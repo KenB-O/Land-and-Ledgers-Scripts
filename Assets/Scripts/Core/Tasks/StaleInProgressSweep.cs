@@ -113,6 +113,28 @@ namespace LandLedgers.Tasks
                     "freight task '" + task.DefinitionId + "' is outside the autonomous sweep");
             }
 
+            // Plan 07 (Slice 07): staged production labour tasks are
+            // owned by the stage machine, not the autonomous sweep. A
+            // staged task sits InProgress with NO schedule-window
+            // reservation, so the sweep would either RescueReDerive it
+            // (creating a window that makes AdvanceAutonomousWork accrue
+            // it alongside the chain drive: double-counted person-time)
+            // or CompleteZeroRemaining it the moment its MinutesRemaining
+            // hits 0 (the tending path records minutes without checking
+            // completion, so a carried task can reach 0 while the stage
+            // machine still owns it — and the stage machine would then
+            // refuse every further WorkActiveStage, bricking the batch).
+            // The stage machine completes staged tasks itself at stage
+            // completion. Literals only, no dependency on the chain
+            // classes from this Core/Tasks helper (slice 06 precedent).
+            if (task.DefinitionId != null
+                && task.DefinitionId.StartsWith("generic-production:", StringComparison.Ordinal))
+            {
+                return new StaleInProgressVerdict(
+                    StaleInProgressDecision.Skip, PersonActivityKind.Work,
+                    "staged production task '" + task.DefinitionId + "' is owned by the stage machine, outside the autonomous sweep");
+            }
+
             // Arrival-driven travel completes on actor arrival via
             // ResolveArrivalDrivenTravelTasks, not on its window.
             if (isArrivalDrivenTravel)

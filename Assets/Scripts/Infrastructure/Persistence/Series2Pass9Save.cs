@@ -377,6 +377,14 @@ namespace LandLedgers.Persistence
         // configured, while current saves round-trip its actual lots/batches.
         public LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime.BakeryShopRuntimeSaveDto BakeryRuntime;
 
+        /// <summary>
+        /// Plan 07 (Slice 07): staged bakery chain state (chain DTO,
+        /// including the private due-event scheduler's events). Additive;
+        /// old saves leave this null and load with an empty chain, the
+        /// honest old-save default.
+        /// </summary>
+        public LandLedgers.Economy.Businesses.Bakery.BakeryStagedProductionChain.BakeryChainSaveDto StagedBakeryChain;
+
         public FuelYardByproductIntake.FuelYardByproductIntakeSaveDto FuelIntake;
         public FreightShipmentService.FreightServiceSaveDto Freight;
         public Pass9FuelSourceParamsDto FuelSourceParams;
@@ -436,6 +444,16 @@ namespace LandLedgers.Persistence
         public Series2BakeryProductionDriver BakeryDriver;
         public LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime BakeryRuntime;
 
+        /// <summary>
+        /// Plan 07 (Slice 07): live staged bakery chain and its PRIVATE
+        /// due-event scheduler, held here in the established Pass 9
+        /// holder pattern ("Codex fills these fields with the live model
+        /// instances"). The chain is not a hub-owned authority; it rides
+        /// the Pass 9 state exactly like BakeryDriver does.
+        /// </summary>
+        public LandLedgers.Economy.Businesses.Bakery.BakeryStagedProductionChain StagedBakeryChain;
+        public LandLedgers.Time.DueEventScheduler StagedBakeryDueEvents;
+
         public FuelYardByproductIntake FuelIntake;
         public FreightProductionDriver FreightDriver;
         public Series2CarrierSettlement CarrierSettlement;
@@ -471,6 +489,17 @@ namespace LandLedgers.Persistence
         /// rewired by the driver that constructs the source.
         /// </summary>
         public Pass9FuelSourceParamsDto RestoredFuelSourceParams;
+
+        /// <summary>
+        /// Plan 07 (Slice 07): staged bakery chain DTO recovered by the
+        /// last Restore, for SimulationDrivers to apply on the first
+        /// drive after load (the driver loads the private scheduler
+        /// first, then the chain, which rebuilds hooks and re-acquires
+        /// due events). Null when no chain was saved. Never applied to
+        /// a live chain by this class: applying needs TaskAuthority,
+        /// which this layer does not own.
+        /// </summary>
+        public LandLedgers.Economy.Businesses.Bakery.BakeryStagedProductionChain.BakeryChainSaveDto RestoredStagedBakeryChain;
 
         /// <summary>Diagnostics from the most recent Capture, for the caller to log (Capture itself returns only the DTO, following the Pass XL coordinator pattern).</summary>
         public List<string> LastCaptureDiagnostics = new List<string>();
@@ -656,6 +685,19 @@ namespace LandLedgers.Persistence
             else if (diag != null)
             {
                 diag.Add("Series2Pass9Save: no live BakeryShopRuntime supplied; bakery stock and production state saved empty.");
+            }
+
+            // Plan 07 (Slice 07): staged bakery chain, with the private
+            // scheduler's events folded into the chain DTO.
+            if (StagedBakeryChain != null)
+            {
+                dto.StagedBakeryChain = StagedBakeryChain.CaptureSaveDto();
+                if (StagedBakeryDueEvents != null)
+                    dto.StagedBakeryChain.DueEvents = StagedBakeryDueEvents.CaptureSaveDto();
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no live staged bakery chain supplied; staged production state saved empty.");
             }
 
             if (FuelIntake != null)
@@ -1021,6 +1063,12 @@ namespace LandLedgers.Persistence
                 diag.Add("Series2Pass9Save: no Bakery runtime section in save; live runtime cleared (old-save default).");
             }
 
+            // Plan 07 (Slice 07): do NOT rebuild hooks here (no
+            // TaskAuthority in this layer). Write the DTO to the state
+            // as pending; SimulationDrivers applies it on the first
+            // drive after load. A null DTO clears a stale pending
+            // field from an earlier load.
+            RestoredStagedBakeryChain = dto.StagedBakeryChain;
             // Pass 8 fuel intake lots (DTO already existed).
             if (FuelIntake != null)
             {

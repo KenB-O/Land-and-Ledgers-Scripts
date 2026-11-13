@@ -544,6 +544,15 @@ namespace LandLedgers.Economy.Businesses.Bakery
             public int BatchSeq;
             public int OvenCount;
             public int OvenBatchCapacity;
+
+            /// <summary>
+            /// Plan 07 (Slice 07): the PRIVATE due-event scheduler's events
+            /// for the chain (the driver's ChainDueEvents). The chain DTO
+            /// already carries batches, stocks, shelf, waste ledger and
+            /// sequences; the scheduler is the only live state it did not
+            /// already carry.
+            /// </summary>
+            public DueEventSchedulerSaveDto DueEvents;
         }
 
         public BakeryChainSaveDto CaptureSaveDto()

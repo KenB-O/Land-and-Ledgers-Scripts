@@ -64,7 +64,6 @@ found, the test fails loudly rather than passing silently.
 | BankRuntime | Domains/Economy/Businesses/Bank/BankRuntime.cs | Domains/Economy/Businesses/Bank | (none) |
 | StagedProductionProcess | Domains/Economy/Generic/ProductionStageMachine.cs | Domains/Economy/Generic | Domains/Economy/Businesses/Bakery/BakeryStagedProductionChain.cs; Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs |
 | ProductionDueEventDriver | Domains/Economy/Generic/ProductionStageMachine.cs | Domains/Economy/Generic | Domains/Economy/Businesses/Bakery/BakeryStagedProductionChain.cs; Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs |
-| BakeryStagedProductionChain | Domains/Economy/Businesses/Bakery/BakeryStagedProductionChain.cs | Domains/Economy/Businesses/Bakery | (none) |
 | ForgeRepairChain | Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs | Domains/Economy/Businesses/Blacksmith | (none) |
 | RealDemandSource | Domains/Economy/Core/RealDemandSource.cs | Domains/Economy/Core | (none) |
 | HouseholdMoveService | Domains/World/Property/HouseholdMoveService.cs | Domains/World/Property | (none) |
@@ -114,11 +113,15 @@ found, the test fails loudly rather than passing silently.
   underwriting. It is NOT wired merely to clear this entry; bank
   binding is WS2 work under a scene-confirmation gate.
 - `StagedProductionProcess` and `ProductionDueEventDriver` are the generic
-  staged-production machinery. Their only production-tree references are the
-  two chains below, which are themselves unwired, so the references are
-  intra-subsystem and allowlisted.
-- `BakeryStagedProductionChain` and `ForgeRepairChain` are the concrete
-  staged-production chains. Covered by editor tests only.
+  staged-production machinery. Their only direct references are the two
+  chain files below, allowlisted as intra-subsystem. The Bakery chain is
+  now wired into production (see the removal note and change-log entry
+  below), so the machinery is reachable through it; the Forge chain
+  remains unwired.
+- `ForgeRepairChain` is the remaining concrete staged-production chain.
+  Covered by editor tests only. `BakeryStagedProductionChain` was removed
+  from the table (Plan 07, 2026-11-13): it is now driven in production —
+  see the change-log entry below.
 - Pass XI WS2 update to the BankRuntime note above: the binding
   contract is now delivered (BankLedgerBindingRegistry: one ledger per
   bank, fail-loud on a second, live reads, no cached balance, no
@@ -734,3 +737,20 @@ note records their audited status so the question does not reopen:
   reference to `PhysicalCapacityEvaluator` needs no allowlist, because
   the evaluator is already wired in production through the shopping
   loop and holds no registry row.
+- Plan 07 (2026-11-13, economic-integration campaign, Agent 1 Slice 07):
+  `BakeryStagedProductionChain` removed from the table above, not
+  allowlisted: it is wired into production for the first time by the
+  campaign's own deliberate Bakery work. The new plain-C#
+  `StagedBakeryChainDriver` (`Domains/Economy/Businesses/Bakery/
+  StagedBakeryChainDriver.cs`) begins one batch a day through a real
+  employee, real TaskAuthority labour, real runtime stocks and the
+  existing staged-to-sellable transfer bridge, on its own private
+  due-event scheduler; `SimulationDrivers` drives it from the day drive
+  (after wholesale planning) and the per-tick drive (after
+  `AdvanceAutonomousWork`), and `Series2Pass9Save` captures and restores
+  it (chain DTO plus the private scheduler's events). The sweep skip for
+  `generic-production:` tasks and the `TaskCompletionDue` backstop
+  exclusion are the guard rails that keep the autonomous drivers from
+  completing a staged labour task out from under the stage machine.
+  `ForgeRepairChain` stays registered: it has no production driver, no
+  save slot and no shelf, and is the next chain slice.

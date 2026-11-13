@@ -358,6 +358,10 @@ namespace LandLedgers.Orchestration.Systems
         private bool managerExecutionConfigured;
         private HouseholdShoppingLoop householdShoppingLoop;
         private ShoppingTripDriver shoppingTripDriver;
+
+        // Plan 07 (Slice 07): cached staged-bakery driver, rebuilt when
+        // the Pass 9 state's chain instance changes (covers restore).
+        private StagedBakeryChainDriver stagedBakeryDriver;
         private readonly LiveTenancyPayeeDirectory tenancyPayees = new LiveTenancyPayeeDirectory();
         private readonly Dictionary<EntityId, string> autonomousTaskReservations = new Dictionary<EntityId, string>();
         private bool subscribedToTimeManager;
@@ -1961,6 +1965,7 @@ namespace LandLedgers.Orchestration.Systems
             // it does not grant capability or create output from a policy alone.
             DriveGenericProduction(absoluteDayIndex);
             DriveBakeryWholesalePlanning(absoluteDayIndex);
+            DriveStagedBakeryDay(absoluteDayIndex);
 
             // Muse Phase I: trade-credit aging is a daily read/transition over
             // the shared FinancialObligationAuthority. It never creates cash
@@ -7356,6 +7361,15 @@ namespace LandLedgers.Orchestration.Systems
                 // arrival gate for these leg tasks.
                 if (shoppingTripDriver != null && shoppingTripDriver.OwnsOpenTask(task)) continue;
 
+                // Plan 07 (Slice 07): the stage machine owns staged
+                // production labour tasks and completes them itself at
+                // stage completion. The backstop must never complete one
+                // out from under it (the same brick as the sweep, through
+                // a different path).
+                if (task.DefinitionId != null
+                    && task.DefinitionId.StartsWith(StagedBakeryChainDriver.StagedTaskDefinitionPrefix, StringComparison.Ordinal))
+                    continue;
+
                 if (IsArrivalDrivenTravelTask(task)) continue;
 
                 string eventId;
@@ -7913,6 +7927,147 @@ namespace LandLedgers.Orchestration.Systems
                     $"{result.TransfersCompleted} transfer(s), {result.UnitsStocked}u stocked.", this);
             if (diagnostics.Count > 0)
                 Debug.Log("[BakeryProduction] " + string.Join(" | ", diagnostics), this);
+        }
+
+        // Plan 07 (Slice 07): staged bakery chain driving. The chain rides
+        // the Pass 9 state exactly like BakeryDriver does; the hub needs no
+        // edit. The day drive begins at most one batch, AFTER the wholesale
+        // planning call, so the staged begin sees post-bake stock. The tick
+        // drive runs after AdvanceAutonomousWork so the two minute-accounting
+        // paths never interleave inside one tick. SimulationDrivers itself
+        // is harness-excluded: these methods are verified by inspection
+        // against the pinned driver behaviour (StagedBakeryChainDriverTests)
+        // and the full-harness gate.
+
+        private Series2Pass9SaveState Pass9State()
+        {
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            return save != null ? save.Series2Pass9State : null;
+        }
+
+        private StagedBakeryChainDriver StagedBakeryDriverFor(
+            LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime bakery)
+        {
+            if (bakery == null || hub == null || timeManager == null) return null;
+            Series2Pass9SaveState state = Pass9State();
+            if (state == null) return null;
+            if (stagedBakeryDriver != null
+                && ReferenceEquals(stagedBakeryDriver.Bakery, bakery)
+                && ReferenceEquals(stagedBakeryDriver.Chain, state.StagedBakeryChain)
+                && ReferenceEquals(stagedBakeryDriver.ChainDueEvents, state.StagedBakeryDueEvents))
+                return stagedBakeryDriver;
+
+            var chain = state.StagedBakeryChain
+                ?? new LandLedgers.Economy.Businesses.Bakery.BakeryStagedProductionChain();
+            var scheduler = state.StagedBakeryDueEvents ?? new LandLedgers.Time.DueEventScheduler();
+            stagedBakeryDriver = new StagedBakeryChainDriver(
+                bakery, chain, scheduler,
+                hub.Tasks, hub.WorkTimeBudgets, hub.Reservations, hub.Ids,
+                () => timeManager.AbsoluteGameSeconds,
+                EntityId.For(EntityKind.Business, StableBusinessRuntimeId(bakery.BusinessInstanceId)));
+            state.StagedBakeryChain = chain;
+            state.StagedBakeryDueEvents = scheduler;
+            return stagedBakeryDriver;
+        }
+
+        private void DriveStagedBakeryDay(int dayIndex)
+        {
+            Series2Pass9SaveState state = Pass9State();
+            LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime bakery =
+                state?.BakeryRuntime ?? state?.BakeryDriver?.Bakery;
+            if (bakery == null) return;
+            StagedBakeryChainDriver driver = StagedBakeryDriverFor(bakery);
+            if (driver == null) return;
+            EntityId bakerId = ResolveStagedBakeryBaker(bakery);
+            ApplyRestoredStagedBakeryChain(state, driver, dayIndex, bakerId);
+            if (driver.HasActiveBatch) return;
+            var diag = new List<string>();
+            if (!driver.TryBeginBatch(dayIndex, bakerId, diag))
+            {
+                if (diag.Count > 0)
+                    Debug.Log("[BakeryProduction] Day " + dayIndex + ": staged batch not begun — " + string.Join(" | ", diag), this);
+                return;
+            }
+            if (diag.Count > 0)
+                Debug.Log("[BakeryProduction] Day " + dayIndex + ": " + string.Join(" | ", diag), this);
+        }
+
+        private void DriveStagedBakeryTick(int wholeMinutes, int dayIndex, int minuteOfDay)
+        {
+            Series2Pass9SaveState state = Pass9State();
+            LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime bakery =
+                state?.BakeryRuntime ?? state?.BakeryDriver?.Bakery;
+            if (bakery == null) return;
+            StagedBakeryChainDriver driver = StagedBakeryDriverFor(bakery);
+            if (driver == null) return;
+            EntityId bakerId = ResolveStagedBakeryBaker(bakery);
+            // Apply the restored DTO before the no-op check: a pending
+            // restore is what makes this drive non-empty.
+            ApplyRestoredStagedBakeryChain(state, driver, dayIndex, bakerId);
+            if (!driver.HasActiveBatch && driver.Chain.BreadShelf.Count == 0) return;
+            var diag = new List<string>();
+            driver.DriveTick(dayIndex, wholeMinutes, bakerId, diag);
+            if (diag.Count > 0)
+                Debug.Log("[BakeryProduction] Day " + dayIndex + ": " + string.Join(" | ", diag), this);
+        }
+
+        /// <summary>
+        /// The baker is the first available person from the
+        /// DriveGenericProduction worker pool for the bakery business
+        /// instance: its Owner first, then the active employees from the
+        /// business RuntimeState EmploymentRegistry. No second-baker
+        /// fallback, no multi-baker arbitration, no employment creation.
+        /// A founder-operator owner is a legitimate baker; no wage, no
+        /// payroll entry is created here.
+        /// </summary>
+        private EntityId ResolveStagedBakeryBaker(
+            LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime bakery)
+        {
+            if (bakery == null || sharedBusinessRuntime == null) return EntityId.Invalid;
+            BusinessInstanceState business = null;
+            foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
+            {
+                if (candidate != null && string.Equals(candidate.InstanceId, bakery.BusinessInstanceId, StringComparison.Ordinal))
+                {
+                    business = candidate;
+                    break;
+                }
+            }
+            if (business == null) return EntityId.Invalid;
+            if (business.Owner != null && business.Owner.PersonId >= 0)
+                return EntityId.For(EntityKind.Person, business.Owner.PersonId);
+            EmploymentRelationshipRegistry registry = business.RuntimeState?.EmploymentRegistry ?? hub?.Employments;
+            if (registry != null)
+            {
+                foreach (EmploymentRelationship relationship in registry.GetActiveByEmployer(business.InstanceId))
+                {
+                    if (relationship != null && relationship.EmployeePersonId >= 0)
+                        return EntityId.For(EntityKind.Person, relationship.EmployeePersonId);
+                }
+            }
+            return EntityId.Invalid;
+        }
+
+        /// <summary>
+        /// Applies the pending restored chain DTO on the first drive
+        /// after load. Identity (Plan 07 section 6.5): a live chain with
+        /// active batches is never silently overwritten by a save —
+        /// refuse loudly, keep the live chain. The pending field is
+        /// cleared either way so the decision is made exactly once.
+        /// </summary>
+        private void ApplyRestoredStagedBakeryChain(Series2Pass9SaveState state, StagedBakeryChainDriver driver, int dayIndex, EntityId bakerId)
+        {
+            if (state == null || driver == null || state.RestoredStagedBakeryChain == null) return;
+            var dto = state.RestoredStagedBakeryChain;
+            state.RestoredStagedBakeryChain = null;
+            if (driver.HasActiveBatch)
+            {
+                Debug.LogWarning("[BakeryProduction] Day " + dayIndex
+                    + ": saved staged bakery chain NOT applied — a live chain already has an active batch; keeping the live chain.", this);
+                return;
+            }
+            driver.LoadFromSaveDto(dto, dayIndex, bakerId);
+            Debug.Log("[BakeryProduction] Day " + dayIndex + ": staged bakery chain restored from save.", this);
         }
 
         private LandLedgers.Economy.BreadDrivers.ISeries2BakeryFuelSource TryBuildPaidBakeryFuelSource(
@@ -9261,6 +9416,12 @@ namespace LandLedgers.Orchestration.Systems
                 }
 
                 AdvanceAutonomousWork(tickWholeMinutes, context.Date.AbsoluteDayIndex,
+                    Mathf.FloorToInt(context.TimeOfDay01 * 1440f));
+
+                // Plan 07 (Slice 07): staged bakery chain tick, after the
+                // autonomous loop so the two minute-accounting paths never
+                // interleave inside one tick.
+                DriveStagedBakeryTick(tickWholeMinutes, context.Date.AbsoluteDayIndex,
                     Mathf.FloorToInt(context.TimeOfDay01 * 1440f));
             }
 

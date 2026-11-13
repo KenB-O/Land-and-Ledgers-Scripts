@@ -193,6 +193,51 @@ namespace LandLedgers.EditorTests.Tasks
                 "a task owned by the freight business (id 3) is never the autonomous sweep's, whatever its definition id");
         }
 
+        // Case 1: 0 remaining + expired window — the zero-remaining
+        // completion branch of the sweep's danger. Case 2: 30 remaining
+        // + no window — the re-derive branch. Both must Skip.
+        [TestCase(0, true)]
+        [TestCase(30, false)]
+        public void StagedProductionTask_Skip(int minutesRemaining, bool expiredWindow)
+        {
+            const string definitionId = "generic-production:bakery-staged-batch-0:phase:0:definition";
+            (TaskAuthority authority, WorkTimeBudgetStore budgets, WorkTask task) = StartTask(definitionId, 60);
+            int toRecord = 60 - minutesRemaining;
+            if (toRecord > 0)
+            {
+                // RecordWorkProgress does NOT auto-complete — the task
+                // stays InProgress at the recorded remaining.
+                Assert.IsTrue(authority.RecordWorkProgress(task.TaskId, toRecord, budgets, 1,
+                    out bool reached, out string reason), reason);
+                Assert.AreEqual(minutesRemaining == 0, reached);
+            }
+            Assert.AreEqual(minutesRemaining, task.MinutesRemaining);
+            Assert.AreEqual(TaskStatus.InProgress, task.Status);
+            var reservations = new List<PersonActivityReservation>();
+            if (expiredWindow)
+                reservations.Add(Reservation(PersonActivityKind.Work, 480, 60, task));
+
+            StaleInProgressVerdict verdict = Decide(task, reservations, 700);
+
+            Assert.AreEqual(StaleInProgressDecision.Skip, verdict.Decision,
+                "a staged production task is owned by the stage machine, never the autonomous sweep");
+        }
+
+        [Test]
+        public void OrdinaryTask_StillRescued_NegativeControl()
+        {
+            (_, _, WorkTask task) = StartTask("test.sweep", 60);
+            var reservations = new List<PersonActivityReservation>
+            {
+                Reservation(PersonActivityKind.Work, 480, 60, task),
+            };
+
+            StaleInProgressVerdict verdict = Decide(task, reservations, 700);
+
+            Assert.AreEqual(StaleInProgressDecision.RescueReDerive, verdict.Decision,
+                "the staged-production skip must not over-skip ordinary tasks");
+        }
+
         [Test]
         public void ArrivalDrivenTravel_Skip()
         {

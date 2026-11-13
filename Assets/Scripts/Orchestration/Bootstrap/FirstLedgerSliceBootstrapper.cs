@@ -563,6 +563,7 @@ namespace LandLedgers.FirstLedger
             sharedBusinessRuntime?.InitializeIfNeeded(storeRuntime != null ? storeRuntime.CurrentBusiness : null);
             ConfigureLiveBakerySaveOwner();
             ConfigureLiveLumberYardSaveOwner();
+            ConfigureLumberYardConstructionBindings();
             SimulationDrivers simulationDrivers = FindAnyObjectByType<SimulationDrivers>();
             simulationDrivers?.AttachBusinessRuntime(sharedBusinessRuntime);
             simulationDrivers?.AttachDevelopmentTownConfiguration(ResolveDevelopmentTownConfiguration());
@@ -2052,6 +2053,10 @@ namespace LandLedgers.FirstLedger
             // C2: same window, same rule — the yard holder must exist
             // before the Pass XL restore consumes the state.
             ConfigureLiveLumberYardSaveOwner();
+            // C3: same window, same rule — the price port and the yard
+            // supplier registration are runtime state, re-established
+            // here after every restore.
+            ConfigureLumberYardConstructionBindings();
         }
 
         // Q04 Slice 3 (re-plan): called by SaveLoadManager.LoadDefaultSlot
@@ -2227,6 +2232,61 @@ namespace LandLedgers.FirstLedger
             }
 
             Debug.Log($"[LumberYardRuntime] Bootstrap owns one live LumberYardShopRuntime for '{yardBusiness.RuntimeDisplayName}' ({yardBusiness.InstanceId}); its Pass 9 state is registered with SaveLoadManager.", this);
+        }
+
+        // C3: mirrors ConfigureLiveLumberYardSaveOwner for the construction
+        // bindings. Binds the C1 price port into the NPC construction
+        // driver (narrow setter — the field only) and registers the
+        // hub-owned yard in the supplier directory, so the driver can
+        // price materials and DiscoverSupplier can find the yard. First
+        // NPC yard only (C2 rule); a second yard is warned about by
+        // ConfigureLiveLumberYardSaveOwner and gets nothing here.
+        // No sale adapter is constructed (C4 owns it); no procurement
+        // port is bound (binding one that cannot procure would regress
+        // the driver). Called at NewGame and in the restore window,
+        // immediately after ConfigureLiveLumberYardSaveOwner.
+        private void ConfigureLumberYardConstructionBindings()
+        {
+            if (sharedBusinessRuntime == null)
+            {
+                Debug.LogWarning("[LumberYardConstruction] Bindings were not created: shared business runtime is missing.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[LumberYardConstruction] Bindings were not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            BusinessInstanceState yardBusiness = FindDevelopmentBusiness(BusinessType.LumberYard);
+            if (yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId))
+            {
+                Debug.LogWarning("[LumberYardConstruction] Bindings were not created: no authored LumberYard business instance is present in the shared runtime.", this);
+                return;
+            }
+
+            // Idempotent: the hub accessor returns the SAME live instance
+            // C2's owner setup created, never a second runtime.
+            LumberYardShopRuntime liveYardRuntime = systemsHub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+            if (liveYardRuntime == null)
+            {
+                Debug.LogWarning("[LumberYardConstruction] Bindings were not created: hub returned no runtime.", this);
+                return;
+            }
+
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                Debug.LogWarning("[LumberYardConstruction] Bindings were not created: SimulationDrivers is missing.", this);
+                return;
+            }
+
+            var port = new LumberYardConstructionPricePort(liveYardRuntime);
+            drivers.BindConstructionPricePort(port);
+            drivers.RegisterLumberYardConstructionSuppliers(liveYardRuntime, port);
+            Debug.Log($"[LumberYardConstruction] Bound the construction price port and registered the yard supplier for '{yardBusiness.RuntimeDisplayName}' ({yardBusiness.InstanceId}).", this);
         }
 
         private void ConfigureMillbrookAidTable(SimulationDrivers drivers)

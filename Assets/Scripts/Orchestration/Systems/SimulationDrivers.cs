@@ -15,6 +15,7 @@ using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.FuelDealer;
 using LandLedgers.Economy.Businesses.GeneralStore;
+using LandLedgers.Economy.Businesses.LumberYard;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Businesses.Bakery;
@@ -443,6 +444,20 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Slice C3: registers the hub-owned lumber yard in the shared
+        /// supplier directory under construction-lumber and
+        /// construction-hardware, through the yard's real stock. Mirrors
+        /// RegisterGeneralStoreSupplier; the binding is runtime state,
+        /// re-established in the restore window.
+        /// </summary>
+        public void RegisterLumberYardConstructionSuppliers(LumberYardShopRuntime yard,
+            IConstructionMaterialPricePort pricePort)
+        {
+            supplierDirectory ??= new SupplierDirectory();
+            LumberYardConstructionSupplier.RegisterIn(supplierDirectory, yard, pricePort);
+        }
+
+        /// <summary>
         /// Connects already-formed Fuel Dealer businesses to the same
         /// household supplier directory. Stock remains in the existing
         /// provenance-tracked Pass 9 fuel-yard intake; the business profile
@@ -580,6 +595,20 @@ namespace LandLedgers.Orchestration.Systems
                     householdId => householdMemberships != null
                         ? householdMemberships.GetActiveMembers(householdId)
                         : new List<int>());
+        }
+
+        /// <summary>
+        /// Slice C3: binds the construction price port. Sets ONLY
+        /// npcConstructionPricePort; it does not touch catalog,
+        /// materials, procurement, parcel authority, or labor. The
+        /// driver re-reads the field on every drive
+        /// (DriveNpcConstruction), so the next drive picks it up.
+        /// Do NOT route this through ConfigureNpcConstruction — that
+        /// would clear the other fields.
+        /// </summary>
+        public void BindConstructionPricePort(IConstructionMaterialPricePort port)
+        {
+            npcConstructionPricePort = port;
         }
 
         /// <summary>Queues an explicit household request; no autonomous build decision is made here.</summary>

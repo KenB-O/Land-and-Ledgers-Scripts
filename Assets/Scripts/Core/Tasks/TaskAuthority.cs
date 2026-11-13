@@ -263,6 +263,24 @@ namespace LandLedgers.Tasks
             return true;
         }
 
+        /// <summary>
+        /// Human-readable word for a blocking task status, used in occupancy
+        /// refusals so the diagnostic names the state plainly ("in-progress")
+        /// instead of the raw enum name ("InProgress"). Any future blocking
+        /// state falls back to its enum name.
+        /// </summary>
+        private static string OccupancyStatusWord(TaskStatus status)
+        {
+            switch (status)
+            {
+                case TaskStatus.InProgress: return "in-progress";
+                case TaskStatus.Paused: return "paused";
+                case TaskStatus.WaitingOnDependency: return "waiting on dependency";
+                case TaskStatus.ResourcesReserved: return "resources reserved";
+                default: return status.ToString();
+            }
+        }
+
         /// <summary>Returns the same skill-scaled duration AssignTask will commit for a worker.</summary>
         public int EstimateMinutesForWorker(string definitionId, EntityId workerId)
         {
@@ -313,7 +331,7 @@ namespace LandLedgers.Tasks
                         || !TaskLifecyclePolicy.BlocksConcurrentTaskStart(activeTask.Status)
                         || activeTask.AssigneeId != task.AssigneeId) continue;
                     rejectionReason = "Cannot start task " + taskId + ": " + task.AssigneeId
-                        + " is already occupied by task " + activeTask.TaskId + " (" + activeTask.Status + ").";
+                        + " is already occupied by task " + activeTask.TaskId + " (" + OccupancyStatusWord(activeTask.Status) + ").";
                     return false;
                 }
             }

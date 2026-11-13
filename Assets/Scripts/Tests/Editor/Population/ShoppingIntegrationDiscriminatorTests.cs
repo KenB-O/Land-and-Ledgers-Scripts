@@ -330,8 +330,13 @@ namespace LandLedgers.EditorTests.Population
 
             public HouseholdShortageMonitor Monitor()
             {
-                // Production value (SimulationDrivers.DriveHouseholdShortageMonitor).
-                return new HouseholdShortageMonitor(Needs) { LowDaysThreshold = 1f };
+                // Pins the 1-day shortfall case explicitly: both thresholds
+                // at 1 day, so the need is the shortfall below 1 day. This
+                // is not the production value (production is Low 3 days,
+                // Target 7 days per SimulationDrivers
+                // DriveHouseholdShortageMonitor); TargetDaysThreshold must
+                // be set here or its 7-day default buys toward a week.
+                return new HouseholdShortageMonitor(Needs) { LowDaysThreshold = 1f, TargetDaysThreshold = 1f };
             }
 
             public void Evaluate(HouseholdShortageMonitor monitor, int dayIndex)
@@ -394,6 +399,25 @@ namespace LandLedgers.EditorTests.Population
                 Assert.IsTrue(line == null || !line.Contains("will not raise a 'bread' need"),
                     "no suppression diagnostic once the seller is known: " + line);
             }
+        }
+
+        [Test]
+        public void Monitor_WithKnowledge_TargetSeven_OpensBreadNeed_ForSevenDays()
+        {
+            var f = new MonitorFixture();
+            GeneralStoreSupplierAdapter.RegisterIn(f.Directory, NpcPort(SeededStoreState()));
+            f.Knowledge.LearnSupplier(1, "general-store-1", "lives in the same town", 0);
+            f.Knowledge.LearnSupplier(2, "general-store-1", "lives in the same town", 0);
+            HouseholdShortageMonitor monitor = f.Monitor();
+            monitor.TargetDaysThreshold = 7f;
+
+            f.Evaluate(monitor, dayIndex: 0);
+
+            HouseholdPurchasingNeed need = f.Needs.GetOpenNeed(7, HouseholdItemCatalog.BreadId);
+            Assert.IsNotNull(need, "a recognized seller opens the need even with zero household stock");
+            Assert.AreEqual(42, need.UnitsNeeded,
+                "2-person household, 1-day low threshold with a 7-day buy-toward target: 7 days x 6 loaves/day");
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
         }
 
         // ---- H2: which stock does the registered port read? -----------

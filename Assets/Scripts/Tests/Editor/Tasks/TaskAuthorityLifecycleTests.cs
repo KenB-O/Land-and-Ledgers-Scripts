@@ -166,17 +166,21 @@ namespace LandLedgers.EditorTests.Tasks
             WorkTask second = authority.CreateTask("test.sweep", Business(2), 1);
             Assert.IsTrue(authority.AssignTask(first.TaskId, Person(7), budgets, out string reason), reason);
             Assert.IsTrue(authority.AssignTask(second.TaskId, Person(7), budgets, out reason), reason);
-            Assert.IsTrue(authority.StartTask(first.TaskId, 1, out reason), reason);
-
             switch (blockingState)
             {
                 case TaskStatus.Paused:
+                    Assert.IsTrue(authority.StartTask(first.TaskId, 1, out reason), reason);
                     Assert.IsTrue(authority.PauseTask(first.TaskId, budgets, "temporary interruption", out reason), reason);
                     break;
                 case TaskStatus.WaitingOnDependency:
+                    Assert.IsTrue(authority.StartTask(first.TaskId, 1, out reason), reason);
                     Assert.IsTrue(authority.MarkWaitingOnDependency(first.TaskId, "required delivery", "waiting", out reason), reason);
                     break;
                 case TaskStatus.ResourcesReserved:
+                    // ResourcesReserved is reachable only from Assigned, so
+                    // it is marked before any start. Starting first would
+                    // make the transition illegal (InProgress ->
+                    // ResourcesReserved) and the setup itself would fail.
                     Assert.IsTrue(authority.MarkResourcesReserved(first.TaskId, "fixture-reservation", "workstation held", out reason), reason);
                     break;
             }

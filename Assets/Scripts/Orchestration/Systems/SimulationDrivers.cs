@@ -8728,6 +8728,14 @@ namespace LandLedgers.Orchestration.Systems
                     // calendar boundary.
                     continue;
                 }
+                // R19 sweep-before (note 115 Q6/Q7): settle escrowed wages
+                // from earlier weeks before the service's own (already
+                // guarded) weekly settlement, so a worker who gains a
+                // household in an already-settled week does not wait until
+                // next week's settlement. No guard call here — the service
+                // guards at WageSettlementService.cs:113. The sweep moves no
+                // business cash, so the service replay is unaffected.
+                business.RuntimeState.SettleEscrowedWagePayables(absoluteDayIndex, diag);
                 var registry = business.RuntimeState.EmploymentRegistry ?? hub.Employments;
                 hub.WageSettlement.SettleWeeklyPayroll(
                     business.RuntimeState, registry, weekIndex, absoluteDayIndex, diag);

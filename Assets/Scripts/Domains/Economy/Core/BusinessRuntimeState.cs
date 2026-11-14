@@ -1043,11 +1043,55 @@ namespace LandLedgers.Economy
         /// <summary>
         /// Worker D (Autonomous Labor, Phase F): settled-week marker for the
         /// idempotency-guarded payroll driver. -1 = no week settled yet. The
-        /// WageSettlementService sets this after a successful weekly settlement;
-        /// the weekly driver consults it before running ResolveWeeklyPayroll so a
-        /// week is never posted twice (save/load included). Additive only.
+        /// marker is consulted by the two direct-path guards
+        /// (SharedBusinessRuntimeManager.ResolvePayrollForType and
+        /// GeneralStoreRuntimeManager.ResolveWeeklyPayrollAndReorder) and by
+        /// WageSettlementService (:113), stamped by the direct paths after a
+        /// successful run and by the service at :213, and persisted via
+        /// BusinessRuntimeSaveDto (save/load included). The week key is
+        /// dayIndex / 7 (0-based) on every path — never the 1-based clock
+        /// week (TimeManager week = dayIndex / 7 + 1). Additive only.
         /// </summary>
         public int LastPayrollSettledWeekIndex = -1;
+
+        /// <summary>
+        /// R44: returns the 0-based week key for a day index, or -1 when the
+        /// clock is unwired (dayIndex &lt; 0). Never use GetCurrentWeekKey /
+        /// CurrentWeek here: the clock week is 1-based (TimeManager.cs:734)
+        /// and would disagree with the service's 0-based weekIndex
+        /// (absoluteDayIndex / 7) by exactly one.
+        /// </summary>
+        public static int WeekKeyForDayIndex(int dayIndex)
+            => dayIndex < 0 ? -1 : dayIndex / 7;
+
+        /// <summary>
+        /// R44: true when this week's payroll may run. False when the week is
+        /// already settled (the caller must skip the run, with a diagnostic).
+        /// A begin without a stamp does not consume the week — only
+        /// StampWeeklyPayrollSettled claims it.
+        /// </summary>
+        public bool TryBeginWeeklyPayroll(int dayIndex)
+        {
+            int weekKey = WeekKeyForDayIndex(dayIndex);
+            if (weekKey < 0) return true; // clock unwired: no guard, run as today
+            return LastPayrollSettledWeekIndex != weekKey;
+        }
+
+        /// <summary>
+        /// R44: stamp the week AFTER a successful run (ResolveWeeklyPayroll
+        /// returned normally). Never call on refusal: a refused week must
+        /// stay retryable. No-op when the clock is unwired. "Successful"
+        /// means the run returned normally — per-worker refusals are
+        /// shortfalls (Suspended + liability preserved), not week-level
+        /// refusals — and an empty run still stamps, mirroring the
+        /// service's unconditional stamp.
+        /// </summary>
+        public void StampWeeklyPayrollSettled(int dayIndex)
+        {
+            int weekKey = WeekKeyForDayIndex(dayIndex);
+            if (weekKey < 0) return;
+            LastPayrollSettledWeekIndex = weekKey;
+        }
 
         private readonly List<ManualWagePaymentRecord> manualWagePayments = new List<ManualWagePaymentRecord>();
 
@@ -2060,6 +2104,7 @@ namespace LandLedgers.Economy
                 lastWeeklyCashAfterCents = LastWeeklyCashAfterCents,
                 accruedLiabilityCents = AccruedLiabilityCents,
                 lastWeeklyAccruedLiabilityCents = LastWeeklyAccruedLiabilityCents,
+                lastPayrollSettledWeekIndex = LastPayrollSettledWeekIndex,
                 lastWeeklyBlockedReason = LastWeeklyBlockedReason,
                 lastWeeklyOperationSummary = LastWeeklyOperationSummary,
                 lastWeeklyTransferSummary = LastWeeklyTransferSummary,
@@ -2176,6 +2221,7 @@ namespace LandLedgers.Economy
                 lastWeeklyCashAfterCents = Mathf.Max(0, dto.lastWeeklyCashAfterCents),
                 accruedLiabilityCents = Mathf.Max(0, dto.accruedLiabilityCents),
                 lastWeeklyAccruedLiabilityCents = Mathf.Max(0, dto.lastWeeklyAccruedLiabilityCents),
+                LastPayrollSettledWeekIndex = Mathf.Max(-1, dto.lastPayrollSettledWeekIndex),
                 lastWeeklyBlockedReason = dto.lastWeeklyBlockedReason ?? string.Empty,
                 lastWeeklyOperationSummary = dto.lastWeeklyOperationSummary ?? string.Empty,
                 lastWeeklyTransferSummary = dto.lastWeeklyTransferSummary ?? string.Empty,
@@ -3360,6 +3406,295 @@ namespace LandLedgers.Economy
 
             RefreshWeeklyCashAfter();
             return true;
+        }
+
+        /// <summary>
+        /// R19: settles unsettled CashAlreadyDeducted wage payables and
+        /// credits each worker's household ledger with the same amount.
+        /// Called from all three weekly payroll drivers BEFORE the week's
+        /// run (sweep-before), so an escrow is always from a previous week.
+        /// Returns the NET settled count: a record settled then re-escrowed
+        /// (credit failed) counts as 0. Never throws for a per-record
+        /// problem — it skips with a diagnostic and continues. Never deletes
+        /// a payable except through a successful TrySettleNamedPayable or a
+        /// successful re-escrow (which replaces the consumed record with an
+        /// identical one). Only records with CashAlreadyDeducted == true AND
+        /// a Reason starting with "wage escrow" are in the sweep set (note
+        /// 115 C2: shortfall liabilities ARE named payables with
+        /// CashAlreadyDeducted=false, excluded BY THIS PREDICATE).
+        /// Diagnostics go to the runtime's own lastWeeklyPayrollDiagnostics
+        /// directly (note 115 C7) and, when a caller list is supplied, there
+        /// too. The sweep day is the day the money lands (no backdating);
+        /// the period label is the fixed string "escrow settlement".
+        /// </summary>
+        public int SettleEscrowedWagePayables(int dayIndex, List<string> diagnostics = null)
+        {
+            int settled = 0;
+            if (HouseholdLedgers == null || PersonHouseholdIdLookup == null)
+            {
+                ReportSweepDiagnostic(diagnostics,
+                    "escrow sweep deferred: household ledgers unwired — escrowed wages stay open.");
+                return 0;
+            }
+
+            FlushNamedPayablesToAuthority();
+
+            // Snapshot copy: TrySettleNamedPayable removes records during
+            // iteration, and a re-escrow appends a new one mid-sweep.
+            var escrow = new List<BusinessNamedPayableRecord>();
+            for (int i = 0; i < namedPayables.Count; i++)
+            {
+                BusinessNamedPayableRecord record = namedPayables[i];
+                if (record != null && record.CashAlreadyDeducted
+                    && !string.IsNullOrEmpty(record.Reason)
+                    && record.Reason.StartsWith("wage escrow", StringComparison.Ordinal))
+                {
+                    escrow.Add(record);
+                }
+            }
+
+            foreach (BusinessNamedPayableRecord record in escrow)
+            {
+                if (string.IsNullOrWhiteSpace(record.ObligationId))
+                {
+                    ReportSweepDiagnostic(diagnostics,
+                        $"escrow {record.AmountCents}c to {record.Creditor} has no obligation id — settlement deferred, payable stays open.");
+                    continue;
+                }
+
+                if (!TryResolveEscrowPerson(record, out int personId))
+                {
+                    ReportSweepDiagnostic(diagnostics,
+                        $"escrow {record.AmountCents}c to {record.Creditor} has no resolvable worker — payable stays open.");
+                    continue;
+                }
+
+                EmploymentRelationship employment = ResolveEscrowEmployment(record, personId);
+                if (employment == null)
+                {
+                    ReportSweepDiagnostic(diagnostics,
+                        $"escrow {record.AmountCents}c for P{personId} has no employment resolvable — payable stays open.");
+                    continue;
+                }
+
+                string oldObligationId = record.ObligationId;
+                int amount = record.AmountCents;
+                string creditor = record.Creditor;
+                string reason = record.Reason;
+                if (!TrySettleNamedPayable(oldObligationId, amount, dayIndex, out string settleDiag))
+                {
+                    ReportSweepDiagnostic(diagnostics,
+                        $"escrow {amount}c for P{personId} could not settle — {settleDiag} Payable stays open.");
+                    continue;
+                }
+
+                // Settle-first, then credit (freight precedent): a failed
+                // credit after settle is repaired by re-escrow, restoring
+                // the pre-settle state. Credit-first would double-pay on
+                // a failed settle with no dedup state.
+                int householdId = PersonHouseholdIdLookup(personId);
+                string rejection;
+                if (householdId < 0)
+                {
+                    rejection = $"worker P{personId} has no household";
+                }
+                else
+                {
+                    HouseholdLedger ledger = HouseholdLedgers.GetOrCreate(householdId);
+                    rejection = ledger.RecordWagePayment(
+                        Mathf.Max(0, dayIndex), employment.Id, personId, amount, "escrow settlement");
+                }
+
+                if (rejection != null)
+                {
+                    // Re-escrow identically (note 115 C6/Q3): same creditor,
+                    // amount and reason, CashAlreadyDeducted=true, with the
+                    // suffix referencing the original obligation — the old
+                    // obligation stays recorded as paid in the authority
+                    // while the new one carries the trace. The prefix is
+                    // preserved, so the next sweep still finds it.
+                    AccrueOperatingLiabilityCents(amount, creditor,
+                        reason + $" re-escrowed from {oldObligationId}",
+                        cashAlreadyDeducted: true);
+                    ReportSweepDiagnostic(diagnostics,
+                        $"escrow {amount}c for P{personId} settled but the household credit failed ({rejection}) — re-escrowed.");
+                    continue;
+                }
+
+                settled++;
+                ReportSweepDiagnostic(diagnostics,
+                    $"escrow {amount}c for P{personId} settled to H{householdId} (employment {employment.Id}).");
+            }
+
+            return settled;
+        }
+
+        private void ReportSweepDiagnostic(List<string> diagnostics, string line)
+        {
+            lastWeeklyPayrollDiagnostics.Add(line);
+            if (diagnostics != null)
+            {
+                diagnostics.Add(line);
+            }
+        }
+
+        /// <summary>
+        /// R19 §3.3a: the worker behind an escrow record. From the Creditor
+        /// when it is person:{id}; when the Creditor is household:{id} (the
+        /// ledger-rejected branch), from the Reason's "for P{personId}"
+        /// segment. False when neither parses — the payable stays open.
+        /// </summary>
+        private bool TryResolveEscrowPerson(BusinessNamedPayableRecord record, out int personId)
+        {
+            personId = -1;
+            if (!string.IsNullOrWhiteSpace(record.Creditor)
+                && record.Creditor.StartsWith("person:", StringComparison.Ordinal)
+                && int.TryParse(record.Creditor.Substring("person:".Length), out int fromCreditor))
+            {
+                personId = fromCreditor;
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(record.Reason))
+            {
+                int forIndex = record.Reason.IndexOf("for P", StringComparison.Ordinal);
+                if (forIndex >= 0)
+                {
+                    int start = forIndex + "for P".Length;
+                    int end = start;
+                    while (end < record.Reason.Length && char.IsDigit(record.Reason[end]))
+                    {
+                        end++;
+                    }
+
+                    if (end > start && int.TryParse(record.Reason.Substring(start, end - start), out int fromReason))
+                    {
+                        personId = fromReason;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// R19 §3.3: employment resolution, first hit wins. (1) Ref-first:
+        /// the employment ref parsed from the Reason's "via {ref}:" segment
+        /// (until ": ", the cause separator — a legacy slot ref contains
+        /// colons of its own), resolved by id with the person matching.
+        /// (2) Span-match: the registry record for (person, this business)
+        /// whose [StartDayIndex, EndDayIndex] contains the escrow DayIndex
+        /// (-1 EndDayIndex is open-ended), latest StartDayIndex on ties.
+        /// (3) Ensure + retry once: project legacy slot workers, then retry
+        /// steps 1–2. (4) Null: skip with a diagnostic, payable stays open.
+        /// Never invents an employment id.
+        /// </summary>
+        private EmploymentRelationship ResolveEscrowEmployment(BusinessNamedPayableRecord record, int personId)
+        {
+            if (EmploymentRegistry != null)
+            {
+                EmploymentRelationship byRef = ResolveEscrowEmploymentByRef(record, personId);
+                if (byRef != null)
+                {
+                    return byRef;
+                }
+
+                EmploymentRelationship bySpan = ResolveEscrowEmploymentBySpan(record, personId);
+                if (bySpan != null)
+                {
+                    return bySpan;
+                }
+            }
+
+            EnsureEmploymentRecordsFromSlots();
+            if (EmploymentRegistry != null)
+            {
+                EmploymentRelationship byRef = ResolveEscrowEmploymentByRef(record, personId);
+                if (byRef != null)
+                {
+                    return byRef;
+                }
+
+                return ResolveEscrowEmploymentBySpan(record, personId);
+            }
+
+            return null;
+        }
+
+        private EmploymentRelationship ResolveEscrowEmploymentByRef(BusinessNamedPayableRecord record, int personId)
+        {
+            string employmentRef = ParseEscrowEmploymentRef(record.Reason);
+            if (string.IsNullOrWhiteSpace(employmentRef))
+            {
+                return null;
+            }
+
+            if (EmploymentRegistry.TryGetById(employmentRef, out EmploymentRelationship employment)
+                && employment != null && employment.EmployeePersonId == personId)
+            {
+                return employment;
+            }
+
+            return null;
+        }
+
+        private static string ParseEscrowEmploymentRef(string reason)
+        {
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                return null;
+            }
+
+            int viaIndex = reason.IndexOf("via ", StringComparison.Ordinal);
+            if (viaIndex < 0)
+            {
+                return null;
+            }
+
+            int start = viaIndex + "via ".Length;
+            int end = reason.IndexOf(": ", start, StringComparison.Ordinal);
+            if (end < 0)
+            {
+                end = reason.Length;
+            }
+
+            string employmentRef = reason.Substring(start, end - start).Trim();
+            return string.IsNullOrWhiteSpace(employmentRef) ? null : employmentRef;
+        }
+
+        private EmploymentRelationship ResolveEscrowEmploymentBySpan(BusinessNamedPayableRecord record, int personId)
+        {
+            EmploymentRelationship best = null;
+            foreach (EmploymentRelationship candidate in EmploymentRegistry.GetByEmployee(personId))
+            {
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(candidate.EmployerBusinessId, BusinessId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (candidate.StartDayIndex > record.DayIndex)
+                {
+                    continue;
+                }
+
+                if (candidate.EndDayIndex >= 0 && record.DayIndex > candidate.EndDayIndex)
+                {
+                    continue;
+                }
+
+                if (best == null || candidate.StartDayIndex > best.StartDayIndex)
+                {
+                    best = candidate;
+                }
+            }
+
+            return best;
         }
 
         /// <summary>

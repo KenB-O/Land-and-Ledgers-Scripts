@@ -1033,6 +1033,10 @@ namespace LandLedgers.Persistence
         public int lastWeeklyCashAfterCents;
         public int accruedLiabilityCents;
         public int lastWeeklyAccruedLiabilityCents;
+        // R44 (A1 plan 28, additive): settled-week marker for the
+        // direct-path payroll guard. Default -1 (no week settled) is the
+        // safe direction for older saves.
+        public int lastPayrollSettledWeekIndex = -1;
         public string lastWeeklyBlockedReason = string.Empty;
         public string lastWeeklyOperationSummary = string.Empty;
         public string lastWeeklyTransferSummary = string.Empty;

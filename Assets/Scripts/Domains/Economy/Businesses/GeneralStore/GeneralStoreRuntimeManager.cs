@@ -1568,7 +1568,27 @@ namespace LandLedgers.FirstLedger
             FindAnyObjectByType<SharedBusinessRuntimeManager>()?.RecordWeeklyProfitForValuation(currentBusiness);
             runtimeState.BeginWeeklySettlementCadence(storeDefinition.Business, reorderThreshold01, false);
             ResolveAutomaticBusinessCashTransfer(BusinessCashAutoTransferMode.LowerOnly);
-            runtimeState.ResolveWeeklyPayroll();
+            // R19 sweep-before + R44 guard (note 115): the sweep settles
+            // escrowed wages from earlier weeks; the guard refuses a second
+            // payroll in the same week. The day index comes from the clock;
+            // -1 (unwired clock) means no guard, run as today. The store
+            // manager has no wiring calls of its own — the sweep is
+            // defensive about unwired ledgers (note 115 Q9) and skips the
+            // whole run with one diagnostic when they are unwired.
+            int payrollDayIndex = timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1;
+            runtimeState.SettleEscrowedWagePayables(payrollDayIndex);
+            if (runtimeState.TryBeginWeeklyPayroll(payrollDayIndex))
+            {
+                runtimeState.ResolveWeeklyPayroll();
+                runtimeState.StampWeeklyPayrollSettled(payrollDayIndex);
+            }
+            else
+            {
+                // TryBegin returned false, so the clock is wired
+                // (payrollDayIndex >= 0) and dayIndex / 7 is the week.
+                runtimeState.AppendWeeklyBlockedReason(
+                    $"week {payrollDayIndex / 7} already settled — payroll skipped (idempotency guard).");
+            }
             ReleaseSuspendedPayrollWorkersFromPopulation();
             ApprenticeshipProgressionEvaluator.AdvancePaidWorkers(currentBusiness, populationManager != null ? populationManager.State : null);
             ApplyWeeklyHouseholdSettlementEffects();

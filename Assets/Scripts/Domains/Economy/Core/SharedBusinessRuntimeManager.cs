@@ -4001,12 +4001,31 @@ namespace LandLedgers.Economy
                     continue;
                 }
 
+                // R19 sweep-before + R44 guard (note 115): the sweep settles
+                // escrowed wages from earlier weeks (the wiring above must
+                // run first — the sweep needs the authority wired to flush
+                // and the ledgers wired to credit); the guard refuses a
+                // second payroll in the same week. On refusal the run AND
+                // the suspended-release block are skipped (nothing was paid,
+                // so nothing is suspended by this run).
+                business.RuntimeState.SettleEscrowedWagePayables(CurrentDayIndex);
                 business.RuntimeState.PayrollDayIndex = CurrentDayIndex;
-                business.RuntimeState.ResolveWeeklyPayroll();
-                if (business.RuntimeState.LastSuspendedPayrollWorkerIds.Count > 0)
+                if (business.RuntimeState.TryBeginWeeklyPayroll(CurrentDayIndex))
                 {
-                    business.RuntimeState.AppendWeeklyBlockedReason("missed payroll");
-                    ReleaseSuspendedPayrollWorkersFromPopulation(business);
+                    business.RuntimeState.ResolveWeeklyPayroll();
+                    business.RuntimeState.StampWeeklyPayrollSettled(CurrentDayIndex);
+                    if (business.RuntimeState.LastSuspendedPayrollWorkerIds.Count > 0)
+                    {
+                        business.RuntimeState.AppendWeeklyBlockedReason("missed payroll");
+                        ReleaseSuspendedPayrollWorkersFromPopulation(business);
+                    }
+                }
+                else
+                {
+                    // TryBegin returned false, so the clock is wired
+                    // (CurrentDayIndex >= 0) and dayIndex / 7 is the week.
+                    business.RuntimeState.AppendWeeklyBlockedReason(
+                        $"week {CurrentDayIndex / 7} already settled — payroll skipped (idempotency guard).");
                 }
 
                 if (businessType == BusinessType.Blacksmith || businessType == BusinessType.Butcher)

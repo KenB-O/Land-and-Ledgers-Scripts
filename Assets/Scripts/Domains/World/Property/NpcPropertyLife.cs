@@ -1103,6 +1103,26 @@ namespace LandLedgers.World.Property
             return false;
         }
 
+        /// <summary>Assessed value for one NPC holding, per the R47 ruling: the single
+        /// assessed-value authority, falling back to the recorded acquisition price (the
+        /// TotalBasisCents a fresh appreciation state would carry) when the resolver
+        /// cannot answer. The player leg skips when the resolver answers 0; the NPC leg
+        /// must not, because no NPC parcel has a state on file yet (see plan §2.5).</summary>
+        private int AssessedValueForHolding(NpcPropertyHolding holding,
+            Func<int, int> assessedValueCentsForPlot, List<string> diag)
+        {
+            if (assessedValueCentsForPlot != null
+                && PlayerTitleBridge.TryPlotIdForParcelKey(holding.ParcelId, out int plotId))
+            {
+                int assessed = Math.Max(0, assessedValueCentsForPlot(plotId));
+                if (assessed > 0) return assessed;
+                diag.Add(string.Format(
+                    "NpcPropertyLife: no appreciation state on file for '{0}' - levying on recorded acquisition price {1}c.",
+                    holding.ParcelId, holding.AcquisitionPriceCents));
+            }
+            return Math.Max(0, holding.AcquisitionPriceCents);
+        }
+
         /// <summary>
         /// Pass IX WS6: the periodic production step over hub holdings —
         /// (0) annual levy, (1) delinquency clock and lien filing, (2) tax
@@ -1118,7 +1138,8 @@ namespace LandLedgers.World.Property
             CreditCashBridge cash, PropertyTaxService tax,
             FinancialObligationAuthority obligations, CivicTreasuryService treasury,
             int dayIndex, List<string> diag, NpcDistressSaleContext saleContext = null,
-            EntityIdRegistry ids = null, CreditRegistry registry = null)
+            EntityIdRegistry ids = null, CreditRegistry registry = null,
+            Func<int, int> assessedValueCentsForPlot = null)
         {
             diag = diag ?? diagnostics;
             var report = new NpcPropertyLifeReport();
@@ -1129,10 +1150,15 @@ namespace LandLedgers.World.Property
             // into this drive's tax book — the same catch-up rule the player
             // tax driver uses: every registered holding owes exactly one
             // assessment per tax year, levied when the current year's is
-            // missing. The assessed basis is the holding's recorded
-            // acquisition price (the only real valuation on the record);
-            // the rate/due/penalty calibration is PropertyTaxCalibration's,
-            // shared with the player leg.
+            // missing. The assessed basis is the single assessed-value
+            // authority (AcquisitionMarketManager.GetAssessedValueCentsForPlot,
+            // shared with the player leg — note 111 §11 / R47); when no
+            // appreciation state is on file for the holding's plot the
+            // resolver answers 0 and the levy falls back to the holding's
+            // recorded acquisition price, which is the TotalBasisCents a
+            // fresh state for that parcel would carry. The rate/due/penalty
+            // calibration is PropertyTaxCalibration's, shared with the
+            // player leg.
             if (tax != null)
             {
                 int taxYear = PropertyTaxCalibration.TaxYearForDay(dayIndex);
@@ -1140,7 +1166,8 @@ namespace LandLedgers.World.Property
                 {
                     if (holding == null) continue;
                     if (tax.HasAssessmentForParcelYear(holding.ParcelId, taxYear)) continue;
-                    int levyCents = PropertyTaxCalibration.ComputeLevyCents(holding.AcquisitionPriceCents);
+                    int assessedCents = AssessedValueForHolding(holding, assessedValueCentsForPlot, diag);
+                    int levyCents = PropertyTaxCalibration.ComputeLevyCents(assessedCents);
                     if (levyCents <= 0) continue;
                     TaxAssessment levied = LevyPropertyTax(tax, ids, holding, taxYear, levyCents,
                         dayIndex + PropertyTaxCalibration.DueDaysAfterLevy,

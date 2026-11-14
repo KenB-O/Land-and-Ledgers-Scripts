@@ -8607,8 +8607,9 @@ namespace LandLedgers.Economy
         /// <summary>
         /// P5: assessed value for the property-tax levy — the parcel's live estimated
         /// value, falling back to total cost basis when no estimate is on file.
+        /// Single assessed-value authority for BOTH tax legs (player and NPC) — note 111 §11 / R47.
         /// </summary>
-        private int GetAssessedValueCentsForPlot(int plotId)
+        public int GetAssessedValueCentsForPlot(int plotId)
         {
             for (int i = 0; i < ownedLandAppreciations.Count; i++)
             {

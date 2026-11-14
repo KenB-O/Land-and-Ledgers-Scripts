@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -26,6 +27,21 @@ namespace LandLedgers.World.Property
         public static string ParcelKeyForPlot(int plotId)
         {
             return $"plot-{plotId}";
+        }
+
+        /// <summary>Inverse of ParcelKeyForPlot: parses "plot-{id}". Returns false for any
+        /// other parcel-id form (bare-land ids, off-map ids, malformed keys). The canonical
+        /// format is defined here and only here.</summary>
+        public static bool TryPlotIdForParcelKey(string parcelId, out int plotId)
+        {
+            plotId = -1;
+            if (string.IsNullOrEmpty(parcelId)) return false;
+            const string prefix = "plot-";
+            if (!parcelId.StartsWith(prefix, StringComparison.Ordinal)) return false;
+            if (!int.TryParse(parcelId.Substring(prefix.Length), out int parsed)) return false;
+            if (parsed < 0) return false;
+            plotId = parsed;
+            return true;
         }
 
         /// <summary>

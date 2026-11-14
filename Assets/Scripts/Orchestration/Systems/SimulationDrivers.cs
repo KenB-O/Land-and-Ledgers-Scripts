@@ -4745,7 +4745,7 @@ namespace LandLedgers.Orchestration.Systems
                 && !sharedBusinessRuntime.TryFindByInstanceId("bakery_001", out bakery))
                 bakery = sharedBusinessRuntime.Businesses.FirstOrDefault(b => b != null && b.BusinessType == BusinessType.Bakery);
             BusinessInstanceState carrier = null;
-            bool carrierFound = sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out carrier);
+            bool carrierFound = FreightBusinessResolver.TryResolveFreightBusiness(sharedBusinessRuntime.Businesses, out carrier);
             if (bakery?.RuntimeState == null || bakery.Owner == null || bakery.Owner.PersonId < 0
                 || !carrierFound
                 || carrier?.Owner == null || carrier.Owner.PersonId < 0
@@ -5350,8 +5350,13 @@ namespace LandLedgers.Orchestration.Systems
         {
             if (hub == null || sharedBusinessRuntime == null || populationManager?.State == null
                 || hub.Animals == null || hub.Journeys == null) return;
-            if (!sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)
-                || freight?.RuntimeState == null || freight.Owner == null || freight.Owner.PersonId < 0) return;
+            if (!FreightBusinessResolver.TryResolveFreightBusiness(sharedBusinessRuntime.Businesses, out BusinessInstanceState freight))
+            {
+                LogRefusalDayKeyed("freight-resolver:feed", absoluteDayIndex,
+                    "[BusinessFeed] No LiveryFreight business resolved (preferred id 'livery_freight_003' absent and no fallback business of type LiveryFreight exists); feed procurement skipped for the day.");
+                return;
+            }
+            if (freight?.RuntimeState == null || freight.Owner == null || freight.Owner.PersonId < 0) return;
 
             // W4 (F-1): a refused return-leg receipt is retried here, on the
             // next feed-drive day, BEFORE any new purchase is placed for the
@@ -6590,9 +6595,14 @@ namespace LandLedgers.Orchestration.Systems
 
         private void DriveOpeningHitchPreparation(int absoluteDayIndex)
         {
-            if (hub == null || sharedBusinessRuntime == null || populationManager?.State == null
-                || !sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)
-                || freight?.Owner == null || freight.Owner.PersonId < 0) return;
+            if (hub == null || sharedBusinessRuntime == null || populationManager?.State == null) return;
+            if (!FreightBusinessResolver.TryResolveFreightBusiness(sharedBusinessRuntime.Businesses, out BusinessInstanceState freight))
+            {
+                LogRefusalDayKeyed("freight-resolver:hitch-prep", absoluteDayIndex,
+                    "[Hitching] No LiveryFreight business resolved (preferred id 'livery_freight_003' absent and no fallback business of type LiveryFreight exists); hitch preparation skipped for the day.");
+                return;
+            }
+            if (freight?.Owner == null || freight.Owner.PersonId < 0) return;
             AnimalState horse = null;
             foreach (AnimalState candidate in hub.Animals.ActiveAnimals)
                 if (candidate != null && candidate.IsActive && candidate.Species == AnimalSpecies.Horse
@@ -6794,8 +6804,13 @@ namespace LandLedgers.Orchestration.Systems
 
         private void StartQueuedOpeningHitchTask(int dayIndex, int tickStartMinute, int tickEndMinute)
         {
-            if (hub?.Tasks == null || sharedBusinessRuntime == null || populationManager?.State == null
-                || !sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)) return;
+            if (hub?.Tasks == null || sharedBusinessRuntime == null || populationManager?.State == null) return;
+            if (!FreightBusinessResolver.TryResolveFreightBusiness(sharedBusinessRuntime.Businesses, out BusinessInstanceState freight))
+            {
+                LogRefusalDayKeyed("freight-resolver:hitch-start", dayIndex,
+                    "[Hitching] No LiveryFreight business resolved (preferred id 'livery_freight_003' absent and no fallback business of type LiveryFreight exists); queued hitch task not started.");
+                return;
+            }
             EquipmentAsset wagon = hub.TransportAssets.Get("opening-freight-wagon");
             if (wagon == null || string.IsNullOrWhiteSpace(wagon.HitchPreparationTaskId)) return;
             WorkTask hitch = hub.Tasks.FindTaskByIdString(wagon.HitchPreparationTaskId);
@@ -7096,7 +7111,13 @@ namespace LandLedgers.Orchestration.Systems
 
         private void HandleCompletedOpeningHitchTask(WorkTask task, int dayIndex)
         {
-            if (task == null || !sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)) return;
+            if (task == null) return;
+            if (!FreightBusinessResolver.TryResolveFreightBusiness(sharedBusinessRuntime.Businesses, out BusinessInstanceState freight))
+            {
+                LogRefusalDayKeyed("freight-resolver:hitch-complete", dayIndex,
+                    "[Hitching] No LiveryFreight business resolved (preferred id 'livery_freight_003' absent and no fallback business of type LiveryFreight exists); completed hitch task dropped.");
+                return;
+            }
             EquipmentAsset wagon = hub.TransportAssets.Get("opening-freight-wagon");
             if (wagon == null) return;
             if (task.CustomerRef.StartsWith(DevelopmentHitchTaskPrefix + "travel:", StringComparison.Ordinal))

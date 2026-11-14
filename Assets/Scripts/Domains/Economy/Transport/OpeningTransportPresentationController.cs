@@ -705,13 +705,9 @@ namespace LandLedgers.Economy.Transport
 
         private static BusinessInstanceState FindFreightBusiness(IReadOnlyList<BusinessInstanceState> businesses)
         {
-            if (businesses == null) return null;
-            foreach (BusinessInstanceState business in businesses)
-                if (business != null && business.BusinessType == BusinessType.LiveryFreight
-                    && business.InstanceId == "livery_freight_003") return business;
-            foreach (BusinessInstanceState business in businesses)
-                if (business != null && business.BusinessType == BusinessType.LiveryFreight) return business;
-            return null;
+            return FreightBusinessResolver.TryResolveFreightBusiness(businesses, out BusinessInstanceState freight)
+                ? freight
+                : null;
         }
 
         private static AnimalState FindOpeningHorse(List<AnimalState> horses)

@@ -323,7 +323,11 @@ namespace LandLedgers.Population
         TradeCreditObligation = 1,
     }
 
-    /// <summary>Phase C: the money side of one retail purchase.</summary>
+    /// <summary>Phase C: the money side of one retail purchase. P28: the
+    /// FreightCents and CarrierBusinessInstanceId fields are write-only in
+    /// this slice (no production reader; SellItem never reads freight from
+    /// the settlement) — they record the split so the carrier leg is
+    /// observable in the audit trail, not the store's.</summary>
     [Serializable]
     public sealed class ShoppingSettlement
     {
@@ -331,12 +335,28 @@ namespace LandLedgers.Population
         public int AmountCents;
         public string ObligationId = string.Empty;
         public string Terms = string.Empty;
+        /// <summary>P28: the delivery-fee leg of this settlement, in cents.
+        /// 0 when no delivery was charged. The household debits AmountCents
+        /// (goods + freight) in one debit; the store posts AmountCents minus
+        /// FreightCents and the carrier posts FreightCents.</summary>
+        public int FreightCents;
+        /// <summary>P28: the carrier business id that performed (or was
+        /// bound to perform) the delivery for this settlement.</summary>
+        public string CarrierBusinessInstanceId = string.Empty;
+        /// <summary>P28 (C2): the trade-credit obligation id for the freight
+        /// leg, when the settlement was on credit and a fee was charged.
+        /// Empty in cash mode or when no fee was charged.</summary>
+        public string FreightObligationId = string.Empty;
     }
 
     /// <summary>
     /// Phase C: result of one shopping trip through the 17-step loop.
     /// Carries the conservation evidence: buyer outflow == store cash in +
-    /// store receivable, every cent.
+    /// store receivable + carrier cash in + carrier receivable, every cent.
+    /// Before P28 the identity was buyer outflow == store cash in + store
+    /// receivable; the fee was silently folded into the store's leg. With a
+    /// fee of 0 every carrier term is 0 and the identity reduces to the old
+    /// one.
     /// </summary>
     [Serializable]
     public sealed class ShoppingTripResult
@@ -370,9 +390,19 @@ namespace LandLedgers.Population
         public int BuyerOutflowCents;
         public int StoreCashInCents;
         public int StoreReceivableCents;
+        /// <summary>P28: the delivery-fee leg credited to the carrier's
+        /// till in cash mode. 0 in credit mode (the carrier leg is a
+        /// receivable there) and 0 whenever no fee was charged.</summary>
+        public int CarrierCashInCents;
+        /// <summary>P28: the delivery-fee leg owed to the carrier in credit
+        /// mode. 0 in cash mode and 0 whenever no fee was charged.</summary>
+        public int CarrierReceivableCents;
         public string Counterparty = string.Empty;
         public string ReceiptId = string.Empty;
         public string ObligationId = string.Empty;
+        /// <summary>P28 (C2): the trade-credit obligation id for the
+        /// freight leg. Empty in cash mode or when no fee was charged.</summary>
+        public string FreightObligationId = string.Empty;
         /// <summary>
         /// Priority V1: the household lot id the receipt path deposited
         /// this trip's goods into, resolved through the F4 lot identity

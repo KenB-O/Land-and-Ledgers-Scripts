@@ -1905,14 +1905,17 @@ namespace LandLedgers.Orchestration.HouseholdSlice
         {
             var r = new ReconciliationResult();
 
-            // ---- every shopping trip: buyer out == seller cash in + seller receivable ----
-            int tripBuyerOut = 0, tripStoreIn = 0, tripReceivable = 0, tripBakeryIn = 0;
+            // ---- every shopping trip: buyer out == seller cash in + seller receivable + carrier cash in + carrier receivable ----
+            // P28: the fee leg posts to the carrier's till (cash) or the carrier's receivable (credit), never the store's.
+            int tripBuyerOut = 0, tripStoreIn = 0, tripReceivable = 0, tripBakeryIn = 0, tripCarrierIn = 0, tripCarrierReceivable = 0;
             foreach (ShoppingTripResult trip in w.Shopping.TripHistory)
             {
                 if (trip == null) continue;
                 tripBuyerOut += trip.BuyerOutflowCents;
                 tripStoreIn += trip.StoreCashInCents;
                 tripReceivable += trip.StoreReceivableCents;
+                tripCarrierIn += trip.CarrierCashInCents;
+                tripCarrierReceivable += trip.CarrierReceivableCents;
                 if (trip.Success && !string.Equals(trip.Counterparty, "Hart General Store", StringComparison.Ordinal))
                 {
                     // The bakery's first sale posts to the bakery purse, not the store.
@@ -1920,8 +1923,8 @@ namespace LandLedgers.Orchestration.HouseholdSlice
                 }
             }
 
-            Check(r, tripBuyerOut == tripStoreIn + tripReceivable,
-                $"shopping conservation: buyer out {tripBuyerOut}c == seller in {tripStoreIn}c + receivable {tripReceivable}c " +
+            Check(r, tripBuyerOut == tripStoreIn + tripReceivable + tripCarrierIn + tripCarrierReceivable,
+                $"shopping conservation: buyer out {tripBuyerOut}c == seller in {tripStoreIn}c + receivable {tripReceivable}c + carrier in {tripCarrierIn}c + carrier receivable {tripCarrierReceivable}c " +
                 $"({w.Shopping.TripHistory.Count} trips)");
 
             int storeSalesIn = tripStoreIn - tripBakeryIn;

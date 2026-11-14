@@ -122,6 +122,11 @@ namespace LandLedgers.Population
         public int DeliveryFeeCents;
         public bool UseDelivery;
         public int SettlementMode;
+        // P28: the carrier bound at evaluation time for this trip's
+        // supplier. Additive; old saves read string.Empty, so a restored
+        // trip with a fee and no carrier refuses at the counter instead of
+        // charging the fee to the store.
+        public string CarrierBusinessInstanceId = string.Empty;
         // Custody batch scalars (null BatchId = no settlement yet).
         public string BatchId = string.Empty;
         public string BatchItemId = string.Empty;
@@ -1342,6 +1347,7 @@ namespace LandLedgers.Population
                 dto.DeliveryFeeCents = trip.Candidate.DeliveryFeeCents;
                 dto.UseDelivery = trip.Candidate.UseDelivery;
                 dto.SettlementMode = (int)trip.Candidate.SettlementMode;
+                dto.CarrierBusinessInstanceId = trip.Candidate.CarrierBusinessInstanceId ?? string.Empty;
             }
 
             if (trip.Batch != null)
@@ -1443,6 +1449,7 @@ namespace LandLedgers.Population
                 TotalCostCents = dto.TotalCostCents,
                 DeliveryFeeCents = dto.DeliveryFeeCents,
                 UseDelivery = dto.UseDelivery,
+                CarrierBusinessInstanceId = dto.CarrierBusinessInstanceId ?? string.Empty,
                 SettlementMode = (ShoppingSettlementMode)dto.SettlementMode,
             };
         }

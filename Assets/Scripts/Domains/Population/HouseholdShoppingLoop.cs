@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Storage;
@@ -92,6 +94,17 @@ namespace LandLedgers.Population
         private readonly Func<int, EntityId> personEntityId;
         private readonly Func<int, HouseholdSpendingPolicy> spendingPolicyProvider;
         private OffMapJourneyAuthority offMapJourneys;
+
+        /// <summary>
+        /// P28 (note 132, Option B): optional per-supplier carrier-id lookup,
+        /// plus a resolver from a carrier business id to the carrier's live
+        /// till (BusinessRuntimeState). Both are null in production, so the
+        /// fee stays 0 (and the production port offers no delivery). Tests
+        /// bind them to prove the split; the backstop refuses any fee with no
+        /// resolvable carrier till. R47 pattern: optional trailing ctor params.
+        /// </summary>
+        private readonly Func<IGoodsSupplier, string> carrierBusinessIdForSupplier;
+        private readonly Func<string, BusinessRuntimeState> carrierRuntimeResolver;
 
         /// <summary>
         /// Plan 08 Slice 2 (Q03, AUD-266): the off-map journey authority
@@ -509,7 +522,9 @@ namespace LandLedgers.Population
             EntityIdRegistry entityIds = null,
             Func<int, EntityId> personEntityId = null,
             Func<int, HouseholdSpendingPolicy> spendingPolicyProvider = null,
-            OffMapJourneyAuthority offMapJourneys = null)
+            OffMapJourneyAuthority offMapJourneys = null,
+            Func<IGoodsSupplier, string> carrierBusinessIdForSupplier = null,
+            Func<string, BusinessRuntimeState> carrierRuntimeResolver = null)
         {
             this.population = population ?? throw new ArgumentNullException(nameof(population));
             this.membership = membership ?? throw new ArgumentNullException(nameof(membership));
@@ -527,6 +542,8 @@ namespace LandLedgers.Population
             this.personEntityId = personEntityId ?? (pid => EntityId.For(EntityKind.Person, pid));
             this.spendingPolicyProvider = spendingPolicyProvider;
             this.offMapJourneys = offMapJourneys;
+            this.carrierBusinessIdForSupplier = carrierBusinessIdForSupplier;
+            this.carrierRuntimeResolver = carrierRuntimeResolver;
         }
 
         /// <summary>
@@ -1632,6 +1649,26 @@ namespace LandLedgers.Population
                 "Nothing affordable or available at the counter — no sale.");
         }
 
+        // ---- P28 backstop: a delivery fee with no resolvable carrier till
+        // refuses the whole settlement BEFORE any cash moves. The fee belongs
+        // to the carrier, never the store, and a fee-0 delivery with no
+        // carrier still settles (the backstop keys on freightCost > 0, not
+        // on UseDelivery). Old saves restore an empty carrier id and refuse
+        // safely instead of charging the fee to the store. ----
+        BusinessRuntimeState carrierRuntime = null;
+        if (freightCost > 0)
+        {
+            string carrierId = chosen.CarrierBusinessInstanceId ?? string.Empty;
+            carrierRuntime = !string.IsNullOrEmpty(carrierId) && carrierRuntimeResolver != null
+                ? carrierRuntimeResolver.Invoke(carrierId)
+                : null;
+            if (carrierRuntime == null || !string.Equals(carrierRuntime.BusinessId, carrierId, StringComparison.Ordinal))
+            {
+                return SettlementOutcome.Failed(
+                    $"Delivery fee {freightCost}c cannot be charged: no carrier till is bound for '{chosen.Supplier.SupplierName}' — the delivery leg is unwired. Need stays open; no cash moved.");
+            }
+        }
+
         // ---- Steps 10-11: settlement — ledger outflow OR a valid credit
         // obligation. No informal debt, ever. ----
         var settlement = new ShoppingSettlement { AmountCents = totalCost };
@@ -1649,8 +1686,13 @@ namespace LandLedgers.Population
             }
 
             settlement.Mode = ShoppingSettlementMode.CashFromLedger;
+            settlement.FreightCents = freightCost;
+            settlement.CarrierBusinessInstanceId = chosen.CarrierBusinessInstanceId ?? string.Empty;
             result.BuyerOutflowCents = totalCost;
-            result.StoreCashInCents = totalCost;
+            // P28: the store posts goods-only. The freight leg posts to the
+            // carrier's till below (step 12), after the household debit.
+            result.StoreCashInCents = goodsCost;
+            result.CarrierCashInCents = freightCost;
         }
         else
         {
@@ -1660,11 +1702,19 @@ namespace LandLedgers.Population
                 "Trade credit chosen but no obligation authority is wired — cannot create informal debt. Need stays open.");
             }
 
+            // P28: credit splits into TWO obligations — goods to the store,
+            // freight to the carrier — so a fee is never the store's debt.
+            // The goods obligation is created first; the freight creation's
+            // only null return is the pre-validated :222-223 guard, so a null
+            // freight creation after a goods creation is unreachable by
+            // construction (both principals are > 0 here and both ids are
+            // non-blank). The freight obligation is created only when a fee
+            // was charged at all.
             FinancialObligation obligation = obligations.Create(
                 entityIds, FinancialObligationKind.TradeCredit,
                 debtor: $"household:{need.HouseholdId}",
                 creditor: chosen.Supplier.SupplierBusinessId,
-                principalCents: totalCost,
+                principalCents: goodsCost,
                 dayIndex: dayIndex,
                 terms: $"trade credit, net 30, for {units}u {need.ItemId}",
                 purpose: $"shopping: {units}u {need.ItemId} from {chosen.Supplier.SupplierName}");
@@ -1674,17 +1724,41 @@ namespace LandLedgers.Population
                 "Trade credit obligation could not be created — no sale without valid credit. Need stays open.");
             }
 
+            FinancialObligation freightObligation = null;
+            if (freightCost > 0)
+            {
+                freightObligation = obligations.Create(
+                    entityIds, FinancialObligationKind.TradeCredit,
+                    debtor: $"household:{need.HouseholdId}",
+                    creditor: chosen.CarrierBusinessInstanceId,
+                    principalCents: freightCost,
+                    dayIndex: dayIndex,
+                    terms: $"trade credit, net 30, for delivery of {units}u {need.ItemId}",
+                    purpose: $"shopping delivery: {units}u {need.ItemId} from {chosen.Supplier.SupplierName}");
+            }
+
             settlement.Mode = ShoppingSettlementMode.TradeCreditObligation;
+            settlement.FreightCents = freightCost;
+            settlement.CarrierBusinessInstanceId = chosen.CarrierBusinessInstanceId ?? string.Empty;
             settlement.ObligationId = obligation.ObligationId;
             settlement.Terms = obligation.Terms;
+            settlement.FreightObligationId = freightObligation != null ? freightObligation.ObligationId : string.Empty;
             result.ObligationId = obligation.ObligationId;
-            result.StoreReceivableCents = totalCost;
+            result.FreightObligationId = settlement.FreightObligationId;
+            result.StoreReceivableCents = goodsCost;
+            result.CarrierReceivableCents = freightCost;
         }
 
+        string freightCashSuffix = freightCost > 0
+            ? $" ({goodsCost}c goods + {freightCost}c delivery fee to '{chosen.CarrierBusinessInstanceId}')"
+            : string.Empty;
+        string freightCreditSuffix = freightCost > 0
+            ? $" + {freightCost}c delivery fee to '{chosen.CarrierBusinessInstanceId}' (trade credit {settlement.FreightObligationId})"
+            : string.Empty;
         AddEvent(result, dayIndex, ShoppingEventKind.Settlement, shopperId, need,
             settlement.Mode == ShoppingSettlementMode.CashFromLedger
-                ? $"H{need.HouseholdId} paid {totalCost}c from its ledger to '{chosen.Supplier.SupplierName}'."
-                : $"H{need.HouseholdId} owes {totalCost}c to '{chosen.Supplier.SupplierName}' (trade credit {settlement.ObligationId}).",
+                ? $"H{need.HouseholdId} paid {totalCost}c from its ledger to '{chosen.Supplier.SupplierName}'{freightCashSuffix}."
+                : $"H{need.HouseholdId} owes {goodsCost}c to '{chosen.Supplier.SupplierName}' (trade credit {settlement.ObligationId}){freightCreditSuffix}.",
             $"units={units} price={unitPrice}c freight={freightCost}c mode={settlement.Mode}");
 
         // ---- Steps 12-13: the ACTUAL retail transaction — real store
@@ -1706,8 +1780,22 @@ namespace LandLedgers.Population
             result.BuyerOutflowCents = 0;
             result.StoreCashInCents = 0;
             result.StoreReceivableCents = 0;
+            result.CarrierCashInCents = 0;
+            result.CarrierReceivableCents = 0;
             return SettlementOutcome.Failed(
                 $"INCONSISTENCY: settlement of {totalCost}c was posted but '{chosen.Supplier.SupplierName}' sold 0 units — refunded, manual reconciliation required.");
+        }
+
+        // P28: the carrier leg of the settlement — cash mode only, after the
+        // household debit and after the store posted, exactly once, through
+        // the carrier's own single-writer method (the exact call
+        // CollectAndPostUncollectedRevenue uses). Credit mode reaches the
+        // carrier through the freight obligation created above instead.
+        // Freight stands on a partial fill, so this posts before the
+        // partial-fill refund below, which is goods-only.
+        if (freightCost > 0 && settlement.Mode == ShoppingSettlementMode.CashFromLedger && carrierRuntime != null)
+        {
+            carrierRuntime.RecordDailyServiceRevenue(FreightCompanyRuntime.FreightRevenueCategoryId, 1, freightCost);
         }
 
         // Priority spoilage integration: the purchase never resets the
@@ -1746,11 +1834,24 @@ namespace LandLedgers.Population
                     $"refund: {units - sold}u {need.ItemId} of {units}u planned could not be filled",
                     chosen.Supplier.SupplierName);
                 result.BuyerOutflowCents = totalCost - unitShortfallRefund;
-                result.StoreCashInCents = totalCost - unitShortfallRefund;
+                // P28: the store trues to the goods actually sold; the
+                // carrier leg stands (freight is not refunded — Q4).
+                result.StoreCashInCents = sold * unitPrice;
+                result.CarrierCashInCents = freightCost;
                 diag.Add($"Day {dayIndex}: partial fill — refunded {unitShortfallRefund}c for {units - sold}u unfilled.");
             }
             else if (settlement.Mode == ShoppingSettlementMode.TradeCreditObligation)
             {
+                // P28 (C1): the credit branch never trued any field — a credit
+                // partial fill left StoreReceivableCents at the PLANNED
+                // goodsCost while the store posted only sold * unitPrice.
+                // Trued here: the store's receivable is the goods actually
+                // sold, the carrier's receivable stands (freight is not
+                // refunded — Q4). The obligation principals stay as created
+                // (the §8.2 wart class): the store's obligation still covers
+                // the planned units and the household must reconcile it.
+                result.StoreReceivableCents = sold * unitPrice;
+                result.CarrierReceivableCents = freightCost;
                 diag.Add($"Day {dayIndex}: INCONSISTENCY — trade credit {settlement.ObligationId} " +
                     $"covers {units}u but only {sold}u were delivered; manual reconciliation required.");
             }
@@ -1783,11 +1884,16 @@ namespace LandLedgers.Population
             $"seller='{chosen.Supplier.SupplierName}', item='{need.ItemId}', units={sold}, " +
             $"unit price={unitPrice}c, total settled={totalCost}c, household debit={result.BuyerOutflowCents}c, " +
             $"seller cash credit={result.StoreCashInCents}c, seller receivable={result.StoreReceivableCents}c, " +
+            (freightCost > 0
+                ? $"carrier cash credit={result.CarrierCashInCents}c, carrier receivable={result.CarrierReceivableCents}c, "
+                : string.Empty) +
             $"household cash after={householdBalanceAfter}c, seller stock after={stockAfterSale}, " +
             $"settlement={settlement.Mode}, receipt='{result.ReceiptId}'.");
         AddEvent(result, dayIndex, ShoppingEventKind.RetailPurchase, shopperId, need,
             $"'{chosen.Supplier.SupplierName}' sold {sold}u {need.ItemId} ({result.ReceiptId}).",
-            $"real store stock decreased; business posted {(settlement.Mode == ShoppingSettlementMode.CashFromLedger ? "cash" : "receivable")} {totalCost}c.");
+            freightCost > 0
+                ? $"real store stock decreased; store posted {(settlement.Mode == ShoppingSettlementMode.CashFromLedger ? "cash" : "receivable")} {goodsCost}c, carrier posted {(settlement.Mode == ShoppingSettlementMode.CashFromLedger ? "cash" : "receivable")} {freightCost}c."
+                : $"real store stock decreased; business posted {(settlement.Mode == ShoppingSettlementMode.CashFromLedger ? "cash" : "receivable")} {totalCost}c.");
 
         // ---- Priority V1: consult the F2 capacity evaluator BEFORE
         // InHand custody is assigned, with the live carry cap supplied.
@@ -3087,10 +3193,22 @@ namespace LandLedgers.Population
                 // Carry vs delivery: a person on foot can only carry so much —
                 // beyond CarryCapacityUnits the goods need a real freight leg
                 // with a real fee. The shopper takes the cheaper honest option.
+                // P28 (note 132, Option B): delivery may be offered without
+                // a carrier, but the fee is forced to 0 when no carrier is
+                // bound for this supplier — a nonzero fee is charged only
+                // when a carrier id is bound AND the backstop resolves its
+                // till. A fee-0 delivery with no carrier settles as an
+                // estimate, not a leg (note 131 F3). With no carrier seams
+                // (production today) this is exactly the old gate, and the
+                // fee stays 0. The carrier id travels on the candidate so
+                // the counter settlement can resolve its till.
+                string carrierBusinessId = carrierBusinessIdForSupplier != null
+                    ? carrierBusinessIdForSupplier.Invoke(supplier) ?? string.Empty
+                    : string.Empty;
                 bool deliveryOffered = options.AllowDelivery
                     && supplier is IDeliveryOfferingSupplier deliverySupplier
                     && deliverySupplier.OffersDelivery;
-                int freight = deliveryOffered
+                int freight = deliveryOffered && !string.IsNullOrEmpty(carrierBusinessId)
                     ? Math.Max(0, ((IDeliveryOfferingSupplier)supplier).DeliveryFeeCents(need.ItemId, units))
                     : 0;
                 bool useDelivery = deliveryOffered && units > Math.Max(1, options.CarryCapacityUnits);
@@ -3175,6 +3293,7 @@ namespace LandLedgers.Population
                     TotalCostCents = total,
                     DeliveryFeeCents = freight,
                     UseDelivery = useDelivery,
+                    CarrierBusinessInstanceId = carrierBusinessId,
                     SettlementMode = mode,
                     // Stock binds only when affordability did not
                     // already downsize: units was capped at stock
@@ -3530,6 +3649,13 @@ namespace LandLedgers.Population
             public int TotalCostCents;
             public int DeliveryFeeCents;
             public bool UseDelivery;
+            /// <summary>
+            /// P28: the carrier business id bound at evaluation time for this
+            /// supplier (string.Empty when no carrier is bound). Carried onto
+            /// the trip DTO so a restored trip can still refuse a fee with no
+            /// resolvable carrier till instead of charging it to the store.
+            /// </summary>
+            public string CarrierBusinessInstanceId = string.Empty;
             public ShoppingSettlementMode SettlementMode;
         }
     }

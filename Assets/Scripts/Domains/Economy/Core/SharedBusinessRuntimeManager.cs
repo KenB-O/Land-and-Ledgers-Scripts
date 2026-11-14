@@ -6,6 +6,7 @@ using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Core;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Transport;
 using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
@@ -3708,9 +3709,34 @@ namespace LandLedgers.Economy
             string workerId = slot.AssignedWorkerId;
             string workerName = slot.AssignedWorkerDisplayName;
             string slotName = slot.SlotDisplayName;
+
+            // R17 (note 111 §2, note 114): end the employment record and
+            // settle the final wage BEFORE the slot clears — a failed end
+            // must leave the slot filled (ruling step 3), and there is no
+            // rollback API. The registry gate refuses loudly before any
+            // mutation; a "no-record" outcome proceeds with the slot and
+            // person reset, no wage invented.
+            int personId;
+            if (!int.TryParse(workerId, out personId))
+            {
+                personId = -1;
+            }
+
+            EmploymentRelationshipRegistry registry = EmploymentRegistry;
+            if (registry == null)
+            {
+                message = $"Firing refused: employment registry unavailable — {workerName} stays employed at {business.RuntimeDisplayName}.";
+                Debug.Log($"[SharedBusinessRuntimeManager] {message}", this);
+                return false;
+            }
+
+            var diagnostics = new List<string>();
+            string firingOutcome = EmploymentFiringService.EndEmploymentForFiring(
+                business.RuntimeState, registry, personId, CurrentDayIndex, diagnostics);
+            diagnostics.Add($"EmploymentFiringService outcome: {firingOutcome}.");
             slot.Unassign();
 
-            if (int.TryParse(workerId, out int personId) && populationManager != null && populationManager.State != null)
+            if (personId >= 0 && populationManager != null && populationManager.State != null)
             {
                 PersonState person = populationManager.State.GetPerson(personId);
                 if (person != null && person.workplaceBuildingId == business.AssignedBuildingId)

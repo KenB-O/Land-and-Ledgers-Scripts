@@ -4,6 +4,7 @@ using System.Text;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.GeneralStore;
+using LandLedgers.Economy.Labor;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
@@ -2210,11 +2211,39 @@ namespace LandLedgers.FirstLedger
             string workerId = slot.AssignedWorkerId;
             string workerName = slot.AssignedWorkerDisplayName;
             string slotName = slot.SlotDisplayName;
+
+            // R17 (note 111 §2, note 114 Q6): end the employment record and
+            // settle the final wage BEFORE the slot clears. Registry
+            // resolution is the runtime state's registry with the shared
+            // manager's as fallback (the fallback stays even if the shared
+            // wiring is verified to cover the store business).
+            int personId;
+            if (!int.TryParse(workerId, out personId))
+            {
+                personId = -1;
+            }
+
+            EmploymentRelationshipRegistry registry =
+                runtimeState.EmploymentRegistry ?? sharedBusinessRuntime?.EmploymentRegistry;
+            if (registry == null)
+            {
+                message = $"Firing refused: employment registry unavailable — {workerName} stays employed.";
+                lastStaffingSummary = message;
+                Debug.Log($"[General Store][Staffing] {message}", this);
+                return false;
+            }
+
+            var diagnostics = new List<string>();
+            string firingOutcome = EmploymentFiringService.EndEmploymentForFiring(
+                runtimeState, registry, personId,
+                timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1, diagnostics);
+            diagnostics.Add($"EmploymentFiringService outcome: {firingOutcome}.");
+
             slot.Unassign();
             currentBusiness.ResolveWeeklyBaselineThroughput();
             currentBusiness.ResolveDailyBaselineService();
 
-            if (int.TryParse(workerId, out int personId) && populationManager != null && populationManager.State != null)
+            if (personId >= 0 && populationManager != null && populationManager.State != null)
             {
                 PersonState person = populationManager.State.GetPerson(personId);
                 if (person != null && person.workplaceBuildingId == storeBuildingId)

@@ -35,14 +35,20 @@ namespace LandLedgers.Economy.Businesses.Logging
     /// the remainder: TryTakeOldestLot gives the remaining logs a fresh
     /// LotId (the consumed portion keeps the original id), so the driver
     /// follows the remainder's new id after a partial run; the job id
-    /// ("sawmill:" plus the original lot id) never changes. The
-    /// custody-ledger Processed move is deferred to Tier 2 (no
-    /// LogLotCustodyLedger exists on this line); the driver's job record
-    /// plus the yard is the production state authority in Tier 1.
+    /// (\"sawmill:\" plus the original lot id) never changes. The
+    /// custody ledger is ported in Tier 2 (LogLotCustodyLedger); the
+    /// driver records a fully consumed lot as Processed through its
+    /// optional ledger reference at the completion step, with the
+    /// original lot id derived from the job id. The driver's job record
+    /// plus the yard stays the production state authority; registration
+    /// of lots into the ledger from the live path is a follow-up slice,
+    /// so a lot that was never registered is diagnosed, never invented.
     ///
     /// The driver is unbound in Tier 1: no hub list entry, no save
     /// section, no production call site. Wiring is instructions only
-    /// (plan 20-plan-f6 §6).
+    /// (plan 20-plan-f6 §6). Tier 2 keeps the driver unbound (plan
+    /// 22-plan-f6-tier2 §6): the ledger is an optional constructor
+    /// reference only, and no production caller supplies one yet.
     /// </summary>
     [Serializable]
     public sealed class SawmillProductionJob
@@ -84,6 +90,7 @@ namespace LandLedgers.Economy.Businesses.Logging
         private readonly EquipmentTaskGate gate;
         private readonly SawmillLabourCounters labourCounters;
         private readonly List<string> diagnostics;
+        private readonly LogLotCustodyLedger ledger;
         private readonly Dictionary<string, SawmillProductionJob> jobs =
             new Dictionary<string, SawmillProductionJob>(StringComparer.Ordinal);
 
@@ -93,7 +100,8 @@ namespace LandLedgers.Economy.Businesses.Logging
             WorkTimeBudgetStore budgetStore,
             EquipmentTaskGate gate,
             SawmillLabourCounters labourCounters,
-            List<string> diagnostics)
+            List<string> diagnostics,
+            LogLotCustodyLedger ledger = null)
         {
             this.mill = mill;
             this.taskAuthority = taskAuthority;
@@ -101,6 +109,11 @@ namespace LandLedgers.Economy.Businesses.Logging
             this.gate = gate;
             this.labourCounters = labourCounters;
             this.diagnostics = diagnostics ?? new List<string>();
+            this.ledger = ledger;
+            if (ledger == null)
+            {
+                this.diagnostics.Add("SawmillProductionDriver: no custody ledger — produced lots are not recorded as Processed; production proceeds.");
+            }
             if (mill == null)
             {
                 this.diagnostics.Add("SawmillProductionDriver: no sawmill runtime — production refused.");
@@ -145,6 +158,7 @@ namespace LandLedgers.Economy.Businesses.Logging
         public WorkTimeBudgetStore BudgetStore => budgetStore;
         public EquipmentTaskGate Gate => gate;
         public SawmillLabourCounters LabourCounters => labourCounters;
+        public LogLotCustodyLedger Ledger => ledger;
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public int ProductionJobCount => jobs.Count;
         public IReadOnlyDictionary<string, SawmillProductionJob> ProductionJobs => jobs;
@@ -279,6 +293,32 @@ namespace LandLedgers.Economy.Businesses.Logging
             jobs[jobId] = job;
             diagnostics.Add($"SawmillProductionDriver.BeginProduction: job '{jobId}' began for {logsToSaw} logs at mill '{job.MillBusinessId}'.");
             return job;
+        }
+
+        /// <summary>
+        /// Records a fully consumed lot as Processed in the custody ledger.
+        /// The original lot id is derived from the job id ("sawmill:" plus
+        /// the original lot id, built once in BeginProduction and never
+        /// rewritten); job.LotId is the remainder's fresh id after a partial
+        /// run and must never be marked. A refusal is diagnostic only: the
+        /// sawing already happened and the lumber already exists, so the job
+        /// still completes with its counters credited.
+        /// </summary>
+        private void MarkLedgerProcessed(SawmillProductionJob job, int dayIndex)
+        {
+            if (ledger == null)
+            {
+                diagnostics.Add($"SawmillProductionDriver.MarkLedgerProcessed: job '{job.JobId}' — no custody ledger; the lot is not recorded as Processed.");
+                return;
+            }
+            string originalLotId = job.JobId.Substring("sawmill:".Length);
+            string refusal = ledger.MarkProcessed(originalLotId, job.MillBusinessId, dayIndex);
+            if (refusal != null)
+            {
+                diagnostics.Add($"SawmillProductionDriver.MarkLedgerProcessed: job '{job.JobId}' — the ledger could not record lot '{originalLotId}' as Processed: {refusal}");
+                return;
+            }
+            diagnostics.Add($"SawmillProductionDriver.MarkLedgerProcessed: job '{job.JobId}' — lot '{originalLotId}' recorded as Processed by '{job.MillBusinessId}' (day {dayIndex}).");
         }
 
         /// <summary>
@@ -502,6 +542,7 @@ namespace LandLedgers.Economy.Businesses.Logging
             job.LotFullyConsumed = true;
             job.CompletedDayIndex = dayIndex;
             job.State = SawmillProductionJobState.Complete;
+            MarkLedgerProcessed(job, dayIndex);
             diagnostics.Add($"SawmillProductionDriver.RunProduction: job '{jobId}' complete — lot '{job.LotId}' fully consumed ({job.LogsSawnTotal} logs, {job.LumberUnitsTotal} lumber, {job.FuelWoodUnitsTotal} fuel wood, {job.SawMinutesTotal} saw minutes).");
             return true;
         }

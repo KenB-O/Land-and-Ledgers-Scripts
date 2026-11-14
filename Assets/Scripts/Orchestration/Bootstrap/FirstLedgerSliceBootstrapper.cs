@@ -2031,7 +2031,59 @@ namespace LandLedgers.FirstLedger
             {
                 Debug.LogWarning($"[SaveLoad] {diagnostic}");
             }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            ReapplyFellingCampAndRightsAfterPass9();
+#endif
         }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        // Note-112 Finding 1 follow-up (plan 29, note 118): on Continue from a
+        // pre-slice save the Pass 9 restore passes null DTOs to the stand
+        // registry and camp (Series2Pass9Save.cs:1129/:1184), whose
+        // clear-then-load wipes the stands, grants, and roster the :449
+        // wiring registered. Re-run the same configuration when the
+        // restored registry is empty. Post-slice saves restore stands, so
+        // the trigger stays off and the re-run is a no-op for them (§3.4).
+        // Both this method and its call site sit inside the guard:
+        // ConfigureFellingCampAndRights is dev-build only, and calling it
+        // from the unguarded deferred step would break release compilation.
+        private void ReapplyFellingCampAndRightsAfterPass9()
+        {
+            if (saveLoadManager == null)
+            {
+                Debug.LogWarning("[SaveLoad] Felling config was not re-applied after the Pass 9 restore: SaveLoadManager is missing.", this);
+                return;
+            }
+            Series2Pass9SaveState pass9 = saveLoadManager.Series2Pass9State;
+            if (pass9 == null)
+            {
+                Debug.LogWarning("[SaveLoad] Felling config was not re-applied after the Pass 9 restore: no Pass 9 state.", this);
+                return;
+            }
+            if (pass9.StandRegistry == null)
+            {
+                Debug.LogWarning("[SaveLoad] Felling config was not re-applied after the Pass 9 restore: no stand registry (the :449 wiring never ran).", this);
+                return;
+            }
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (!enableDevelopmentTownConfiguration || configuration == null)
+                return; // No config: nothing was registered at :449 either.
+            int authoredStandCount = 0;
+            foreach (DevelopmentTownConfiguration.TimberStandEntry entry in configuration.TimberStands)
+                if (entry != null && !string.IsNullOrWhiteSpace(entry.standId)) authoredStandCount++;
+            if (!pass9.StandRegistry.NeedsFellingConfigReapply(authoredStandCount))
+                return; // Post-slice save (stands restored) or no stands authored: nothing to re-apply.
+            BusinessInstanceState millBusiness = FindDevelopmentBusiness(BusinessType.Sawmill);
+            if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId))
+            {
+                Debug.LogWarning("[SaveLoad] Felling config was not re-applied after the Pass 9 restore: no authored Sawmill business instance is present in the shared runtime.", this);
+                return;
+            }
+            ConfigureFellingCampAndRights(millBusiness, pass9, configuration);
+            Debug.Log("[SaveLoad] Felling config re-applied after the Pass 9 restore: the restored stand registry was empty (pre-slice save).", this);
+        }
+#endif
 
         // Q04 Slice 1 (re-plan): called by SaveLoadManager.LoadDefaultSlot
         // AFTER the shared-business restore and BEFORE the Pass XL restore.

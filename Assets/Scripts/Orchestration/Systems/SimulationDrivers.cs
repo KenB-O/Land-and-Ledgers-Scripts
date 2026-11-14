@@ -686,7 +686,7 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     if (millBusiness == null) millBusiness = business;
                     else LogFellingWarningOnce("second-mill",
-                        "Felling skipped: second Sawmill business '" + business.InstanceId + "' is unwired; the Pass 9 slot holds one mill only.");
+                        "Felling continues with the first mill; second Sawmill business '" + business.InstanceId + "' is unwired; the Pass 9 slot holds one mill only.");
                 }
             }
             if (millBusiness == null)

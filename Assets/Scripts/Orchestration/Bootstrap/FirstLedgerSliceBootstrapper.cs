@@ -2417,7 +2417,7 @@ namespace LandLedgers.FirstLedger
             // Pass 9 slot. Reuse, never replace.
             if (pass9.LoggingOperation == null)
             {
-                pass9.LoggingOperation = new LoggingOperationRuntime(millBusiness.InstanceId, systemsHub.Tasks.IdRegistry);
+                pass9.LoggingOperation = new LoggingOperationRuntime(millBusiness.InstanceId, systemsHub.Tasks.IdRegistry, ledger);
             }
 
             Debug.Log($"[SawmillProduction] Bootstrap wired the sawmill production driver for '{millBusiness.InstanceId}' (driver, counters, ledger, Pass 9 logging runtime).", this);

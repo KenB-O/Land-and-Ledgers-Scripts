@@ -721,7 +721,9 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             // 4. Deliver first (C1): Arrived hauls move into the yard.
-            loggingOperation.DeliverArrivedHauls(mill.LogStock, diag);
+            // Registration producer (plan 26): the day index is passed so
+            // the delivery step can record Delivered in the custody ledger.
+            loggingOperation.DeliverArrivedHauls(mill.LogStock, diag, absoluteDayIndex);
 
             // 5. Delivered lots = lot ids in the yard now, minus the snapshot
             // (Q1 snapshot-diff: DeliverArrivedHauls returns nothing).

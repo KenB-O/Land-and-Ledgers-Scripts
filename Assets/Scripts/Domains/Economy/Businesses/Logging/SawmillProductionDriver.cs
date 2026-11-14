@@ -41,14 +41,17 @@ namespace LandLedgers.Economy.Businesses.Logging
     /// optional ledger reference at the completion step, with the
     /// original lot id derived from the job id. The driver's job record
     /// plus the yard stays the production state authority; registration
-    /// of lots into the ledger from the live path is a follow-up slice,
+    /// of lots into the ledger from the live path is wired in the
+    /// registration-producer follow-up (26-plan-registration-producer-followup):
+    /// lots are registered at felling and driven to Delivered at delivery,
     /// so a lot that was never registered is diagnosed, never invented.
     ///
     /// The driver is unbound in Tier 1: no hub list entry, no save
     /// section, no production call site. Wiring is instructions only
-    /// (plan 20-plan-f6 §6). Tier 2 keeps the driver unbound (plan
-    /// 22-plan-f6-tier2 §6): the ledger is an optional constructor
-    /// reference only, and no production caller supplies one yet.
+    /// (plan 20-plan-f6 §6). Tier 2 kept the driver unbound (plan
+    /// 22-plan-f6-tier2 §6). The P3 production wiring (plan 23) binds it:
+    /// the bootstrapper constructs the ledger, registers it in the hub,
+    /// and passes it as the driver's optional constructor reference.
     /// </summary>
     [Serializable]
     public sealed class SawmillProductionJob

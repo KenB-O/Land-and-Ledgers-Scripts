@@ -209,6 +209,16 @@ namespace LandLedgers.Population
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public IReadOnlyList<PlannedShoppingTrip> ActiveTrips => activeTrips;
+
+        /// <summary>
+        /// Slice 25: true once LoadFromSaveDto has loaded at least one
+        /// trip that RehydrateAfterLoad has not yet rehydrated. The
+        /// production rehydrate seam (SimulationDrivers.
+        /// ApplyRestoredShoppingTrips, called from Rebind) runs only
+        /// while this is set, so New Game rebinds and second rebinds
+        /// are no-ops. Cleared by RehydrateAfterLoad.
+        /// </summary>
+        public bool NeedsRehydrateAfterLoad { get; private set; }
         public HouseholdShoppingLoop Loop => loop;
         public bool HasActiveTripForNeed(int needSequence) => HasActiveTripFor(needSequence);
         public bool HasDepartedTripForPerson(int personId)
@@ -1054,6 +1064,7 @@ namespace LandLedgers.Population
             serviceTaskIdStringToTripId.Clear();
             if (dtos == null)
             {
+                NeedsRehydrateAfterLoad = false;
                 return;
             }
 
@@ -1082,6 +1093,8 @@ namespace LandLedgers.Population
                 }
                 AttachTripNeedToRegistry(trip);
             }
+
+            NeedsRehydrateAfterLoad = activeTrips.Count > 0;
         }
 
         /// <summary>
@@ -1129,6 +1142,8 @@ namespace LandLedgers.Population
         /// Re-resolves leg tasks and suppliers after a clear-then-load restore.
         /// Must be called after the TaskAuthority and SupplierDirectory are
         /// restored; trips whose legs no longer resolve are aborted loudly.
+        /// Production call site: SimulationDrivers.ApplyRestoredShoppingTrips,
+        /// via Rebind after a load.
         /// Trips persisted mid-settlement (AtStore) resume at the in-store leg
         /// — settlement is never re-run (no double charge). Trips persisted
         /// mid-wait (AwaitingService) resume the wait when the service task
@@ -1286,6 +1301,8 @@ namespace LandLedgers.Population
                 loop.AbortTrip(trip, "lost across save/load", dayIndex, diag);
                 activeTrips.Remove(trip);
             }
+
+            NeedsRehydrateAfterLoad = false;
         }
 
         // ---------- DTO mapping ----------

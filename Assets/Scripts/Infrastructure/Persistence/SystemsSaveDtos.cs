@@ -139,6 +139,11 @@ namespace LandLedgers.Persistence
         // SimulationSystemsHub.ShoppingLoop); a null loop saves empty, and
         // old saves without this section load as empty.
         public HouseholdShoppingCustodySaveDto shoppingCustody = new();
+        // Slice 25 (additive): the shopping driver's active trips.
+        // The driver is SimulationDrivers-owned, not hub-owned (see
+        // SimulationSystemsHub.ShoppingTripDriver); a null driver saves
+        // empty, and old saves without this section load as empty.
+        public List<PlannedShoppingTripSaveDto> shoppingTrips = new();
         // Pass V P2-2: durable registry of private household lenders.
         public HouseholdLenderDirectory.HouseholdLenderDirectorySaveDto householdLenders = new();
         // Pass VIII (6.3): the production business lender's servicing books

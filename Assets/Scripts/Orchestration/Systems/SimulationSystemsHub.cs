@@ -768,6 +768,14 @@ namespace LandLedgers.Orchestration.Systems
         public HouseholdShoppingLoop ShoppingLoop { get; set; }
 
         /// <summary>
+        /// Slice 25: the production shopping driver, owned by
+        /// SimulationDrivers (see BuildHouseholdShoppingLoop). The hub
+        /// never constructs the driver; it only holds the reference for
+        /// save/load, exactly like ShoppingLoop.
+        /// </summary>
+        public ShoppingTripDriver ShoppingTripDriver { get; set; }
+
+        /// <summary>
         /// Pass III Worker C: hub-owned housing-search registry used by the
         /// RelocateCheaper decision path.
         /// </summary>
@@ -1163,6 +1171,8 @@ namespace LandLedgers.Orchestration.Systems
                 householdErrandPlans = HouseholdErrands.Plans.CaptureSaveDto(),
                 // Priority U-3: the loop's in-transit custody (null loop = empty).
                 shoppingCustody = ShoppingLoop != null ? ShoppingLoop.CaptureCustodySaveDto() : new HouseholdShoppingCustodySaveDto(),
+                // Slice 25: the driver's active trips (null driver = empty).
+                shoppingTrips = ShoppingTripDriver != null ? ShoppingTripDriver.CaptureSaveDto() : new List<PlannedShoppingTripSaveDto>(),
                 householdAutonomy = HouseholdAutonomy.CaptureSaveDto(),
                 housing = Housing.CaptureSaveDto(),
                 lodgingRegistry = LodgingRegistry.CaptureSaveDto(),
@@ -1291,6 +1301,21 @@ namespace LandLedgers.Orchestration.Systems
             HouseholdAutonomy.LoadFromSaveDto(dto.householdAutonomy);
             // Pass IV (Worker 1): due-event schedule (clear-then-load, idempotent).
             DueEvents.LoadFromSaveDto(dto.dueEvents);
+            // Slice 25: the driver's trip list. Placed after the DueEvents
+            // restore so every authority the driver loads against (tasks,
+            // loop custody, dues) is restored above this line. The trips
+            // are loaded here but NOT rehydrated here — the supplier
+            // directory is not re-registered until SaveLoadManager's
+            // EnsureNotionsProcurementForRestore; rehydrate runs in
+            // SimulationDrivers.Rebind (see ApplyRestoredShoppingTrips).
+            if (ShoppingTripDriver != null)
+            {
+                ShoppingTripDriver.LoadFromSaveDto(dto.shoppingTrips);
+            }
+            else if (dto.shoppingTrips != null && dto.shoppingTrips.Count > 0)
+            {
+                diagnostics.Add("ShoppingTripDriver: save holds " + dto.shoppingTrips.Count + " shopping trips but no driver is attached to the hub — trips dropped.");
+            }
             // Pass IV Worker 2: reservations restore before draft holds (draft
             // holds reference authority keys); capacity registrations restore in
             // step with authority capacity limits. The freight pool re-attaches to

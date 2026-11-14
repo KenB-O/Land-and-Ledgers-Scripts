@@ -2027,5 +2027,323 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(1, balked.Count);
             Assert.AreEqual(preInitial, balked[0].PatienceMinutesInitial);
         }
+
+        // Slice 25 (note 94): production save/load wiring for the
+        // ShoppingTripDriver — hub field, hub driver reference, restore-time
+        // rehydrate seam, driver-owned pending flag.
+
+        private static void DrainRestoredTripToCompletion(Fixture g, float gStart)
+        {
+            for (int t = 122; t < 2000 && g.Driver.ActiveTrips.Count > 0; t++)
+            {
+                float now = gStart + t * 300f;
+                g.Driver.AdvanceTick(now, Fixture.Day, g.DueEvents, g.Diag);
+                foreach (DueEvent ev in g.DueEvents.PopDue(now))
+                {
+                    g.Driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, g.DueEvents, g.Diag);
+                }
+            }
+
+            for (int i = 0; i < 50 && (g.DueEvents.ScheduledCount > 0 || g.Driver.ActiveTrips.Count > 0); i++)
+            {
+                foreach (DueEvent ev in g.DueEvents.PopDue(gStart + 3 * 86400f))
+                {
+                    g.Driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, g.DueEvents, g.Diag);
+                }
+            }
+        }
+
+        [Test]
+        public void Hub_SaveLoad_ShoppingTripsSurviveProductionOrder()
+        {
+            // Slice 25 fallback (plan §7 step 1(c), adapted): the hub
+            // round-trip does NOT run in the harness. SimulationSystemsHub.cs
+            // and SystemsSaveDtos.cs are deliberately harness-excluded (the
+            // hub's Unity-scene dependency web; the DTO file duplicates shim
+            // types and references harness-absent types — adding it fails
+            // with 84 errors), and P6TravelCommsJourneyTests.cs is excluded
+            // from the harness sources. This test therefore proves the
+            // production restore ORDER at the DTO level, by hand: need open
+            // in g first (SaveLoadManager :394), tasks, custody, dues, then
+            // the driver list — the same order hub.LoadFromSaveDto runs. The
+            // hub's own capture/restore lines are covered by Agent 3 source
+            // review. The test keeps its plan name so the T1–T5 inventory
+            // matches the plan.
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+
+            // Advance to mid-outbound, then save everything.
+            float start = Fixture.Day * 86400f;
+            f.Driver.AdvanceTick(start + 610 * 60f, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+
+            var tasksDto = f.Tasks.CaptureSaveDto();
+            var budgetsDto = f.Budgets.CaptureSaveDto();
+            var schedulesDto = f.Tracker.CaptureSaveDto();
+            var driverDto = f.Driver.CaptureSaveDto();
+            var dueDto = f.DueEvents.CaptureSaveDto();
+            Assert.AreEqual(1, driverDto.Count);
+
+            // Restore into a FRESH fixture, in the production order.
+            var g = new Fixture();
+            float gStart = Fixture.Day * 86400f;
+            // Step 1 (SaveLoadManager :394, note 94 condition C1): open
+            // the need in g BEFORE the driver list load, so the load-time
+            // need re-point lands on g's registry need. No hand re-point
+            // follows: the load itself must do it.
+            HouseholdPurchasingNeed gNeed = g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            gNeed.UnitsNeeded = need.UnitsNeeded;
+            g.Tasks.LoadFromSaveDto(tasksDto);
+            g.Budgets.LoadFromSaveDto(budgetsDto, Fixture.Day);
+            g.Tracker.LoadFromSaveDto(schedulesDto);
+            g.DueEvents.LoadFromSaveDto(dueDto);
+            g.Driver.LoadFromSaveDto(driverDto);
+            Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
+            Assert.IsTrue(g.Driver.NeedsRehydrateAfterLoad);
+
+            // The seam call, exactly as ApplyRestoredShoppingTrips makes it.
+            g.Driver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                Fixture.Day, gStart + 610 * 60f, g.DueEvents, g.Diag);
+            Assert.IsTrue(!g.Driver.NeedsRehydrateAfterLoad);
+
+            // Drive to completion (the SaveLoad_MidTrip_ResumesToSameOutcome drain).
+            DrainRestoredTripToCompletion(g, gStart);
+            Assert.AreEqual(0, g.Driver.ActiveTrips.Count, "restored trip should finish\n" + string.Join("\n", g.Diag));
+            // The Fulfilled assertion reads g's registry need (opened
+            // before the driver list load, re-pointed at load time).
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, gNeed.Status);
+            Assert.AreEqual(90, g.Store.Stock[HouseholdItemCatalog.FlourId]);
+            Assert.AreEqual(1200, g.Store.CashReceived);
+        }
+
+        [Test]
+        public void SaveLoad_RehydrateOrder_TasksBeforeDriver()
+        {
+            var f = new Fixture();
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            float start = Fixture.Day * 86400f;
+            f.Driver.AdvanceTick(start + 610 * 60f, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+
+            var tasksDto = f.Tasks.CaptureSaveDto();
+            var driverDto = f.Driver.CaptureSaveDto();
+            var dueDto = f.DueEvents.CaptureSaveDto();
+
+            // Phase (a) wrong order: driver list restored, rehydrate BEFORE
+            // tasks restore. Pins existing RehydrateAfterLoad behaviour.
+            var g = new Fixture();
+            g.Driver.LoadFromSaveDto(driverDto);
+            HouseholdPurchasingNeed gNeedCopy = g.Driver.ActiveTrips[0].Need;
+            g.Driver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                Fixture.Day, start + 610 * 60f, g.DueEvents, g.Diag);
+            Assert.AreEqual(0, g.Driver.ActiveTrips.Count);
+            StringAssert.Contains("lost its leg tasks across save/load", string.Join("\n", g.Diag));
+            Assert.AreEqual(PurchasingNeedStatus.Open, gNeedCopy.Status, "aborted trip must leave the need open");
+
+            // Phase (b) right order: tasks first, then driver list, then rehydrate.
+            var h = new Fixture();
+            h.Tasks.LoadFromSaveDto(tasksDto);
+            h.Driver.LoadFromSaveDto(driverDto);
+            h.DueEvents.LoadFromSaveDto(dueDto);
+            h.Driver.RehydrateAfterLoad(h.Tasks, id => (IGoodsSupplier)h.Store,
+                Fixture.Day, start + 610 * 60f, h.DueEvents, h.Diag);
+            Assert.AreEqual(1, h.Driver.ActiveTrips.Count);
+            Assert.IsTrue(!string.Join("\n", h.Diag).Contains("lost its leg tasks"));
+        }
+
+        [Test]
+        public void SaveLoad_ProductionRestore_RefusalAndMissingBehaviour()
+        {
+            // Phase (a) leg task missing: remove the outbound leg task from
+            // the captured tasks DTO, restore in production order, rehydrate.
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            float start = Fixture.Day * 86400f;
+            f.Driver.AdvanceTick(start + 610 * 60f, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+            PlannedShoppingTrip trip = f.Driver.ActiveTrips[0];
+            var tasksDto = f.Tasks.CaptureSaveDto();
+            var driverDto = f.Driver.CaptureSaveDto();
+            var dueDto = f.DueEvents.CaptureSaveDto();
+            tasksDto.tasks.RemoveAll(t => t.TaskId == trip.OutboundTaskId);
+
+            var g = new Fixture();
+            float gStart = Fixture.Day * 86400f;
+            HouseholdPurchasingNeed gNeed = g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            gNeed.UnitsNeeded = need.UnitsNeeded;
+            g.Tasks.LoadFromSaveDto(tasksDto);
+            g.Driver.LoadFromSaveDto(driverDto);
+            g.DueEvents.LoadFromSaveDto(dueDto);
+            g.Driver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                Fixture.Day, gStart + 610 * 60f, g.DueEvents, g.Diag);
+            Assert.AreEqual(0, g.Driver.ActiveTrips.Count);
+            StringAssert.Contains("lost its leg tasks across save/load", string.Join("\n", g.Diag));
+            Assert.AreEqual(PurchasingNeedStatus.Open, gNeed.Status, "aborted trip must leave the need open");
+            Assert.AreEqual(0, g.Store.CashReceived);
+
+            // Phase (b) supplier missing: drive to arrival (AwaitingService),
+            // restore in production order, rehydrate with a null delegate.
+            var f2 = new Fixture();
+            var log2 = new LostSaleLog();
+            AddClerk(f2);
+            WireService(f2, log2, 3);
+            f2.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip2 = DriveToArrival(f2, out float arrival2);
+            Assert.IsTrue(IsAwaitingService(trip2));
+            var tasksDto2 = f2.Tasks.CaptureSaveDto();
+            var driverDto2 = f2.Driver.CaptureSaveDto();
+            var dueDto2 = f2.DueEvents.CaptureSaveDto();
+            var g2 = new Fixture();
+            HouseholdPurchasingNeed gNeed2 = g2.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            g2.Tasks.LoadFromSaveDto(tasksDto2);
+            g2.Driver.LoadFromSaveDto(driverDto2);
+            g2.DueEvents.LoadFromSaveDto(dueDto2);
+            g2.Driver.RehydrateAfterLoad(g2.Tasks, id => null,
+                Fixture.Day, arrival2, g2.DueEvents, g2.Diag);
+            Assert.AreEqual(0, g2.Driver.ActiveTrips.Count);
+            StringAssert.Contains("lost its supplier across save/load", string.Join("\n", g2.Diag));
+            Assert.AreEqual(PurchasingNeedStatus.Open, gNeed2.Status, "aborted trip must leave the need open");
+
+            // Phase (c) service task gone: the (f1) fallback settles on restore.
+            var f3 = new Fixture();
+            var log3 = new LostSaleLog();
+            AddClerk(f3);
+            WireService(f3, log3, 3);
+            HouseholdPurchasingNeed need3 = f3.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip3 = DriveToArrival(f3, out float arrival3);
+            Assert.IsTrue(IsAwaitingService(trip3));
+            EntityId serviceTaskId3 = ServiceTaskIdOf(trip3);
+            var tasksDto3 = f3.Tasks.CaptureSaveDto();
+            var driverDto3 = f3.Driver.CaptureSaveDto();
+            var dueDto3 = f3.DueEvents.CaptureSaveDto();
+            tasksDto3.tasks.RemoveAll(t => t.TaskId == serviceTaskId3);
+
+            var g3 = new Fixture();
+            HouseholdPurchasingNeed gNeed3 = g3.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            gNeed3.UnitsNeeded = need3.UnitsNeeded;
+            g3.Tasks.LoadFromSaveDto(tasksDto3);
+            g3.Driver.LoadFromSaveDto(driverDto3);
+            g3.DueEvents.LoadFromSaveDto(dueDto3);
+            g3.Driver.RehydrateAfterLoad(g3.Tasks, id => (IGoodsSupplier)g3.Store,
+                Fixture.Day, arrival3, g3.DueEvents, g3.Diag);
+            Assert.AreEqual(1, g3.Driver.ActiveTrips.Count);
+            PlannedShoppingTrip restored3 = g3.Driver.ActiveTrips[0];
+            Assert.IsNotNull(restored3.Batch);
+            Assert.AreEqual(10, restored3.UnitsSettled);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, restored3.State);
+            Assert.AreEqual(1200, g3.Store.CashReceived);
+            StringAssert.Contains("lost its live service task", string.Join("\n", g3.Diag));
+        }
+
+        [Test]
+        public void SaveLoad_OldSave_NullTripList_LoadsEmpty_And_DoubleRestoreIsIdempotent()
+        {
+            // Slice 25 fallback (plan §7 step 1(c), adapted — same reason as
+            // T1): the hub round-trip does NOT run in the harness, so the
+            // old-save and double-restore pins run at the driver-DTO level.
+            // A null trip list is what the hub passes for an old save
+            // (SystemsSaveDto.shoppingTrips deserializes as null); the
+            // driver's own null-guard is what makes that load empty. The
+            // hub's null-slot handling itself is covered by Agent 3 source
+            // review.
+            var g = new Fixture();
+            g.Driver.LoadFromSaveDto(null);
+            Assert.AreEqual(0, g.Driver.ActiveTrips.Count);
+            Assert.IsTrue(!g.Driver.NeedsRehydrateAfterLoad);
+
+            // Phase (b) double restore: same driver DTO restored twice,
+            // rehydrated twice. Clear-then-load must not duplicate the trip.
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            float start = Fixture.Day * 86400f;
+            f.Driver.AdvanceTick(start + 610 * 60f, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+            var tasksDto = f.Tasks.CaptureSaveDto();
+            var budgetsDto = f.Budgets.CaptureSaveDto();
+            var schedulesDto = f.Tracker.CaptureSaveDto();
+            var driverDto = f.Driver.CaptureSaveDto();
+            var dueDto = f.DueEvents.CaptureSaveDto();
+            Assert.AreEqual(1, driverDto.Count);
+
+            var g2 = new Fixture();
+            float gStart = Fixture.Day * 86400f;
+            HouseholdPurchasingNeed gNeed = g2.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            gNeed.UnitsNeeded = need.UnitsNeeded;
+            g2.Tasks.LoadFromSaveDto(tasksDto);
+            g2.Budgets.LoadFromSaveDto(budgetsDto, Fixture.Day);
+            g2.Tracker.LoadFromSaveDto(schedulesDto);
+            g2.DueEvents.LoadFromSaveDto(dueDto);
+            g2.Driver.LoadFromSaveDto(driverDto);
+            Assert.AreEqual(1, g2.Driver.ActiveTrips.Count);
+            Assert.IsTrue(g2.Driver.NeedsRehydrateAfterLoad);
+            g2.Driver.RehydrateAfterLoad(g2.Tasks, id => (IGoodsSupplier)g2.Store,
+                Fixture.Day, gStart + 610 * 60f, g2.DueEvents, g2.Diag);
+            Assert.AreEqual(1, g2.Driver.ActiveTrips.Count);
+            Assert.IsTrue(!g2.Driver.NeedsRehydrateAfterLoad);
+            Assert.AreEqual(0, g2.Store.CashReceived);
+
+            // Restore the SAME DTO a second time into g2, then rehydrate again.
+            g2.Driver.LoadFromSaveDto(driverDto);
+            Assert.AreEqual(1, g2.Driver.ActiveTrips.Count);
+            Assert.IsTrue(g2.Driver.NeedsRehydrateAfterLoad);
+            g2.Driver.RehydrateAfterLoad(g2.Tasks, id => (IGoodsSupplier)g2.Store,
+                Fixture.Day, gStart + 610 * 60f, g2.DueEvents, g2.Diag);
+            Assert.AreEqual(1, g2.Driver.ActiveTrips.Count);
+            Assert.IsTrue(!g2.Driver.NeedsRehydrateAfterLoad);
+            Assert.AreEqual(0, g2.Store.CashReceived);
+
+            // Drive to completion: exactly-once settlement.
+            DrainRestoredTripToCompletion(g2, gStart);
+            Assert.AreEqual(0, g2.Driver.ActiveTrips.Count, "restored trip should finish\n" + string.Join("\n", g2.Diag));
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, gNeed.Status);
+            Assert.AreEqual(90, g2.Store.Stock[HouseholdItemCatalog.FlourId]);
+            Assert.AreEqual(1200, g2.Store.CashReceived);
+        }
+
+        [Test]
+        public void RehydratePendingFlag_Lifecycle()
+        {
+            var f = new Fixture();
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            float start = Fixture.Day * 86400f;
+            f.Driver.AdvanceTick(start + 610 * 60f, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+            // A live planned trip is not pending: no load has happened.
+            Assert.IsTrue(!f.Driver.NeedsRehydrateAfterLoad);
+
+            var dtos = f.Driver.CaptureSaveDto();
+            var tasksDto = f.Tasks.CaptureSaveDto();
+            var dueDto = f.DueEvents.CaptureSaveDto();
+            var g = new Fixture();
+            g.Tasks.LoadFromSaveDto(tasksDto);
+            g.DueEvents.LoadFromSaveDto(dueDto);
+            g.Driver.LoadFromSaveDto(dtos);
+            Assert.IsTrue(g.Driver.NeedsRehydrateAfterLoad);
+
+            g.Driver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                Fixture.Day, start + 610 * 60f, g.DueEvents, g.Diag);
+            Assert.IsTrue(!g.Driver.NeedsRehydrateAfterLoad);
+            Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
+
+            int duesBefore = g.DueEvents.ScheduledCount;
+            g.Driver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                Fixture.Day, start + 610 * 60f, g.DueEvents, g.Diag);
+            Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
+            // Note 94 condition C3: no due is minted on a second rehydrate
+            // of an outbound trip (RehydrateAfterLoad mints a leg due only
+            // for AtStore / AwaitingService-(f1) trips), so the count is
+            // unchanged. This assertion does not pin replace-by-id.
+            Assert.AreEqual(duesBefore, g.DueEvents.ScheduledCount);
+            Assert.IsTrue(!g.Driver.NeedsRehydrateAfterLoad);
+
+            var h = new Fixture();
+            h.Driver.LoadFromSaveDto(new List<PlannedShoppingTripSaveDto>());
+            Assert.IsTrue(!h.Driver.NeedsRehydrateAfterLoad);
+        }
     }
 }

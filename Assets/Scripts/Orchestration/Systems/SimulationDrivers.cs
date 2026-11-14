@@ -850,6 +850,9 @@ namespace LandLedgers.Orchestration.Systems
             // save; a loop attached after the hub load leaves the custody
             // section unrestored for that load.
             hub.ShoppingLoop = householdShoppingLoop;
+            // Slice 25: attach the driver beside the loop, same shape —
+            // the hub only holds the reference for save/load.
+            hub.ShoppingTripDriver = shoppingTripDriver;
 
             // Physical shopping is driven through the existing phased loop.
             // The transaction driver may settle only after the visible person
@@ -1137,6 +1140,50 @@ namespace LandLedgers.Orchestration.Systems
             {
                 AttachBusinessRuntime(sharedBusinessRuntime);
             }
+
+            // Slice 25: rehydrate shopping trips restored by the hub save.
+            ApplyRestoredShoppingTrips();
+        }
+
+        /// <summary>
+        /// Slice 25: rehydrates shopping trips restored by the hub save,
+        /// exactly once per load. Runs only while the driver reports
+        /// pending restored trips, so New Game rebinds are no-ops.
+        /// MUST run before the first post-load tick: the per-tick
+        /// backstop (SyncTaskCompletionDueEvents) re-schedules the dues
+        /// of any open task the driver does not yet own, and the
+        /// service due is never re-scheduled (Slice 19 MAP-ONLY), so a
+        /// lazy apply would push it later by the elapsed wait.
+        /// The supplier delegate is a linear scan: SupplierDirectory
+        /// has no by-id lookup, and the directory holds a handful of
+        /// suppliers, scanned once per load.
+        /// </summary>
+        public void ApplyRestoredShoppingTrips()
+        {
+            if (shoppingTripDriver == null || !shoppingTripDriver.NeedsRehydrateAfterLoad) return;
+            if (hub == null || timeManager == null) return;
+            var diag = new List<string>();
+            shoppingTripDriver.RehydrateAfterLoad(
+                hub.Tasks,
+                businessId => SupplierByBusinessId(businessId),
+                timeManager.CurrentAbsoluteDayIndex,
+                timeManager.AbsoluteGameSeconds,
+                hub.DueEvents,
+                diag);
+            foreach (string message in diag)
+            {
+                if (!string.IsNullOrWhiteSpace(message)) Debug.Log("[ShoppingTrips] " + message, this);
+            }
+        }
+
+        private IGoodsSupplier SupplierByBusinessId(string businessId)
+        {
+            if (string.IsNullOrWhiteSpace(businessId) || supplierDirectory == null) return null;
+            foreach (IGoodsSupplier supplier in supplierDirectory.All)
+            {
+                if (supplier != null && string.Equals(supplier.SupplierBusinessId, businessId, StringComparison.Ordinal)) return supplier;
+            }
+            return null;
         }
 
         /// <summary>

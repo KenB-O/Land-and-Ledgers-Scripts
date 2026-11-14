@@ -23,6 +23,11 @@ namespace LandLedgers.World.Property
         /// <summary>The holder name the acquisition flows already use for the player.</summary>
         public const string PlayerHolderName = "Player";
 
+        /// <summary>The holder name the loan-default recovery transfers a holding
+        /// to (R33): the same name RecoverPlayerHolding already passes to the
+        /// business transfer, so the chain and the business record agree.</summary>
+        public const string BankReceiverHolderName = "Bank Receiver";
+
         /// <summary>Canonical title-parcel key for a town plot id.</summary>
         public static string ParcelKeyForPlot(int plotId)
         {
@@ -107,6 +112,42 @@ namespace LandLedgers.World.Property
                 ? $"player sale for {priceCents}c"
                 : "player disposal";
             return titles.TransferTitle(null, parcelId, buyerName.Trim(),
+                TitleBasis.Purchase, instrument, dayIndex, note, diag);
+        }
+
+        /// <summary>
+        /// R33: records a loan-default recovery. RecoverPlayerHolding moves a
+        /// holding Player → "Bank Receiver" while the chain kept saying
+        /// "Player"; the chain-first branch of IsPlayerOwnedPlot then answered
+        /// player-owned for a bank-held plot (still buildable, never
+        /// re-listable). The recovery is for value (the default credit) so the
+        /// basis is Purchase; the instrument is generated because no loan id is
+        /// in scope at the call site and the fallback recovery path has no loan
+        /// at all (note 127 Q1/Q2). Mirrors RecordPlayerDisposal: an unseen
+        /// parcel (e.g. a pre-P5 save) registers the player first rather than
+        /// inventing a prior owner. Returns null on success, or an error string
+        /// (the economic recovery already happened; a recording problem is
+        /// logged, never silently dropped).
+        /// </summary>
+        public static string RecordBankRecovery(
+            TitleAuthority titles, int plotId, int priceCents, int dayIndex, List<string> diag)
+        {
+            if (titles == null)
+                return "PlayerTitleBridge.RecordBankRecovery: no title authority given.";
+            string parcelId = ParcelKeyForPlot(plotId);
+            if (titles.CurrentHolder(parcelId) == null)
+            {
+                // Recovering a parcel the chain never saw (e.g. a pre-P5 save):
+                // register the player as the first observed holder rather than
+                // inventing a prior owner.
+                titles.RegisterParcel(parcelId, $"Town plot {plotId:000}", 0f, PlayerHolderName,
+                    TitleBasis.Unspecified, dayIndex, diag);
+            }
+            string instrument = $"recovery-plot-{plotId}-day-{dayIndex}";
+            string note = priceCents > 0
+                ? $"loan-default recovery for {priceCents}c"
+                : "loan-default recovery";
+            return titles.TransferTitle(null, parcelId, BankReceiverHolderName,
                 TitleBasis.Purchase, instrument, dayIndex, note, diag);
         }
     }

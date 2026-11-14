@@ -4199,6 +4199,13 @@ namespace LandLedgers.Economy
                 ownedPlotIds.Remove(plot.id);
             }
 
+            // R33: record the recovery in the title chain. Unconditional on
+            // the business-transfer outcome above: this method returns true
+            // regardless of it, so gating the recording on the transfer would
+            // leave the chain saying Player while the flags say not-owned —
+            // the same defect in the other direction (note 127 Q6).
+            RecordTitleRecovery(plot, recoveredValueCents);
+
             if (state != null)
             {
                 ownedLandAppreciations.Remove(state);
@@ -8596,6 +8603,23 @@ namespace LandLedgers.Economy
                 titleAuthority, plot.id, buyerName,
                 $"sale-plot-{plot.id}-day-{GetCurrentDayIndex()}",
                 priceCents, GetCurrentDayIndex(), diag);
+            foreach (string line in diag) titleDiagnostics.Add(line);
+            if (!string.IsNullOrEmpty(problem))
+            {
+                titleDiagnostics.Add(problem);
+                Debug.LogWarning($"[Acquisitions] Title chain recording: {problem}", this);
+            }
+        }
+
+        /// <summary>R33: records a loan-default recovery in the T2F title chain.
+        /// Mirrors RecordTitleDisposal (no dispute-recording block: a recovery
+        /// is not an acquisition — note 127 F3).</summary>
+        private void RecordTitleRecovery(TownPlot plot, int priceCents)
+        {
+            if (plot == null) return;
+            var diag = new List<string>();
+            string problem = PlayerTitleBridge.RecordBankRecovery(
+                titleAuthority, plot.id, priceCents, GetCurrentDayIndex(), diag);
             foreach (string line in diag) titleDiagnostics.Add(line);
             if (!string.IsNullOrEmpty(problem))
             {

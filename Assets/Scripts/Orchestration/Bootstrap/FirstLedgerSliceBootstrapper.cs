@@ -2310,6 +2310,17 @@ namespace LandLedgers.FirstLedger
             // driver, counters, ledger, and logging operation runtime
             // into the daily flow. Runs on NewGame and restore alike.
             ConfigureSawmillProductionWiring(millBusiness, pass9);
+
+            // F7 yard-transfer wiring: bind the sawmill-to-yard transfer
+            // driver into the daily flow. Runs on NewGame and restore
+            // alike. The yard business is resolved here with
+            // FindDevelopmentBusiness, the same call
+            // ConfigureLiveLumberYardSaveOwner uses (note 103 C1: the
+            // call template is its :2198 site, not the :1677 method
+            // definition); the yard owner runs before the mill owner in
+            // both paths, so pass9.LumberYard already exists.
+            BusinessInstanceState yardBusiness = FindDevelopmentBusiness(BusinessType.LumberYard);
+            ConfigureSawmillYardTransferWiring(millBusiness, yardBusiness, pass9);
         }
 
         // P3 (F6 production wiring): constructs the sawmill production
@@ -2390,6 +2401,60 @@ namespace LandLedgers.FirstLedger
             }
 
             Debug.Log($"[SawmillProduction] Bootstrap wired the sawmill production driver for '{millBusiness.InstanceId}' (driver, counters, ledger, Pass 9 logging runtime).", this);
+        }
+
+        // F7 yard-transfer wiring: constructs the sawmill-to-yard transfer
+        // driver and registers it via the SimulationDrivers forwarder.
+        // Reuse, never replace (the mill rule in
+        // ConfigureLiveSawmillSaveOwner): a second call in the same session
+        // keeps the existing instance, so a restored job record is never
+        // discarded by re-construction. The driver needs no equipment gate,
+        // no TaskAuthority, no registry, and no Pass 9 slot of its own —
+        // the mill and yard runtimes already have theirs.
+        private void ConfigureSawmillYardTransferWiring(BusinessInstanceState millBusiness, BusinessInstanceState yardBusiness, Series2Pass9SaveState pass9)
+        {
+            if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId) || yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId) || pass9 == null)
+            {
+                Debug.LogWarning("[SawmillToYardTransfer] Wiring was not created: no authored Sawmill or LumberYard business instance, or no Pass 9 state.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[SawmillToYardTransfer] Wiring was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                Debug.LogWarning("[SawmillToYardTransfer] Wiring was not created: SimulationDrivers is missing.", this);
+                return;
+            }
+
+            SawmillShopRuntime liveMillRuntime = systemsHub.SawmillRuntimeFor(millBusiness.InstanceId);
+            if (liveMillRuntime == null)
+            {
+                Debug.LogWarning("[SawmillToYardTransfer] Wiring was not created: hub returned no mill runtime.", this);
+                return;
+            }
+
+            LumberYardShopRuntime liveYardRuntime = systemsHub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+            if (liveYardRuntime == null)
+            {
+                Debug.LogWarning("[SawmillToYardTransfer] Wiring was not created: hub returned no yard runtime.", this);
+                return;
+            }
+
+            SawmillToYardTransferDriver driver = systemsHub.SawmillToYardTransferDriver;
+            if (driver == null)
+            {
+                driver = new SawmillToYardTransferDriver(liveMillRuntime, liveYardRuntime, new List<string>());
+            }
+            drivers.RegisterSawmillToYardTransferDriver(driver);
+
+            Debug.Log($"[SawmillToYardTransfer] Bootstrap wired the sawmill-to-yard transfer driver for '{millBusiness.InstanceId}' to yard '{yardBusiness.InstanceId}'.", this);
         }
 
         // C3: mirrors ConfigureLiveLumberYardSaveOwner for the construction

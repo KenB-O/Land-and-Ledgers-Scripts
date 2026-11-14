@@ -825,6 +825,260 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// F7 yard-transfer wiring: moves every lumber lot the sawmill
+        /// produced into mill LumberStock into yard LumberStock, with the
+        /// yard grade, the caller-supplied unit cost, and the full sawmill
+        /// provenance recorded on the yard lot, exactly once. Re-attempts
+        /// open Planned jobs first (FIFO, C7 analogue), then begins fresh
+        /// transfers for every untransferred lot in mill LumberStock
+        /// (backfill: the first wired day moves the whole backlog). Runs
+        /// after sawing each day, so the day's output is in the yard
+        /// before anything downstream reads it.
+        /// </summary>
+        private void DriveSawmillToYardTransfer(int absoluteDayIndex)
+        {
+            // 1. Resolve the mill and the yard (D1 pattern).
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogSawmillTransferWarningOnce("no-business-runtime",
+                    "Sawmill-to-yard transfer skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogSawmillTransferWarningOnce("no-pass9",
+                    "Sawmill-to-yard transfer skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            BusinessInstanceState millBusiness = null;
+            BusinessInstanceState yardBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Sawmill)
+                {
+                    if (millBusiness == null) millBusiness = business;
+                    else LogSawmillTransferWarningOnce("second-mill",
+                        $"Second Sawmill business '{business.InstanceId}' is unwired: the yard transfer moves the first mill only.");
+                }
+                else if (business.BusinessType == BusinessType.LumberYard)
+                {
+                    if (yardBusiness == null) yardBusiness = business;
+                    else LogSawmillTransferWarningOnce("second-yard",
+                        $"Second LumberYard business '{business.InstanceId}' is unwired: the yard transfer moves into the first yard only.");
+                }
+            }
+
+            // Agent 3 note 68 ruling (2), as in the D1 transfer and
+            // DriveSawmillProduction: pass9.Sawmill / pass9.LumberYard are
+            // PRIMARY — the bootstrapper owns the holders. The hub
+            // accessors are the fallback only when a holder is null AND
+            // the business is formed, with a warning.
+            SawmillShopRuntime mill = pass9.Sawmill;
+            if (mill == null)
+            {
+                if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId))
+                {
+                    LogSawmillTransferWarningOnce("no-mill",
+                        "Sawmill-to-yard transfer skipped: no formed Sawmill business is present in the shared runtime.");
+                    return;
+                }
+
+                LogSawmillTransferWarningOnce("holder-fallback-mill",
+                    $"Sawmill-to-yard transfer: Pass 9 mill holder is null; resolving the formed Sawmill '{millBusiness.InstanceId}' through the hub (empty runtime until the bootstrapper owns it).");
+                mill = hub.SawmillRuntimeFor(millBusiness.InstanceId);
+                if (mill == null)
+                {
+                    LogSawmillTransferWarningOnce("hub-no-mill",
+                        "Sawmill-to-yard transfer skipped: hub returned no mill runtime.");
+                    return;
+                }
+            }
+
+            LumberYardShopRuntime yard = pass9.LumberYard;
+            if (yard == null)
+            {
+                if (yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId))
+                {
+                    LogSawmillTransferWarningOnce("no-yard",
+                        "Sawmill-to-yard transfer skipped: no formed LumberYard business is present in the shared runtime.");
+                    return;
+                }
+
+                LogSawmillTransferWarningOnce("holder-fallback-yard",
+                    $"Sawmill-to-yard transfer: Pass 9 yard holder is null; resolving the formed LumberYard '{yardBusiness.InstanceId}' through the hub (empty runtime until the bootstrapper owns it).");
+                yard = hub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+                if (yard == null)
+                {
+                    LogSawmillTransferWarningOnce("hub-no-yard",
+                        "Sawmill-to-yard transfer skipped: hub returned no yard runtime.");
+                    return;
+                }
+            }
+
+            // 2. Resolve the driver from the hub.
+            SawmillToYardTransferDriver driver = hub.SawmillToYardTransferDriver;
+            if (driver == null)
+            {
+                LogSawmillTransferWarningOnce("no-driver",
+                    "Sawmill-to-yard transfer skipped: no sawmill-to-yard transfer driver is registered in the hub.");
+                return;
+            }
+
+            var diag = new List<string>();
+
+            // 3. Re-attempt pass (C7 analogue): open Planned jobs from
+            // prior days BEFORE the begin pass (FIFO: a pending job names
+            // an older lot than today's sawing). Failed and Transferred
+            // jobs are terminal and are never re-attempted. Each open job
+            // runs once via RunTransfer with its stored grade and cost —
+            // no new BeginTransfer, so the duplicate and open-job guards
+            // are not re-triggered.
+            var openJobs = new List<SawmillToYardTransferJob>();
+            openJobs.AddRange(driver.JobsInState(SawmillToYardTransferJobState.Planned));
+            openJobs.Sort((a, b) =>
+            {
+                int byDay = a.CreatedDayIndex.CompareTo(b.CreatedDayIndex);
+                return byDay != 0 ? byDay : string.CompareOrdinal(a.JobId, b.JobId);
+            });
+
+            int reattemptedCount = 0;
+            int begunCount = 0;
+            int transferredCount = 0;
+            int failedCount = 0;
+
+            foreach (SawmillToYardTransferJob openJob in openJobs)
+            {
+                reattemptedCount++;
+                if (RunYardTransferJobOnce(driver, openJob, absoluteDayIndex, diag, ref failedCount) && openJob.State == SawmillToYardTransferJobState.Transferred)
+                {
+                    transferredCount++;
+                }
+            }
+
+            // 4. Begin pass: scan mill LumberStock for lots with units
+            // above 0 and no yard lot holding their source. Backfill: the
+            // scan has no day filter, so the first wired day moves the
+            // whole backlog accumulated while the driver was unbound.
+            // A lot with a Planned job is handled by the re-attempt pass;
+            // a Transferred job means the yard already holds it. A Failed
+            // job does NOT skip the lot: the open-job guard refuses only
+            // Planned jobs, so a fresh begin is the recovery path.
+            var transferableLotIds = new List<string>();
+            foreach (SawmillLumberLot lot in mill.LumberStock.Lots)
+            {
+                if (lot == null || lot.LumberUnits <= 0) continue;
+                string lotId = lot.LotId.ToString();
+                if (FindYardLotBySource(yard, lotId) != null) continue;
+                SawmillToYardTransferJob existing = driver.GetJob("yard-transfer:" + lotId);
+                if (existing != null && (existing.State == SawmillToYardTransferJobState.Planned || existing.State == SawmillToYardTransferJobState.Transferred)) continue;
+                transferableLotIds.Add(lotId);
+            }
+
+            if (openJobs.Count == 0 && transferableLotIds.Count == 0)
+            {
+                LogSawmillTransferWarningOnce("nothing-to-transfer",
+                    "Sawmill-to-yard transfer: no untransferred lots in the mill yard and no open jobs to re-attempt.");
+                return;
+            }
+
+            foreach (string lotId in transferableLotIds)
+            {
+                SawmillLumberLot lot = FindMillLumberLot(mill, lotId);
+                if (lot == null || lot.LumberUnits <= 0)
+                {
+                    diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: lot '{lotId}' is no longer in the mill yard — never conjured, skipped.");
+                    continue;
+                }
+                SawmillToYardTransferJob job = driver.BeginTransfer(lotId, LumberYardGradeCatalog.DefaultGradeId, 0, absoluteDayIndex, out string beginRefusal);
+                if (job == null)
+                {
+                    diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: lot '{lotId}' could not begin — {beginRefusal}");
+                    continue;
+                }
+                begunCount++;
+                if (RunYardTransferJobOnce(driver, job, absoluteDayIndex, diag, ref failedCount) && job.State == SawmillToYardTransferJobState.Transferred)
+                {
+                    transferredCount++;
+                }
+            }
+
+            // 7. Summary.
+            Debug.Log($"[SawmillTransfer] Day {absoluteDayIndex}: re-attempted {reattemptedCount} open job(s), began {begunCount} new job(s), {transferredCount} job(s) transferred, {failedCount} job(s) failed. {string.Join(" | ", diag)}", this);
+        }
+
+        /// <summary>
+        /// F7 yard-transfer wiring: runs one open transfer job once and
+        /// handles its refusal. An intake refusal leaves the job Planned
+        /// and the retry safe (note 100 Q2); a failed job is reconciled
+        /// with a diagnostic naming the lot (step 5). Never re-calls
+        /// RunTransfer the same day; the job is re-attempted on the next
+        /// day's drive. Returns true when the run succeeded.
+        /// </summary>
+        private bool RunYardTransferJobOnce(SawmillToYardTransferDriver driver, SawmillToYardTransferJob job, int dayIndex, List<string> diag, ref int failedCount)
+        {
+            if (driver == null || job == null) return false;
+            if (!driver.RunTransfer(job.JobId, dayIndex, out string refusal))
+            {
+                diag.Add($"[SawmillTransfer] Day {dayIndex}: job '{job.JobId}' refused — {refusal}");
+                // Step 5 reconciliation: both terminal paths. The
+                // mismatch path keys on the driver's own exact text
+                // ("cannot be verified"); the units already moved, the
+                // yard lot stays in yard stock, and no credit is
+                // invented — the next day's begin pass refuses the lot
+                // on the duplicate-source guard, so no double-move is
+                // possible.
+                if (job.State == SawmillToYardTransferJobState.Failed)
+                {
+                    failedCount++;
+                    if (refusal != null && refusal.Contains("cannot be verified"))
+                    {
+                        diag.Add($"[SawmillTransfer] Day {dayIndex}: job '{job.JobId}' for lot '{job.MillLotId}' mismatched its run — the output lot already exists in yard stock and no credit is invented; the next day's begin pass refuses the lot on the duplicate-source guard, so no double-move is possible.");
+                    }
+                    else
+                    {
+                        diag.Add($"[SawmillTransfer] Day {dayIndex}: job '{job.JobId}' for lot '{job.MillLotId}' FAILED — the lot stays in the mill yard, never re-invented; a fresh BeginTransfer is the recovery path.");
+                    }
+                }
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// F7 yard-transfer wiring: finds the yard lot holding lumber from
+        /// one mill lot, by source. A query, not a registration, so the
+        /// note-100 Q6 boundary does not apply. Mirrors the driver's
+        /// private scan; the duplicate-source guard makes it unambiguous.
+        /// </summary>
+        private static LumberYardLumberLot FindYardLotBySource(LumberYardShopRuntime yard, string millLotId)
+        {
+            if (yard == null || yard.LumberStock == null || string.IsNullOrWhiteSpace(millLotId)) return null;
+            foreach (LumberYardLumberLot lot in yard.LumberStock.Lots)
+            {
+                if (lot != null && string.Equals(lot.SourceSawmillLotId, millLotId, StringComparison.Ordinal)) return lot;
+            }
+            return null;
+        }
+
+        private static SawmillLumberLot FindMillLumberLot(SawmillShopRuntime mill, string lotId)
+        {
+            if (mill == null || mill.LumberStock == null || string.IsNullOrWhiteSpace(lotId)) return null;
+            foreach (SawmillLumberLot lot in mill.LumberStock.Lots)
+            {
+                if (lot != null && string.Equals(lot.LotId.ToString(), lotId, StringComparison.Ordinal)) return lot;
+            }
+            return null;
+        }
+
+        /// <summary>
         /// P3 (F6 production wiring): runs one open production job once and
         /// handles its refusal. A blade-gated refusal runs the filer loop
         /// (the filer is the job's stored sawyer); a post-deduction failure
@@ -1225,6 +1479,17 @@ namespace LandLedgers.Orchestration.Systems
         {
             if (ledger == null || hub == null) return;
             hub.RegisterLogLotCustodyLedger(ledger);
+        }
+
+        /// <summary>
+        /// F7 yard-transfer wiring: registers the sawmill-to-yard transfer
+        /// driver with the hub. Forwarder only — no BindBusiness-style
+        /// side effects (note 100 Q6 boundary).
+        /// </summary>
+        public void RegisterSawmillToYardTransferDriver(SawmillToYardTransferDriver driver)
+        {
+            if (driver == null || hub == null) return;
+            hub.RegisterSawmillToYardTransferDriver(driver);
         }
 
         private void BuildHouseholdShoppingLoop()
@@ -2457,6 +2722,13 @@ namespace LandLedgers.Orchestration.Systems
             // transfer so the day's output is in mill.ByproductStock before
             // the transfer moves it, and before the bakery plans its day.
             DriveSawmillProduction(absoluteDayIndex);
+            // F7 yard-transfer wiring: the day's sawn lumber moves into
+            // yard LumberStock before the byproduct transfer, so the day's
+            // output is in the yard before anything downstream reads it.
+            // The two transfers consume different stocks (LumberStock vs
+            // ByproductStock), so the order between them is narrative,
+            // not a correctness dependency.
+            DriveSawmillToYardTransfer(absoluteDayIndex);
             // D1: the mill's byproduct lots move into the Fuel Dealer's
             // intake by custody before the bakery plans its wholesale
             // day, so the paid-source builder (when D-F2 lands) sees the

@@ -95,6 +95,8 @@ namespace LandLedgers.Persistence
         public SawmillProductionDriver.SawmillProductionDriverSaveDto sawmillProductionDriver = new();
         public SawmillLabourCounters.SawmillLabourCountersDto sawmillLabourCounters = new();
         public LogLotCustodyLedger.LogLotCustodyLedgerSaveDto logLotCustodyLedger = new();
+        /// <summary>F7 yard-transfer wiring: the sawmill-to-yard transfer driver — one shared instance.</summary>
+        public SawmillToYardTransferDriver.SawmillToYardTransferDriverSaveDto sawmillToYardTransferDriver = new();
         public NpcFormationAssetRegisterSaveDto npcFormationAssets = new();
         public List<NpcBusinessLifeRecordSaveDto> npcBusinessLifecycle = new();
         public NpcBusinessInvestigationSaveDto npcBusinessInvestigation = new();

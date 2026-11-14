@@ -142,6 +142,11 @@ namespace LandLedgers.Economy.Financing
         public string Purpose = string.Empty;
         public string LegalRegimeId = string.Empty;
         public string Terms = string.Empty;
+        // P28 credit void (note 136 §2, note 138 Q2): the reason a
+        // cancelled obligation was voided, set only by CancelObligation
+        // (first reason wins). Append-only audit record; old saves load
+        // with an empty string. CloneObligation copies it (note 138 C1).
+        public string CancellationReason = string.Empty;
         public FinancialPaymentTerms PaymentTerms = new FinancialPaymentTerms();
         public string ScheduleReference = string.Empty;
         public string SourceEconomicEventId = string.Empty;
@@ -306,6 +311,36 @@ namespace LandLedgers.Economy.Financing
             if (amountCents <= 0) return "Interest must be positive.";
             if (obligation.Settled) return "Financial obligation is already settled.";
             obligation.AccruedInterestCents = checked(obligation.AccruedInterestCents + amountCents);
+            return null;
+        }
+
+        /// <summary>
+        /// P28 credit void (note 136 §2, note 138 Q1–Q4): cancels an
+        /// obligation created for a sale that voided. Null on success, a
+        /// refusal string otherwise, per the AccrueInterest convention.
+        /// Unknown ids refuse; an already-Satisfied obligation refuses
+        /// (a paid obligation is a settled fact, never voided away); a
+        /// second cancel is an idempotent no-op keeping the first reason.
+        /// Zeroing the outstanding amounts makes the obligation inert to
+        /// every exactly-once path, which guards on Settled only — a
+        /// status-only flip would leave a payable, accruable obligation
+        /// still counted as live debt. OriginalPrincipalCents and the
+        /// Payments list are preserved for audit; a partially-paid
+        /// obligation may be cancelled and only the remainder is zeroed
+        /// (a real-life write-off — the remainder is forgiven, the
+        /// payments already made stay recorded).
+        /// </summary>
+        public string CancelObligation(string obligationId, string reason)
+        {
+            FinancialObligation obligation = Find(obligationId);
+            if (obligation == null) return "Unknown financial obligation.";
+            if (obligation.Status == FinancialObligationStatus.Satisfied) return "Financial obligation is already satisfied.";
+            if (obligation.Status == FinancialObligationStatus.Cancelled) return null;
+            obligation.Status = FinancialObligationStatus.Cancelled;
+            obligation.OutstandingPrincipalCents = 0;
+            obligation.AccruedInterestCents = 0;
+            obligation.FeesCents = 0;
+            obligation.CancellationReason = reason ?? string.Empty;
             return null;
         }
 
@@ -761,6 +796,7 @@ namespace LandLedgers.Economy.Financing
                 Purpose = o.Purpose,
                 LegalRegimeId = o.LegalRegimeId,
                 Terms = o.Terms,
+                CancellationReason = o.CancellationReason,
                 PaymentTerms = o.PaymentTerms != null ? new FinancialPaymentTerms
                 {
                     AnnualInterestRateBps = o.PaymentTerms.AnnualInterestRateBps,

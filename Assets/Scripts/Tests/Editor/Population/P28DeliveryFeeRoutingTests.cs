@@ -87,6 +87,10 @@ namespace LandLedgers.EditorTests.Population
             public int DeliveryFeeValue;
             public bool OffersTradeCreditValue;
             public int TradeCreditLimitValue;
+            // P28 credit void: one-shot consume controls (C2, C5).
+            public bool FailNextConsume;
+            public int? NextConsumeLimit;
+            public int ConsumeAttempts;
 
             public IReadOnlyList<GeneralStoreCategoryOffer> CategoryOffers => OfferList;
             public StoreTradingCapability TradingCapability => Capability;
@@ -102,8 +106,24 @@ namespace LandLedgers.EditorTests.Population
             public bool TryConsumeStoreUnits(string categoryId, int units, out int consumedUnits)
             {
                 consumedUnits = 0;
+                ConsumeAttempts++;
+                // P28 credit void (C5): one-shot failure — disarms after
+                // firing and short-circuits BEFORE any stock mutation.
+                if (FailNextConsume)
+                {
+                    FailNextConsume = false;
+                    return false;
+                }
                 int have = CategoryStockUnits(categoryId);
                 int take = System.Math.Min(System.Math.Max(0, units), have);
+                // P28 credit void (C2): one-shot consume limit — caps the
+                // next consume at min(requested, have, limit), then clears
+                // itself, so the C1 branch can be driven with stock 100.
+                if (NextConsumeLimit.HasValue)
+                {
+                    take = System.Math.Min(take, System.Math.Max(0, NextConsumeLimit.Value));
+                    NextConsumeLimit = null;
+                }
                 if (take <= 0) return false;
                 Stock[categoryId] = have - take;
                 consumedUnits = take;
@@ -704,6 +724,242 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsNotNull(freight);
             Assert.AreEqual("carrier-1", freight.Creditor);
             Assert.AreEqual(250, freight.OutstandingPrincipalCents);
+        }
+
+        [Test]
+        public void P28_T11_CreditVoidCancelsBothObligations()
+        {
+            // The P28 credit-void wart (note 136 item 2, X3): SettleAtCounter
+            // creates the two trade-credit obligations BEFORE the sale, and
+            // the void branch left them standing. The void now cancels both
+            // in full, so no live debt survives a zero sale.
+            Fixture f = DeliveryFixture(CarrierBinding.Bound, 250);
+            f.Fund(100);
+            f.Port.OffersTradeCreditValue = true;
+            f.Port.TradeCreditLimitValue = 10000;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 60);
+            f.Port.FailNextConsume = true;
+
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need }, f.Day, f.Options(), "p28-t11");
+
+            Assert.IsTrue(batch.TripExecuted, batch.FailureReason);
+            Assert.AreEqual(0, batch.ServedNeedCount);
+            Assert.AreEqual(0, batch.UnitsAcquiredTotal);
+            Assert.AreEqual(1, batch.UnbatchedNeeds.Count);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status, "The voided need stays open for a later day.");
+            Assert.AreEqual(100, f.Balance(), "Credit mode moves no cash.");
+            Assert.AreEqual(100, f.StoreStock(), "A voided sale moves no stock.");
+            Assert.AreEqual(0, f.Port.RecordedCashRevenue);
+            Assert.AreEqual(0, f.Carrier.CurrentCashCents);
+            Assert.AreEqual(1, f.Port.ConsumeAttempts, "The void fires exactly one consume, on the SellItem call.");
+            ShoppingTripResult result = SingleResult(batch);
+            Assert.AreEqual(0, result.BuyerOutflowCents);
+            Assert.AreEqual(0, result.StoreCashInCents);
+            Assert.AreEqual(0, result.StoreReceivableCents);
+            Assert.AreEqual(0, result.CarrierCashInCents);
+            Assert.AreEqual(0, result.CarrierReceivableCents);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(result.ObligationId),
+                "The void branch zeroes only the five money fields; the ids survive on the failed result.");
+            Assert.IsFalse(string.IsNullOrWhiteSpace(result.FreightObligationId));
+
+            FinancialObligation goods = f.Obligations.Find(result.ObligationId);
+            Assert.IsNotNull(goods);
+            Assert.AreEqual(FinancialObligationStatus.Cancelled, goods.Status);
+            Assert.AreEqual(0, goods.OutstandingPrincipalCents);
+            Assert.AreEqual(0, goods.TotalOutstandingCents);
+            Assert.AreEqual(7200, goods.OriginalPrincipalCents, "Cancel zeroes the remainder; the created principal stays for audit.");
+            FinancialObligation freight = f.Obligations.Find(result.FreightObligationId);
+            Assert.IsNotNull(freight);
+            Assert.AreEqual(FinancialObligationStatus.Cancelled, freight.Status);
+            Assert.AreEqual(0, freight.OutstandingPrincipalCents);
+            Assert.AreEqual(0, freight.TotalOutstandingCents);
+            Assert.AreEqual(250, freight.OriginalPrincipalCents);
+            string diag = string.Join("\n", f.Diagnostics);
+            Assert.IsTrue(diag.IndexOf("cancelled", StringComparison.OrdinalIgnoreCase) >= 0,
+                "The void diagnostic must name the cancellation: " + diag);
+        }
+
+        [Test]
+        public void P28_T12_CreditVoidWithoutFeeCancelsGoodsOnly()
+        {
+            // No fee was charged, so no freight obligation exists: the void
+            // cancels the goods obligation only, and no refusal may
+            // pollute the diagnostic.
+            Fixture f = DeliveryFixture(CarrierBinding.None, 0);
+            f.Fund(100);
+            f.Port.OffersTradeCreditValue = true;
+            f.Port.TradeCreditLimitValue = 10000;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 60);
+            f.Port.FailNextConsume = true;
+
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need }, f.Day, f.Options(), "p28-t12");
+
+            Assert.IsTrue(batch.TripExecuted, batch.FailureReason);
+            Assert.AreEqual(0, batch.ServedNeedCount);
+            Assert.AreEqual(1, batch.UnbatchedNeeds.Count);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(100, f.Balance(), "Credit mode moves no cash.");
+            Assert.AreEqual(100, f.StoreStock(), "A voided sale moves no stock.");
+            Assert.AreEqual(1, f.Port.ConsumeAttempts);
+            ShoppingTripResult result = SingleResult(batch);
+            Assert.AreEqual(0, result.BuyerOutflowCents);
+            Assert.AreEqual(0, result.StoreCashInCents);
+            Assert.AreEqual(0, result.StoreReceivableCents);
+            Assert.AreEqual(0, result.CarrierCashInCents);
+            Assert.AreEqual(0, result.CarrierReceivableCents);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(result.ObligationId));
+            Assert.IsTrue(string.IsNullOrWhiteSpace(result.FreightObligationId),
+                "No fee was charged, so no freight obligation exists and no freight cancel runs.");
+            FinancialObligation goods = f.Obligations.Find(result.ObligationId);
+            Assert.IsNotNull(goods);
+            Assert.AreEqual(FinancialObligationStatus.Cancelled, goods.Status);
+            Assert.AreEqual(0, goods.OutstandingPrincipalCents);
+            Assert.AreEqual(0, goods.TotalOutstandingCents);
+            Assert.AreEqual(7200, goods.OriginalPrincipalCents);
+            string diag = string.Join("\n", f.Diagnostics);
+            Assert.IsTrue(diag.IndexOf("cancelled", StringComparison.OrdinalIgnoreCase) >= 0,
+                "The void diagnostic must name the cancellation: " + diag);
+            Assert.IsTrue(diag.IndexOf("Unknown financial obligation", StringComparison.Ordinal) < 0,
+                "No freight cancel runs, so no unknown-id refusal may appear: " + diag);
+        }
+
+        [Test]
+        public void P28_T13_CashVoidUnchanged()
+        {
+            // Cash mode has no obligations: the void refunds the household
+            // in full and the diagnostic keeps the existing text verbatim.
+            Fixture f = DeliveryFixture(CarrierBinding.Bound, 250);
+            f.Fund(10000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 60);
+            f.Port.FailNextConsume = true;
+
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need }, f.Day, f.Options(), "p28-t13");
+
+            Assert.IsTrue(batch.TripExecuted, batch.FailureReason);
+            Assert.AreEqual(0, batch.ServedNeedCount);
+            Assert.AreEqual(1, batch.UnbatchedNeeds.Count);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(10000, f.Balance(), "The cash void refunds the whole purchase.");
+            Assert.AreEqual(100, f.StoreStock(), "A voided sale moves no stock.");
+            Assert.AreEqual(0, f.Obligations.Obligations.Count, "Cash mode creates no obligations.");
+            Assert.AreEqual(1, f.Port.ConsumeAttempts);
+            ShoppingTripResult result = SingleResult(batch);
+            Assert.AreEqual(0, result.BuyerOutflowCents);
+            Assert.AreEqual(0, result.StoreCashInCents);
+            Assert.AreEqual(0, result.StoreReceivableCents);
+            Assert.AreEqual(0, result.CarrierCashInCents);
+            Assert.AreEqual(0, result.CarrierReceivableCents);
+            string diag = string.Join("\n", f.Diagnostics);
+            Assert.IsTrue(diag.IndexOf("refunded, manual reconciliation required.", StringComparison.Ordinal) >= 0,
+                "Cash mode keeps the existing void text verbatim: " + diag);
+        }
+
+        [Test]
+        public void P28_T14_CreditPartialFillStillTruesOnlyResult()
+        {
+            // C1 regression pin, corrected per note 138 C2: the C1 branch
+            // (sold < units in credit mode) cannot trigger through
+            // ExecuteBatch with a faithful port, because the counter check
+            // re-caps units by stock. The one-shot consume limit drives
+            // it: stock 100 keeps units at 60 and the obligations at
+            // 7200/250, then SellItem consumes only 55.
+            Fixture f = DeliveryFixture(CarrierBinding.Bound, 250);
+            f.Fund(100);
+            f.Port.OffersTradeCreditValue = true;
+            f.Port.TradeCreditLimitValue = 10000;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 60);
+            f.Port.NextConsumeLimit = 55;
+
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.Loop.ExecuteBatch(
+                new List<HouseholdPurchasingNeed> { need }, f.Day, f.Options(), "p28-t14");
+
+            Assert.IsTrue(batch.TripExecuted, batch.FailureReason);
+            Assert.AreEqual(1, batch.ServedNeedCount);
+            Assert.AreEqual(55, batch.UnitsAcquiredTotal);
+            Assert.AreEqual(100, f.Balance(), "Credit mode moves no cash.");
+            ShoppingTripResult result = SingleResult(batch);
+            Assert.AreEqual(0, result.BuyerOutflowCents);
+            Assert.AreEqual(6600, result.StoreReceivableCents, "C1: the store receivable is the goods actually sold.");
+            Assert.AreEqual(250, result.CarrierReceivableCents, "C1: the carrier receivable stands on a partial fill.");
+            Assert.AreEqual(0, result.StoreCashInCents);
+            Assert.AreEqual(0, result.CarrierCashInCents);
+            Assert.AreEqual(5, result.UnitsStillNeeded);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(result.ObligationId));
+            Assert.IsFalse(string.IsNullOrWhiteSpace(result.FreightObligationId));
+
+            FinancialObligation goods = f.Obligations.Find(result.ObligationId);
+            Assert.IsNotNull(goods);
+            Assert.AreEqual(7200, goods.OutstandingPrincipalCents, "C1: the obligation principal stays as created, only the result is trued.");
+            FinancialObligation freight = f.Obligations.Find(result.FreightObligationId);
+            Assert.IsNotNull(freight);
+            Assert.AreEqual(250, freight.OutstandingPrincipalCents);
+            string diag = string.Join("\n", f.Diagnostics);
+            Assert.IsTrue(diag.IndexOf("INCONSISTENCY", StringComparison.Ordinal) >= 0,
+                "The C1 truing must still be loud in diagnostics: " + diag);
+        }
+
+        [Test]
+        public void P28_T15_CancelUnknownIdRefuses()
+        {
+            // Authority level, no loop: an unknown id refuses with the
+            // AccrueInterest wording and throws nothing.
+            var authority = new FinancialObligationAuthority();
+            string refusal = authority.CancelObligation("no-such-id", "test");
+            Assert.IsNotNull(refusal);
+            Assert.IsTrue(refusal.IndexOf("Unknown financial obligation", StringComparison.Ordinal) >= 0,
+                "The refusal must name the unknown id: " + refusal);
+        }
+
+        [Test]
+        public void P28_T16_CancelSatisfiedRefuses()
+        {
+            // Authority level: a paid obligation is a settled fact and
+            // must never be voided away.
+            var authority = new FinancialObligationAuthority();
+            var ids = new EntityIdRegistry();
+            FinancialObligation obligation = authority.Create(
+                ids, FinancialObligationKind.TradeCredit, "household:7", "store-1", 7200, 0,
+                "trade credit, net 30", "test obligation");
+            Assert.IsNotNull(obligation);
+            FinancialPaymentRecord payment = authority.ApplyPayment(
+                obligation.ObligationId, 7200, 0, "household:7", "store-1");
+            Assert.IsNotNull(payment, "The obligation must settle in full before the cancel is attempted.");
+            Assert.AreEqual(FinancialObligationStatus.Satisfied, obligation.Status);
+            string refusal = authority.CancelObligation(obligation.ObligationId, "test");
+            Assert.IsNotNull(refusal, "Cancelling a paid obligation must refuse — a settled fact is never voided away.");
+            Assert.AreEqual(FinancialObligationStatus.Satisfied, obligation.Status);
+            Assert.AreEqual(7200, obligation.OriginalPrincipalCents);
+        }
+
+        [Test]
+        public void P28_T17_CancelIsIdempotentAndInert()
+        {
+            // Authority level: cancel is an idempotent no-op the second
+            // time (first reason wins) and the cancelled obligation is
+            // inert to the exactly-once paths. C6: the exactly-once calls
+            // use positive amounts, so any refusal is the Settled refusal,
+            // not the positivity refusal.
+            var authority = new FinancialObligationAuthority();
+            var ids = new EntityIdRegistry();
+            FinancialObligation obligation = authority.Create(
+                ids, FinancialObligationKind.TradeCredit, "household:7", "store-1", 7200, 0,
+                "trade credit, net 30", "test obligation");
+            Assert.IsNotNull(obligation);
+            Assert.IsNull(authority.CancelObligation(obligation.ObligationId, "first reason"));
+            Assert.AreEqual(FinancialObligationStatus.Cancelled, obligation.Status);
+            Assert.AreEqual(0, obligation.OutstandingPrincipalCents);
+            Assert.AreEqual(0, obligation.TotalOutstandingCents);
+            Assert.AreEqual(7200, obligation.OriginalPrincipalCents);
+            Assert.AreEqual("first reason", obligation.CancellationReason);
+            Assert.IsNull(authority.CancelObligation(obligation.ObligationId, "second reason"));
+            Assert.AreEqual("first reason", obligation.CancellationReason, "A second cancel keeps the first reason.");
+            Assert.IsNull(authority.ApplyPayment(obligation.ObligationId, 100, 0, "household:7", "store-1"),
+                "A cancelled obligation is inert to payment.");
+            Assert.IsNotNull(authority.AccrueInterest(obligation.ObligationId, 100),
+                "A cancelled obligation is inert to accrual.");
         }
     }
 }

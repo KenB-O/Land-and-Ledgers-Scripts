@@ -1777,11 +1777,47 @@ namespace LandLedgers.Population
                     chosen.Supplier.SupplierName);
             }
 
+            // P28 credit void (note 136 §2, note 138): the obligations were
+            // created before the sale, and the sale voided — cancel both in
+            // full so no live debt survives a zero sale. The goods
+            // obligation is non-empty by construction in credit mode; the
+            // freight obligation is cancelled only when its id is
+            // non-empty (no fee was charged otherwise), and any refusal is
+            // appended to the diagnostic rather than swallowed.
+            string cancelRefusals = string.Empty;
+            if (settlement.Mode == ShoppingSettlementMode.TradeCreditObligation && obligations != null)
+            {
+                string reason = $"sale voided at the counter: '{chosen.Supplier.SupplierName}' sold 0 units of {units}u {need.ItemId} on day {dayIndex}";
+                string goodsRefusal = obligations.CancelObligation(settlement.ObligationId, reason);
+                if (!string.IsNullOrWhiteSpace(goodsRefusal))
+                    cancelRefusals += $" goods cancel refused: {goodsRefusal};";
+                if (!string.IsNullOrWhiteSpace(settlement.FreightObligationId))
+                {
+                    string freightRefusal = obligations.CancelObligation(settlement.FreightObligationId, reason);
+                    if (!string.IsNullOrWhiteSpace(freightRefusal))
+                        cancelRefusals += $" freight cancel refused: {freightRefusal};";
+                }
+            }
+
             result.BuyerOutflowCents = 0;
             result.StoreCashInCents = 0;
             result.StoreReceivableCents = 0;
             result.CarrierCashInCents = 0;
             result.CarrierReceivableCents = 0;
+            if (settlement.Mode == ShoppingSettlementMode.TradeCreditObligation)
+            {
+                // Credit mode restates the diagnostic to name the
+                // cancellation (note 138 Q5): the existing text says
+                // "refunded" even in credit mode, where nothing was
+                // refunded; the restatement says "cancelled" instead and
+                // names both cancelled ids.
+                string cancelledIds = settlement.ObligationId;
+                if (!string.IsNullOrWhiteSpace(settlement.FreightObligationId))
+                    cancelledIds += " and " + settlement.FreightObligationId;
+                return SettlementOutcome.Failed(
+                    $"INCONSISTENCY: settlement of {totalCost}c was posted but '{chosen.Supplier.SupplierName}' sold 0 units — obligations {cancelledIds} cancelled, manual reconciliation required.{cancelRefusals}");
+            }
+
             return SettlementOutcome.Failed(
                 $"INCONSISTENCY: settlement of {totalCost}c was posted but '{chosen.Supplier.SupplierName}' sold 0 units — refunded, manual reconciliation required.");
         }

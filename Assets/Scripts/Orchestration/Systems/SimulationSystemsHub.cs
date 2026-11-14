@@ -396,6 +396,8 @@ namespace LandLedgers.Orchestration.Systems
         private ConstructionProjectExecutor constructionProjectExecutor;
         private readonly List<ConstructionProject> constructionProjects = new List<ConstructionProject>();
         private NpcConstructionCommissioner npcConstructionCommissioner;
+        private ConstructionContractBook constructionContractBook;
+        private ConstructionProgressBillingService constructionBilling;
         private TradeCreditBook tradeCreditBook;
         private CreditEventLog creditEventLog;
         private CreditCashBridge creditCashBridge;
@@ -544,6 +546,12 @@ namespace LandLedgers.Orchestration.Systems
         public ConstructionProjectExecutor ConstructionExecutor => constructionProjectExecutor ??= new ConstructionProjectExecutor();
         public IList<ConstructionProject> ConstructionProjects => constructionProjects;
         public NpcConstructionCommissioner NpcConstructionCommissioner => npcConstructionCommissioner ??= new NpcConstructionCommissioner();
+        /// <summary>Plan 26 (Q18): the construction contract book, hub-held.</summary>
+        public ConstructionContractBook ConstructionContractBook =>
+            constructionContractBook ??= new ConstructionContractBook();
+        /// <summary>Plan 26 (Q18, note 102 C6): the progress-billing service, hub-held with a null cash port until Q17 wires a real production port; the service refuses loudly on a null port, never throws.</summary>
+        public ConstructionProgressBillingService ConstructionBilling =>
+            constructionBilling ??= new ConstructionProgressBillingService(null);
         public TradeCreditBook TradeCredit => tradeCreditBook ??= new TradeCreditBook();
         public CreditEventLog CreditEvents => creditEventLog ??= new CreditEventLog();
         /// <summary>
@@ -966,6 +974,8 @@ namespace LandLedgers.Orchestration.Systems
             npcPropertyLife ??= new NpcPropertyLifeService();
             constructionProjectExecutor ??= new ConstructionProjectExecutor();
             npcConstructionCommissioner ??= new NpcConstructionCommissioner();
+            constructionContractBook ??= new ConstructionContractBook();
+            constructionBilling ??= new ConstructionProgressBillingService(null);
             tradeCreditBook ??= new TradeCreditBook();
             creditEventLog ??= new CreditEventLog();
             creditCashBridge ??= new CreditCashBridge();
@@ -1150,6 +1160,8 @@ namespace LandLedgers.Orchestration.Systems
                 npcPropertyLife = NpcPropertyLife.CaptureSaveDto(),
                 constructionProjects = ConstructionExecutor.CaptureSaveDto(new List<ConstructionProject>(ConstructionProjects)),
                 npcConstructionCommissioner = NpcConstructionCommissioner.CaptureSaveDto(),
+                constructionContractBook = ConstructionContractBook.CaptureSaveDto(),
+                constructionBilling = ConstructionBilling.CaptureSaveDto(),
                 tradeCredit = TradeCredit.CaptureSaveDto(),
                 creditEvents = CreditEvents.CaptureSaveDto(),
                 contactGraph = ContactGraph.CaptureSaveDto(),
@@ -1273,6 +1285,8 @@ namespace LandLedgers.Orchestration.Systems
                 if (project != null) ConstructionProjects.Add(project);
             }
             NpcConstructionCommissioner.LoadFromSaveDto(dto.npcConstructionCommissioner, diagnostics);
+            ConstructionContractBook.LoadFromSaveDto(dto.constructionContractBook);
+            ConstructionBilling.LoadFromSaveDto(dto.constructionBilling);
             TradeCredit.LoadFromSaveDto(dto.tradeCredit);
             CreditEvents.LoadFromSaveDto(dto.creditEvents);
             ContactGraph.LoadFromSaveDto(dto.contactGraph);

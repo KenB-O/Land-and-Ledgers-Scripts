@@ -100,6 +100,9 @@ namespace LandLedgers.Persistence
         public NpcPropertyLifeService.NpcPropertyLifeSaveDto npcPropertyLife = new();
         public ConstructionProjectExecutor.ConstructionProjectSaveDto constructionProjects = new();
         public NpcConstructionCommissioner.NpcConstructionCommissionerSaveDto npcConstructionCommissioner = new();
+        /// <summary>Plan 26 (Q18): the construction contract book and progress-billing service save state.</summary>
+        public ConstructionContractBook.ConstructionContractBookSaveDto constructionContractBook = new();
+        public ConstructionProgressBillingService.ConstructionProgressBillingServiceSaveDto constructionBilling = new();
         public TradeCreditBook.TradeCreditBookSaveDto tradeCredit = new();
         public CreditEventLog.CreditEventLogSaveDto creditEvents = new();
         // Autonomous Labor pass services: contact graph, negotiated offers,

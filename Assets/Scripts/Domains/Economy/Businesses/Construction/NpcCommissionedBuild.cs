@@ -57,6 +57,15 @@ namespace LandLedgers.Economy
         /// </summary>
         public int FreightCostCents;
         public string Notes = string.Empty;
+        /// <summary>
+        /// Plan 26 (Q30b): the package's procurement leg failed after the
+        /// sale stood — the paid-for lot sits with the supplier, so the
+        /// driver blocks a blind retry until AllowProcurementRetry is called.
+        /// Persisted through the commissioner's deep-copy; the driver
+        /// re-derives its retry-block set from this marker.
+        /// </summary>
+        public bool Stranded;
+        public string StrandedReason = string.Empty;
 
         public NpcBuildPackageFunding() { }
     }
@@ -872,11 +881,19 @@ namespace LandLedgers.Economy
         public sealed class NpcConstructionCommissionerSaveDto
         {
             public List<NpcConstructionRecord> Records = new List<NpcConstructionRecord>();
+            /// <summary>
+            /// Plan 26 (Q30a): the commissioner's id sequence at capture.
+            /// Additive; -1 means absent (an old save predating this field)
+            /// — Load then recomputes from the restored ids. Mirrors the
+            /// executor's ExecutorSequence (Pass XI WS4).
+            /// </summary>
+            public int CommissionerSequence = -1;
         }
 
         public NpcConstructionCommissionerSaveDto CaptureSaveDto()
         {
             var dto = new NpcConstructionCommissionerSaveDto();
+            dto.CommissionerSequence = sequence;
             foreach (NpcConstructionRecord record in records.Values)
                 if (record != null) dto.Records.Add(record);
             return dto;
@@ -933,6 +950,8 @@ namespace LandLedgers.Economy
                             WagesPaidCents = funding.WagesPaidCents,
                             FreightCostCents = funding.FreightCostCents,
                             Notes = funding.Notes ?? string.Empty,
+                            Stranded = funding.Stranded,
+                            StrandedReason = funding.StrandedReason ?? string.Empty,
                         };
                         if (funding.WorkerPersonIds != null) fundingCopy.WorkerPersonIds.AddRange(funding.WorkerPersonIds);
                         if (funding.EmploymentIds != null) fundingCopy.EmploymentIds.AddRange(funding.EmploymentIds);
@@ -959,6 +978,21 @@ namespace LandLedgers.Economy
                 if (record.Decisions != null) copy.Decisions.AddRange(record.Decisions);
                 records[copy.RecordId] = copy;
             }
+            // Plan 26 (Q30a, note 102 C7): continue the id sequence instead
+            // of restarting at 0 and re-minting an existing id. The persisted
+            // sequence wins when it is ahead; the recomputed floor wins when
+            // the field is absent (old save, -1) or behind the restored ids,
+            // so an old save can never collide either. The scan covers the
+            // DTO's records, so a duplicate-skipped record still counts
+            // toward the floor (its id was in the DTO). Only RecordIds are
+            // scanned (PackageIds are minted by the executor's sequence).
+            int maxSuffix = -1;
+            foreach (NpcConstructionRecord source in dto.Records)
+            {
+                if (source == null) continue;
+                maxSuffix = Math.Max(maxSuffix, TrailingNumber(source.RecordId));
+            }
+            sequence = Math.Max(dto.CommissionerSequence, maxSuffix + 1);
         }
 
         public NpcConstructionRecord FindRecord(string recordId)
@@ -982,6 +1016,16 @@ namespace LandLedgers.Economy
                 if (record != null && string.Equals(record.ProjectId, projectId, StringComparison.Ordinal))
                     return record;
             return null;
+        }
+
+        /// <summary>Numeric suffix after the last '-' in an id, or -1 when there is none. (Plan 26 Q30a, note 102 C7: duplicated from the executor — no cross-class coupling for a 9-line pure function.)</summary>
+        private static int TrailingNumber(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return -1;
+            int dash = id.LastIndexOf('-');
+            if (dash < 0 || dash == id.Length - 1) return -1;
+            int value;
+            return int.TryParse(id.Substring(dash + 1), out value) ? value : -1;
         }
 
         #endregion

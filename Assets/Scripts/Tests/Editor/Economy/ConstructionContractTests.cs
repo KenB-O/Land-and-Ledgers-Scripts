@@ -571,5 +571,47 @@ namespace LandLedgers.EditorTests.Economy
                 ConstructionContractPriceBasis.LumpSum, 7500, 13, 10, null, null, 13, diag);
             Assert.AreEqual("BID-0002", secondBid.BidId, "bid numbering survives the round trip");
         }
+
+        [Test]
+        public void Book_SaveLoad_RoundTrip_NextContractMintsFollowingId()
+        {
+            var book = new ConstructionContractBook();
+            var diag = new List<string>();
+            ConstructionBidRequest request = OpenStoreRequest(book, diag);
+            ConstructionBid bid = SubmitAlphaBid(book, request.RequestId, diag);
+            ConstructionContract contract = AcceptAlphaContract(book, bid.BidId, diag);
+            Assert.IsNotNull(contract, string.Join("; ", diag));
+
+            ConstructionContractBook.ConstructionContractBookSaveDto dto = book.CaptureSaveDto();
+            var restored = new ConstructionContractBook();
+            restored.LoadFromSaveDto(dto);
+
+            // Note 102 C1: the existing round-trip already pins the next
+            // request (RBID-0002) and the next bid (BID-0002); this test pins
+            // only the new id — the next contract.
+            ConstructionBidRequest secondRequest = OpenStoreRequest(restored, diag);
+            ConstructionBid secondBid = SubmitAlphaBid(restored, secondRequest.RequestId, diag);
+            ConstructionContract second = AcceptAlphaContract(restored, secondBid.BidId, diag);
+            Assert.IsNotNull(second, string.Join("; ", diag));
+            Assert.AreEqual("CTR-0002", second.ContractId, "contract numbering survives the round trip");
+        }
+
+        [Test]
+        public void Book_LoadNull_ResetsSequencesToOne()
+        {
+            var book = new ConstructionContractBook();
+            var diag = new List<string>();
+            ConstructionBidRequest request = OpenStoreRequest(book, diag);
+            ConstructionBid bid = SubmitAlphaBid(book, request.RequestId, diag);
+            Assert.IsNotNull(AcceptAlphaContract(book, bid.BidId, diag), string.Join("; ", diag));
+
+            book.LoadFromSaveDto(null);
+            Assert.AreEqual(0, book.RequestCount);
+            Assert.AreEqual(0, book.BidCount);
+            Assert.AreEqual(0, book.ContractCount);
+
+            ConstructionBidRequest fresh = OpenStoreRequest(book, diag);
+            Assert.AreEqual("RBID-0001", fresh.RequestId, "a null load resets the request sequence to 1");
+        }
     }
 }

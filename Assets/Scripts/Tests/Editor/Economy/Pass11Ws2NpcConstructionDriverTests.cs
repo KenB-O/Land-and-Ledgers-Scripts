@@ -631,5 +631,315 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsNull(c.Commissioner.ResumeProject(project, record, 12, c.Diag), string.Join("; ", c.Diag));
             Assert.AreEqual(1, driver.Drive(13, c.Diag));
         }
+
+        // ---------------- Plan 26 (Q30a/Q30b) ----------------
+
+        // Plan 26 (Q30a): captures the commissioner DTO, restores it into a
+        // fresh commissioner (loads times), then commissions once more through
+        // a fresh driver and returns the minted record id. The executor
+        // sequence is burned past the restored project ids so the new
+        // commission mints a fresh project id and the restored records stay
+        // addressable by project id. The burn count is derived from the
+        // DTO's own project ids: each commission advances the executor
+        // sequence by 3 (one project id plus one per work package — the
+        // cabin has two phases), so a fixed burn of 3 would collide with
+        // the restored cproj-3 record.
+        private static int ProjectSuffix(string projectId)
+        {
+            if (string.IsNullOrEmpty(projectId)) return -1;
+            int dash = projectId.LastIndexOf('-');
+            if (dash < 0 || dash == projectId.Length - 1) return -1;
+            int value;
+            return int.TryParse(projectId.Substring(dash + 1), out value) ? value : -1;
+        }
+
+        private static string MintRecordIdAfterRestore(
+            NpcConstructionCommissioner.NpcConstructionCommissionerSaveDto dto, int loads,
+            out NpcConstructionCommissioner restoredCommissioner)
+        {
+            restoredCommissioner = new NpcConstructionCommissioner();
+            var loadDiag = new List<string>();
+            for (int i = 0; i < loads; i++) restoredCommissioner.LoadFromSaveDto(dto, loadDiag);
+            var c = new Chain();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            c.Commissioner = restoredCommissioner;
+            int maxProjectSuffix = -1;
+            foreach (NpcConstructionRecord r in dto.Records)
+                if (r != null) maxProjectSuffix = Math.Max(maxProjectSuffix, ProjectSuffix(r.ProjectId));
+            for (int i = 0; i <= maxProjectSuffix; i++)
+                c.Executor.CreateProject(c.Catalog, 7, "cabin-a", "parcel-9", 10, c.Diag);
+            var driver = c.NewDriver();
+            ConstructionProject project = driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag);
+            Assert.IsNotNull(project, string.Join("; ", c.Diag));
+            NpcConstructionRecord record = restoredCommissioner.FindRecordForProject(project.ProjectId);
+            Assert.IsNotNull(record, "the new commission must open a commissioner record");
+            return record.RecordId;
+        }
+
+        [Test]
+        public void CommissionerSequence_RestoresAfterLoad_NextMintDoesNotOverwrite()
+        {
+            var c = new Chain();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var driver = c.NewDriver();
+            Assert.IsNotNull(driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag), string.Join("; ", c.Diag));
+            Assert.IsNotNull(driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag), string.Join("; ", c.Diag));
+            Assert.IsNotNull(driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag), string.Join("; ", c.Diag));
+
+            NpcConstructionCommissioner.NpcConstructionCommissionerSaveDto dto =
+                c.Commissioner.CaptureSaveDto();
+            NpcConstructionCommissioner restored;
+            string minted = MintRecordIdAfterRestore(dto, 1, out restored);
+            Assert.AreEqual("npcb-3", minted, "the sequence survives the round trip");
+            NpcConstructionRecord first = restored.FindRecord("npcb-0");
+            Assert.IsNotNull(first, "the restored npcb-0 record must survive the new commission");
+            Assert.AreEqual("cproj-0", first.ProjectId,
+                "the restored npcb-0 record was not overwritten by the new commission");
+        }
+
+        [Test]
+        public void CommissionerSequence_DoubleLoad_NoDuplicates_SequenceStable()
+        {
+            var c = new Chain();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var driver = c.NewDriver();
+            Assert.IsNotNull(driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag), string.Join("; ", c.Diag));
+            Assert.IsNotNull(driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag), string.Join("; ", c.Diag));
+            Assert.IsNotNull(driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag), string.Join("; ", c.Diag));
+
+            NpcConstructionCommissioner.NpcConstructionCommissionerSaveDto dto =
+                c.Commissioner.CaptureSaveDto();
+
+            // A second load of the same DTO adds no duplicate records.
+            var twice = new NpcConstructionCommissioner();
+            twice.LoadFromSaveDto(dto, c.Diag);
+            twice.LoadFromSaveDto(dto, c.Diag);
+            Assert.IsNotNull(twice.FindRecord("npcb-0"));
+            Assert.IsNotNull(twice.FindRecord("npcb-1"));
+            Assert.IsNotNull(twice.FindRecord("npcb-2"));
+
+            // The next mint is the same after one load as after two.
+            NpcConstructionCommissioner once;
+            string mintedOnce = MintRecordIdAfterRestore(dto, 1, out once);
+            NpcConstructionCommissioner twiceMore;
+            string mintedTwice = MintRecordIdAfterRestore(dto, 2, out twiceMore);
+            Assert.AreEqual(mintedOnce, mintedTwice, "the sequence is stable across a double load");
+        }
+
+        [Test]
+        public void Driver_NoStrandedPackages_RestoresWithNoPhantomBlock()
+        {
+            var c = new Chain();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var driver = c.NewDriver();
+            ConstructionProject project = driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag);
+            Assert.IsNotNull(project, string.Join("; ", c.Diag));
+
+            ConstructionProjectExecutor.ConstructionProjectSaveDto projectDto =
+                c.Executor.CaptureSaveDto(new List<ConstructionProject>(c.Projects));
+            NpcConstructionCommissioner.NpcConstructionCommissionerSaveDto recordDto =
+                c.Commissioner.CaptureSaveDto();
+            var executor2 = new ConstructionProjectExecutor();
+            var commissioner2 = new NpcConstructionCommissioner();
+            List<ConstructionProject> projects2 = executor2.LoadFromSaveDto(projectDto, c.Diag);
+            commissioner2.LoadFromSaveDto(recordDto, c.Diag);
+
+            // A null DTO loads cleanly and leaves an empty commissioner.
+            var empty = new NpcConstructionCommissioner();
+            empty.LoadFromSaveDto(null, c.Diag);
+            Assert.IsNull(empty.FindRecord("npcb-0"));
+
+            var c2 = new Chain();
+            c2.Executor = executor2;
+            c2.Commissioner = commissioner2;
+            c2.Projects = projects2;
+            c2.Cash = c.Cash;
+            c2.Obligations = c.Obligations;
+            c2.Ids = c.Ids;
+            c2.Source = c.Source;
+            c2.Prices = c.Prices;
+            c2.Catalog = c.Catalog;
+            var driver2 = c2.NewDriver();
+            c2.Budgets.EnsureDay(11);
+            Assert.AreEqual(1, driver2.Drive(11, c2.Diag),
+                "no phantom block: the unblocked package stages after restore");
+            Assert.AreEqual(WorkPackageStatus.MaterialsStaged, projects2[0].WorkPackages[0].Status);
+        }
+
+        [Test]
+        public void CommissionerSequence_OldSaveFloor_RecomputedFromRestoredIds()
+        {
+            var dto = new NpcConstructionCommissioner.NpcConstructionCommissionerSaveDto
+            {
+                CommissionerSequence = -1,
+            };
+            dto.Records.Add(new NpcConstructionRecord { RecordId = "npcb-0", ProjectId = "proj-a" });
+            dto.Records.Add(new NpcConstructionRecord { RecordId = "npcb-1", ProjectId = "proj-b" });
+            dto.Records.Add(new NpcConstructionRecord { RecordId = "npcb-2", ProjectId = "proj-c" });
+
+            NpcConstructionCommissioner restored;
+            string minted = MintRecordIdAfterRestore(dto, 1, out restored);
+            Assert.AreEqual("npcb-3", minted, "an old save without the sequence recomputes the floor from restored ids");
+        }
+
+        [Test]
+        public void CommissionerSequence_PersistedAhead_WinsOverRestoredIds()
+        {
+            var dto = new NpcConstructionCommissioner.NpcConstructionCommissionerSaveDto
+            {
+                CommissionerSequence = 5,
+            };
+            dto.Records.Add(new NpcConstructionRecord { RecordId = "npcb-0", ProjectId = "proj-a" });
+            dto.Records.Add(new NpcConstructionRecord { RecordId = "npcb-1", ProjectId = "proj-b" });
+
+            NpcConstructionCommissioner restored;
+            string minted = MintRecordIdAfterRestore(dto, 1, out restored);
+            Assert.AreEqual("npcb-5", minted, "a persisted sequence ahead of the restored ids wins");
+        }
+
+        [Test]
+        public void Driver_BlockedPackage_SurvivesLoad_StillBlockedAfterRestore()
+        {
+            var c = new Chain();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var port = new ProcurementPort(c) { WagonMassKg = 10f };
+            var driver = c.NewDriver(port);
+            ConstructionProject project = driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag);
+            Assert.IsNotNull(project, string.Join("; ", c.Diag));
+
+            // The wagon cannot carry the load: the sale stands at the
+            // supplier, but nothing reaches the site and the package waits.
+            Assert.AreEqual(0, driver.Drive(11, c.Diag));
+            Assert.AreEqual(WorkPackageStatus.Ready, project.WorkPackages[0].Status);
+            Assert.AreEqual(1, c.SalePort.Sales.Count, "the failed leg bought once");
+            NpcConstructionRecord record = c.Commissioner.FindRecordForProject(project.ProjectId);
+            Assert.IsNotNull(record);
+            NpcBuildPackageFunding funding = record.FindFunding(project.WorkPackages[0].PackageId);
+            Assert.IsNotNull(funding);
+            Assert.IsTrue(funding.Stranded, "the failed procurement marks the funding line stranded");
+            Assert.IsTrue(!string.IsNullOrWhiteSpace(funding.StrandedReason));
+
+            // Save and load into fresh authorities, as the hub does.
+            ConstructionProjectExecutor.ConstructionProjectSaveDto projectDto =
+                c.Executor.CaptureSaveDto(new List<ConstructionProject>(c.Projects));
+            NpcConstructionCommissioner.NpcConstructionCommissionerSaveDto recordDto =
+                c.Commissioner.CaptureSaveDto();
+            var executor2 = new ConstructionProjectExecutor();
+            var commissioner2 = new NpcConstructionCommissioner();
+            List<ConstructionProject> projects2 = executor2.LoadFromSaveDto(projectDto, c.Diag);
+            commissioner2.LoadFromSaveDto(recordDto, c.Diag);
+
+            // The stranded marker survives the round trip (the deep-copy).
+            NpcConstructionRecord record2 = commissioner2.FindRecordForProject(projects2[0].ProjectId);
+            Assert.IsNotNull(record2);
+            NpcBuildPackageFunding funding2 = record2.FindFunding(projects2[0].WorkPackages[0].PackageId);
+            Assert.IsNotNull(funding2);
+            Assert.IsTrue(funding2.Stranded, "the stranded marker survives the round trip");
+
+            var c2 = new Chain();
+            c2.Executor = executor2;
+            c2.Commissioner = commissioner2;
+            c2.Projects = projects2;
+            c2.Cash = c.Cash;
+            c2.Obligations = c.Obligations;
+            c2.Ids = c.Ids;
+            c2.Source = c.Source;
+            c2.Prices = c.Prices;
+            c2.Catalog = c.Catalog;
+            c2.SalePort = c.SalePort;
+            var port2 = new ProcurementPort(c2) { WagonMassKg = 10f };
+            var driver2 = c2.NewDriver(port2);
+
+            // The restored driver re-derives the block from the persisted
+            // stranded marker: the package stays blocked, nothing is bought
+            // a second time.
+            c2.Budgets.EnsureDay(12);
+            Assert.AreEqual(0, driver2.Drive(12, c2.Diag));
+            Assert.AreEqual(WorkPackageStatus.Ready, projects2[0].WorkPackages[0].Status);
+            Assert.AreEqual(1, c2.SalePort.Sales.Count, "a blind retry would double-buy the stranded lot");
+        }
+
+        [Test]
+        public void Driver_BlockedPackage_ExplicitRetryAfterRestore_UnblocksAndStages()
+        {
+            var c = new Chain();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var port = new ProcurementPort(c) { WagonMassKg = 10f };
+            var driver = c.NewDriver(port);
+            ConstructionProject project = driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag);
+            Assert.IsNotNull(project, string.Join("; ", c.Diag));
+            Assert.AreEqual(0, driver.Drive(11, c.Diag));
+            Assert.AreEqual(1, c.SalePort.Sales.Count, "the failed leg bought once");
+
+            ConstructionProjectExecutor.ConstructionProjectSaveDto projectDto =
+                c.Executor.CaptureSaveDto(new List<ConstructionProject>(c.Projects));
+            NpcConstructionCommissioner.NpcConstructionCommissionerSaveDto recordDto =
+                c.Commissioner.CaptureSaveDto();
+            var executor2 = new ConstructionProjectExecutor();
+            var commissioner2 = new NpcConstructionCommissioner();
+            List<ConstructionProject> projects2 = executor2.LoadFromSaveDto(projectDto, c.Diag);
+            commissioner2.LoadFromSaveDto(recordDto, c.Diag);
+
+            var c2 = new Chain();
+            c2.Executor = executor2;
+            c2.Commissioner = commissioner2;
+            c2.Projects = projects2;
+            c2.Cash = c.Cash;
+            c2.Obligations = c.Obligations;
+            c2.Ids = c.Ids;
+            c2.Source = c.Source;
+            c2.Prices = c.Prices;
+            c2.Catalog = c.Catalog;
+            c2.SalePort = c.SalePort;
+            var port2 = new ProcurementPort(c2) { WagonMassKg = 10f };
+            var driver2 = c2.NewDriver(port2);
+
+            // The block survived the restore.
+            NpcConstructionRecord record2 = commissioner2.FindRecordForProject(projects2[0].ProjectId);
+            Assert.IsNotNull(record2);
+            Assert.IsTrue(record2.FindFunding(projects2[0].WorkPackages[0].PackageId).Stranded);
+
+            // An explicit retry decision with a wagon that can carry the load
+            // clears the flag and the key, and the package stages; the first
+            // lot stays supplier-held (the service semantic).
+            port2.WagonMassKg = 100000f;
+            driver2.AllowProcurementRetry(projects2[0], projects2[0].WorkPackages[0]);
+            Assert.IsTrue(!record2.FindFunding(projects2[0].WorkPackages[0].PackageId).Stranded,
+                "AllowProcurementRetry clears the stranded marker");
+            c2.Budgets.EnsureDay(13);
+            Assert.AreEqual(1, driver2.Drive(13, c2.Diag));
+            Assert.AreEqual(WorkPackageStatus.MaterialsStaged, projects2[0].WorkPackages[0].Status);
+            Assert.AreEqual(2, c2.SalePort.Sales.Count, "the retry buys the lot again; the first lot stays supplier-held");
+        }
+
+        [Test]
+        public void Driver_BlockedPackageKey_IsProjectAndPackage_DeriveIsIdempotent()
+        {
+            var c = new Chain();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var port = new ProcurementPort(c) { WagonMassKg = 10f };
+            var driver = c.NewDriver(port);
+            ConstructionProject project = driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag);
+            Assert.IsNotNull(project, string.Join("; ", c.Diag));
+
+            Assert.AreEqual(0, driver.Drive(11, c.Diag));
+            var keysAfterFirst = new List<string>(driver.BlockedProcurementPackageKeys);
+            Assert.AreEqual(1, keysAfterFirst.Count);
+            Assert.AreEqual(project.ProjectId + "|" + project.WorkPackages[0].PackageId, keysAfterFirst[0],
+                "the blocked key is projectId|packageId");
+
+            // A second drive re-derives the same set (idempotent).
+            Assert.AreEqual(0, driver.Drive(12, c.Diag));
+            var keysAfterSecond = new List<string>(driver.BlockedProcurementPackageKeys);
+            Assert.AreEqual(keysAfterFirst.Count, keysAfterSecond.Count);
+            Assert.AreEqual(keysAfterFirst[0], keysAfterSecond[0]);
+        }
     }
 }

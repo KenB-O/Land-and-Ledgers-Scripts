@@ -113,6 +113,8 @@ namespace LandLedgers.Economy
         public string RecordDeposit(ConstructionContract contract, int dayIndex, List<string> diagnostics)
         {
             diagnostics = diagnostics ?? new List<string>();
+            string noPortRefusal = CheckCashPortBound("RecordDeposit", diagnostics);
+            if (noPortRefusal != null) return noPortRefusal;
             string refusal = CheckContractBillable(contract, "RecordDeposit", allowPreWork: true, diagnostics);
             if (refusal != null) return refusal;
 
@@ -189,6 +191,8 @@ namespace LandLedgers.Economy
         public string RecordMilestone(ConstructionContract contract, string milestoneId, int dayIndex, List<string> diagnostics)
         {
             diagnostics = diagnostics ?? new List<string>();
+            string noPortRefusal = CheckCashPortBound("RecordMilestone", diagnostics);
+            if (noPortRefusal != null) return noPortRefusal;
             string refusal = CheckContractBillable(contract, "RecordMilestone", allowPreWork: false, diagnostics);
             if (refusal != null) return refusal;
             if (string.IsNullOrWhiteSpace(milestoneId))
@@ -275,6 +279,8 @@ namespace LandLedgers.Economy
         public string RecordCompletionBalance(ConstructionContract contract, int dayIndex, List<string> diagnostics)
         {
             diagnostics = diagnostics ?? new List<string>();
+            string noPortRefusal = CheckCashPortBound("RecordCompletionBalance", diagnostics);
+            if (noPortRefusal != null) return noPortRefusal;
             if (contract == null)
                 return "ConstructionProgressBillingService: no contract supplied.";
             if (contract.Status != ConstructionContractStatus.Accepted)
@@ -474,6 +480,22 @@ namespace LandLedgers.Economy
                     return link;
             }
             return null;
+        }
+
+        /// <summary>
+        /// Plan 26 (Q18, note 102 C2/C6): the hub holds this service with a
+        /// null cash port until Q17 wires a real production port. A null
+        /// port must refuse loudly — never throw on MoveCash. Called at the
+        /// top of the three cash-moving entry points (the three
+        /// cashPort.MoveCash sites). CheckContractBillable is a billability
+        /// check, not a port check, so its contract is unchanged (it is also
+        /// static and cannot see the instance port field); the guard lives
+        /// at the call sites instead.
+        /// </summary>
+        private string CheckCashPortBound(string method, List<string> diagnostics)
+        {
+            if (cashPort != null) return null;
+            return $"ConstructionProgressBillingService: no cash port bound — {method} refused rather than moving money that does not exist.";
         }
 
         private static string CheckContractBillable(ConstructionContract contract, string method,

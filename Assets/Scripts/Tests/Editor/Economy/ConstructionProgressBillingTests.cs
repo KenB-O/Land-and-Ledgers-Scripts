@@ -523,5 +523,66 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsNotNull(restored.RecordDeposit(contract, 22, diag));
             Assert.AreEqual(2, restored.EventsForContract("CTR-0001").Count);
         }
+
+        [Test]
+        public void SaveLoad_RoundTrip_NextObligationMintsFollowingId_AndDoubleLoadIsIdempotent()
+        {
+            ConstructionContract contract = MakeContract("CTR-0001", 45000);
+            contract.PaymentTerms.DepositCents = 10000;
+            AddMilestone(contract, "MILE-0001", "foundation complete", 15000);
+            StartWorkAndAcceptBothStages(contract);
+            Assert.IsNull(billing.RecordMilestoneStageLink(contract, "MILE-0001", "STAGE-0001", 6, diag));
+            Assert.IsNull(billing.RecordDeposit(contract, 6, diag));
+            Assert.IsNull(billing.RecordMilestone(contract, "MILE-0001", 21, diag));
+
+            ConstructionProgressBillingService.ConstructionProgressBillingServiceSaveDto dto =
+                billing.CaptureSaveDto();
+            var restored = new ConstructionProgressBillingService(port);
+            restored.LoadFromSaveDto(dto);
+
+            // A second load of the same DTO is idempotent (clear-then-load).
+            restored.LoadFromSaveDto(dto);
+            Assert.AreEqual(2, restored.EventsForContract("CTR-0001").Count);
+            Assert.AreEqual(1, restored.MilestoneStageLinks.Count);
+            Assert.AreEqual(1500, restored.RetainageBalanceCents("CTR-0001"));
+
+            // The obligation counter survived the round trip: the deposit
+            // minted PAYD-0001 and the milestone PAYM-0002, so the next
+            // obligation mints PAYD-0003 — not PAYD-0001.
+            ConstructionContract second = MakeContract("CTR-0002", 45000);
+            second.PaymentTerms.DepositCents = 10000;
+            Assert.IsNull(restored.RecordDeposit(second, 22, diag));
+            ConstructionPaymentObligation obligation = FindObligation(second, "deposit");
+            Assert.IsNotNull(obligation);
+            Assert.AreEqual("PAYD-0003", obligation.ObligationId, "obligation numbering survives the round trip");
+        }
+
+        [Test]
+        public void SaveLoad_NullLoad_ResetsSequences_AndNullPortRefusesLoudly()
+        {
+            var fresh = new ConstructionProgressBillingService(port);
+            fresh.LoadFromSaveDto(null);
+            Assert.AreEqual(0, fresh.EventsForContract("CTR-0001").Count);
+            Assert.AreEqual(0, fresh.MilestoneStageLinks.Count);
+            Assert.AreEqual(10, fresh.Policy.RetainagePercentWhole);
+
+            ConstructionContract contract = MakeContract("CTR-0001", 45000);
+            contract.PaymentTerms.DepositCents = 10000;
+            Assert.IsNull(fresh.RecordDeposit(contract, 6, diag));
+            ConstructionPaymentObligation obligation = FindObligation(contract, "deposit");
+            Assert.IsNotNull(obligation);
+            Assert.AreEqual("PAYD-0001", obligation.ObligationId, "a null load resets the obligation sequence to 1");
+
+            // A hub-held service has a null cash port (note 102 C6): it must
+            // refuse loudly, never throw. A fresh contract is used so the
+            // refusal can only come from the port guard, not from a
+            // double-billing check on the settled deposit above.
+            ConstructionContract second = MakeContract("CTR-0002", 45000);
+            second.PaymentTerms.DepositCents = 10000;
+            var noPort = new ConstructionProgressBillingService(null);
+            string refusal = noPort.RecordDeposit(second, 7, diag);
+            Assert.IsNotNull(refusal, "a null-port service must refuse rather than throw");
+            StringAssert.Contains("no cash port", refusal);
+        }
     }
 }

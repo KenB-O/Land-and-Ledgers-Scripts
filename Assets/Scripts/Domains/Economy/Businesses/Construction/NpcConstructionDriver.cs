@@ -98,6 +98,14 @@ namespace LandLedgers.Economy
         /// </summary>
         private readonly HashSet<string> blockedProcurementPackages = new HashSet<string>(StringComparer.Ordinal);
 
+        /// <summary>
+        /// Plan 26 (Q30b): the procurement retry-block keys, for diagnostics
+        /// and tests. Keys are "projectId|packageId". The set is the live
+        /// authority within a session; its persisted mirror is the Stranded
+        /// marker on the commissioner's funding lines.
+        /// </summary>
+        public IReadOnlyCollection<string> BlockedProcurementPackageKeys => blockedProcurementPackages;
+
         /// <summary>Projects the driver advances. Owned by the hub; the driver never replaces the list.</summary>
         public IList<ConstructionProject> Projects => projects;
 
@@ -144,6 +152,7 @@ namespace LandLedgers.Economy
             this.procurement = procurement;
             this.labor = labor;
             this.householdMembers = householdMembers;
+            DeriveBlockedProcurementPackages();
         }
 
         /// <summary>
@@ -261,6 +270,7 @@ namespace LandLedgers.Economy
                 diag.Add("NpcConstructionDriver.Drive: commissioner, executor and project list required.");
                 return 0;
             }
+            DeriveBlockedProcurementPackages();
             int advanced = 0;
             var snapshot = new List<ConstructionProject>(projects);
             foreach (ConstructionProject project in snapshot)
@@ -333,11 +343,52 @@ namespace LandLedgers.Economy
             return false;
         }
 
+        /// <summary>
+        /// Plan 26 (Q30b, note 102 C3/C4): rebuilds the in-memory retry-block
+        /// set from the persisted stranded markers on the commissioner's
+        /// funding lines. The commissioner exposes no all-records accessor,
+        /// so the derive enumerates the driver's live projects and resolves
+        /// each record via FindRecordForProject. Records whose project is no
+        /// longer live in the driver are not scanned — a block only matters
+        /// while the project is live. Idempotent: the set is cleared and
+        /// rebuilt on every call. Called at construction and at the top of
+        /// every Drive (the driver instance survives a Continue, so a
+        /// construction-only restore would never run after a load — the
+        /// note-101 Finding 1 shape).
+        /// </summary>
+        private void DeriveBlockedProcurementPackages()
+        {
+            blockedProcurementPackages.Clear();
+            if (commissioner == null || projects == null) return;
+            foreach (ConstructionProject project in projects)
+            {
+                if (project == null) continue;
+                NpcConstructionRecord record = commissioner.FindRecordForProject(project.ProjectId);
+                if (record == null || record.PackageFundings == null) continue;
+                foreach (NpcBuildPackageFunding funding in record.PackageFundings)
+                {
+                    if (funding != null && funding.Stranded
+                        && !string.IsNullOrWhiteSpace(funding.PackageId))
+                        blockedProcurementPackages.Add(project.ProjectId + "|" + funding.PackageId);
+                }
+            }
+        }
+
         /// <summary>Clears a procurement retry block for one package (explicit operator decision).</summary>
         public void AllowProcurementRetry(ConstructionProject project, WorkPackage package)
         {
             if (project == null || package == null) return;
             blockedProcurementPackages.Remove(project.ProjectId + "|" + package.PackageId);
+            if (commissioner != null)
+            {
+                NpcConstructionRecord record = commissioner.FindRecordForProject(project.ProjectId);
+                NpcBuildPackageFunding funding = record != null ? record.FindFunding(package.PackageId) : null;
+                if (funding != null)
+                {
+                    funding.Stranded = false;
+                    funding.StrandedReason = string.Empty;
+                }
+            }
         }
 
         private string FundAndStage(ConstructionProject project, WorkPackage package, int dayIndex, List<string> diag)
@@ -352,7 +403,16 @@ namespace LandLedgers.Economy
                 if (blockedProcurementPackages.Contains(key))
                     return $"procurement previously failed for package '{package.PackageId}' — the paid-for lot sits with the supplier; retry is blocked until AllowProcurementRetry is called.";
                 string problem = procurement.ProcureAndStage(project, package, record, dayIndex, diag);
-                if (problem != null) blockedProcurementPackages.Add(key);
+                if (problem != null)
+                {
+                    NpcBuildPackageFunding funding = record.FindFunding(package.PackageId);
+                    if (funding != null)
+                    {
+                        funding.Stranded = true;
+                        funding.StrandedReason = problem;
+                    }
+                    blockedProcurementPackages.Add(key);
+                }
                 return problem;
             }
             IConstructionMaterialSource source = MaterialSourceByHousehold != null

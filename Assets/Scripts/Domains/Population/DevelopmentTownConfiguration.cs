@@ -124,6 +124,48 @@ namespace LandLedgers.Population
             public string businessKey = string.Empty;
             public OvenEquipment[] ovens = Array.Empty<OvenEquipment>();
             public string[] kitIds = Array.Empty<string>();
+            /// <summary>
+            /// A2 plan 27 (P10 live felling driver): one scenario-authored
+            /// opening asset per entry (asset id + equipment kind). The
+            /// mill endowment installer registers each listed asset into
+            /// the business equipment register. Zero by default: a
+            /// business with no asset entries gets no assets. Asset ids
+            /// are Kennedy-authored; the slice fixture id
+            /// "slice-felling-axe" is refused in Validate.
+            /// </summary>
+            public OpeningAssetEntry[] assetEntries = Array.Empty<OpeningAssetEntry>();
+        }
+
+        /// <summary>
+        /// A2 plan 27 (P10): one scenario-authored opening asset — an
+        /// equipment asset id plus its equipment kind (for example
+        /// "felling-axe"). The kind must match the equipment-gate code
+        /// the asset is meant to satisfy.
+        /// </summary>
+        [Serializable]
+        public sealed class OpeningAssetEntry
+        {
+            public string assetId = string.Empty;
+            public string kind = string.Empty;
+        }
+
+        /// <summary>
+        /// A2 plan 27 (P10 live felling driver): one scenario-authored
+        /// timber stand — the felling source the bootstrapper registers
+        /// into the stand registry and grants timber rights over. Zero
+        /// by default: a configuration with no stands registers none,
+        /// and the felling driver refuses loudly. Stand entries are
+        /// Kennedy-authored; no fixture stand is copied into production.
+        /// </summary>
+        [Serializable]
+        public sealed class TimberStandEntry
+        {
+            public string standId = string.Empty;
+            public string displayName = string.Empty;
+            public string locationId = string.Empty;
+            public string species = string.Empty;
+            [Min(0)] public float kilogramsPerLog;
+            [Min(0)] public int standingTimberUnits;
         }
 
         /// <summary>
@@ -163,6 +205,9 @@ namespace LandLedgers.Population
         [SerializeField] private HouseholdCashTarget[] householdCashTargets = Array.Empty<HouseholdCashTarget>();
         [SerializeField] private BusinessOpeningInventory[] openingInventory = Array.Empty<BusinessOpeningInventory>();
         [SerializeField] private BusinessOpeningEquipment[] openingEquipment = Array.Empty<BusinessOpeningEquipment>();
+        [SerializeField] private TimberStandEntry[] timberStands = Array.Empty<TimberStandEntry>();
+        [SerializeField, Min(0), Tooltip("A2 plan 27 (P10): cover days of opening provisions for the logging camp crew, endowed once at New Game from the bootstrap endowment. Zero by default means no endowment. The cover-days value is Kennedy's; no number is invented here.")]
+        private int openingLoggingCampProvisionCoverDays;
         [SerializeField] private BakeryWholesaleAccountDefinition[] wholesaleAccounts = Array.Empty<BakeryWholesaleAccountDefinition>();
         [SerializeField] private string freightBusinessKey = "freight-company";
         [SerializeField, Min(0), Tooltip("Finite development-town opening fuel endowment for the configured Bakery. This is scenario stock, applied once and never replenished automatically.")]
@@ -202,6 +247,10 @@ namespace LandLedgers.Population
         public IReadOnlyList<HouseholdCashTarget> HouseholdCashTargets => householdCashTargets ?? Array.Empty<HouseholdCashTarget>();
         public IReadOnlyList<BusinessOpeningInventory> OpeningInventory => openingInventory ?? Array.Empty<BusinessOpeningInventory>();
         public IReadOnlyList<BusinessOpeningEquipment> OpeningEquipment => openingEquipment ?? Array.Empty<BusinessOpeningEquipment>();
+        /// <summary>A2 plan 27 (P10): the scenario-authored timber stands; empty by default (no stands, no felling).</summary>
+        public IReadOnlyList<TimberStandEntry> TimberStands => timberStands ?? Array.Empty<TimberStandEntry>();
+        /// <summary>A2 plan 27 (P10): cover days of opening logging-camp provisions; 0 = no endowment.</summary>
+        public int OpeningLoggingCampProvisionCoverDays => openingLoggingCampProvisionCoverDays;
         public IReadOnlyList<BakeryWholesaleAccountDefinition> WholesaleAccounts => wholesaleAccounts ?? Array.Empty<BakeryWholesaleAccountDefinition>();
         public string FreightBusinessKey => freightBusinessKey ?? string.Empty;
         public int OpeningBakeryFuelUnits => openingBakeryFuelUnits;
@@ -385,7 +434,27 @@ namespace LandLedgers.Population
                     if (oven == null || oven.componentAssetIds == null
                         || oven.componentAssetIds.Length != WorkstationCatalog.BakeOven.Components.Count)
                     { error = $"Opening equipment for '{entry.businessKey}' lists an oven whose component count must equal the BakeOven definition ({WorkstationCatalog.BakeOven.Components.Count})."; return false; }
+                // A2 plan 27 (P10): asset entries need a non-blank id and
+                // kind, no duplicates, and never the slice fixture id.
+                var assetIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (OpeningAssetEntry asset in entry.assetEntries ?? Array.Empty<OpeningAssetEntry>())
+                {
+                    if (asset == null || string.IsNullOrWhiteSpace(asset.assetId) || string.IsNullOrWhiteSpace(asset.kind)
+                        || !assetIds.Add(asset.assetId.Trim()))
+                    { error = $"Opening equipment for '{entry.businessKey}' contains an invalid or duplicate asset entry."; return false; }
+                    if (string.Equals(asset.assetId.Trim(), "slice-felling-axe", StringComparison.Ordinal))
+                    { error = $"Opening equipment for '{entry.businessKey}' must not reuse the slice fixture id 'slice-felling-axe'."; return false; }
+                }
             }
+            // A2 plan 27 (P10): timber stands are optional and zero by
+            // default. When present, every stand needs a unique non-blank
+            // id, a non-blank location, and non-negative kilograms per
+            // log and standing units.
+            var standIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (TimberStandEntry stand in TimberStands)
+                if (stand == null || string.IsNullOrWhiteSpace(stand.standId) || string.IsNullOrWhiteSpace(stand.locationId)
+                    || stand.kilogramsPerLog < 0f || stand.standingTimberUnits < 0 || !standIds.Add(stand.standId))
+                { error = "Timber stand entries need unique non-blank ids, a location, and non-negative kilograms per log and standing units."; return false; }
             return true;
         }
 

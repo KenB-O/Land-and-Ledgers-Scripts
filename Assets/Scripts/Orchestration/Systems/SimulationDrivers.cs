@@ -7,6 +7,7 @@ using LandLedgers.Persistence;
 using LandLedgers.Economy.Delegation;
 using LandLedgers.Economy.Estates;
 using LandLedgers.Economy.Farming.Integration;
+using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Transport;
@@ -355,6 +356,7 @@ namespace LandLedgers.Orchestration.Systems
         private readonly HashSet<string> fuelDealerSupplierWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> sawmillTransferWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> sawmillProductionWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> fellingWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private EmbodiedPurchaseExecutor purchaseExecutor;
         private HouseholdMembershipRegistry householdMemberships;
         private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
@@ -634,6 +636,198 @@ namespace LandLedgers.Orchestration.Systems
         /// zero Arrived hauls and the yard stays empty: the chain is bound
         /// but no logs appear.
         /// </summary>
+        /// <summary>
+        /// A2 plan 27 (P10 live felling driver, note 110): drives the
+        /// logging camp's daily felling from OnDayChanged, before the
+        /// sawmill production driver. The camp is the designed daily
+        /// driver: it enforces the one-day-once rule, the two-person
+        /// crew, daylight, provisions, and landing caps. Scope is
+        /// felling only — felled lots reach the landing daily; dispatch
+        /// + advance is the named next slice, so the yard still does
+        /// not restock after this slice. The felling is budget-capped
+        /// (note 110 C2): June daylight allows 9 logs per team but a
+        /// feller's 600-minute day affords only 6, so logsWanted is
+        /// capped at teams x budgetCap, the cap is pre-committed
+        /// before the fell, and the remainder is released after it.
+        /// Dormant where values are absent: no camp, no registered
+        /// stand, no rights, no crew, no gate, or no provisions each
+        /// refuse loudly and fell nothing — the slice never invents
+        /// stands, provisions, or axe entries.
+        /// </summary>
+        private void DriveFelling(int absoluteDayIndex)
+        {
+            // 1. Resolve the mill and the runtime (D1 pattern,
+            // mirroring DriveSawmillProduction).
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogFellingWarningOnce("no-business-runtime",
+                    "Felling skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogFellingWarningOnce("no-pass9",
+                    "Felling skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            BusinessInstanceState millBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Sawmill)
+                {
+                    if (millBusiness == null) millBusiness = business;
+                    else LogFellingWarningOnce("second-mill",
+                        "Felling skipped: second Sawmill business '" + business.InstanceId + "' is unwired; the Pass 9 slot holds one mill only.");
+                }
+            }
+            if (millBusiness == null)
+            {
+                LogFellingWarningOnce("no-mill",
+                    "Felling skipped: no Sawmill business is present in the shared runtime.");
+                return;
+            }
+
+            LoggingStandRegistry registry = pass9.StandRegistry;
+            if (registry == null)
+            {
+                LogFellingWarningOnce("no-registry",
+                    "Felling skipped: no timber stand registry is wired on the Pass 9 state.");
+                return;
+            }
+
+            LoggingCampSite camp = pass9.LoggingCamp;
+            if (camp == null)
+            {
+                LogFellingWarningOnce("no-camp",
+                    "Felling skipped: no logging camp is wired on the Pass 9 state.");
+                return;
+            }
+
+            // 2. The camp fells its own stand. An unregistered stand
+            // refuses loudly here, never by passing an empty holder
+            // through: the rights check compares holder ids as
+            // strings, so an ungranted stand with an empty holder
+            // would pass an empty feller id.
+            string standId = camp.StandId;
+            if (registry.GetStand(standId) == null)
+            {
+                LogFellingWarningOnce("stand-not-registered",
+                    "Felling skipped: stand '" + standId + "' is not registered — stands are authored, never conjured.");
+                return;
+            }
+            string rightsHolderId = registry.CurrentRightsHolder(standId);
+            if (string.IsNullOrWhiteSpace(rightsHolderId))
+            {
+                LogFellingWarningOnce("no-rights",
+                    "Felling skipped: no timber rights are granted on stand '" + standId + "'.");
+                return;
+            }
+
+            // 3. Working loggers: the first 2 x teams rostered
+            // logger/feller entries by DayJoined (note 110 C2). A team
+            // is two loggers.
+            var loggers = new List<LoggingCampCrewEntry>();
+            foreach (LoggingCampCrewEntry entry in camp.Crew)
+            {
+                if (entry == null) continue;
+                if (!string.Equals(entry.Role, LoggingCampRoles.Logger, StringComparison.Ordinal)
+                    && !string.Equals(entry.Role, LoggingCampRoles.Feller, StringComparison.Ordinal)) continue;
+                loggers.Add(entry);
+            }
+            loggers.Sort((a, b) => a.DayJoined.CompareTo(b.DayJoined));
+            int teams = loggers.Count / 2;
+            if (teams <= 0)
+            {
+                LogFellingWarningOnce("no-crew",
+                    "Felling skipped: logging camp '" + camp.CampId + "' has no two-person felling crew rostered.");
+                return;
+            }
+            var workingLoggers = new List<EntityId>();
+            for (int i = 0; i < teams * 2; i++) workingLoggers.Add(loggers[i].Worker);
+
+            // 4. Budget cap (note 110 C2): a feller's day affords
+            // MinutesRemaining / 90 logs, so the camp can want at most
+            // teams x budgetCap logs however long the daylight is.
+            int budgetCap = int.MaxValue;
+            EntityId exhaustedLogger = EntityId.Invalid;
+            int lowestRemaining = int.MaxValue;
+            foreach (EntityId logger in workingLoggers)
+            {
+                int remaining = hub.WorkTimeBudgets.GetOrCreate(logger).MinutesRemaining;
+                if (remaining < lowestRemaining) { lowestRemaining = remaining; exhaustedLogger = logger; }
+                int cap = remaining / TimberHarvest.FellMinutesPerLog;
+                if (cap < budgetCap) budgetCap = cap;
+            }
+            if (budgetCap <= 0)
+            {
+                LogFellingWarningOnce("budget-exhausted",
+                    "Felling skipped: feller " + exhaustedLogger + " has only " + lowestRemaining + " work minutes remaining today (a log takes " + TimberHarvest.FellMinutesPerLog + " minutes).");
+                return;
+            }
+            int logsWanted = teams * budgetCap;
+
+            // 5. Pre-commit the cap before the fell, so the minutes are
+            // reserved against any other drive today. A refusal fells
+            // nothing, and any commitment already made for an earlier
+            // logger in this loop is released, so a refused fell costs
+            // no logger any minutes.
+            var committedLoggers = new List<EntityId>();
+            foreach (EntityId logger in workingLoggers)
+            {
+                if (!hub.WorkTimeBudgets.TryCommitTask(logger, budgetCap * TimberHarvest.FellMinutesPerLog, out string reason))
+                {
+                    foreach (EntityId committed in committedLoggers)
+                        hub.WorkTimeBudgets.GetOrCreate(committed).ReleaseCommitment(budgetCap * TimberHarvest.FellMinutesPerLog);
+                    LogFellingWarningOnce("budget-commit-refused",
+                        "Felling skipped: work-time budget commit refused for feller " + logger + " (" + reason + ").");
+                    return;
+                }
+                committedLoggers.Add(logger);
+            }
+
+            // 6. Drive the camp day. The camp enforces the one-day-once
+            // rule, daylight, provisions, the equipment gate, and the
+            // landing cap, and records the work day.
+            int month = timeManager != null ? timeManager.CurrentMonth : 0;
+            EntityId firstLogger = workingLoggers[0];
+            var campDiag = new List<string>();
+            LogLot lot = camp.RunCampDay(registry, pass9.LoggingOperation, rightsHolderId,
+                logsWanted, firstLogger, absoluteDayIndex, month, campDiag, hub.InstalledEquipmentTaskGate);
+
+            // 7. Settle the budget: on a null lot (a refused day)
+            // release the full pre-commitment; on a lot, record the
+            // minutes the fell actually took per logger and release
+            // the remainder. ReleaseCommitment clamps through
+            // WorkTimeMath (a 0-minute release would release 1
+            // minute), so only release when the remainder is positive.
+            if (lot == null)
+            {
+                foreach (EntityId logger in workingLoggers)
+                    hub.WorkTimeBudgets.GetOrCreate(logger).ReleaseCommitment(budgetCap * TimberHarvest.FellMinutesPerLog);
+                string refusal = campDiag.Count > 0 ? campDiag[campDiag.Count - 1] : "the camp refused the day.";
+                LogFellingWarningOnce("camp-day-refused",
+                    "Felling skipped: " + refusal);
+                return;
+            }
+            int logsPerTeam = (lot.LogUnits + teams - 1) / teams;
+            int minutesPerLogger = logsPerTeam * TimberHarvest.FellMinutesPerLog;
+            int releasePerLogger = (budgetCap - logsPerTeam) * TimberHarvest.FellMinutesPerLog;
+            foreach (EntityId logger in workingLoggers)
+            {
+                if (releasePerLogger > 0)
+                    hub.WorkTimeBudgets.GetOrCreate(logger).ReleaseCommitment(releasePerLogger);
+                hub.WorkTimeBudgets.GetOrCreate(logger).RecordWorked(minutesPerLogger);
+            }
+        }
+
         private void DriveSawmillProduction(int absoluteDayIndex)
         {
             // 1. Resolve the mill and the runtime (D1 pattern).
@@ -1212,6 +1406,12 @@ namespace LandLedgers.Orchestration.Systems
         {
             string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
             if (sawmillProductionWarningsLogged.Add(warningKey)) Debug.LogWarning("[SawmillProduction] " + message, this);
+        }
+
+        private void LogFellingWarningOnce(string key, string message)
+        {
+            string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
+            if (fellingWarningsLogged.Add(warningKey)) Debug.LogWarning("[Felling] " + message, this);
         }
 
         /// <summary>Attaches the scenario's real membership authority for the production shopping loop.</summary>
@@ -2720,6 +2920,12 @@ namespace LandLedgers.Orchestration.Systems
             // boundary. This is execution of an already-started physical process;
             // it does not grant capability or create output from a policy alone.
             DriveGenericProduction(absoluteDayIndex);
+            // P10 (live felling driver): the day's logs are felled
+            // before the mill saws, so the day's output is in the
+            // landing stock before the mill reads it. The camp is
+            // one-day-once, so the daily call IS the re-attempt: a
+            // refused day is retried tomorrow.
+            DriveFelling(absoluteDayIndex);
             // P3 (F6 production wiring): sawing runs before the byproduct
             // transfer so the day's output is in mill.ByproductStock before
             // the transfer moves it, and before the bakery plans its day.

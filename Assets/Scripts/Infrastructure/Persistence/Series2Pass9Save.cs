@@ -456,8 +456,13 @@ namespace LandLedgers.Persistence
         // above. Same holder pattern as FuelIntake: Codex fills these with
         // the live instances before the first save; a null field captures
         // as an empty section and restores as a diagnostic, never a crash.
-        // No production driver owns these runtimes yet (Priority C timber
-        // integration), so they are null in production until wired.
+        // A2 plan 27 (P10 live felling driver, note 110 C4): the
+        // logging operation, stand registry, and logging camp ARE owned
+        // in production now — the bootstrapper constructs them into
+        // these slots in ConfigureSawmillProductionWiring, and
+        // SimulationDrivers.DriveFelling drives the camp daily. The
+        // sawmill, lumber yard, and customer queue slots keep the
+        // original shape: null until their own wiring lands.
         public LandLedgers.Economy.Businesses.Logging.LoggingStandRegistry StandRegistry;
         public LandLedgers.Economy.Businesses.Logging.LoggingOperationRuntime LoggingOperation;
         public LandLedgers.Economy.Businesses.Sawmill.SawmillShopRuntime Sawmill;

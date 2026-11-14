@@ -2420,8 +2420,204 @@ namespace LandLedgers.FirstLedger
                 pass9.LoggingOperation = new LoggingOperationRuntime(millBusiness.InstanceId, systemsHub.Tasks.IdRegistry, ledger);
             }
 
-            Debug.Log($"[SawmillProduction] Bootstrap wired the sawmill production driver for '{millBusiness.InstanceId}' (driver, counters, ledger, Pass 9 logging runtime).", this);
+            // A2 plan 27 (P10 live felling driver, note 110): construct
+            // the stand registry into the Pass 9 slot. Reuse, never
+            // replace: a second call in the same session keeps the
+            // existing registry. The empty registry needs no config and
+            // is constructed in every build; the camp and everything
+            // config-dependent sit in ConfigureFellingCampAndRights
+            // below. Zero by default: a configuration with no stands
+            // registers none, and the felling driver refuses loudly
+            // instead of inventing values.
+            if (pass9.StandRegistry == null)
+            {
+                pass9.StandRegistry = new LoggingStandRegistry();
+            }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            DevelopmentTownConfiguration fellingConfiguration = ResolveDevelopmentTownConfiguration();
+            if (enableDevelopmentTownConfiguration && fellingConfiguration != null)
+            {
+                ConfigureFellingCampAndRights(millBusiness, pass9, fellingConfiguration);
+            }
+#endif
+
+            Debug.Log($"[SawmillProduction] Bootstrap wired the sawmill production driver for '{millBusiness.InstanceId}' (driver, counters, ledger, Pass 9 logging runtime, stand registry).", this);
         }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        // A2 plan 27 (P10 live felling driver, note 110): registers the
+        // config-authored stands, grants the mill timber rights on each
+        // (grantor "town-land-office", note 110 Q3c), builds the camp
+        // for the first listed stand, rosters the mill crew (owner +
+        // first active employee, the PickSawmillSawyer pattern, note
+        // 110 Q4/Q9), endows opening provisions once (marker-gated,
+        // note 110 C7), and installs the mill axe via the mill-typed
+        // installer (note 110 C6). Zero by default: no stands, no camp,
+        // no provisions, no axe — the felling driver refuses loudly
+        // instead of inventing values. Runs on NewGame and Continue
+        // alike; the Pass 9 restore loads saved stands and roster over
+        // what is built here, and the endowment markers keep the
+        // provisions and axe once-only.
+        private void ConfigureFellingCampAndRights(BusinessInstanceState millBusiness, Series2Pass9SaveState pass9, DevelopmentTownConfiguration configuration)
+        {
+            if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId) || pass9 == null || configuration == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Felling was not wired: no mill business, Pass 9 state, or development-town configuration.", this);
+                return;
+            }
+
+            string millKey = null;
+            foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
+                if (slot != null && ToBusinessType(slot.operationId) == BusinessType.Sawmill)
+                {
+                    millKey = slot.key;
+                    break;
+                }
+            if (string.IsNullOrWhiteSpace(millKey))
+            {
+                Debug.LogWarning("[SawmillProduction] Felling was not wired: no sawmill business is configured.", this);
+                return;
+            }
+
+            int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
+
+            // Register every config stand and grant the mill timber
+            // rights on each. A stand that is already registered (a
+            // second wiring call in the same session) is left alone,
+            // never re-granted: RegisterStand refuses duplicates and
+            // GrantTimberRights refuses a second grant.
+            foreach (DevelopmentTownConfiguration.TimberStandEntry standEntry in configuration.TimberStands)
+            {
+                if (standEntry == null || string.IsNullOrWhiteSpace(standEntry.standId)) continue;
+                if (pass9.StandRegistry.GetStand(standEntry.standId) == null)
+                {
+                    string standRefusal = pass9.StandRegistry.RegisterStand(new LandLedgers.Economy.Farming.Timber.TimberStand
+                    {
+                        StandId = standEntry.standId,
+                        DisplayName = standEntry.displayName ?? string.Empty,
+                        LocationId = standEntry.locationId ?? string.Empty,
+                        Species = standEntry.species ?? string.Empty,
+                        KilogramsPerLog = standEntry.kilogramsPerLog,
+                        StandingTimberUnits = standEntry.standingTimberUnits,
+                    });
+                    if (!string.IsNullOrWhiteSpace(standRefusal))
+                        Debug.LogWarning($"[SawmillProduction] {standRefusal}", this);
+                }
+                if (string.IsNullOrWhiteSpace(pass9.StandRegistry.CurrentRightsHolder(standEntry.standId)))
+                {
+                    string rightsRefusal = pass9.StandRegistry.GrantTimberRights(
+                        standEntry.standId, millBusiness.InstanceId, dayIndex,
+                        "town-land-office", "P10 live felling driver: opening timber rights for the mill.");
+                    if (!string.IsNullOrWhiteSpace(rightsRefusal))
+                        Debug.LogWarning($"[SawmillProduction] {rightsRefusal}", this);
+                }
+            }
+
+            // Build the camp for the first listed stand, once. campId
+            // "camp-" + standId, dayEstablished 0 at NewGame (note 110
+            // Q8). No stands, no camp.
+            if (pass9.LoggingCamp == null)
+            {
+                DevelopmentTownConfiguration.TimberStandEntry firstStand = null;
+                foreach (DevelopmentTownConfiguration.TimberStandEntry candidate in configuration.TimberStands)
+                    if (candidate != null && !string.IsNullOrWhiteSpace(candidate.standId)) { firstStand = candidate; break; }
+                if (firstStand != null)
+                {
+                    pass9.LoggingCamp = new LoggingCampSite(
+                        "camp-" + firstStand.standId, millBusiness.InstanceId, firstStand.standId, 0);
+                }
+            }
+
+            if (pass9.LoggingCamp != null)
+            {
+                // Roster the mill crew: the owner first, then the first
+                // active employee. AssignWorker refuses duplicates, so
+                // a second wiring call is a no-op.
+                var campDiag = new List<string>();
+                if (millBusiness.Owner != null && millBusiness.Owner.PersonId >= 0)
+                {
+                    EntityId ownerId = EntityId.For(EntityKind.Person, millBusiness.Owner.PersonId);
+                    string rosterRefusal = pass9.LoggingCamp.AssignWorker(ownerId, LoggingCampRoles.Logger, dayIndex, campDiag);
+                    if (!string.IsNullOrWhiteSpace(rosterRefusal))
+                        Debug.LogWarning($"[SawmillProduction] Mill owner could not be rostered as a feller: {rosterRefusal}", this);
+                }
+                if (millBusiness.RuntimeState?.EmploymentRegistry != null)
+                {
+                    foreach (EmploymentRelationship relationship in millBusiness.RuntimeState.EmploymentRegistry.GetActiveByEmployer(millBusiness.InstanceId))
+                    {
+                        if (relationship == null || relationship.EmployeePersonId < 0) continue;
+                        EntityId employeeId = EntityId.For(EntityKind.Person, relationship.EmployeePersonId);
+                        string rosterRefusal = pass9.LoggingCamp.AssignWorker(employeeId, LoggingCampRoles.Logger, dayIndex, campDiag);
+                        if (!string.IsNullOrWhiteSpace(rosterRefusal))
+                            Debug.LogWarning($"[SawmillProduction] Mill employee could not be rostered as a feller: {rosterRefusal}", this);
+                        break;
+                    }
+                }
+                foreach (string line in campDiag) Debug.Log($"[SawmillProduction] {line}", this);
+
+                // Endow opening provisions once (marker-gated): cover
+                // days x headcount x provisions per head per day, from
+                // the bootstrap endowment (note 110 C7). Cover days 0
+                // = no endowment. The quantity is config-sourced; an
+                // absent entry endows nothing, never an invented
+                // quantity.
+                if (configuration.OpeningLoggingCampProvisionCoverDays > 0 && millBusiness.RuntimeState != null)
+                {
+                    string provisionEndowmentId = $"development-town-opening-provisions:{configuration.ConfigurationId}:{millKey}:{millBusiness.InstanceId}";
+                    if (!millBusiness.RuntimeState.HasAppliedScenarioEndowment(provisionEndowmentId))
+                    {
+                        float quantity = Math.Max(0f, configuration.OpeningLoggingCampProvisionCoverDays
+                            * pass9.LoggingCamp.CrewHeadcount
+                            * pass9.LoggingCamp.Parameters.ProvisionsPerHeadPerDay);
+                        if (quantity > 0f)
+                        {
+                            var provisionDiag = new List<string>();
+                            string deliveryRefusal = pass9.LoggingCamp.SupplyLedger.RecordDelivery(
+                                LoggingCampSupplyLedger.BootstrapEndowmentSupplierId,
+                                quantity, dayIndex,
+                                $"P10 opening provision endowment: {configuration.OpeningLoggingCampProvisionCoverDays} cover days for the logging camp crew.",
+                                provisionDiag);
+                            foreach (string line in provisionDiag) Debug.Log($"[SawmillProduction] {line}", this);
+                            if (!string.IsNullOrWhiteSpace(deliveryRefusal))
+                                Debug.LogWarning($"[SawmillProduction] Opening provision endowment refused: {deliveryRefusal}", this);
+                            else if (!millBusiness.RuntimeState.RecordAppliedScenarioEndowment(provisionEndowmentId))
+                                Debug.LogWarning($"[SawmillProduction] Could not record opening provision endowment '{provisionEndowmentId}'.", this);
+                        }
+                    }
+                }
+            }
+
+            // Install the mill axe via the mill-typed installer (note
+            // 110 C6): assets from the mill business key's
+            // opening-equipment entry, never the slice fixture id. The
+            // axe is mill equipment, not camp equipment, so it installs
+            // whether or not any stand (and camp) exists.
+            if (millBusiness.RuntimeState != null)
+            {
+                systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+                if (systemsHub == null)
+                {
+                    Debug.LogWarning("[SawmillProduction] Mill axe was not installed: SimulationSystemsHub is missing.", this);
+                    return;
+                }
+                BusinessEquipmentRegister millRegister = systemsHub.EquipmentRegisterFor(millBusiness.InstanceId);
+                var axeDiag = new List<string>();
+                if (!ScenarioMillOpeningEquipmentEndowment.TryApply(configuration, millKey,
+                        millBusiness.InstanceId, millBusiness.RuntimeState, millRegister,
+                        dayIndex, axeDiag, out string axeReport, out string axeError))
+                {
+                    Debug.LogError($"[SawmillProduction] {axeError}", this);
+                    return;
+                }
+                if (!pass9.EquipmentRegisters.Exists(existing => existing != null
+                        && string.Equals(existing.BusinessInstanceId, millBusiness.InstanceId, StringComparison.Ordinal)))
+                    pass9.EquipmentRegisters.Add(millRegister);
+                Debug.Log($"[SawmillProduction] {axeReport}", this);
+                foreach (string line in axeDiag) Debug.Log($"[SawmillProduction] {line}", this);
+            }
+        }
+#endif
 
         // F7 yard-transfer wiring: constructs the sawmill-to-yard transfer
         // driver and registers it via the SimulationDrivers forwarder.

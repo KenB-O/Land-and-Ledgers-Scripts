@@ -31,6 +31,7 @@ using LandLedgers.Economy.Businesses.Doctor;
 using LandLedgers.Economy.Businesses.GrainMill;
 using LandLedgers.Economy.Businesses.Hotel;
 using LandLedgers.Economy.Businesses.Logging;
+using LandLedgers.Economy.Businesses.LumberYard;
 using LandLedgers.Economy.Businesses.Mine;
 using LandLedgers.Economy.Businesses.Newspaper;
 using LandLedgers.Economy.Businesses.Restaurant;
@@ -182,6 +183,32 @@ namespace LandLedgers.Orchestration.Systems
         // register holds no equipment — the gate still refuses loudly.
         private Dictionary<string, BusinessEquipmentRegister> equipmentRegisters;
 
+        // C2: one live lumber yard runtime per LumberYard business,
+        // mirroring the per-business equipment registers above. The Pass 9
+        // save seam persists the first yard only (single holder field);
+        // see Series2Pass9Save.cs. A business with no runtime holds no
+        // yard stock.
+        private Dictionary<string, LumberYardShopRuntime> lumberYardRuntimes;
+
+        // D1 (C2 mirror): one live sawmill runtime per Sawmill business.
+        // The Pass 9 save seam persists the first mill only (single
+        // holder field); see Series2Pass9Save.cs. A business with no
+        // runtime holds no mill stock.
+        private Dictionary<string, SawmillShopRuntime> sawmillRuntimes;
+
+        // P3 (F6 production wiring): one shared sawmill production driver,
+        // one labour counters, one custody ledger. Single instances, not
+        // lists — each is one shared authority, wired by
+        // FirstLedgerSliceBootstrapper.ConfigureSawmillProductionWiring.
+        private SawmillProductionDriver sawmillProductionDriver;
+        private SawmillLabourCounters sawmillLabourCounters;
+        private LogLotCustodyLedger logLotCustodyLedger;
+
+        // F7 yard-transfer wiring: one shared sawmill-to-yard transfer
+        // driver. Single instance, not a list — one shared authority,
+        // wired by FirstLedgerSliceBootstrapper.ConfigureSawmillYardTransferWiring.
+        private SawmillToYardTransferDriver sawmillToYardTransferDriver;
+
         /// <summary>Slice S2: the equipment register for one business, created on first use (empty).</summary>
         public BusinessEquipmentRegister EquipmentRegisterFor(string businessInstanceId)
         {
@@ -193,6 +220,19 @@ namespace LandLedgers.Orchestration.Systems
                 equipmentRegisters[businessInstanceId] = register;
             }
             return register;
+        }
+
+        /// <summary>C2: the lumber yard runtime for one business, created on first use (empty).</summary>
+        public LumberYardShopRuntime LumberYardRuntimeFor(string businessInstanceId)
+        {
+            if (string.IsNullOrWhiteSpace(businessInstanceId)) return null;
+            lumberYardRuntimes ??= new Dictionary<string, LumberYardShopRuntime>(StringComparer.Ordinal);
+            if (!lumberYardRuntimes.TryGetValue(businessInstanceId, out LumberYardShopRuntime yard) || yard == null)
+            {
+                yard = new LumberYardShopRuntime(businessInstanceId, Ids);
+                lumberYardRuntimes[businessInstanceId] = yard;
+            }
+            return yard;
         }
 
         /// <summary>
@@ -207,6 +247,101 @@ namespace LandLedgers.Orchestration.Systems
             equipmentRegisters ??= new Dictionary<string, BusinessEquipmentRegister>(StringComparer.Ordinal);
             equipmentRegisters[register.BusinessInstanceId] = register;
         }
+
+        /// <summary>
+        /// C2: adopts a runtime (e.g. one restored from the Pass 9 save
+        /// seam) as the hub's live holder for its business. Replaces by
+        /// business id, never merges — the save data is authoritative,
+        /// and re-registering the same runtime is idempotent.
+        /// </summary>
+        public void RegisterLumberYardRuntime(LumberYardShopRuntime runtime)
+        {
+            if (runtime == null || string.IsNullOrWhiteSpace(runtime.BusinessInstanceId)) return;
+            lumberYardRuntimes ??= new Dictionary<string, LumberYardShopRuntime>(StringComparer.Ordinal);
+            lumberYardRuntimes[runtime.BusinessInstanceId] = runtime;
+        }
+
+        /// <summary>D1 (C2 mirror): the sawmill runtime for one business, created on first use (empty).</summary>
+        public SawmillShopRuntime SawmillRuntimeFor(string businessInstanceId)
+        {
+            if (string.IsNullOrWhiteSpace(businessInstanceId)) return null;
+            sawmillRuntimes ??= new Dictionary<string, SawmillShopRuntime>(StringComparer.Ordinal);
+            if (!sawmillRuntimes.TryGetValue(businessInstanceId, out SawmillShopRuntime mill) || mill == null)
+            {
+                mill = new SawmillShopRuntime(businessInstanceId, Ids);
+                sawmillRuntimes[businessInstanceId] = mill;
+            }
+            return mill;
+        }
+
+        /// <summary>
+        /// D1 (C2 mirror): adopts a runtime (e.g. one restored from the
+        /// Pass 9 save seam) as the hub's live holder for its business.
+        /// Replaces by business id, never merges — the save data is
+        /// authoritative, and re-registering the same runtime is idempotent.
+        /// </summary>
+        public void RegisterSawmillRuntime(SawmillShopRuntime runtime)
+        {
+            if (runtime == null || string.IsNullOrWhiteSpace(runtime.BusinessInstanceId)) return;
+            sawmillRuntimes ??= new Dictionary<string, SawmillShopRuntime>(StringComparer.Ordinal);
+            sawmillRuntimes[runtime.BusinessInstanceId] = runtime;
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): adopts the sawmill production driver
+        /// as the hub's live holder. Single instance; re-registering the
+        /// same driver is idempotent.
+        /// </summary>
+        public void RegisterSawmillProductionDriver(SawmillProductionDriver driver)
+        {
+            if (driver == null) return;
+            sawmillProductionDriver = driver;
+        }
+
+        /// <summary>P3 (F6 production wiring): the live sawmill production driver, or null when unwired.</summary>
+        public SawmillProductionDriver SawmillProductionDriver => sawmillProductionDriver;
+
+        /// <summary>
+        /// P3 (F6 production wiring): adopts the sawmill labour counters as
+        /// the hub's live holder. Single instance; re-registering the same
+        /// counters is idempotent.
+        /// </summary>
+        public void RegisterSawmillLabourCounters(SawmillLabourCounters counters)
+        {
+            if (counters == null) return;
+            sawmillLabourCounters = counters;
+        }
+
+        /// <summary>P3 (F6 production wiring): the live sawmill labour counters, or null when unwired.</summary>
+        public SawmillLabourCounters SawmillLabourCounters => sawmillLabourCounters;
+
+        /// <summary>
+        /// P3 (F6 production wiring): adopts the log-lot custody ledger as
+        /// the hub's live holder. Single instance; re-registering the same
+        /// ledger is idempotent.
+        /// </summary>
+        public void RegisterLogLotCustodyLedger(LogLotCustodyLedger ledger)
+        {
+            if (ledger == null) return;
+            logLotCustodyLedger = ledger;
+        }
+
+        /// <summary>P3 (F6 production wiring): the live log-lot custody ledger, or null when unwired.</summary>
+        public LogLotCustodyLedger LogLotCustodyLedger => logLotCustodyLedger;
+
+        /// <summary>
+        /// F7 yard-transfer wiring: adopts the sawmill-to-yard transfer
+        /// driver as the hub's live holder. Single instance;
+        /// re-registering the same driver is idempotent.
+        /// </summary>
+        public void RegisterSawmillToYardTransferDriver(SawmillToYardTransferDriver driver)
+        {
+            if (driver == null) return;
+            sawmillToYardTransferDriver = driver;
+        }
+
+        /// <summary>F7 yard-transfer wiring: the live sawmill-to-yard transfer driver, or null when unwired.</summary>
+        public SawmillToYardTransferDriver SawmillToYardTransferDriver => sawmillToYardTransferDriver;
 
         // Pass IV Worker 2: the unified reservation authority (persisted),
         // the hub-owned draft-power service (reserves through the authority),
@@ -260,6 +395,14 @@ namespace LandLedgers.Orchestration.Systems
             return null;
         }
 
+        // P3 (F6 production wiring): the installed equipment gate, retained
+        // so the sawmill production driver receives the same instance the
+        // TaskAuthority holds — never a second gate.
+        private EquipmentTaskGate installedEquipmentTaskGate;
+
+        /// <summary>P3 (F6 production wiring): the installed equipment task gate, or null when no gate has been installed yet.</summary>
+        public EquipmentTaskGate InstalledEquipmentTaskGate => installedEquipmentTaskGate;
+
         /// <summary>
         /// Pass IV: installs the equipment execution gate (Canon 4.1) on the
         /// hub's TaskAuthority. Suppliers are wired to hub-owned truth — the
@@ -270,6 +413,11 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public void InstallEquipmentTaskGate(Func<float> nowGameSeconds = null)
         {
+            // P3 (F6 production wiring): idempotent — the bootstrapper and
+            // SimulationDrivers.Awake both call this, and the driver must
+            // hold the same gate instance the TaskAuthority holds. A second
+            // gate would diverge on reservations for the same saw.
+            if (installedEquipmentTaskGate != null) return;
             var gate = new EquipmentTaskGate
             {
                 AssetsSupplier = CollectGateAssets,
@@ -279,6 +427,7 @@ namespace LandLedgers.Orchestration.Systems
                 NowGameSecondsSupplier = nowGameSeconds,
                 HandOccupancySupplier = PersonHands.SnapshotFor,
             };
+            installedEquipmentTaskGate = gate;
             Tasks.SetExecutionGate(gate);
         }
 
@@ -1189,6 +1338,16 @@ namespace LandLedgers.Orchestration.Systems
                 housing = Housing.CaptureSaveDto(),
                 lodgingRegistry = LodgingRegistry.CaptureSaveDto(),
                 boardingHouseRuntimes = CaptureBoardingHouseRuntimes(),
+                // P3 (F6 production wiring): one section per shared sawmill
+                // authority. Null at capture means unwired (old save, degraded
+                // path) — the section stays an empty DTO, never null.
+                sawmillProductionDriver = sawmillProductionDriver != null ? sawmillProductionDriver.ToSaveDto() : new SawmillProductionDriver.SawmillProductionDriverSaveDto(),
+                sawmillLabourCounters = sawmillLabourCounters != null ? sawmillLabourCounters.ToSaveDto() : new SawmillLabourCounters.SawmillLabourCountersDto(),
+                logLotCustodyLedger = logLotCustodyLedger != null ? logLotCustodyLedger.CaptureSaveDto() : new LogLotCustodyLedger.LogLotCustodyLedgerSaveDto(),
+                // F7 yard-transfer wiring: one section for the shared
+                // transfer driver. Null at capture means unwired — the
+                // section stays an empty DTO, never null.
+                sawmillToYardTransferDriver = sawmillToYardTransferDriver != null ? sawmillToYardTransferDriver.ToSaveDto() : new SawmillToYardTransferDriver.SawmillToYardTransferDriverSaveDto(),
                 // Pass IV (Worker 1): deterministic due-event schedule.
                 dueEvents = DueEvents.CaptureSaveDto(),
                 // Pass IV Worker 2: unified reservations, draft holds, capacity registrations.
@@ -1301,6 +1460,11 @@ namespace LandLedgers.Orchestration.Systems
             Housing.LoadFromSaveDto(dto.housing);
             LodgingRegistry.LoadFromSaveDto(dto.lodgingRegistry);
             LoadBoardingHouseRuntimes(dto.boardingHouseRuntimes);
+            // Sawmill sections (driver, counters, ledger, transfer driver) are NOT restored
+            // here. They load after the Pass 9 mill restore via
+            // FirstLedgerSliceBootstrapper.ApplySawmillRestoreAfterPass9 — loading
+            // them here would run before the yard is restored and drop valid jobs
+            // (plan 25).
             TenancyPayments.LoadFromSaveDto(dto.tenancyPayments);
             HouseholdDecisions.LoadFromSaveDto(dto.householdDecisions);
             HouseholdDecisionDriver.LoadFromSaveDto(dto.householdDecisionDriver);
@@ -1369,6 +1533,31 @@ namespace LandLedgers.Orchestration.Systems
                 }
             }
 
+            return diagnostics;
+        }
+
+        /// <summary>
+        /// Deferred sawmill restore. Called ONLY from FirstLedgerSliceBootstrapper
+        /// .ApplySawmillRestoreAfterPass9 after the Pass 9 mill restore — never
+        /// from LoadFromSaveDto — because the driver loads re-attach against
+        /// yard lots that do not exist until the Pass 9 restore runs.
+        /// </summary>
+        public List<string> LoadSawmillSectionsFromSaveDto(SystemsSaveDto dto)
+        {
+            var diagnostics = new List<string>();
+            if (dto == null)
+            {
+                return diagnostics;
+            }
+
+            if (sawmillLabourCounters != null) sawmillLabourCounters.LoadFromSaveDto(dto.sawmillLabourCounters);
+            else diagnostics.Add("SimulationSystemsHub: sawmill labour counters section skipped — no counters constructed yet; the bootstrapper owns construction.");
+            if (sawmillProductionDriver != null) sawmillProductionDriver.LoadFromSaveDto(dto.sawmillProductionDriver);
+            else diagnostics.Add("SimulationSystemsHub: sawmill production driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
+            if (logLotCustodyLedger != null) logLotCustodyLedger.LoadFromSaveDto(dto.logLotCustodyLedger);
+            else diagnostics.Add("SimulationSystemsHub: log-lot custody ledger section skipped — no ledger constructed yet; the bootstrapper owns construction.");
+            if (sawmillToYardTransferDriver != null) sawmillToYardTransferDriver.LoadFromSaveDto(dto.sawmillToYardTransferDriver);
+            else diagnostics.Add("SimulationSystemsHub: sawmill-to-yard transfer driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
             return diagnostics;
         }
 

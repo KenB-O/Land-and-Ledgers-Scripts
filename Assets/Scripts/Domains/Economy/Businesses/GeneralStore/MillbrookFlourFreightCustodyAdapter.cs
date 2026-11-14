@@ -154,14 +154,28 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 return true;
             }
 
-            // Validate the source-side idempotency key before adding the
-            // destination lot. ReceiveAtBakery is deterministic after these
+            // Validate the source-side idempotency key before confirming
+            // the receipt. ReceiveAtBakery is deterministic after these
             // checks and the destination is updated in this same synchronous
             // callback, so no daily tick can observe an intermediate state.
             if (lot.Received && (!string.Equals(lot.DestinationBusinessId, bakery.BusinessInstanceId, StringComparison.Ordinal)
                 || !string.Equals(lot.ShipmentId, shipment.ShipmentId, StringComparison.Ordinal)))
             {
                 reason = $"Millbrook lot '{lot.LotId}' was already delivered to a different shipment or business.";
+                return false;
+            }
+
+            // Slice A5 (QA-06): the supplier confirms FIRST, before any
+            // Bakery lot is constructed or added. The ordering invariant is
+            // confirm-then-mutate: a supplier refusal after prevalidation
+            // (the surviving case is an empty destination id — ResolveLot
+            // passes "" == "" and nothing else checks either side) leaves
+            // nothing in Bakery stock, so a refused receive can never
+            // double-count flour the supplier has not confirmed.
+            reason = supplier.ReceiveAtBakery(lot.LotId, shipment.ShipmentId,
+                bakery.BusinessInstanceId, out int supplierBakeryUnits);
+            if (reason != null)
+            {
                 return false;
             }
 
@@ -188,19 +202,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             string stockRefusal = bakery.FlourStock.ReceiveLot(flourLot, new List<string>());
             if (stockRefusal != null)
             {
+                // The supplier is already marked received; a retry mints a
+                // fresh LotId (the id sequence only advances) and converges
+                // via the idempotent ReceiveAtBakery above. No compensation
+                // is attempted — BakeryFlourStock has no removal operation.
                 reason = stockRefusal;
-                return false;
-            }
-
-            reason = supplier.ReceiveAtBakery(lot.LotId, shipment.ShipmentId,
-                bakery.BusinessInstanceId, out int supplierBakeryUnits);
-            if (reason != null)
-            {
-                // No supported removal/compensation operation exists on
-                // BakeryFlourStock. This branch should be unreachable after
-                // prevalidation; fail visibly rather than minting or silently
-                // duplicating another lot.
-                reason = "Millbrook source receipt refused after the Bakery lot was added; investigate custody reconciliation: " + reason;
                 return false;
             }
 

@@ -9,6 +9,9 @@ using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.Bakery;
+using LandLedgers.Economy.Businesses.LumberYard;
+using LandLedgers.Economy.Businesses.Logging;
+using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Financing;
@@ -578,6 +581,9 @@ namespace LandLedgers.FirstLedger
             ConfigureSharedBusinessRuntime();
             sharedBusinessRuntime?.InitializeIfNeeded(storeRuntime != null ? storeRuntime.CurrentBusiness : null);
             ConfigureLiveBakerySaveOwner();
+            ConfigureLiveLumberYardSaveOwner();
+            ConfigureLiveSawmillSaveOwner();
+            ConfigureLumberYardConstructionBindings();
             SimulationDrivers simulationDrivers = FindAnyObjectByType<SimulationDrivers>();
             simulationDrivers?.AttachBusinessRuntime(sharedBusinessRuntime);
             simulationDrivers?.AttachDevelopmentTownConfiguration(ResolveDevelopmentTownConfiguration());
@@ -2024,6 +2030,78 @@ namespace LandLedgers.FirstLedger
             }
         }
 
+        // Plan 25: deferred sawmill restore. Called by SaveLoadManager.LoadDefaultSlot
+        // after the Pass 9 mill restore — the driver loads re-attach against yard
+        // lots that do not exist until the Pass 9 restore runs. Takes the DTO as
+        // a parameter and keeps no state (the loads are clear-then-load, so a
+        // second call in the same session is safe by construction).
+        public void ApplySawmillRestoreAfterPass9(SystemsSaveDto systems)
+        {
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[SaveLoad] Sawmill restore after Pass 9 was not applied: no SimulationSystemsHub found; the four sawmill sections will not restore.", this);
+                return;
+            }
+
+            foreach (string diagnostic in systemsHub.LoadSawmillSectionsFromSaveDto(systems))
+            {
+                Debug.LogWarning($"[SaveLoad] {diagnostic}");
+            }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            ReapplyFellingCampAndRightsAfterPass9();
+#endif
+        }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        // Note-112 Finding 1 follow-up (plan 29, note 118): on Continue from a
+        // pre-slice save the Pass 9 restore passes null DTOs to the stand
+        // registry and camp (Series2Pass9Save.cs:1129/:1184), whose
+        // clear-then-load wipes the stands, grants, and roster the :449
+        // wiring registered. Re-run the same configuration when the
+        // restored registry is empty. Post-slice saves restore stands, so
+        // the trigger stays off and the re-run is a no-op for them (§3.4).
+        // Both this method and its call site sit inside the guard:
+        // ConfigureFellingCampAndRights is dev-build only, and calling it
+        // from the unguarded deferred step would break release compilation.
+        private void ReapplyFellingCampAndRightsAfterPass9()
+        {
+            if (saveLoadManager == null)
+            {
+                Debug.LogWarning("[SaveLoad] Felling config was not re-applied after the Pass 9 restore: SaveLoadManager is missing.", this);
+                return;
+            }
+            Series2Pass9SaveState pass9 = saveLoadManager.Series2Pass9State;
+            if (pass9 == null)
+            {
+                Debug.LogWarning("[SaveLoad] Felling config was not re-applied after the Pass 9 restore: no Pass 9 state.", this);
+                return;
+            }
+            if (pass9.StandRegistry == null)
+            {
+                Debug.LogWarning("[SaveLoad] Felling config was not re-applied after the Pass 9 restore: no stand registry (the :449 wiring never ran).", this);
+                return;
+            }
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (!enableDevelopmentTownConfiguration || configuration == null)
+                return; // No config: nothing was registered at :449 either.
+            int authoredStandCount = 0;
+            foreach (DevelopmentTownConfiguration.TimberStandEntry entry in configuration.TimberStands)
+                if (entry != null && !string.IsNullOrWhiteSpace(entry.standId)) authoredStandCount++;
+            if (!pass9.StandRegistry.NeedsFellingConfigReapply(authoredStandCount))
+                return; // Post-slice save (stands restored) or no stands authored: nothing to re-apply.
+            BusinessInstanceState millBusiness = FindDevelopmentBusiness(BusinessType.Sawmill);
+            if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId))
+            {
+                Debug.LogWarning("[SaveLoad] Felling config was not re-applied after the Pass 9 restore: no authored Sawmill business instance is present in the shared runtime.", this);
+                return;
+            }
+            ConfigureFellingCampAndRights(millBusiness, pass9, configuration);
+            Debug.Log("[SaveLoad] Felling config re-applied after the Pass 9 restore: the restored stand registry was empty (pre-slice save).", this);
+        }
+#endif
+
         // Q04 Slice 1 (re-plan): called by SaveLoadManager.LoadDefaultSlot
         // AFTER the shared-business restore and BEFORE the Pass XL restore.
         // The Bakery instance exists only in that window (a pre-load call
@@ -2064,6 +2142,16 @@ namespace LandLedgers.FirstLedger
             // warn-returns otherwise, leaving the state + freight driver above
             // in place for the degraded path (section 2.4).
             ConfigureLiveBakerySaveOwner();
+            // C2: same window, same rule — the yard holder must exist
+            // before the Pass XL restore consumes the state.
+            ConfigureLiveLumberYardSaveOwner();
+            // D1: same window, same rule — the mill holder must exist
+            // before the Pass XL restore consumes the state.
+            ConfigureLiveSawmillSaveOwner();
+            // C3: same window, same rule — the price port and the yard
+            // supplier registration are runtime state, re-established
+            // here after every restore.
+            ConfigureLumberYardConstructionBindings();
         }
 
         // Q04 Slice 3 (re-plan): called by SaveLoadManager.LoadDefaultSlot
@@ -2172,6 +2260,542 @@ namespace LandLedgers.FirstLedger
                 Debug.Log("[FreightSave] Pass 9 save owner created the live freight driver before simulation startup.", this);
             }
             Debug.Log($"[BakeryRuntime] Bootstrap owns one live BakeryShopRuntime for '{bakeryBusiness.RuntimeDisplayName}' ({bakeryBusiness.InstanceId}); its Pass 9 state is registered with SaveLoadManager.", this);
+        }
+
+        // C2: mirrors ConfigureLiveBakerySaveOwner for the lumber yard.
+        // Creates/reuses the yard runtime + Pass 9 holder when a
+        // LumberYard business instance exists; warn-returns otherwise,
+        // leaving the state in place for the degraded path (the compact
+        // preset has no yard). First NPC yard only: the Pass 9 slot is a
+        // single field, so a second yard business has no slot to save
+        // into and is warned about, never silently wired.
+        private void ConfigureLiveLumberYardSaveOwner()
+        {
+            if (sharedBusinessRuntime == null || saveLoadManager == null)
+            {
+                Debug.LogWarning("[LumberYardRuntime] Live owner was not created: shared business runtime or SaveLoadManager is missing.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[LumberYardRuntime] Live owner was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            BusinessInstanceState yardBusiness = FindDevelopmentBusiness(BusinessType.LumberYard);
+            if (yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId))
+            {
+                Debug.LogWarning("[LumberYardRuntime] Live owner was not created: no authored LumberYard business instance is present in the shared runtime.", this);
+                return;
+            }
+
+            Series2Pass9SaveState pass9 = saveLoadManager.Series2Pass9State;
+            if (pass9 == null)
+            {
+                pass9 = new Series2Pass9SaveState();
+                saveLoadManager.Series2Pass9State = pass9;
+            }
+
+            // Reuse, never replace: the hub accessor creates the runtime
+            // on first use and returns the live holder afterwards, so the
+            // hub dictionary and the Pass 9 holder share one instance.
+            LumberYardShopRuntime liveYardRuntime = systemsHub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+            if (liveYardRuntime == null)
+            {
+                Debug.LogWarning("[LumberYardRuntime] Live owner was not created: hub returned no runtime.", this);
+                return;
+            }
+
+            if (pass9.LumberYard == null)
+            {
+                pass9.LumberYard = liveYardRuntime;
+            }
+            else if (!string.Equals(pass9.LumberYard.BusinessInstanceId, yardBusiness.InstanceId, StringComparison.Ordinal))
+            {
+                Debug.LogWarning($"[LumberYardRuntime] Replacing Pass 9 lumber yard holder '{pass9.LumberYard.BusinessInstanceId}' with the authored yard '{yardBusiness.InstanceId}' (the Pass 9 load's identity guard would refuse the mismatched DTO anyway).", this);
+                pass9.LumberYard = liveYardRuntime;
+            }
+
+            foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
+            {
+                if (candidate == null || candidate.BusinessType != BusinessType.LumberYard) continue;
+                if (string.Equals(candidate.InstanceId, yardBusiness.InstanceId, StringComparison.Ordinal)) continue;
+                Debug.LogWarning($"[LumberYardRuntime] Second LumberYard business '{candidate.InstanceId}' is unwired: the Pass 9 slot holds one yard only, so its stock is not saved.", this);
+                break;
+            }
+
+            Debug.Log($"[LumberYardRuntime] Bootstrap owns one live LumberYardShopRuntime for '{yardBusiness.RuntimeDisplayName}' ({yardBusiness.InstanceId}); its Pass 9 state is registered with SaveLoadManager.", this);
+        }
+
+        // D1: mirrors ConfigureLiveLumberYardSaveOwner for the sawmill.
+        // Owns one live SawmillShopRuntime for the first NPC-owned Sawmill
+        // business and hands it to the Pass 9 holder, so the daily
+        // byproduct transfer (SimulationDrivers) has a live mill to draw
+        // from. First mill only (C2 rule); a second mill is warned about
+        // and gets nothing here. Called at NewGame and in the restore
+        // window, immediately after ConfigureLiveLumberYardSaveOwner.
+        private void ConfigureLiveSawmillSaveOwner()
+        {
+            if (sharedBusinessRuntime == null || saveLoadManager == null)
+            {
+                Debug.LogWarning("[SawmillRuntime] Live owner was not created: shared business runtime or SaveLoadManager is missing.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[SawmillRuntime] Live owner was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            BusinessInstanceState millBusiness = FindDevelopmentBusiness(BusinessType.Sawmill);
+            if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId))
+            {
+                Debug.LogWarning("[SawmillRuntime] Live owner was not created: no authored Sawmill business instance is present in the shared runtime.", this);
+                return;
+            }
+
+            Series2Pass9SaveState pass9 = saveLoadManager.Series2Pass9State;
+            if (pass9 == null)
+            {
+                pass9 = new Series2Pass9SaveState();
+                saveLoadManager.Series2Pass9State = pass9;
+            }
+
+            // Reuse, never replace: the hub accessor creates the runtime
+            // on first use and returns the live holder afterwards, so the
+            // hub dictionary and the Pass 9 holder share one instance.
+            SawmillShopRuntime liveMillRuntime = systemsHub.SawmillRuntimeFor(millBusiness.InstanceId);
+            if (liveMillRuntime == null)
+            {
+                Debug.LogWarning("[SawmillRuntime] Live owner was not created: hub returned no runtime.", this);
+                return;
+            }
+
+            if (pass9.Sawmill == null)
+            {
+                pass9.Sawmill = liveMillRuntime;
+            }
+            else if (!string.Equals(pass9.Sawmill.BusinessInstanceId, millBusiness.InstanceId, StringComparison.Ordinal))
+            {
+                Debug.LogWarning($"[SawmillRuntime] Replacing Pass 9 sawmill holder '{pass9.Sawmill.BusinessInstanceId}' with the authored mill '{millBusiness.InstanceId}' (the Pass 9 load's identity guard would refuse the mismatched DTO anyway).", this);
+                pass9.Sawmill = liveMillRuntime;
+            }
+
+            foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
+            {
+                if (candidate == null || candidate.BusinessType != BusinessType.Sawmill) continue;
+                if (string.Equals(candidate.InstanceId, millBusiness.InstanceId, StringComparison.Ordinal)) continue;
+                Debug.LogWarning($"[SawmillRuntime] Second Sawmill business '{candidate.InstanceId}' is unwired: the Pass 9 slot holds one mill only, so its stock is not saved.", this);
+                break;
+            }
+
+            Debug.Log($"[SawmillRuntime] Bootstrap owns one live SawmillShopRuntime for '{millBusiness.RuntimeDisplayName}' ({millBusiness.InstanceId}); its Pass 9 state is registered with SaveLoadManager.", this);
+
+            // P3 (F6 production wiring): bind the sawmill production
+            // driver, counters, ledger, and logging operation runtime
+            // into the daily flow. Runs on NewGame and restore alike.
+            ConfigureSawmillProductionWiring(millBusiness, pass9);
+
+            // F7 yard-transfer wiring: bind the sawmill-to-yard transfer
+            // driver into the daily flow. Runs on NewGame and restore
+            // alike. The yard business is resolved here with
+            // FindDevelopmentBusiness, the same call
+            // ConfigureLiveLumberYardSaveOwner uses (note 103 C1: the
+            // call template is its :2198 site, not the :1677 method
+            // definition); the yard owner runs before the mill owner in
+            // both paths, so pass9.LumberYard already exists.
+            BusinessInstanceState yardBusiness = FindDevelopmentBusiness(BusinessType.LumberYard);
+            ConfigureSawmillYardTransferWiring(millBusiness, yardBusiness, pass9);
+        }
+
+        // P3 (F6 production wiring): constructs the sawmill production
+        // driver, the labour counters, and the custody ledger, registers
+        // them via the SimulationDrivers forwarders, and constructs the
+        // logging operation runtime into the Pass 9 slot. Reuse, never
+        // replace (the mill rule in ConfigureLiveSawmillSaveOwner): a
+        // second call in the same session keeps the existing instances,
+        // so a restored job record is never discarded by re-construction.
+        private void ConfigureSawmillProductionWiring(BusinessInstanceState millBusiness, Series2Pass9SaveState pass9)
+        {
+            if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId) || pass9 == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Wiring was not created: no authored Sawmill business instance or Pass 9 state.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Wiring was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Wiring was not created: SimulationDrivers is missing.", this);
+                return;
+            }
+
+            SawmillShopRuntime liveMillRuntime = systemsHub.SawmillRuntimeFor(millBusiness.InstanceId);
+            if (liveMillRuntime == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Wiring was not created: hub returned no mill runtime.", this);
+                return;
+            }
+
+            // C3: the driver must receive the hub-retained gate, never a
+            // second gate. InstallEquipmentTaskGate is idempotent, so this
+            // is safe regardless of whether SimulationDrivers.Awake
+            // already installed it.
+            if (systemsHub.InstalledEquipmentTaskGate == null)
+            {
+                systemsHub.InstallEquipmentTaskGate();
+            }
+            EquipmentTaskGate gate = systemsHub.InstalledEquipmentTaskGate;
+            if (gate == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Wiring was not created: no equipment task gate could be installed.", this);
+                return;
+            }
+
+            SawmillLabourCounters counters = systemsHub.SawmillLabourCounters ?? new SawmillLabourCounters();
+            LogLotCustodyLedger ledger = systemsHub.LogLotCustodyLedger ?? new LogLotCustodyLedger(new List<string>());
+            SawmillProductionDriver driver = systemsHub.SawmillProductionDriver;
+            if (driver == null)
+            {
+                driver = new SawmillProductionDriver(
+                    liveMillRuntime,
+                    systemsHub.Tasks,
+                    systemsHub.WorkTimeBudgets,
+                    gate,
+                    counters,
+                    new List<string>(),
+                    ledger);
+            }
+            drivers.RegisterSawmillProductionDriver(driver);
+            drivers.RegisterSawmillLabourCounters(counters);
+            drivers.RegisterLogLotCustodyLedger(ledger);
+
+            // C4: construct the logging operation runtime with the LIVE
+            // registry (never a second registry) and assign it to the
+            // Pass 9 slot. Reuse, never replace.
+            if (pass9.LoggingOperation == null)
+            {
+                pass9.LoggingOperation = new LoggingOperationRuntime(millBusiness.InstanceId, systemsHub.Tasks.IdRegistry, ledger);
+            }
+
+            // A2 plan 27 (P10 live felling driver, note 110): construct
+            // the stand registry into the Pass 9 slot. Reuse, never
+            // replace: a second call in the same session keeps the
+            // existing registry. The empty registry needs no config and
+            // is constructed in every build; the camp and everything
+            // config-dependent sit in ConfigureFellingCampAndRights
+            // below. Zero by default: a configuration with no stands
+            // registers none, and the felling driver refuses loudly
+            // instead of inventing values.
+            if (pass9.StandRegistry == null)
+            {
+                pass9.StandRegistry = new LoggingStandRegistry();
+            }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            DevelopmentTownConfiguration fellingConfiguration = ResolveDevelopmentTownConfiguration();
+            if (enableDevelopmentTownConfiguration && fellingConfiguration != null)
+            {
+                ConfigureFellingCampAndRights(millBusiness, pass9, fellingConfiguration);
+            }
+#endif
+
+            Debug.Log($"[SawmillProduction] Bootstrap wired the sawmill production driver for '{millBusiness.InstanceId}' (driver, counters, ledger, Pass 9 logging runtime, stand registry).", this);
+        }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        // A2 plan 27 (P10 live felling driver, note 110): registers the
+        // config-authored stands, grants the mill timber rights on each
+        // (grantor "town-land-office", note 110 Q3c), builds the camp
+        // for the first listed stand, rosters the mill crew (owner +
+        // first active employee, the PickSawmillSawyer pattern, note
+        // 110 Q4/Q9), endows opening provisions once (marker-gated,
+        // note 110 C7), and installs the mill axe via the mill-typed
+        // installer (note 110 C6). Zero by default: no stands, no camp,
+        // no provisions, no axe — the felling driver refuses loudly
+        // instead of inventing values. Runs on NewGame and Continue
+        // alike; the Pass 9 restore loads saved stands and roster over
+        // what is built here, and the endowment markers keep the
+        // provisions and axe once-only.
+        private void ConfigureFellingCampAndRights(BusinessInstanceState millBusiness, Series2Pass9SaveState pass9, DevelopmentTownConfiguration configuration)
+        {
+            if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId) || pass9 == null || configuration == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Felling was not wired: no mill business, Pass 9 state, or development-town configuration.", this);
+                return;
+            }
+
+            string millKey = null;
+            foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
+                if (slot != null && ToBusinessType(slot.operationId) == BusinessType.Sawmill)
+                {
+                    millKey = slot.key;
+                    break;
+                }
+            if (string.IsNullOrWhiteSpace(millKey))
+            {
+                Debug.LogWarning("[SawmillProduction] Felling was not wired: no sawmill business is configured.", this);
+                return;
+            }
+
+            int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
+
+            // Register every config stand and grant the mill timber
+            // rights on each. A stand that is already registered (a
+            // second wiring call in the same session) is left alone,
+            // never re-granted: RegisterStand refuses duplicates and
+            // GrantTimberRights refuses a second grant.
+            foreach (DevelopmentTownConfiguration.TimberStandEntry standEntry in configuration.TimberStands)
+            {
+                if (standEntry == null || string.IsNullOrWhiteSpace(standEntry.standId)) continue;
+                if (pass9.StandRegistry.GetStand(standEntry.standId) == null)
+                {
+                    string standRefusal = pass9.StandRegistry.RegisterStand(new LandLedgers.Economy.Farming.Timber.TimberStand
+                    {
+                        StandId = standEntry.standId,
+                        DisplayName = standEntry.displayName ?? string.Empty,
+                        LocationId = standEntry.locationId ?? string.Empty,
+                        Species = standEntry.species ?? string.Empty,
+                        KilogramsPerLog = standEntry.kilogramsPerLog,
+                        MilesToMill = standEntry.milesToMill,
+                        StandingTimberUnits = standEntry.standingTimberUnits,
+                    });
+                    if (!string.IsNullOrWhiteSpace(standRefusal))
+                        Debug.LogWarning($"[SawmillProduction] {standRefusal}", this);
+                }
+                if (string.IsNullOrWhiteSpace(pass9.StandRegistry.CurrentRightsHolder(standEntry.standId)))
+                {
+                    string rightsRefusal = pass9.StandRegistry.GrantTimberRights(
+                        standEntry.standId, millBusiness.InstanceId, dayIndex,
+                        "town-land-office", "P10 live felling driver: opening timber rights for the mill.");
+                    if (!string.IsNullOrWhiteSpace(rightsRefusal))
+                        Debug.LogWarning($"[SawmillProduction] {rightsRefusal}", this);
+                }
+            }
+
+            // Build the camp for the first listed stand, once. campId
+            // "camp-" + standId, dayEstablished 0 at NewGame (note 110
+            // Q8). No stands, no camp.
+            if (pass9.LoggingCamp == null)
+            {
+                DevelopmentTownConfiguration.TimberStandEntry firstStand = null;
+                foreach (DevelopmentTownConfiguration.TimberStandEntry candidate in configuration.TimberStands)
+                    if (candidate != null && !string.IsNullOrWhiteSpace(candidate.standId)) { firstStand = candidate; break; }
+                if (firstStand != null)
+                {
+                    pass9.LoggingCamp = new LoggingCampSite(
+                        "camp-" + firstStand.standId, millBusiness.InstanceId, firstStand.standId, 0);
+                }
+            }
+
+            if (pass9.LoggingCamp != null)
+            {
+                // Roster the mill crew: the owner first, then the first
+                // active employee. AssignWorker refuses duplicates, so
+                // a second wiring call is a no-op.
+                var campDiag = new List<string>();
+                if (millBusiness.Owner != null && millBusiness.Owner.PersonId >= 0)
+                {
+                    EntityId ownerId = EntityId.For(EntityKind.Person, millBusiness.Owner.PersonId);
+                    string rosterRefusal = pass9.LoggingCamp.AssignWorker(ownerId, LoggingCampRoles.Logger, dayIndex, campDiag);
+                    if (!string.IsNullOrWhiteSpace(rosterRefusal))
+                        Debug.LogWarning($"[SawmillProduction] Mill owner could not be rostered as a feller: {rosterRefusal}", this);
+                }
+                if (millBusiness.RuntimeState?.EmploymentRegistry != null)
+                {
+                    foreach (EmploymentRelationship relationship in millBusiness.RuntimeState.EmploymentRegistry.GetActiveByEmployer(millBusiness.InstanceId))
+                    {
+                        if (relationship == null || relationship.EmployeePersonId < 0) continue;
+                        EntityId employeeId = EntityId.For(EntityKind.Person, relationship.EmployeePersonId);
+                        string rosterRefusal = pass9.LoggingCamp.AssignWorker(employeeId, LoggingCampRoles.Logger, dayIndex, campDiag);
+                        if (!string.IsNullOrWhiteSpace(rosterRefusal))
+                            Debug.LogWarning($"[SawmillProduction] Mill employee could not be rostered as a feller: {rosterRefusal}", this);
+                        break;
+                    }
+                }
+                foreach (string line in campDiag) Debug.Log($"[SawmillProduction] {line}", this);
+
+                // Endow opening provisions once (marker-gated): cover
+                // days x headcount x provisions per head per day, from
+                // the bootstrap endowment (note 110 C7). Cover days 0
+                // = no endowment. The quantity is config-sourced; an
+                // absent entry endows nothing, never an invented
+                // quantity.
+                if (configuration.OpeningLoggingCampProvisionCoverDays > 0 && millBusiness.RuntimeState != null)
+                {
+                    string provisionEndowmentId = $"development-town-opening-provisions:{configuration.ConfigurationId}:{millKey}:{millBusiness.InstanceId}";
+                    if (!millBusiness.RuntimeState.HasAppliedScenarioEndowment(provisionEndowmentId))
+                    {
+                        float quantity = Math.Max(0f, configuration.OpeningLoggingCampProvisionCoverDays
+                            * pass9.LoggingCamp.CrewHeadcount
+                            * pass9.LoggingCamp.Parameters.ProvisionsPerHeadPerDay);
+                        if (quantity > 0f)
+                        {
+                            var provisionDiag = new List<string>();
+                            string deliveryRefusal = pass9.LoggingCamp.SupplyLedger.RecordDelivery(
+                                LoggingCampSupplyLedger.BootstrapEndowmentSupplierId,
+                                quantity, dayIndex,
+                                $"P10 opening provision endowment: {configuration.OpeningLoggingCampProvisionCoverDays} cover days for the logging camp crew.",
+                                provisionDiag);
+                            foreach (string line in provisionDiag) Debug.Log($"[SawmillProduction] {line}", this);
+                            if (!string.IsNullOrWhiteSpace(deliveryRefusal))
+                                Debug.LogWarning($"[SawmillProduction] Opening provision endowment refused: {deliveryRefusal}", this);
+                            else if (!millBusiness.RuntimeState.RecordAppliedScenarioEndowment(provisionEndowmentId))
+                                Debug.LogWarning($"[SawmillProduction] Could not record opening provision endowment '{provisionEndowmentId}'.", this);
+                        }
+                    }
+                }
+            }
+
+            // Install the mill axe via the mill-typed installer (note
+            // 110 C6): assets from the mill business key's
+            // opening-equipment entry, never the slice fixture id. The
+            // axe is mill equipment, not camp equipment, so it installs
+            // whether or not any stand (and camp) exists.
+            if (millBusiness.RuntimeState != null)
+            {
+                systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+                if (systemsHub == null)
+                {
+                    Debug.LogWarning("[SawmillProduction] Mill axe was not installed: SimulationSystemsHub is missing.", this);
+                    return;
+                }
+                BusinessEquipmentRegister millRegister = systemsHub.EquipmentRegisterFor(millBusiness.InstanceId);
+                var axeDiag = new List<string>();
+                if (!ScenarioMillOpeningEquipmentEndowment.TryApply(configuration, millKey,
+                        millBusiness.InstanceId, millBusiness.RuntimeState, millRegister,
+                        dayIndex, axeDiag, out string axeReport, out string axeError))
+                {
+                    Debug.LogError($"[SawmillProduction] {axeError}", this);
+                    return;
+                }
+                if (!pass9.EquipmentRegisters.Exists(existing => existing != null
+                        && string.Equals(existing.BusinessInstanceId, millBusiness.InstanceId, StringComparison.Ordinal)))
+                    pass9.EquipmentRegisters.Add(millRegister);
+                Debug.Log($"[SawmillProduction] {axeReport}", this);
+                foreach (string line in axeDiag) Debug.Log($"[SawmillProduction] {line}", this);
+            }
+        }
+#endif
+
+        // F7 yard-transfer wiring: constructs the sawmill-to-yard transfer
+        // driver and registers it via the SimulationDrivers forwarder.
+        // Reuse, never replace (the mill rule in
+        // ConfigureLiveSawmillSaveOwner): a second call in the same session
+        // keeps the existing instance, so a restored job record is never
+        // discarded by re-construction. The driver needs no equipment gate,
+        // no TaskAuthority, no registry, and no Pass 9 slot of its own —
+        // the mill and yard runtimes already have theirs.
+        private void ConfigureSawmillYardTransferWiring(BusinessInstanceState millBusiness, BusinessInstanceState yardBusiness, Series2Pass9SaveState pass9)
+        {
+            if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId) || yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId) || pass9 == null)
+            {
+                Debug.LogWarning("[SawmillToYardTransfer] Wiring was not created: no authored Sawmill or LumberYard business instance, or no Pass 9 state.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[SawmillToYardTransfer] Wiring was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                Debug.LogWarning("[SawmillToYardTransfer] Wiring was not created: SimulationDrivers is missing.", this);
+                return;
+            }
+
+            SawmillShopRuntime liveMillRuntime = systemsHub.SawmillRuntimeFor(millBusiness.InstanceId);
+            if (liveMillRuntime == null)
+            {
+                Debug.LogWarning("[SawmillToYardTransfer] Wiring was not created: hub returned no mill runtime.", this);
+                return;
+            }
+
+            LumberYardShopRuntime liveYardRuntime = systemsHub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+            if (liveYardRuntime == null)
+            {
+                Debug.LogWarning("[SawmillToYardTransfer] Wiring was not created: hub returned no yard runtime.", this);
+                return;
+            }
+
+            SawmillToYardTransferDriver driver = systemsHub.SawmillToYardTransferDriver;
+            if (driver == null)
+            {
+                driver = new SawmillToYardTransferDriver(liveMillRuntime, liveYardRuntime, new List<string>());
+            }
+            drivers.RegisterSawmillToYardTransferDriver(driver);
+
+            Debug.Log($"[SawmillToYardTransfer] Bootstrap wired the sawmill-to-yard transfer driver for '{millBusiness.InstanceId}' to yard '{yardBusiness.InstanceId}'.", this);
+        }
+
+        // C3: mirrors ConfigureLiveLumberYardSaveOwner for the construction
+        // bindings. Binds the C1 price port into the NPC construction
+        // driver (narrow setter — the field only) and registers the
+        // hub-owned yard in the supplier directory, so the driver can
+        // price materials and DiscoverSupplier can find the yard. First
+        // NPC yard only (C2 rule); a second yard is warned about by
+        // ConfigureLiveLumberYardSaveOwner and gets nothing here.
+        // No sale adapter is constructed (C4 owns it); no procurement
+        // port is bound (binding one that cannot procure would regress
+        // the driver). Called at NewGame and in the restore window,
+        // immediately after ConfigureLiveLumberYardSaveOwner.
+        private void ConfigureLumberYardConstructionBindings()
+        {
+            if (sharedBusinessRuntime == null)
+            {
+                Debug.LogWarning("[LumberYardConstruction] Bindings were not created: shared business runtime is missing.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[LumberYardConstruction] Bindings were not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            BusinessInstanceState yardBusiness = FindDevelopmentBusiness(BusinessType.LumberYard);
+            if (yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId))
+            {
+                Debug.LogWarning("[LumberYardConstruction] Bindings were not created: no authored LumberYard business instance is present in the shared runtime.", this);
+                return;
+            }
+
+            // Idempotent: the hub accessor returns the SAME live instance
+            // C2's owner setup created, never a second runtime.
+            LumberYardShopRuntime liveYardRuntime = systemsHub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+            if (liveYardRuntime == null)
+            {
+                Debug.LogWarning("[LumberYardConstruction] Bindings were not created: hub returned no runtime.", this);
+                return;
+            }
+
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                Debug.LogWarning("[LumberYardConstruction] Bindings were not created: SimulationDrivers is missing.", this);
+                return;
+            }
+
+            var port = new LumberYardConstructionPricePort(liveYardRuntime);
+            drivers.BindConstructionPricePort(port);
+            drivers.RegisterLumberYardConstructionSuppliers(liveYardRuntime, port);
+            Debug.Log($"[LumberYardConstruction] Bound the construction price port and registered the yard supplier for '{yardBusiness.RuntimeDisplayName}' ({yardBusiness.InstanceId}).", this);
         }
 
         private void ConfigureMillbrookAidTable(SimulationDrivers drivers)

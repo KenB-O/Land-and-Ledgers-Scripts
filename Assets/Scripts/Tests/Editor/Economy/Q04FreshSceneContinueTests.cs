@@ -1419,6 +1419,12 @@ namespace LandLedgers.Tests.Economy
                 Reservations = scenario.Equipment,
                 NowGameSeconds = 0f,
             };
+            // Slice A3 (QA-12): the adoption lookup, read lazily from the
+            // scenario's own agreement book at BeginLoading time (after
+            // RegisterDispatchTask). Both the source and the restore hooks
+            // are built by this method over their own scenario.
+            hooks.FindRegisteredDispatchTask = (LogisticsShipmentState shipment) =>
+                scenario.FreightDriver?.ServiceAgreements?.FindAgreement(shipment.FreightServiceAgreementId)?.DispatchTaskId;
             hooks.ReceiveShipment = (LogisticsShipmentState shipment, int quantityUnits, out string reason) =>
             {
                 reason = string.Empty;
@@ -1466,7 +1472,7 @@ namespace LandLedgers.Tests.Economy
         // Every step asserts its own success, so a build failure names
         // the seam that refused instead of surfacing as a restore
         // failure later.
-        private static Q04Scenario BuildQ04SourceScenario()
+        private static Q04Scenario BuildQ04SourceScenario(bool completeLoad = true)
         {
             var s = NewQ04Scenario();
             var diag = new List<string>();
@@ -1690,6 +1696,18 @@ namespace LandLedgers.Tests.Economy
             service.RegisterWagon(NewQ04Wagon("wagon-1"));
             service.RegisterWagon(NewQ04Wagon("wagon-2"));
             FreightShipmentHooks hooks = BuildQ04FreightHooks(s);
+            // Slice A3b (QA-30): on the mid-load path only, wire the
+            // schedule calendar into the hooks so BeginLoading reserves
+            // the load window under "freight:load:<shipmentId>" (the A2
+            // reserve-first seam). The builder owns its hooks internally,
+            // so the wiring happens here, not after the builder returns
+            // (plan §4.3 deviation, recorded in the checkpoint). The
+            // default path is byte-identical: no Schedules, no reservation.
+            if (!completeLoad)
+            {
+                hooks.Schedules = s.Schedules;
+                hooks.MinuteOfDay = 480;
+            }
             var book = driver.ServiceAgreements;
             var freightRequest = new FreightServiceRequest
             {
@@ -1752,6 +1770,22 @@ namespace LandLedgers.Tests.Economy
                 "the pending task must register as the dispatch task");
             Assert.IsTrue(service.BeginLoading(shipment, EntityId.For(EntityKind.Person, 701),
                 hooks, out string loadReason), "loading must begin: " + loadReason);
+            if (!completeLoad)
+            {
+                // Slice A3b (QA-30): stop mid-load — one 5-minute tick
+                // of the 15-minute adopted task, so the save captures an
+                // InProgress load task with 10 minutes remaining. The
+                // shipment stays Loading with nothing debited yet.
+                Assert.IsTrue(service.WorkLoading(shipment, 5, hooks, out string midLoadReason),
+                    "the first 5 minutes of loading must work: " + midLoadReason);
+                Assert.IsTrue(!shipment.loadApplied, "mid-load: the load is not yet applied after 5 of 15 minutes");
+                Assert.IsTrue(!shipment.sourceLotDebitApplied, "mid-load: the source lot is not yet debited");
+                WorkTask midLoadTask = s.Tasks.FindTask(s.TaskId);
+                Assert.IsNotNull(midLoadTask, "mid-load: the adopted load task must exist");
+                Assert.AreEqual(5, midLoadTask.MinutesWorked, "mid-load: 5 minutes worked");
+                Assert.AreEqual(10, midLoadTask.MinutesRemaining, "mid-load: 10 minutes remain");
+                return s;
+            }
             int guard = 0;
             while (!shipment.loadApplied && guard++ < 10)
                 Assert.IsTrue(service.WorkLoading(shipment, 60, hooks, out string workReason),
@@ -2242,20 +2276,30 @@ namespace LandLedgers.Tests.Economy
             Assert.IsTrue(!target.Pass9.CarrierSettlement.AlreadySettled(Q04ShipmentId),
                 "the mid-journey shipment must not read as settled after restore");
 
-            // (12) Pending task: same id, fr.load-freight, open
-            // (ResourcesReserved), 15 planned minutes, 0 worked, same
-            // assignee, same reservation handle id.
+            // (12) Load task: same id, fr.load-freight, COMPLETED — QA-12
+            // adoption makes the registered dispatch task the load task, so
+            // it ran its 15 minutes and completed in the source scenario.
+            // The pre-adoption world left it open with 0 worked and minted
+            // a second load task; that two-task shape is the QA-12 defect
+            // (a leaked open task holding the dock and 15 committed minutes
+            // forever), so the old open/0-worked assertions pinned the
+            // defect, not the intended world. Same assignee; the
+            // reservation handle id is cleared on completion by
+            // TaskAuthority.ReleaseTaskResources (the equipment hold itself
+            // stays live in this fixture because the reservation-authority
+            // seam is not installed — see (13) — so the dock-hold
+            // assertions below still hold).
             WorkTask task = target.Tasks.FindTask(source.TaskId);
-            Assert.IsNotNull(task, "the pending task must restore with its id");
+            Assert.IsNotNull(task, "the load task must restore with its id");
             Assert.AreEqual("fr.load-freight", task.DefinitionId, "the task definition must restore");
-            Assert.IsTrue(task.IsOpen, "the task must stay open");
-            Assert.AreEqual(TaskStatus.ResourcesReserved, task.Status, "the task must stay ResourcesReserved");
+            Assert.IsTrue(!task.IsOpen, "the task must be closed: adoption ran it to completion");
+            Assert.AreEqual(TaskStatus.Complete, task.Status, "the task must be Complete after adoption ran the load");
             Assert.AreEqual(15, task.PlannedMinutes, "the task must keep its 15 planned minutes");
-            Assert.AreEqual(0, task.MinutesWorked, "the task must keep 0 minutes worked");
+            Assert.AreEqual(15, task.MinutesWorked, "the task must keep its 15 worked minutes");
             Assert.AreEqual(EntityId.For(EntityKind.Person, 701), task.AssigneeId, "the assignee must restore");
-            Assert.AreEqual(source.HandleId, task.ReservationHandleId, "the task's handle id must restore verbatim");
-            Assert.AreEqual(expectedSetCount, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
-                "exactly the expected open tasks must exist for the freight owner (the completed load tasks are not open)");
+            Assert.AreEqual(string.Empty, task.ReservationHandleId, "the task's handle id is cleared on completion");
+            Assert.AreEqual(0, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
+                "no open tasks may remain for the freight owner: adoption completed every load task (the completed load tasks are not open)");
 
             // (13) Person reservations + equipment holds + due event
             // + budget: the shopper's Work + Shopping windows, the
@@ -2309,14 +2353,16 @@ namespace LandLedgers.Tests.Economy
                     targetBudget = budget;
             Assert.IsNotNull(targetBudget, "P701's work-time budget must restore");
             Assert.AreEqual(600, targetBudget.DailyBudgetMinutes, "the daily budget must restore at 600 minutes");
-            // 20 committed minutes, composed exactly: 15 for the open
-            // fr.load-freight task + 5 for the shipment's load task
-            // (base 5 = max(5, (16+9)/10)). The load task worked its
-            // 5 minutes and completed with 0 remaining, so its
-            // commitment is not released — only unused commitment is.
-            Assert.AreEqual(20, targetBudget.MinutesCommitted, "the committed minutes must restore (15 + 5)");
-            Assert.AreEqual(5, targetBudget.MinutesWorked,
-                "the 5 worked minutes on the completed load task must restore");
+            // 15 committed minutes, composed exactly: 15 for the adopted
+            // fr.load-freight load task. QA-12 adoption removes the second
+            // minted load task (base 5 = max(5, (16+9)/10)) the pre-adoption
+            // world minted, so the old 20 = 15 open + 5 minted no longer
+            // applies. The adopted task worked its 15 minutes and completed
+            // with 0 remaining, so its commitment is not released — only
+            // unused commitment is.
+            Assert.AreEqual(15, targetBudget.MinutesCommitted, "the committed minutes must restore (15, the adopted load task)");
+            Assert.AreEqual(15, targetBudget.MinutesWorked,
+                "the 15 worked minutes on the completed load task must restore");
 
             // (2, store side) Store: one retail lot, 24 loaves,
             // category pool 24, endowment recorded exactly once and
@@ -2442,19 +2488,22 @@ namespace LandLedgers.Tests.Economy
             Assert.AreEqual(4, breadLot2.QuantityUnits, "the household 2 bread lot must hold its 4 units");
             Assert.AreEqual(0, breadLot2.HeldUnits, "the household 2 bread lot holds nothing");
 
-            // (12) Two open tasks for the freight owner, the second
-            // assigned to P703 with its own handle.
-            Assert.AreEqual(2, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
-                "exactly two open tasks must exist for the freight owner in save A");
+            // (12) No open tasks for the freight owner in save A: QA-12
+            // adoption ran both dispatch tasks to completion (see the
+            // Slice 7 note in AssertQ04ScenarioRestored). The second
+            // task is Complete with its 15 minutes worked, same assignee,
+            // handle id cleared on completion.
+            Assert.AreEqual(0, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
+                "no open tasks may remain for the freight owner in save A: adoption completed both load tasks");
             WorkTask task2 = target.Tasks.FindTask(source.TaskId2);
-            Assert.IsNotNull(task2, "the second pending task must restore with its id");
+            Assert.IsNotNull(task2, "the second load task must restore with its id");
             Assert.AreEqual("fr.load-freight", task2.DefinitionId, "the second task definition must restore");
-            Assert.IsTrue(task2.IsOpen, "the second task must stay open");
-            Assert.AreEqual(TaskStatus.ResourcesReserved, task2.Status, "the second task must stay ResourcesReserved");
+            Assert.IsTrue(!task2.IsOpen, "the second task must be closed: adoption ran it to completion");
+            Assert.AreEqual(TaskStatus.Complete, task2.Status, "the second task must be Complete after adoption ran the load");
             Assert.AreEqual(15, task2.PlannedMinutes, "the second task must keep its 15 planned minutes");
-            Assert.AreEqual(0, task2.MinutesWorked, "the second task must keep 0 minutes worked");
+            Assert.AreEqual(15, task2.MinutesWorked, "the second task must keep its 15 worked minutes");
             Assert.AreEqual(EntityId.For(EntityKind.Person, 703), task2.AssigneeId, "the second assignee must restore");
-            Assert.AreEqual(source.HandleId2, task2.ReservationHandleId, "the second task's handle id must restore verbatim");
+            Assert.AreEqual(string.Empty, task2.ReservationHandleId, "the second task's handle id is cleared on completion");
 
             // (13) Person reservations: P1's two windows as Slice 7
             // pins them, plus P2's Work window [480,720].
@@ -2542,18 +2591,20 @@ namespace LandLedgers.Tests.Economy
             Assert.AreEqual(0, obligation2.Payments.Count, "no payment must restore on the second obligation");
             Assert.IsTrue(!obligation2.Settled, "the second obligation must stay unsettled");
 
-            // P703's work-time budget: 15 committed for the open task
-            // + 5 for the completed load task, 5 worked — the same
-            // composition as P701's in Slice 7.
+            // P703's work-time budget: 15 committed for the adopted
+            // load task, 15 worked — the same composition as P701's in
+            // Slice 7 after QA-12 adoption (the old 20 = 15 open + 5
+            // minted no longer applies; adoption removes the second
+            // minted load task).
             WorkTimeBudget budget703 = null;
             foreach (WorkTimeBudget budget in target.Budgets.CaptureSaveDto().budgets)
                 if (budget != null && budget.PersonId == EntityId.For(EntityKind.Person, 703))
                     budget703 = budget;
             Assert.IsNotNull(budget703, "P703's work-time budget must restore in save A");
             Assert.AreEqual(600, budget703.DailyBudgetMinutes, "the P703 daily budget must restore at 600 minutes");
-            Assert.AreEqual(20, budget703.MinutesCommitted, "the P703 committed minutes must restore (15 + 5)");
-            Assert.AreEqual(5, budget703.MinutesWorked,
-                "the 5 worked minutes on the second completed load task must restore");
+            Assert.AreEqual(15, budget703.MinutesCommitted, "the P703 committed minutes must restore (15, the adopted load task)");
+            Assert.AreEqual(15, budget703.MinutesWorked,
+                "the 15 worked minutes on the second completed load task must restore");
         }
 
         [Test]
@@ -2595,8 +2646,14 @@ namespace LandLedgers.Tests.Economy
             Assert.AreEqual(1, target.Errands.All.Count, "exactly the one kept errand plan must survive");
             Assert.IsNull(target.Tasks.FindTask(sourceA.TaskId2),
                 "the smaller load must drop the removed task");
-            Assert.AreEqual(1, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
-                "exactly the one kept open task must survive");
+            Assert.AreEqual(0, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
+                "no open tasks may remain after the smaller load: the kept task completed under adoption");
+            WorkTask keptTask = null;
+            foreach (WorkTask t in target.Tasks.CaptureSaveDto().tasks)
+                if (t != null && t.DefinitionId == "fr.load-freight" && t.AssigneeId == EntityId.For(EntityKind.Person, 701))
+                    keptTask = t;
+            Assert.IsNotNull(keptTask, "the kept task must survive the smaller load");
+            Assert.AreEqual(TaskStatus.Complete, keptTask.Status, "the kept task must stay Complete after the smaller load");
             Assert.AreEqual(0, target.Schedules.ActiveFor(2, Q04DayIndex).Count,
                 "the smaller load must drop the removed person's reservation");
             Assert.AreEqual(0, target.Equipment.ReservationsForTask(sourceA.TaskId2.ToString()).Count,
@@ -2629,7 +2686,8 @@ namespace LandLedgers.Tests.Economy
             // Orphan count zero, computed the Slice 7 way: every open
             // task holding a handle must resolve it to a live
             // reservation. The removed task is gone, so it cannot
-            // orphan; the kept task's handle still resolves.
+            // orphan; the kept task is closed under adoption, so it
+            // holds no handle and cannot orphan either.
             int orphans = 0;
             foreach (WorkTask open in target.Tasks.CaptureSaveDto().tasks)
             {
@@ -2731,6 +2789,184 @@ namespace LandLedgers.Tests.Economy
             Assert.AreEqual(230, recaptured.millbrookAid.InventoryUnits[recaptured.millbrookAid.InventoryItemIds.IndexOf("bakery_flour_sack")]);
             Assert.AreEqual(0, recaptured.millbrookAid.CashCents);
             Assert.AreEqual(0, recaptured.millbrookAid.Lots.Count);
+        }
+
+        // Slice A3b (QA-30): the adopted load task re-binds across a
+        // mid-load save/restore. The source saves with the 15-minute
+        // fr.load-freight task 5 minutes worked and the shipment still
+        // Loading; after restore the task must re-bind (same id, 5
+        // worked / 10 remaining), the remaining 10 minutes must finish
+        // the load, the source lot must debit exactly once, and the
+        // shipment must reach Arrived with the loader free and the load
+        // window released (the A2 post-restore fallback-release check,
+        // folded in from plan §4.1 step 5).
+        [Test]
+        public void Q04_AdoptedLoadTask_MidLoadSave_RestoresAndResumesToArrived()
+        {
+            Q04Scenario source = BuildQ04SourceScenario(completeLoad: false);
+            Q04Captured captured = CaptureQ04Scenario(source);
+            Q04Scenario target = NewQ04Scenario();
+            RestoreQ04Scenario(captured, target);
+
+            // Rebind: the restored adopted task is the same task, still
+            // InProgress with 5 worked / 10 remaining; the shipment is
+            // still Loading with nothing debited.
+            WorkTask restoredTask = target.Tasks.FindTask(source.TaskId);
+            Assert.IsNotNull(restoredTask, "the adopted load task must re-bind after restore");
+            Assert.AreEqual(TaskStatus.InProgress, restoredTask.Status, "the restored task is still InProgress");
+            Assert.AreEqual(5, restoredTask.MinutesWorked, "the restored task keeps 5 minutes worked");
+            Assert.AreEqual(10, restoredTask.MinutesRemaining, "the restored task keeps 10 minutes remaining");
+            LogisticsShipmentState restoredShipment = target.FreightDriver.AllShipments()
+                .FirstOrDefault(sh => sh.ShipmentId == Q04ShipmentId);
+            Assert.IsNotNull(restoredShipment, "the restored shipment must exist");
+            Assert.AreEqual(LogisticsShipmentStatus.Loading, restoredShipment.Status, "the restored shipment is still Loading");
+            Assert.IsTrue(!restoredShipment.loadApplied, "the restored shipment has not applied the load yet");
+            Assert.IsTrue(!restoredShipment.sourceLotDebitApplied, "the restored shipment has not debited the source lot yet");
+
+            // Resume: finish the load on the restored shipment with
+            // fresh hooks over the target scenario (calendar wired, so
+            // the post-restore release takes the fallback label lookup —
+            // the service-side reservation map was cleared on restore).
+            FreightShipmentHooks restoreHooks = BuildQ04FreightHooks(target);
+            restoreHooks.Schedules = target.Schedules;
+            restoreHooks.MinuteOfDay = 480;
+            int guard = 0;
+            while (!restoredShipment.loadApplied && guard++ < 10)
+                Assert.IsTrue(target.FreightDriver.Service.WorkLoading(restoredShipment, 60, restoreHooks, out string resumeReason),
+                    "the resumed load must work: " + resumeReason);
+            Assert.IsTrue(restoredShipment.loadApplied, "the resumed load must apply");
+            Assert.IsTrue(restoredShipment.sourceLotDebitApplied, "the resumed load must debit the source lot");
+            Assert.AreEqual(0, target.SourceLotStock[Q04MillbrookLotId],
+                "the resumed load must debit the 16-sack source lot exactly once to 0");
+
+            // Dispatch and transit to Arrived on the restored shipment.
+            Assert.IsTrue(target.FreightDriver.Service.Dispatch(restoredShipment, EntityId.For(EntityKind.Person, 702),
+                null, restoreHooks, out string dispatchReason), "dispatch must succeed after resume: " + dispatchReason);
+            restoredShipment.transitDurationGameSeconds = 200f;
+            target.FreightDriver.Service.AdvanceTransit(restoredShipment, 200f, restoreHooks);
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, restoredShipment.Status, "the resumed shipment must reach Arrived");
+
+            // Loader free: the task is Complete with all 15 minutes
+            // worked, and no open task remains for the freight owner.
+            WorkTask finishedTask = target.Tasks.FindTask(source.TaskId);
+            Assert.IsNotNull(finishedTask, "the finished load task must still exist");
+            Assert.AreEqual(TaskStatus.Complete, finishedTask.Status, "the loader's task must be Complete");
+            Assert.AreEqual(15, finishedTask.MinutesWorked, "the loader's task must hold all 15 minutes worked");
+            Assert.AreEqual(0, target.Tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
+                "no open task may remain for the freight owner after the resumed load");
+
+            // Fallback release: P701 holds no active reservation under
+            // the load label once the post-restore load completes.
+            Assert.IsTrue(!target.Schedules.ActiveFor(701, Q04DayIndex)
+                .Any(r => r.Label == "freight:load:" + Q04ShipmentId),
+                "P701 must hold no active reservation under the load label after the resumed load completes");
+        }
+
+        // Slice A3b (QA-30): the Delayed safety net. Restore a mid-load
+        // driver DTO into a fresh TaskAuthority with no tasks at all:
+        // neither the registered-task lookup nor the definition fallback
+        // can find a load task, so the shipment must be Delayed with a
+        // named reason and resumeState Planned — never left stalling in
+        // Loading with a null rebind.
+        [Test]
+        public void Q04_RestoreWithMissingLoadTask_MarksDelayedWithNamedReason()
+        {
+            Q04Scenario source = BuildQ04SourceScenario(completeLoad: false);
+            FreightShipmentService.FreightServiceSaveDto dto = source.FreightDriver.CaptureSaveDto();
+            Assert.IsNotNull(dto, "the driver DTO must capture");
+            Assert.IsTrue(dto.ShipmentIdsWithLoadTasks.Contains(Q04ShipmentId),
+                "the mid-load DTO must list the shipment as having a load task");
+
+            Q04Scenario target = NewQ04Scenario();
+            FreightShipmentHooks targetHooks = BuildQ04FreightHooks(target);
+            targetHooks.Schedules = target.Schedules;
+            targetHooks.MinuteOfDay = 480;
+            List<string> diag = new List<string>();
+            target.FreightDriver.RestoreSaveDto(dto, targetHooks, diag);
+
+            LogisticsShipmentState restored = target.FreightDriver.AllShipments()
+                .FirstOrDefault(sh => sh.ShipmentId == Q04ShipmentId);
+            Assert.IsNotNull(restored, "the restored shipment must exist");
+            Assert.AreEqual(LogisticsShipmentStatus.Delayed, restored.Status,
+                "a shipment whose load task cannot be re-bound must be Delayed, not left stalling in Loading");
+            Assert.IsTrue(restored.BlockedReason.Contains("load task"),
+                "the delay reason must name the load task; reason: " + restored.BlockedReason);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, restored.resumeStateAfterDelay,
+                "the delayed shipment must resume to Planned for a fresh load attempt");
+
+            // Slice A3b follow-up nit (a): the Delayed net must log to the
+            // hooks diagnostics, like every other MarkDelayed site in the
+            // service — a silent delay leaves no trace for the operator.
+            Assert.IsTrue(targetHooks.Diagnostics.Any(d => d.Contains(Q04ShipmentId) && d.Contains("delayed")),
+                "the load Delayed net must log to hooks diagnostics; diag: " + string.Join("; ", targetHooks.Diagnostics));
+        }
+
+        // Slice A3b follow-up nit (b): a registered dispatch task in
+        // ReworkRequired must NOT bind as the load task on restore.
+        // ReworkRequired is terminal for the instance (TaskModels.cs:
+        // "failed work that needs a corrective task. Terminal for this
+        // instance"), so adopting it would bind a dead task and stall the
+        // shipment in Loading with a non-null rebind — the exact stall
+        // the Delayed net exists to prevent. The restore must reject
+        // the dead task through BOTH lookups (the registered lookup and
+        // the definition fallback, which only excludes Complete) and
+        // Delay the shipment with a named reason and resumeState Planned.
+        [Test]
+        public void Q04_RestoreWithReworkRequiredLoadTask_RejectsBindingAndDelays()
+        {
+            Q04Scenario source = BuildQ04SourceScenario(completeLoad: false);
+            Q04Captured captured = CaptureQ04Scenario(source);
+            FreightShipmentService.FreightServiceSaveDto dto = source.FreightDriver.CaptureSaveDto();
+            Assert.IsTrue(dto.ShipmentIdsWithLoadTasks.Contains(Q04ShipmentId),
+                "the mid-load DTO must list the shipment as having a load task");
+
+            Q04Scenario target = NewQ04Scenario();
+            // The direct driver restore below restores freight only, not
+            // the task authority: load the source tasks (including the
+            // adopted InProgress load task) into the target authority
+            // first, exactly as RestoreQ04Scenario does for the full
+            // scenario. Without this the registered lookup has no task
+            // to find at all and the test proves nothing.
+            target.Tasks.LoadFromSaveDto(captured.Tasks);
+            WorkTask precheck = target.Tasks.FindTask(source.TaskId);
+            Assert.IsNotNull(precheck, "the adopted load task must load into the target authority");
+            Assert.AreEqual(TaskStatus.InProgress, precheck.Status, "the loaded task is InProgress before the first restore");
+            FreightShipmentHooks targetHooks = BuildQ04FreightHooks(target);
+            targetHooks.Schedules = target.Schedules;
+            targetHooks.MinuteOfDay = 480;
+            List<string> diag = new List<string>();
+            target.FreightDriver.RestoreSaveDto(dto, targetHooks, diag);
+
+            // First restore binds the adopted task, still InProgress.
+            WorkTask bound = target.Tasks.FindTask(source.TaskId);
+            Assert.IsNotNull(bound, "the adopted load task must bind on the first restore");
+            Assert.AreEqual(TaskStatus.InProgress, bound.Status, "the bound task is InProgress before failing it");
+
+            // Fail the load, then mark rework: Failed -> ReworkRequired
+            // is the only transition into ReworkRequired (policy table).
+            Assert.IsTrue(target.Tasks.CompleteTask(source.TaskId, TaskOutcome.RecoverableFailure, Q04DayIndex, target.Budgets),
+                "the adopted task must fail in the fixture");
+            Assert.AreEqual(TaskStatus.Failed, bound.Status, "the task is Failed after the failure outcome");
+            Assert.IsTrue(target.Tasks.MarkReworkRequired(source.TaskId, default(EntityId), "fixture: load failed, rework required", out string rej), rej);
+            Assert.AreEqual(TaskStatus.ReworkRequired, bound.Status, "the task is ReworkRequired before the second restore");
+
+            // Second restore of the same DTO over the same task authority:
+            // the registered lookup finds the dead task and must reject
+            // it, and the definition fallback must not re-bind it either.
+            List<string> diag2 = new List<string>();
+            target.FreightDriver.RestoreSaveDto(dto, targetHooks, diag2);
+            LogisticsShipmentState restored = target.FreightDriver.AllShipments()
+                .FirstOrDefault(sh => sh.ShipmentId == Q04ShipmentId);
+            Assert.IsNotNull(restored, "the restored shipment must exist after the second restore");
+            Assert.AreEqual(LogisticsShipmentStatus.Delayed, restored.Status,
+                "a shipment whose only load task is ReworkRequired must be Delayed, not left stalling in Loading");
+            Assert.IsTrue(restored.BlockedReason.Contains("load task"),
+                "the delay reason must name the load task; reason: " + restored.BlockedReason);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, restored.resumeStateAfterDelay,
+                "the delayed shipment must resume to Planned for a fresh load attempt");
+            FreightShipmentService.FreightServiceSaveDto recaptured = target.FreightDriver.CaptureSaveDto();
+            Assert.IsTrue(!recaptured.ShipmentIdsWithLoadTasks.Contains(Q04ShipmentId),
+                "no load-task binding may survive for the ReworkRequired task");
         }
     }
 }

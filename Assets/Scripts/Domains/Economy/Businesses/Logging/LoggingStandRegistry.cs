@@ -59,6 +59,18 @@ namespace LandLedgers.Economy.Businesses.Logging
         public IReadOnlyList<TimberRightsGrant> RightsGrants => rightsGrants;
         public int StandCount => stands.Count;
 
+        /// <summary>
+        /// Note-112 Finding 1 follow-up (plan 29, note 118 C2): the trigger
+        /// for re-applying the felling config after the Pass 9 restore. The
+        /// restored registry is empty AND stands were authored in config —
+        /// an empty registry with no authored stands is the correct state,
+        /// not a wipe, so it must not trigger. The bootstrapper reads the
+        /// authored count from config (the registry must not); this method
+        /// owns only the registry half of the decision.
+        /// </summary>
+        public bool NeedsFellingConfigReapply(int authoredStandCount) =>
+            StandCount == 0 && authoredStandCount > 0;
+
         /// <summary>Registers an authored stand. Duplicates and blank ids are refused loudly.</summary>
         public string RegisterStand(TimberStand stand)
         {
@@ -225,6 +237,7 @@ namespace LandLedgers.Economy.Businesses.Logging
                     TimberRightsHolderId = stand.TimberRightsHolderId,
                     Species = stand.Species,
                     KilogramsPerLog = stand.KilogramsPerLog,
+                    MilesToMill = stand.MilesToMill,
                     StandingTimberUnits = stand.StandingTimberUnits,
                     LastFelledDayIndex = stand.LastFelledDayIndex,
                 });

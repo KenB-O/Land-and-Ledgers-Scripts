@@ -15,7 +15,7 @@ namespace LandLedgers.Tests.World
 {
     public sealed class RegionalItemOrderingTests
     {
-        private sealed class ItemStorePort : IItemLevelGeneralStoreTradingPort
+        private sealed class ItemStorePort : IItemLevelGeneralStoreTradingPort, IPaidStoreReceivingPort
         {
             public string StoreBusinessId { get; set; } = "general-store-1";
             public string StoreName { get; set; } = "General Store";
@@ -69,6 +69,28 @@ namespace LandLedgers.Tests.World
             public string ReceiveStock(string categoryId, int units, string provenanceLabel)
             {
                 Stock[categoryId] = CategoryStockUnits(categoryId) + System.Math.Max(0, units);
+                return null;
+            }
+
+            // QA-18 (2026-11-13): the overnight atomic paid-receipt gate
+            // (StoreProcurementChain.AdvanceDay) waits forever on a store
+            // port without IPaidStoreReceivingPort. This fixture implements
+            // it by delegating to the existing SpendCash + ReceiveStock:
+            // validate first, then move cash and stock together, so a
+            // refusal leaves both unchanged. ItemId arrives empty for this
+            // port (it implements neither IItemLevelRestockTradingPort nor
+            // IIdentifiedRetailStockReceivingPort), and the store's offers
+            // are pooled (UsesItemLevelInventory false), so the category
+            // pool is the item stock — there is no separate item-stock
+            // dictionary to credit.
+            public string ReceivePaidStock(string lotId, string itemId, string categoryId, string unitLabel,
+                int units, int costCents, string provenance, int dayIndex)
+            {
+                if (units <= 0 || costCents < 0) return "Invalid paid receipt quantity or cost.";
+                if (CashBalance < costCents) return "Store cannot afford " + costCents + "c for the receipt.";
+                string spendProblem = SpendCash(costCents, "regional receipt " + lotId);
+                if (spendProblem != null) return spendProblem;
+                ReceiveStock(categoryId, units, provenance);
                 return null;
             }
             public int CategoryReceivableUnits(string categoryId) => int.MaxValue;

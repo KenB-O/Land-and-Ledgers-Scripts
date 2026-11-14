@@ -615,6 +615,7 @@ namespace LandLedgers.Orchestration.Player
         public bool OverSaleFlourRefused;
         public bool OverSaleBreadRefused;
         public bool OverSaleFuelRefused;
+        public bool Succeeded;
         public bool ConsumptionRestoredCountMatches;
         public bool SuppressMigrantArrivalsRestored;
         public List<string> SeamsStopped = new List<string>();
@@ -626,8 +627,9 @@ namespace LandLedgers.Orchestration.Player
     /// test parameters. Business seeds are labelled owner-equity run
     /// inputs (seed amounts are caller-supplied test inputs, variable
     /// between runs, not canon); households start at 0 in this run and
-    /// earn only through draws and sales in this run. Returns null
-    /// only when a step that must succeed fails; diagnostics say why.
+    /// earn only through draws and sales in this run. Returns the report
+    /// on every path; Succeeded is false on any failure path and the
+    /// Diagnostics list says why. Never returns null.
     /// </summary>
     public static class ThreeBusinessSliceRun
     {
@@ -712,7 +714,7 @@ namespace LandLedgers.Orchestration.Player
                 || SliceWorkAndPay.RecordOwnerLabour(5, "boniecki-fuel-dealer-1", startDay, 7).WageCents != 0)
             {
                 report.Diagnostics.Add("Run failed: owner labour carried a wage.");
-                return null;
+                return report;
             }
 
             // Fuel chain, day 0: stand, rights, fell, haul, saw, transfer.
@@ -725,9 +727,9 @@ namespace LandLedgers.Orchestration.Player
                 Species = "white pine",
                 StandingTimberUnits = 10,
             });
-            if (standProblem != null) { report.Diagnostics.Add("Run failed: stand registration refused: " + standProblem); return null; }
+            if (standProblem != null) { report.Diagnostics.Add("Run failed: stand registration refused: " + standProblem); return report; }
             string grantProblem = registry.GrantTimberRights("stand-slice-1", "boniecki-fuel-dealer-1", startDay, "town-land-office");
-            if (grantProblem != null) { report.Diagnostics.Add("Run failed: timber rights grant refused: " + grantProblem); return null; }
+            if (grantProblem != null) { report.Diagnostics.Add("Run failed: timber rights grant refused: " + grantProblem); return report; }
             var logging = new LoggingOperationRuntime("boniecki-fuel-dealer-1", ids);
             var fellingTools = new EquipmentTaskGate
             {
@@ -745,37 +747,38 @@ namespace LandLedgers.Orchestration.Player
             };
             LogLot felled = logging.RunFelling(registry, "stand-slice-1", "boniecki-fuel-dealer-1", 4,
                 EntityId.For(EntityKind.Person, 5), startDay, diag, fellingTools);
-            if (felled == null) { report.Diagnostics.Add("Run failed: felling refused."); report.Diagnostics.AddRange(diag); return null; }
+            if (felled == null) { report.Diagnostics.Add("Run failed: felling refused."); report.Diagnostics.AddRange(diag); return report; }
             var journey = new JourneyModel();
             journey.RegisterLocation(new JourneyLocation("landing-1", JourneyLocationKind.Waypoint, "North Landing", 2f, 0f));
             journey.RegisterLocation(new JourneyLocation("mill-1-yard", JourneyLocationKind.Mill, "Local Sawmill", 0f, 0f) { BusinessId = "slice-mill-1" });
             journey.AddEdge("landing-1", "mill-1-yard", 2f, "river road");
-            LogHaul haul = logging.DispatchLogHaul(felled.LotId, "slice-mill-1", "mill-1-yard", journey, "landing-1", startDay, diag);
-            if (haul == null) { report.Diagnostics.Add("Run failed: log haul refused."); report.Diagnostics.AddRange(diag); return null; }
-            logging.AdvanceHauls(1000, diag);
             var mill = new SawmillShopRuntime("slice-mill-1", ids);
-            logging.DeliverArrivedHauls(mill.LogStock, diag);
-            if (mill.LogStock.TotalLogUnits != 4) { report.Diagnostics.Add($"Run failed: mill log stock is {mill.LogStock.TotalLogUnits}, expected 4."); report.Diagnostics.AddRange(diag); return null; }
+            // One wagon-load moves 1 log (300 kg/log vs 450 kg capacity),
+            // so 4 logs need up to 4 explicit trips. Each successful
+            // dispatch moves >= 1 unit and shrinks the landing lot, so
+            // the loop terminates; the bound of 10 is slack, not a tuned
+            // value. A refused dispatch fails loudly with diagnostics.
+            int haulTrips = 0;
+            while (mill.LogStock.TotalLogUnits < 4 && haulTrips < 10)
+            {
+                haulTrips++;
+                LogHaul haul = logging.DispatchLogHaul(felled.LotId, "slice-mill-1", "mill-1-yard", journey, "landing-1", startDay, diag);
+                if (haul == null) { report.Diagnostics.Add("Run failed: log haul refused."); report.Diagnostics.AddRange(diag); return report; }
+                logging.AdvanceHauls(1000, diag);
+                logging.DeliverArrivedHauls(mill.LogStock, diag);
+            }
+            if (mill.LogStock.TotalLogUnits != 4) { report.Diagnostics.Add($"Run failed: mill log stock is {mill.LogStock.TotalLogUnits}, expected 4 after {haulTrips} haul trip(s)."); report.Diagnostics.AddRange(diag); return report; }
             EntityId sawyer = EntityId.For(EntityKind.Person, 5);
             var sawTasks = new TaskAuthority();
             Sawmill.RegisterTaskDefinitions(sawTasks);
             var sawBudgets = new WorkTimeBudgetStore();
             sawBudgets.EnsureDay(startDay);
-            var sawTask = sawTasks.CreateTaskWithPlannedMinutes(Sawmill.SawLogsTaskId,
-                EntityId.For(EntityKind.Business, 6), startDay, 4 * SawmillConversionData.DefaultForSpecies("white pine").SawMinutesPerLog);
-            string sawAssignFailure = null;
-            string sawStartFailure = null;
-            string sawWorkFailure = null;
-            if (!sawTasks.AssignTask(sawTask.TaskId, sawyer, sawBudgets, startDay, out sawAssignFailure)
-                || !sawTasks.StartTask(sawTask.TaskId, startDay, out sawStartFailure)
-                || !sawTasks.RecordWorkProgress(sawTask.TaskId, sawTask.PlannedMinutes, sawBudgets, startDay,
-                    out bool sawWorkComplete, out sawWorkFailure)
-                || !sawWorkComplete)
-            {
-                report.Diagnostics.Add("Run failed: saw-line labor did not complete: "
-                    + (sawAssignFailure ?? sawStartFailure ?? sawWorkFailure ?? "planned simulated work remains."));
-                return null;
-            }
+            // One saw-logs task per log, created in the sawing loop below:
+            // each mill lot holds a single log (one wagon-load per haul),
+            // and SawmillLogStock refuses a run larger than the oldest lot,
+            // so the 4 logs are sawn one at a time ("request the remainder
+            // separately"). Total labor and blade wear equal the single
+            // 4-log run; each RunSawing call completes its own task.
             var sawStations = new BusinessWorkstations("slice-mill-1");
             var sawStation = sawStations.GetOrCreate("sawmill-saw-line");
             sawStation.SpaceId = "slice-mill-saw-floor";
@@ -802,17 +805,38 @@ namespace LandLedgers.Orchestration.Player
                     return support;
                 },
             };
-            SawmillSawingResult sawing = mill.RunSawing(4, sawyer, startDay, diag,
-                sawTasks, sawTask.TaskId, sawBudgets, sawGate);
-            if (sawing == null || sawing.ByproductLot == null) { report.Diagnostics.Add("Run failed: sawing refused."); report.Diagnostics.AddRange(diag); return null; }
-            report.FuelWoodUnitsProduced = sawing.ByproductLot.FuelWoodUnits;
+            int sawingRuns = 0;
+            int sawMinutesPerLog = SawmillConversionData.DefaultForSpecies("white pine").SawMinutesPerLog;
+            for (int logIndex = 0; logIndex < 4; logIndex++)
+            {
+                var sawTask = sawTasks.CreateTaskWithPlannedMinutes(Sawmill.SawLogsTaskId,
+                    EntityId.For(EntityKind.Business, 6), startDay, sawMinutesPerLog);
+                string sawAssignFailure = null;
+                string sawStartFailure = null;
+                string sawWorkFailure = null;
+                if (!sawTasks.AssignTask(sawTask.TaskId, sawyer, sawBudgets, startDay, out sawAssignFailure)
+                    || !sawTasks.StartTask(sawTask.TaskId, startDay, out sawStartFailure)
+                    || !sawTasks.RecordWorkProgress(sawTask.TaskId, sawTask.PlannedMinutes, sawBudgets, startDay,
+                        out bool sawWorkComplete, out sawWorkFailure)
+                    || !sawWorkComplete)
+                {
+                    report.Diagnostics.Add("Run failed: saw-line labor did not complete: "
+                        + (sawAssignFailure ?? sawStartFailure ?? sawWorkFailure ?? "planned simulated work remains."));
+                    return report;
+                }
+                SawmillSawingResult sawing = mill.RunSawing(1, sawyer, startDay, diag,
+                    sawTasks, sawTask.TaskId, sawBudgets, sawGate);
+                if (sawing == null || sawing.ByproductLot == null) { report.Diagnostics.Add("Run failed: sawing refused."); report.Diagnostics.AddRange(diag); return report; }
+                report.FuelWoodUnitsProduced += sawing.ByproductLot.FuelWoodUnits;
+                sawingRuns++;
+            }
             var intake = new FuelYardByproductIntake();
             int transferred = mill.TransferByproductsToFuelDealer("boniecki-fuel-dealer-1", intake, diag);
-            if (transferred != 1 || intake.TotalFuelWoodUnitsFor("boniecki-fuel-dealer-1") != report.FuelWoodUnitsProduced)
+            if (transferred != sawingRuns || intake.TotalFuelWoodUnitsFor("boniecki-fuel-dealer-1") != report.FuelWoodUnitsProduced)
             {
                 report.Diagnostics.Add($"Run failed: byproduct transfer moved {transferred} lot(s), intake holds {intake.TotalFuelWoodUnitsFor("boniecki-fuel-dealer-1")}u, produced {report.FuelWoodUnitsProduced}u.");
                 report.Diagnostics.AddRange(diag);
-                return null;
+                return report;
             }
 
             // Fuel dealer -> bakery (business to business, paid).
@@ -820,7 +844,7 @@ namespace LandLedgers.Orchestration.Player
             ThreeBusinessFuelSaleResult fuelToBakery = ThreeBusinessSlice.SellFuelToBakery(
                 intake, "boniecki-fuel-dealer-1", fuelRuntime, bakery, bakeryRuntime, ids,
                 bakeryFuelUnits, bakeryFuelPriceCents, startDay, diag);
-            if (!fuelToBakery.Success) { report.Diagnostics.Add("Run failed: fuel to bakery refused: " + fuelToBakery.Diagnostic); return null; }
+            if (!fuelToBakery.Success) { report.Diagnostics.Add("Run failed: fuel to bakery refused: " + fuelToBakery.Diagnostic); return report; }
 
             // General Store order, arrival day 3.
             var market = new ExternalMarketAuthority();
@@ -833,59 +857,59 @@ namespace LandLedgers.Orchestration.Player
             };
             supplier.SupplyUnits["flour"] = marketSupplyUnits;
             string supplierProblem = market.RegisterCounterparty(supplier);
-            if (supplierProblem != null) { report.Diagnostics.Add("Run failed: supplier registration refused: " + supplierProblem); return null; }
+            if (supplierProblem != null) { report.Diagnostics.Add("Run failed: supplier registration refused: " + supplierProblem); return report; }
             var storeCash = new BusinessRuntimeCashPort(store);
             var service = new OffMapNamedSkuProcurementService("general-store-1", market, storeCash);
             NamedSkuOrder order = service.PlaceOrder("flour", orderUnits, unitGoodsCostCents, freightSurchargeCents,
                 "test-grain", startDay, NamedSkuPaymentMode.CashOnArrival, null);
-            if (order == null) { report.Diagnostics.Add("Run failed: flour order refused."); report.Diagnostics.AddRange(service.Diagnostics); return null; }
+            if (order == null) { report.Diagnostics.Add("Run failed: flour order refused."); report.Diagnostics.AddRange(service.Diagnostics); return report; }
             List<NamedSkuLot> arrived = service.ReceiveArrivals(order.ExpectedArrivalDayIndex, null);
-            if (arrived.Count != 1) { report.Diagnostics.Add($"Run failed: expected 1 flour lot on arrival, got {arrived.Count}."); return null; }
+            if (arrived.Count != 1) { report.Diagnostics.Add($"Run failed: expected 1 flour lot on arrival, got {arrived.Count}."); return report; }
 
             // Day-to-day owner draws fund the households; no household input.
             SliceOwnerDrawResult kennedyDraw = SliceWorkAndPay.DrawDaily(store, baldwin, arrivalDay, kennedyDrawCents, storeReserveCents);
-            if (!kennedyDraw.Success) { report.Diagnostics.Add("Run failed: Kennedy day-draw refused: " + kennedyDraw.Diagnostic); return null; }
+            if (!kennedyDraw.Success) { report.Diagnostics.Add("Run failed: Kennedy day-draw refused: " + kennedyDraw.Diagnostic); return report; }
             OffMapNamedSkuProcurementService.NamedSkuDeliveryResult flourSale =
                 service.SellAndDeliverToInventory(baldwin, baldwinInv, 1, 1, "person:1",
                     "flour", storeFlourSaleUnits, storeFlourSalePriceCents, arrivalDay);
-            if (flourSale == null || !flourSale.Success) { report.Diagnostics.Add("Run failed: Baldwin-Ooms flour sale refused: " + (flourSale != null ? flourSale.Diagnostic : "null")); return null; }
+            if (flourSale == null || !flourSale.Success) { report.Diagnostics.Add("Run failed: Baldwin-Ooms flour sale refused: " + (flourSale != null ? flourSale.Diagnostic : "null")); return report; }
 
             // Bakery feed: paid inter-business sale, then notions input, then bake.
             string feedProblem = ThreeBusinessSlice.FeedBakeryFromStore(
                 service, store, bakery, bakeryRuntime, ids,
                 "flour", feedStoreUnits, 1, feedPriceCents, arrivalDay, diag);
-            if (feedProblem != null) { report.Diagnostics.Add("Run failed: bakery feed refused: " + feedProblem); return null; }
+            if (feedProblem != null) { report.Diagnostics.Add("Run failed: bakery feed refused: " + feedProblem); return report; }
             string notionsProblem = BakeryFlourSupply.ReceiveImportArrival(
                 bakery.FlourStock, BakeryBreadCatalog.NotionsItemId, notionsInputUnits,
                 "passxl-phase8-notions-input", "off-map notions supplier (test parameter, not a registered supplier)",
                 arrivalDay, ids, diag);
-            if (notionsProblem != null) { report.Diagnostics.Add("Run failed: notions input refused: " + notionsProblem); return null; }
+            if (notionsProblem != null) { report.Diagnostics.Add("Run failed: notions input refused: " + notionsProblem); return report; }
             SliceOwnerDrawResult glenDraw = SliceWorkAndPay.DrawDaily(bakeryRuntime, pierce, arrivalDay, glenDrawCents, bakeryReserveCents);
-            if (!glenDraw.Success) { report.Diagnostics.Add("Run failed: Glen day-draw refused: " + glenDraw.Diagnostic); return null; }
+            if (!glenDraw.Success) { report.Diagnostics.Add("Run failed: Glen day-draw refused: " + glenDraw.Diagnostic); return report; }
             SliceOwnerDrawResult jacobDraw = SliceWorkAndPay.DrawDaily(fuelRuntime, boniecki, arrivalDay, jacobDrawCents, fuelReserveCents);
-            if (!jacobDraw.Success) { report.Diagnostics.Add("Run failed: Jacob day-draw refused: " + jacobDraw.Diagnostic); return null; }
+            if (!jacobDraw.Success) { report.Diagnostics.Add("Run failed: Jacob day-draw refused: " + jacobDraw.Diagnostic); return report; }
             string ovenProblem = bakery.AddOven("bakehouse", new List<string>
                 { "oven-chamber-1", "kneading-table-1", "proofing-rack-1", "bake-peels-1" }, diag);
-            if (ovenProblem != null) { report.Diagnostics.Add("Run failed: bakery oven install refused: " + ovenProblem); return null; }
+            if (ovenProblem != null) { report.Diagnostics.Add("Run failed: bakery oven install refused: " + ovenProblem); return report; }
             List<string> batches = bakery.PlanBatch(BakeryBreadCatalog.BreadLoafId, 1, arrivalDay, diag);
-            if (batches == null || batches.Count != 1) { report.Diagnostics.Add("Run failed: bakery batch planning refused."); report.Diagnostics.AddRange(diag); return null; }
+            if (batches == null || batches.Count != 1) { report.Diagnostics.Add("Run failed: bakery batch planning refused."); report.Diagnostics.AddRange(diag); return report; }
             int baked = bakery.WorkDay(arrivalDay, true, WorkstationCatalog.BakeOven, OvenFinder(), diag, ids);
-            if (baked != 1 || bakery.BreadShelf.Count != 1) { report.Diagnostics.Add($"Run failed: bake produced {baked} batch(es), shelf has {bakery.BreadShelf.Count} lot(s)."); report.Diagnostics.AddRange(diag); return null; }
+            if (baked != 1 || bakery.BreadShelf.Count != 1) { report.Diagnostics.Add($"Run failed: bake produced {baked} batch(es), shelf has {bakery.BreadShelf.Count} lot(s)."); report.Diagnostics.AddRange(diag); return report; }
             report.BakeryLoavesBaked = bakery.BreadShelf[0].UnitCount;
 
             // Bread sales to all three households.
             ThreeBusinessBreadSaleResult breadPierce = ThreeBusinessSlice.SellBreadToHousehold(
                 bakery, bakeryRuntime, "pierce-bakery-1", pierce, pierceInv, 2, 3,
                 BakeryBreadCatalog.BreadLoafId, breadSaleUnitsPerHousehold, arrivalDay, diag);
-            if (!breadPierce.Success) { report.Diagnostics.Add("Run failed: Pierce bread sale refused: " + breadPierce.Diagnostic); return null; }
+            if (!breadPierce.Success) { report.Diagnostics.Add("Run failed: Pierce bread sale refused: " + breadPierce.Diagnostic); return report; }
             ThreeBusinessBreadSaleResult breadBoniecki = ThreeBusinessSlice.SellBreadToHousehold(
                 bakery, bakeryRuntime, "pierce-bakery-1", boniecki, bonieckiInv, 3, 5,
                 BakeryBreadCatalog.BreadLoafId, breadSaleUnitsPerHousehold, arrivalDay, diag);
-            if (!breadBoniecki.Success) { report.Diagnostics.Add("Run failed: Boniecki bread sale refused: " + breadBoniecki.Diagnostic); return null; }
+            if (!breadBoniecki.Success) { report.Diagnostics.Add("Run failed: Boniecki bread sale refused: " + breadBoniecki.Diagnostic); return report; }
             ThreeBusinessBreadSaleResult breadBaldwin = ThreeBusinessSlice.SellBreadToHousehold(
                 bakery, bakeryRuntime, "pierce-bakery-1", baldwin, baldwinInv, 1, 1,
                 BakeryBreadCatalog.BreadLoafId, breadSaleUnitsPerHousehold, arrivalDay, diag);
-            if (!breadBaldwin.Success) { report.Diagnostics.Add("Run failed: Baldwin-Ooms bread sale refused: " + breadBaldwin.Diagnostic); return null; }
+            if (!breadBaldwin.Success) { report.Diagnostics.Add("Run failed: Baldwin-Ooms bread sale refused: " + breadBaldwin.Diagnostic); return report; }
             report.BakeryLoavesRemaining = 0;
             foreach (var lot in bakery.BreadShelf) report.BakeryLoavesRemaining += Math.Max(0, lot.UnitCount);
 
@@ -893,7 +917,7 @@ namespace LandLedgers.Orchestration.Player
             ThreeBusinessFuelSaleResult fuelSale = ThreeBusinessSlice.SellFuelToHousehold(
                 intake, "boniecki-fuel-dealer-1", fuelRuntime, baldwin, baldwinInv, 1, 1,
                 fuelHouseholdUnits, fuelHouseholdPriceCents, arrivalDay, diag);
-            if (!fuelSale.Success) { report.Diagnostics.Add("Run failed: household fuel sale refused: " + fuelSale.Diagnostic); return null; }
+            if (!fuelSale.Success) { report.Diagnostics.Add("Run failed: household fuel sale refused: " + fuelSale.Diagnostic); return report; }
 
             // Meals, day 3, all three households, from real inventory.
             var mealLog = new HouseholdMealLogRegistry();
@@ -939,7 +963,7 @@ namespace LandLedgers.Orchestration.Player
             if (!kennedyFinal.Success || !glenFinal.Success || !jacobFinal.Success)
             {
                 report.Diagnostics.Add("Run failed: a final day-draw was refused.");
-                return null;
+                return report;
             }
 
             // Slice gate survives in the save DTO (phase 2 pattern).
@@ -965,6 +989,7 @@ namespace LandLedgers.Orchestration.Player
             report.FuelIntakeRemaining = intake.TotalFuelWoodUnitsFor("boniecki-fuel-dealer-1");
             report.Diagnostics.AddRange(diag);
             report.Diagnostics.AddRange(service.Diagnostics);
+            report.Succeeded = true;
             return report;
         }
     }

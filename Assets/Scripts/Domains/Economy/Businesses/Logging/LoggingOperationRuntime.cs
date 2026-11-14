@@ -43,6 +43,7 @@ namespace LandLedgers.Economy.Businesses.Logging
         private readonly List<string> diagnostics = new List<string>();
         private string businessInstanceId;
         private readonly EntityIdRegistry idRegistry;
+        private readonly LogLotCustodyLedger ledger;
         private readonly List<LogLot> landingStock = new List<LogLot>(); // felled lots staged at the landing
         private readonly List<LogHaul> hauls = new List<LogHaul>(); // active + recently finished hauls
 
@@ -81,13 +82,19 @@ namespace LandLedgers.Economy.Businesses.Logging
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public string BusinessInstanceId => businessInstanceId;
+        public LogLotCustodyLedger Ledger => ledger;
         public IReadOnlyList<LogLot> LandingStock => landingStock;
         public IReadOnlyList<LogHaul> Hauls => hauls;
 
-        public LoggingOperationRuntime(string businessInstanceId, EntityIdRegistry idRegistry)
+        public LoggingOperationRuntime(string businessInstanceId, EntityIdRegistry idRegistry, LogLotCustodyLedger ledger = null)
         {
             this.businessInstanceId = businessInstanceId ?? string.Empty;
             this.idRegistry = idRegistry;
+            this.ledger = ledger;
+            if (ledger == null)
+            {
+                diagnostics.Add("LoggingOperationRuntime: no custody ledger — felled lots are not registered; felling, dispatch and delivery proceed.");
+            }
         }
 
         public int LandingLogUnits
@@ -157,6 +164,27 @@ namespace LandLedgers.Economy.Businesses.Logging
             if (lot == null) return null; // rights gate or stand gate refused — logged there
 
             landingStock.Add(lot);
+
+            // Registration producer (plan 26): register the felled lot at
+            // the felling choke point, with the stand's LocationId as the
+            // harvest location (note 96 ruling) and the felling holder as
+            // custodian. A registration refusal is diagnostic-only: the lot
+            // stays staged and felling is never undone.
+            if (ledger != null)
+            {
+                TimberStand stand = registry.GetStand(lot.StandId);
+                if (stand == null)
+                {
+                    diag.Add($"LoggingOperationRuntime: lot '{lot.LotId}' — no stand record for '{lot.StandId}'; the lot is staged unregistered.");
+                }
+                else
+                {
+                    string registerRefusal = ledger.RegisterLot(lot, stand.LocationId, lot.OwnerId, string.Empty, dayIndex);
+                    if (registerRefusal != null)
+                        diag.Add(registerRefusal);
+                }
+            }
+
             diag.Add($"LoggingOperationRuntime: felled {lot.LogUnits} logs from stand '{lot.StandId}' " +
                 $"(lot {lot.LotId}) — staged at the landing with provenance.");
             return lot;
@@ -256,19 +284,66 @@ namespace LandLedgers.Economy.Businesses.Logging
                 diag.Add($"LoggingOperationRuntime: lot {haul.Lot.LotId} carries {hauledUnits} log unit(s) ({hauledMass:0.##} kg); {lot.LogUnits} unit(s) remain at the landing within the wagon's {LogHaul.WagonCargoCapacityKg:0.##} kg limit.");
             }
             hauls.Add(haul);
+
+            // Registration producer (plan 26): drive Collect + Load for
+            // the dispatched cargo. The cargo carries a fresh id when the
+            // lot was split, so register it first under that id, reading
+            // the harvest location from the original record. A refusal is
+            // diagnostic-only: the haul still dispatches.
+            if (ledger != null)
+            {
+                string cargoLotId = haul.Lot.LotId.ToString();
+                string originalLotId = lot.LotId.ToString();
+                if (!string.Equals(cargoLotId, originalLotId, StringComparison.Ordinal))
+                {
+                    LogLotCustodyRecord original = ledger.GetLot(originalLotId);
+                    string harvestLocationId = original == null ? null : original.HarvestLocationId;
+                    if (string.IsNullOrWhiteSpace(harvestLocationId))
+                    {
+                        diag.Add($"LoggingOperationRuntime: lot '{cargoLotId}' — no harvest location on record for the original lot; the cargo lot is dispatched unregistered.");
+                    }
+                    else
+                    {
+                        string cargoRefusal = ledger.RegisterLot(haul.Lot, harvestLocationId, haul.Lot.OwnerId, string.Empty, dayIndex);
+                        if (cargoRefusal != null)
+                            diag.Add(cargoRefusal);
+                    }
+                }
+                string collectRefusal;
+                if (!ledger.CollectLot(cargoLotId, businessInstanceId, dayIndex, out collectRefusal) && collectRefusal != null)
+                    diag.Add(collectRefusal);
+                string loadRefusal = ledger.LoadLot(cargoLotId, businessInstanceId, dayIndex);
+                if (loadRefusal != null)
+                    diag.Add(loadRefusal);
+            }
+
             diag.Add($"LoggingOperationRuntime: lot {lot.LotId} dispatched — the haul holds it now, " +
                 "not the landing.");
             return haul;
         }
 
-        /// <summary>Advances all active hauls by whole minutes (Loading -> InTransit -> Arrived).</summary>
-        public void AdvanceHauls(int minutes, List<string> diag)
+        /// <summary>
+        /// Advances all active hauls by whole minutes (Loading -> InTransit -> Arrived).
+        /// Registration producer (plan 26): records the Loading -> InTransit
+        /// flip in the custody ledger. The day is an optional parameter
+        /// because neither the runtime nor the haul holds one; -1 is the
+        /// record's unset value. A refusal is diagnostic-only — the wagon
+        /// is already on the road.
+        /// </summary>
+        public void AdvanceHauls(int minutes, List<string> diag, int dayIndex = -1)
         {
             diag = diag ?? diagnostics;
             foreach (var haul in hauls)
             {
-                if (haul != null && haul.IsActive)
-                    haul.AdvanceMinutes(minutes, diag);
+                if (haul == null || !haul.IsActive) continue;
+                LogHaulStatus before = haul.Status;
+                haul.AdvanceMinutes(minutes, diag);
+                if (ledger != null && before == LogHaulStatus.Loading && haul.Status != LogHaulStatus.Loading)
+                {
+                    string refusal = ledger.MarkInTransit(haul.Lot.LotId.ToString(), businessInstanceId, dayIndex);
+                    if (refusal != null)
+                        diag.Add(refusal);
+                }
             }
         }
 
@@ -276,15 +351,26 @@ namespace LandLedgers.Economy.Businesses.Logging
         /// Delivers every arrived haul into the mill's log stock — custody
         /// transfers through the W4A provenance gate (anonymous lots refused
         /// loudly; refused lots stay on the wagon, never dropped).
+        /// Registration producer (plan 26): records Delivered in the custody
+        /// ledger, from the runtime side, only after ReceiveLogLot succeeds
+        /// — never before, never on refusal. The day is an optional
+        /// parameter; the live daily driver passes its day index.
         /// </summary>
-        public void DeliverArrivedHauls(SawmillLogStock millStock, List<string> diag)
+        public void DeliverArrivedHauls(SawmillLogStock millStock, List<string> diag, int dayIndex = -1)
         {
             diag = diag ?? diagnostics;
             foreach (var haul in hauls)
             {
                 if (haul == null) continue;
                 if (haul.Status != LogHaulStatus.Arrived) continue;
-                haul.DeliverToMill(millStock, diag);
+                string lotId = haul.Lot == null ? null : haul.Lot.LotId.ToString();
+                string deliveryRefusal = haul.DeliverToMill(millStock, diag);
+                if (deliveryRefusal == null && haul.Status == LogHaulStatus.Delivered && ledger != null)
+                {
+                    string refusal = ledger.MarkDelivered(lotId, haul.MillBusinessId, dayIndex);
+                    if (refusal != null)
+                        diag.Add(refusal);
+                }
             }
         }
 

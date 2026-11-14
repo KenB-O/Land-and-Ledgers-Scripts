@@ -73,6 +73,14 @@ namespace LandLedgers.Tasks
         private readonly Dictionary<EntityId, List<WorkTask>> queueByOwner = new Dictionary<EntityId, List<WorkTask>>();
 
         private EntityIdRegistry idRegistry = new EntityIdRegistry();
+
+        /// <summary>
+        /// P3 (F6 production wiring): the live registry, so the bootstrapper
+        /// can pass it to the LoggingOperationRuntime constructor. Mirrors
+        /// AnimalRegistry.IdRegistry — the narrowest accessor; never construct
+        /// a second registry for production use.
+        /// </summary>
+        internal EntityIdRegistry IdRegistry => idRegistry;
         private ITaskDurationEstimator durationEstimator = new DefaultTaskDurationEstimator();
 
         /// <summary>NX-1A: optional execution gate (Canon 4.1). Null = no enforcement.</summary>

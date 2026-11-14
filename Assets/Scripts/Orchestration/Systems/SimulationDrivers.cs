@@ -7,6 +7,7 @@ using LandLedgers.Persistence;
 using LandLedgers.Economy.Delegation;
 using LandLedgers.Economy.Estates;
 using LandLedgers.Economy.Farming.Integration;
+using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Transport;
@@ -15,6 +16,9 @@ using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.FuelDealer;
 using LandLedgers.Economy.Businesses.GeneralStore;
+using LandLedgers.Economy.Businesses.Logging;
+using LandLedgers.Economy.Businesses.LumberYard;
+using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Businesses.Bakery;
@@ -350,6 +354,10 @@ namespace LandLedgers.Orchestration.Systems
         private SupplierDirectory supplierDirectory;
         private readonly HashSet<string> fuelDealerSupplierRegistrationLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> fuelDealerSupplierWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> sawmillTransferWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> sawmillProductionWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> fellingWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> logHaulWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private EmbodiedPurchaseExecutor purchaseExecutor;
         private HouseholdMembershipRegistry householdMemberships;
         private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
@@ -447,6 +455,20 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Slice C3: registers the hub-owned lumber yard in the shared
+        /// supplier directory under construction-lumber and
+        /// construction-hardware, through the yard's real stock. Mirrors
+        /// RegisterGeneralStoreSupplier; the binding is runtime state,
+        /// re-established in the restore window.
+        /// </summary>
+        public void RegisterLumberYardConstructionSuppliers(LumberYardShopRuntime yard,
+            IConstructionMaterialPricePort pricePort)
+        {
+            supplierDirectory ??= new SupplierDirectory();
+            LumberYardConstructionSupplier.RegisterIn(supplierDirectory, yard, pricePort);
+        }
+
+        /// <summary>
         /// Connects already-formed Fuel Dealer businesses to the same
         /// household supplier directory. Stock remains in the existing
         /// provenance-tracked Pass 9 fuel-yard intake; the business profile
@@ -512,6 +534,1050 @@ namespace LandLedgers.Orchestration.Systems
         {
             string key = string.IsNullOrWhiteSpace(businessId) ? "<missing>" : businessId;
             if (fuelDealerSupplierWarningsLogged.Add(key)) Debug.LogWarning("[FuelDealerSupplier] " + message, this);
+        }
+
+        /// <summary>
+        /// D1: daily sawmill-byproduct custody transfer — moves the mill's
+        /// held byproduct lots into the first formed Fuel Dealer's intake
+        /// by custody, so the bakery's paid-source builder (when D-F2
+        /// lands) sees the day's stock. First mill and first dealer only
+        /// (C2 rule); a second mill or dealer warns and gets nothing.
+        /// Custody only: never pays the mill (D-F3 open), never creates a
+        /// lot, never touches a wagon or a shipment, never reads a price.
+        /// Loud refusal (diagnostic + once-per-piece warning) when any
+        /// piece is absent — the transfer never silently no-ops. Called
+        /// from OnDayChanged immediately before
+        /// DriveBakeryWholesalePlanning.
+        /// </summary>
+        private void TransferSawmillByproductsToFuelDealer(int dayIndex)
+        {
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogSawmillTransferWarningOnce("no-business-runtime",
+                    "Sawmill byproduct transfer skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogSawmillTransferWarningOnce("no-pass9",
+                    "Sawmill byproduct transfer skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            // Empty runtime holder only. Inventory arrives solely through
+            // the existing sawmill-byproduct custody transfer; this creates
+            // no stock, cash, or transaction.
+            pass9.FuelIntake ??= new LandLedgers.Economy.Businesses.Sawmill.FuelYardByproductIntake();
+
+            BusinessInstanceState millBusiness = null;
+            BusinessInstanceState dealerBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Sawmill)
+                {
+                    if (millBusiness == null) millBusiness = business;
+                    else LogSawmillTransferWarningOnce("second-mill",
+                        $"Second Sawmill business '{business.InstanceId}' is unwired: the Pass 9 slot holds one mill only, so its byproducts are not transferred.");
+                }
+                else if (business.BusinessType == BusinessType.FuelDealer)
+                {
+                    if (dealerBusiness == null) dealerBusiness = business;
+                    else LogSawmillTransferWarningOnce("second-dealer",
+                        $"Second Fuel Dealer business '{business.InstanceId}' is unwired: the transfer feeds the first dealer only.");
+                }
+            }
+
+            // Agent 3 note 68 ruling (2): pass9.Sawmill is PRIMARY — the
+            // bootstrapper owns the holder. The hub accessor is the fallback
+            // only when the holder is null AND a Sawmill business is formed,
+            // with a warning; it creates the (empty) runtime on first use.
+            LandLedgers.Economy.Businesses.Sawmill.SawmillShopRuntime mill = pass9.Sawmill;
+            if (mill == null)
+            {
+                if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId))
+                {
+                    LogSawmillTransferWarningOnce("no-mill",
+                        "Sawmill byproduct transfer skipped: no formed Sawmill business is present in the shared runtime.");
+                    return;
+                }
+
+                LogSawmillTransferWarningOnce("holder-fallback",
+                    $"Sawmill byproduct transfer: Pass 9 mill holder is null; resolving the formed Sawmill '{millBusiness.InstanceId}' through the hub (empty runtime until the bootstrapper owns it).");
+                mill = hub.SawmillRuntimeFor(millBusiness.InstanceId);
+                if (mill == null)
+                {
+                    LogSawmillTransferWarningOnce("hub-no-mill",
+                        "Sawmill byproduct transfer skipped: hub returned no mill runtime.");
+                    return;
+                }
+            }
+
+            if (dealerBusiness == null || string.IsNullOrWhiteSpace(dealerBusiness.InstanceId))
+            {
+                LogSawmillTransferWarningOnce("no-dealer",
+                    "Sawmill byproduct transfer skipped: no formed Fuel Dealer business is present in the shared runtime.");
+                return;
+            }
+
+            var diag = new List<string>();
+            int transferred = mill.TransferByproductsToFuelDealer(dealerBusiness.InstanceId, pass9.FuelIntake, diag);
+            Debug.Log($"[SawmillTransfer] Day {dayIndex}: transferred {transferred} byproduct lot(s) from mill '{mill.BusinessInstanceId}' to FuelDealer '{dealerBusiness.InstanceId}' by custody ({string.Join("; ", diag)}).", this);
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): the daily sawmill production drive.
+        /// Delivers arrived hauls into the mill yard, re-attempts open jobs
+        /// from prior days (C7), then saws newly delivered lots whole,
+        /// filing or re-setting the blade when it gates a run. Byproducts
+        /// stay in mill.ByproductStock for the D1 transfer that follows.
+        /// Until live felling and haul dispatch land, the delivery finds
+        /// zero Arrived hauls and the yard stays empty: the chain is bound
+        /// but no logs appear.
+        /// </summary>
+        /// <summary>
+        /// A2 plan 27 (P10 live felling driver, note 110): drives the
+        /// logging camp's daily felling from OnDayChanged, before the
+        /// sawmill production driver. The camp is the designed daily
+        /// driver: it enforces the one-day-once rule, the two-person
+        /// crew, daylight, provisions, and landing caps. Scope is
+        /// felling only — felled lots reach the landing daily; dispatch
+        /// + advance is the named next slice, so the yard still does
+        /// not restock after this slice. The felling is budget-capped
+        /// (note 110 C2): June daylight allows 9 logs per team but a
+        /// feller's 600-minute day affords only 6, so logsWanted is
+        /// capped at teams x budgetCap, the cap is pre-committed
+        /// before the fell, and the remainder is released after it.
+        /// Dormant where values are absent: no camp, no registered
+        /// stand, no rights, no crew, no gate, or no provisions each
+        /// refuse loudly and fell nothing — the slice never invents
+        /// stands, provisions, or axe entries.
+        /// </summary>
+        private void DriveFelling(int absoluteDayIndex)
+        {
+            // 1. Resolve the mill and the runtime (D1 pattern,
+            // mirroring DriveSawmillProduction).
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogFellingWarningOnce("no-business-runtime",
+                    "Felling skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogFellingWarningOnce("no-pass9",
+                    "Felling skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            BusinessInstanceState millBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Sawmill)
+                {
+                    if (millBusiness == null) millBusiness = business;
+                    else LogFellingWarningOnce("second-mill",
+                        "Felling continues with the first mill; second Sawmill business '" + business.InstanceId + "' is unwired; the Pass 9 slot holds one mill only.");
+                }
+            }
+            if (millBusiness == null)
+            {
+                LogFellingWarningOnce("no-mill",
+                    "Felling skipped: no Sawmill business is present in the shared runtime.");
+                return;
+            }
+
+            LoggingStandRegistry registry = pass9.StandRegistry;
+            if (registry == null)
+            {
+                LogFellingWarningOnce("no-registry",
+                    "Felling skipped: no timber stand registry is wired on the Pass 9 state.");
+                return;
+            }
+
+            LoggingCampSite camp = pass9.LoggingCamp;
+            if (camp == null)
+            {
+                LogFellingWarningOnce("no-camp",
+                    "Felling skipped: no logging camp is wired on the Pass 9 state.");
+                return;
+            }
+
+            // 2. The camp fells its own stand. An unregistered stand
+            // refuses loudly here, never by passing an empty holder
+            // through: the rights check compares holder ids as
+            // strings, so an ungranted stand with an empty holder
+            // would pass an empty feller id.
+            string standId = camp.StandId;
+            if (registry.GetStand(standId) == null)
+            {
+                LogFellingWarningOnce("stand-not-registered",
+                    "Felling skipped: stand '" + standId + "' is not registered — stands are authored, never conjured.");
+                return;
+            }
+            string rightsHolderId = registry.CurrentRightsHolder(standId);
+            if (string.IsNullOrWhiteSpace(rightsHolderId))
+            {
+                LogFellingWarningOnce("no-rights",
+                    "Felling skipped: no timber rights are granted on stand '" + standId + "'.");
+                return;
+            }
+
+            // 3. Working loggers: the first 2 x teams rostered
+            // logger/feller entries by DayJoined (note 110 C2). A team
+            // is two loggers.
+            var loggers = new List<LoggingCampCrewEntry>();
+            foreach (LoggingCampCrewEntry entry in camp.Crew)
+            {
+                if (entry == null) continue;
+                if (!string.Equals(entry.Role, LoggingCampRoles.Logger, StringComparison.Ordinal)
+                    && !string.Equals(entry.Role, LoggingCampRoles.Feller, StringComparison.Ordinal)) continue;
+                loggers.Add(entry);
+            }
+            loggers.Sort((a, b) => a.DayJoined.CompareTo(b.DayJoined));
+            int teams = loggers.Count / 2;
+            if (teams <= 0)
+            {
+                LogFellingWarningOnce("no-crew",
+                    "Felling skipped: logging camp '" + camp.CampId + "' has no two-person felling crew rostered.");
+                return;
+            }
+            var workingLoggers = new List<EntityId>();
+            for (int i = 0; i < teams * 2; i++) workingLoggers.Add(loggers[i].Worker);
+
+            // 4. Budget cap (note 110 C2): a feller's day affords
+            // MinutesRemaining / 90 logs, so the camp can want at most
+            // teams x budgetCap logs however long the daylight is.
+            int budgetCap = int.MaxValue;
+            EntityId exhaustedLogger = EntityId.Invalid;
+            int lowestRemaining = int.MaxValue;
+            foreach (EntityId logger in workingLoggers)
+            {
+                int remaining = hub.WorkTimeBudgets.GetOrCreate(logger).MinutesRemaining;
+                if (remaining < lowestRemaining) { lowestRemaining = remaining; exhaustedLogger = logger; }
+                int cap = remaining / TimberHarvest.FellMinutesPerLog;
+                if (cap < budgetCap) budgetCap = cap;
+            }
+            if (budgetCap <= 0)
+            {
+                LogFellingWarningOnce("budget-exhausted",
+                    "Felling skipped: feller " + exhaustedLogger + " has only " + lowestRemaining + " work minutes remaining today (a log takes " + TimberHarvest.FellMinutesPerLog + " minutes).");
+                return;
+            }
+            int logsWanted = teams * budgetCap;
+
+            // 5. Pre-commit the cap before the fell, so the minutes are
+            // reserved against any other drive today. A refusal fells
+            // nothing, and any commitment already made for an earlier
+            // logger in this loop is released, so a refused fell costs
+            // no logger any minutes.
+            var committedLoggers = new List<EntityId>();
+            foreach (EntityId logger in workingLoggers)
+            {
+                if (!hub.WorkTimeBudgets.TryCommitTask(logger, budgetCap * TimberHarvest.FellMinutesPerLog, out string reason))
+                {
+                    foreach (EntityId committed in committedLoggers)
+                        hub.WorkTimeBudgets.GetOrCreate(committed).ReleaseCommitment(budgetCap * TimberHarvest.FellMinutesPerLog);
+                    LogFellingWarningOnce("budget-commit-refused",
+                        "Felling skipped: work-time budget commit refused for feller " + logger + " (" + reason + ").");
+                    return;
+                }
+                committedLoggers.Add(logger);
+            }
+
+            // 6. Drive the camp day. The camp enforces the one-day-once
+            // rule, daylight, provisions, the equipment gate, and the
+            // landing cap, and records the work day.
+            int month = timeManager != null ? timeManager.CurrentMonth : 0;
+            EntityId firstLogger = workingLoggers[0];
+            var campDiag = new List<string>();
+            LogLot lot = camp.RunCampDay(registry, pass9.LoggingOperation, rightsHolderId,
+                logsWanted, firstLogger, absoluteDayIndex, month, campDiag, hub.InstalledEquipmentTaskGate);
+
+            // 7. Settle the budget: on a null lot (a refused day)
+            // release the full pre-commitment; on a lot, record the
+            // minutes the fell actually took per logger and release
+            // the remainder. ReleaseCommitment clamps through
+            // WorkTimeMath (a 0-minute release would release 1
+            // minute), so only release when the remainder is positive.
+            if (lot == null)
+            {
+                foreach (EntityId logger in workingLoggers)
+                    hub.WorkTimeBudgets.GetOrCreate(logger).ReleaseCommitment(budgetCap * TimberHarvest.FellMinutesPerLog);
+                string refusal = campDiag.Count > 0 ? campDiag[campDiag.Count - 1] : "the camp refused the day.";
+                LogFellingWarningOnce("camp-day-refused",
+                    "Felling skipped: " + refusal);
+                return;
+            }
+            int logsPerTeam = (lot.LogUnits + teams - 1) / teams;
+            int minutesPerLogger = logsPerTeam * TimberHarvest.FellMinutesPerLog;
+            int releasePerLogger = (budgetCap - logsPerTeam) * TimberHarvest.FellMinutesPerLog;
+            foreach (EntityId logger in workingLoggers)
+            {
+                if (releasePerLogger > 0)
+                    hub.WorkTimeBudgets.GetOrCreate(logger).ReleaseCommitment(releasePerLogger);
+                hub.WorkTimeBudgets.GetOrCreate(logger).RecordWorked(minutesPerLogger);
+            }
+        }
+
+        /// <summary>
+        /// A2 plan 28 (2026-11-14, note 113): the daily log-haul driver.
+        /// Dispatches every lot waiting at the landing to the first Sawmill
+        /// business, then advances all active hauls by the working day
+        /// (600 minutes, C3). Day order is fell, haul, saw, transfer, so a
+        /// haul arriving in today's advance is delivered and sawn the same
+        /// day. The driver lands BEFORE the miles authoring (Q1): a stand
+        /// with no authored miles refuses loudly and once-only per stand,
+        /// and the lot stays at the landing. No teamster budget is charged
+        /// (Q8) — there is no identified teamster and no per-person minute
+        /// cost for hauling as written, so the slice lands WITHOUT a
+        /// TryCommitTask pre-commit and says so in a loud diagnostic each
+        /// day it dispatches or advances. The Canon 4.1 wagon gate is
+        /// passed null (Q5) until the log-wagon endowment lands; the skip
+        /// is recorded in the same daily diagnostic.
+        /// </summary>
+        private void DriveLogHauls(int absoluteDayIndex)
+        {
+            // 1. Resolve the mill and the runtime (D1 pattern,
+            // mirroring DriveSawmillProduction and DriveFelling).
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogHaulWarningOnce("no-business-runtime",
+                    "Hauling skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogHaulWarningOnce("no-pass9",
+                    "Hauling skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            BusinessInstanceState millBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Sawmill)
+                {
+                    if (millBusiness == null) millBusiness = business;
+                    else LogHaulWarningOnce("second-mill",
+                        "Hauling goes to the first Sawmill business only: second Sawmill business '" + business.InstanceId + "' is unwired; the Pass 9 slot holds one mill only.");
+                }
+            }
+            if (millBusiness == null)
+            {
+                LogHaulWarningOnce("no-mill",
+                    "Hauling skipped: no Sawmill business is present in the shared runtime.");
+                return;
+            }
+
+            LoggingOperationRuntime loggingOperation = pass9.LoggingOperation;
+            if (loggingOperation == null)
+            {
+                LogHaulWarningOnce("no-logging-operation",
+                    "Hauling skipped: no logging operation is wired on the Pass 9 state.");
+                return;
+            }
+
+            LoggingStandRegistry registry = pass9.StandRegistry;
+            if (registry == null)
+            {
+                LogHaulWarningOnce("no-registry",
+                    "Hauling skipped: no timber stand registry is wired on the Pass 9 state.");
+                return;
+            }
+
+            // 2. Dispatch every lot at the landing, FIFO by FelledDayIndex
+            // (Q6: dispatch-all; landing-stock order breaks ties).
+            var diag = new List<string>();
+            string millLocationId = millBusiness.InstanceId + "-yard"; // C5
+            var lots = new List<LogLot>(loggingOperation.LandingStock);
+            var orderedLots = lots.OrderBy(lot => lot == null ? int.MaxValue : lot.FelledDayIndex).ToList();
+            int dispatched = 0;
+            foreach (LogLot lot in orderedLots)
+            {
+                if (lot == null) continue;
+                TimberStand stand = registry.GetStand(lot.StandId);
+                if (stand == null)
+                {
+                    LogHaulWarningOnce("no-stand-" + lot.StandId,
+                        "Haul refused: lot " + lot.LotId + " names stand '" + lot.StandId + "', which the stand registry does not hold; the lot stays at the landing.");
+                    continue;
+                }
+                if (string.IsNullOrWhiteSpace(stand.LocationId))
+                {
+                    LogHaulWarningOnce("no-location-" + stand.StandId,
+                        "Haul refused: stand '" + stand.StandId + "' has no authored landing location; the lot stays at the landing.");
+                    continue;
+                }
+                // C4/Q1: miles ride on the stand. Zero or absent means the
+                // authoring has not landed — refuse loudly, invent nothing.
+                if (stand.MilesToMill <= 0f)
+                {
+                    LogHaulWarningOnce("no-miles-" + stand.StandId,
+                        "Haul refused: stand '" + stand.StandId + "' has no authored miles to the mill (MilesToMill is 0); dispatch waits on the authoring and the lot stays at the landing.");
+                    continue;
+                }
+                string routeProblem = LogHaulRoute.EnsureRoute(hub.Journeys, stand.LocationId, stand.DisplayName,
+                    millLocationId, millBusiness.InstanceId, millBusiness.RuntimeDisplayName, stand.MilesToMill, "logging road", diag);
+                if (routeProblem != null)
+                {
+                    LogHaulWarningOnce("route-" + lot.LotId,
+                        "Haul refused: " + routeProblem);
+                    continue;
+                }
+                LogHaul haul = loggingOperation.DispatchLogHaul(lot.LotId, millBusiness.InstanceId, millLocationId,
+                    hub.Journeys, stand.LocationId, absoluteDayIndex, diag, null); // Q5: gate null until the wagon endowment lands
+                if (haul != null) dispatched++;
+            }
+
+            // 3. Advance all active hauls by the working day (C3: 600
+            // minutes, not daylight). Snapshot the wagon-minutes before
+            // and after so the Q8 audit diagnostic can report exactly
+            // what advanced.
+            int loadingBefore = 0;
+            int transitBefore = 0;
+            foreach (LogHaul haul in loggingOperation.Hauls)
+            {
+                if (haul == null || !haul.IsActive) continue;
+                loadingBefore += haul.LoadingMinutesRemaining;
+                transitBefore += haul.TransitMinutesRemaining;
+            }
+            loggingOperation.AdvanceHauls(WorkTimeBudget.DefaultDailyWorkMinutes, diag, absoluteDayIndex);
+            int loadingAfter = 0;
+            int transitAfter = 0;
+            foreach (LogHaul haul in loggingOperation.Hauls)
+            {
+                if (haul == null || !haul.IsActive) continue;
+                loadingAfter += haul.LoadingMinutesRemaining;
+                transitAfter += haul.TransitMinutesRemaining;
+            }
+            int loadingAdvanced = loadingBefore - loadingAfter;
+            int transitAdvanced = transitBefore - transitAfter;
+
+            // Q8 + Q5: one loud diagnostic each day the driver dispatches
+            // or advances, stating plainly that no teamster budget was
+            // charged and that the Canon 4.1 wagon gate was skipped (no
+            // log-wagon endowment yet). Teamster identity and the rest
+            // model stay an owner decision (A5 P15).
+            if (dispatched > 0 || loadingAdvanced + transitAdvanced > 0)
+            {
+                Debug.LogWarning("[LogHaul] Day " + absoluteDayIndex + ": dispatched " + dispatched + " haul(s), advanced "
+                    + (loadingAdvanced + transitAdvanced) + " wagon-minutes (" + loadingAdvanced + " loading + " + transitAdvanced + " transit); "
+                    + "no teamster budget was charged — hauling has no identified teamster and no per-person minute cost as written (note 113 Q8). "
+                    + "The log-wagon gate was skipped (null gate, Q5) until the wagon endowment lands.", this);
+            }
+        }
+
+        private void DriveSawmillProduction(int absoluteDayIndex)
+        {
+            // 1. Resolve the mill and the runtime (D1 pattern).
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogSawmillProductionWarningOnce("no-business-runtime",
+                    "Sawmill production skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogSawmillProductionWarningOnce("no-pass9",
+                    "Sawmill production skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            BusinessInstanceState millBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Sawmill)
+                {
+                    if (millBusiness == null) millBusiness = business;
+                    else LogSawmillProductionWarningOnce("second-mill",
+                        $"Second Sawmill business '{business.InstanceId}' is unwired: the production drive saws the first mill only.");
+                }
+            }
+
+            // Agent 3 note 68 ruling (2), as in the D1 transfer: pass9.Sawmill
+            // is PRIMARY — the bootstrapper owns the holder. The hub accessor
+            // is the fallback only when the holder is null AND a Sawmill
+            // business is formed, with a warning.
+            SawmillShopRuntime mill = pass9.Sawmill;
+            if (mill == null)
+            {
+                if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId))
+                {
+                    LogSawmillProductionWarningOnce("no-mill",
+                        "Sawmill production skipped: no formed Sawmill business is present in the shared runtime.");
+                    return;
+                }
+
+                LogSawmillProductionWarningOnce("holder-fallback",
+                    $"Sawmill production: Pass 9 mill holder is null; resolving the formed Sawmill '{millBusiness.InstanceId}' through the hub (empty runtime until the bootstrapper owns it).");
+                mill = hub.SawmillRuntimeFor(millBusiness.InstanceId);
+                if (mill == null)
+                {
+                    LogSawmillProductionWarningOnce("hub-no-mill",
+                        "Sawmill production skipped: hub returned no mill runtime.");
+                    return;
+                }
+            }
+
+            LoggingOperationRuntime loggingOperation = pass9.LoggingOperation;
+            if (loggingOperation == null)
+            {
+                LogSawmillProductionWarningOnce("no-logging-operation",
+                    "Sawmill production skipped: no logging operation runtime is bound (the Pass 9 slot is empty).");
+                return;
+            }
+
+            // 2. Resolve the driver from the hub.
+            SawmillProductionDriver driver = hub.SawmillProductionDriver;
+            if (driver == null)
+            {
+                LogSawmillProductionWarningOnce("no-driver",
+                    "Sawmill production skipped: no sawmill production driver is registered in the hub.");
+                return;
+            }
+
+            var diag = new List<string>();
+            int driverDiagMark = driver.Diagnostics.Count;
+
+            // 3. Snapshot the lot ids currently in the yard.
+            var yardIdsBefore = new HashSet<string>(StringComparer.Ordinal);
+            foreach (LogLot yardLot in mill.LogStock.Lots)
+            {
+                if (yardLot != null) yardIdsBefore.Add(yardLot.LotId.ToString());
+            }
+
+            // 4. Deliver first (C1): Arrived hauls move into the yard.
+            // Registration producer (plan 26): the day index is passed so
+            // the delivery step can record Delivered in the custody ledger.
+            loggingOperation.DeliverArrivedHauls(mill.LogStock, diag, absoluteDayIndex);
+
+            // 5. Delivered lots = lot ids in the yard now, minus the snapshot
+            // (Q1 snapshot-diff: DeliverArrivedHauls returns nothing).
+            var deliveredLotIds = new List<string>();
+            foreach (LogLot yardLot in mill.LogStock.Lots)
+            {
+                if (yardLot != null && !yardIdsBefore.Contains(yardLot.LotId.ToString()))
+                {
+                    deliveredLotIds.Add(yardLot.LotId.ToString());
+                }
+            }
+
+            // Open jobs from prior days, for the C7 re-attempt pass below.
+            var openJobs = new List<SawmillProductionJob>();
+            openJobs.AddRange(driver.JobsInState(SawmillProductionJobState.Planned));
+            openJobs.AddRange(driver.JobsInState(SawmillProductionJobState.Sawing));
+            openJobs.Sort((a, b) =>
+            {
+                int byDay = a.CreatedDayIndex.CompareTo(b.CreatedDayIndex);
+                return byDay != 0 ? byDay : string.CompareOrdinal(a.JobId, b.JobId);
+            });
+
+            if (openJobs.Count == 0 && deliveredLotIds.Count == 0)
+            {
+                LogSawmillProductionWarningOnce("nothing-to-saw",
+                    "Sawmill production: no lots delivered today and no open jobs to re-attempt.");
+                return;
+            }
+
+            int reattemptedCount = 0;
+            int begunCount = 0;
+            int completedCount = 0;
+
+            // C7: re-attempt open jobs from prior days BEFORE the
+            // delivered-lot pass (FIFO: a pending job names an older lot
+            // than today's deliveries). Failed jobs are terminal and are
+            // never re-attempted. The job's stored sawyer runs it — no new
+            // sawyer pick, no BeginProduction, so the duplicate and FIFO
+            // guards are not re-triggered.
+            foreach (SawmillProductionJob openJob in openJobs)
+            {
+                reattemptedCount++;
+                if (RunSawmillJobOnce(driver, mill, openJob, absoluteDayIndex, diag) && openJob.State == SawmillProductionJobState.Complete)
+                {
+                    completedCount++;
+                }
+            }
+
+            // 6-7. Saw each delivered lot, whole-lot first use. The sawyer
+            // is picked only when there is something to saw (C2).
+            if (deliveredLotIds.Count > 0)
+            {
+                EntityId sawyerId = PickSawmillSawyer(millBusiness);
+                if (!sawyerId.IsValid || sawyerId.Kind != EntityKind.Person)
+                {
+                    LogSawmillProductionWarningOnce("no-sawyer",
+                        "Sawmill production: the mill has no owner person and no active employees — no sawyer, never a phantom worker.");
+                }
+                else
+                {
+                    foreach (string lotId in deliveredLotIds)
+                    {
+                        LogLot lot = FindSawmillYardLot(mill, lotId);
+                        if (lot == null || lot.LogUnits < 1)
+                        {
+                            diag.Add($"[SawmillProduction] Day {absoluteDayIndex}: delivered lot '{lotId}' is no longer in the mill yard — never conjured, skipped.");
+                            continue;
+                        }
+                        SawmillProductionJob job = driver.BeginProduction(lotId, sawyerId, lot.LogUnits, absoluteDayIndex, out string beginRefusal);
+                        if (job == null)
+                        {
+                            diag.Add($"[SawmillProduction] Day {absoluteDayIndex}: lot '{lotId}' could not begin — {beginRefusal}");
+                            continue;
+                        }
+                        begunCount++;
+                        if (RunSawmillJobOnce(driver, mill, job, absoluteDayIndex, diag) && job.State == SawmillProductionJobState.Complete)
+                        {
+                            completedCount++;
+                        }
+                    }
+                }
+            }
+
+            // 10. MarkProcessed refusal: the driver's completion records a
+            // refusal in its diagnostics when the ledger could not record
+            // a lot as Processed. Log it naming the lot and the reason; the
+            // job is already Complete and the counters are already credited,
+            // so no recovery action is taken and no record is invented.
+            for (int i = driverDiagMark; i < driver.Diagnostics.Count; i++)
+            {
+                string entry = driver.Diagnostics[i];
+                if (entry != null && entry.Contains("MarkLedgerProcessed") && entry.Contains("could not record"))
+                {
+                    Debug.LogWarning("[SawmillProduction] Day " + absoluteDayIndex + ": " + entry, this);
+                }
+            }
+
+            // 11. Byproducts stay in mill.ByproductStock for the D1 daily
+            // transfer that follows this method. No new transfer call here.
+            Debug.Log($"[SawmillProduction] Day {absoluteDayIndex}: delivered {deliveredLotIds.Count} lot(s), re-attempted {reattemptedCount} open job(s), began {begunCount} new job(s), {completedCount} job(s) complete. {string.Join(" | ", diag)}", this);
+        }
+
+        /// <summary>
+        /// F7 yard-transfer wiring: moves every lumber lot the sawmill
+        /// produced into mill LumberStock into yard LumberStock, with the
+        /// yard grade, the caller-supplied unit cost, and the full sawmill
+        /// provenance recorded on the yard lot, exactly once. Re-attempts
+        /// open Planned jobs first (FIFO, C7 analogue), then begins fresh
+        /// transfers for every untransferred lot in mill LumberStock
+        /// (backfill: the first wired day moves the whole backlog). Runs
+        /// after sawing each day, so the day's output is in the yard
+        /// before anything downstream reads it.
+        /// </summary>
+        private void DriveSawmillToYardTransfer(int absoluteDayIndex)
+        {
+            // 1. Resolve the mill and the yard (D1 pattern).
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogSawmillTransferWarningOnce("no-business-runtime",
+                    "Sawmill-to-yard transfer skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogSawmillTransferWarningOnce("no-pass9",
+                    "Sawmill-to-yard transfer skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            BusinessInstanceState millBusiness = null;
+            BusinessInstanceState yardBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Sawmill)
+                {
+                    if (millBusiness == null) millBusiness = business;
+                    else LogSawmillTransferWarningOnce("second-mill",
+                        $"Second Sawmill business '{business.InstanceId}' is unwired: the yard transfer moves the first mill only.");
+                }
+                else if (business.BusinessType == BusinessType.LumberYard)
+                {
+                    if (yardBusiness == null) yardBusiness = business;
+                    else LogSawmillTransferWarningOnce("second-yard",
+                        $"Second LumberYard business '{business.InstanceId}' is unwired: the yard transfer moves into the first yard only.");
+                }
+            }
+
+            // Agent 3 note 68 ruling (2), as in the D1 transfer and
+            // DriveSawmillProduction: pass9.Sawmill / pass9.LumberYard are
+            // PRIMARY — the bootstrapper owns the holders. The hub
+            // accessors are the fallback only when a holder is null AND
+            // the business is formed, with a warning.
+            SawmillShopRuntime mill = pass9.Sawmill;
+            if (mill == null)
+            {
+                if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId))
+                {
+                    LogSawmillTransferWarningOnce("no-mill",
+                        "Sawmill-to-yard transfer skipped: no formed Sawmill business is present in the shared runtime.");
+                    return;
+                }
+
+                LogSawmillTransferWarningOnce("holder-fallback-mill",
+                    $"Sawmill-to-yard transfer: Pass 9 mill holder is null; resolving the formed Sawmill '{millBusiness.InstanceId}' through the hub (empty runtime until the bootstrapper owns it).");
+                mill = hub.SawmillRuntimeFor(millBusiness.InstanceId);
+                if (mill == null)
+                {
+                    LogSawmillTransferWarningOnce("hub-no-mill",
+                        "Sawmill-to-yard transfer skipped: hub returned no mill runtime.");
+                    return;
+                }
+            }
+
+            LumberYardShopRuntime yard = pass9.LumberYard;
+            if (yard == null)
+            {
+                if (yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId))
+                {
+                    LogSawmillTransferWarningOnce("no-yard",
+                        "Sawmill-to-yard transfer skipped: no formed LumberYard business is present in the shared runtime.");
+                    return;
+                }
+
+                LogSawmillTransferWarningOnce("holder-fallback-yard",
+                    $"Sawmill-to-yard transfer: Pass 9 yard holder is null; resolving the formed LumberYard '{yardBusiness.InstanceId}' through the hub (empty runtime until the bootstrapper owns it).");
+                yard = hub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+                if (yard == null)
+                {
+                    LogSawmillTransferWarningOnce("hub-no-yard",
+                        "Sawmill-to-yard transfer skipped: hub returned no yard runtime.");
+                    return;
+                }
+            }
+
+            // 2. Resolve the driver from the hub.
+            SawmillToYardTransferDriver driver = hub.SawmillToYardTransferDriver;
+            if (driver == null)
+            {
+                LogSawmillTransferWarningOnce("no-driver",
+                    "Sawmill-to-yard transfer skipped: no sawmill-to-yard transfer driver is registered in the hub.");
+                return;
+            }
+
+            var diag = new List<string>();
+
+            // 3. Re-attempt pass (C7 analogue): open Planned jobs from
+            // prior days BEFORE the begin pass (FIFO: a pending job names
+            // an older lot than today's sawing). Failed and Transferred
+            // jobs are terminal and are never re-attempted. Each open job
+            // runs once via RunTransfer with its stored grade and cost —
+            // no new BeginTransfer, so the duplicate and open-job guards
+            // are not re-triggered.
+            var openJobs = new List<SawmillToYardTransferJob>();
+            openJobs.AddRange(driver.JobsInState(SawmillToYardTransferJobState.Planned));
+            openJobs.Sort((a, b) =>
+            {
+                int byDay = a.CreatedDayIndex.CompareTo(b.CreatedDayIndex);
+                return byDay != 0 ? byDay : string.CompareOrdinal(a.JobId, b.JobId);
+            });
+
+            int reattemptedCount = 0;
+            int begunCount = 0;
+            int transferredCount = 0;
+            int failedCount = 0;
+
+            foreach (SawmillToYardTransferJob openJob in openJobs)
+            {
+                reattemptedCount++;
+                if (RunYardTransferJobOnce(driver, openJob, absoluteDayIndex, diag, ref failedCount) && openJob.State == SawmillToYardTransferJobState.Transferred)
+                {
+                    transferredCount++;
+                }
+            }
+
+            // 4. Begin pass: scan mill LumberStock for lots with units
+            // above 0 and no yard lot holding their source. Backfill: the
+            // scan has no day filter, so the first wired day moves the
+            // whole backlog accumulated while the driver was unbound.
+            // A lot with a Planned job is handled by the re-attempt pass;
+            // a Transferred job means the yard already holds it. A Failed
+            // job does NOT skip the lot: the open-job guard refuses only
+            // Planned jobs, so a fresh begin is the recovery path.
+            var transferableLotIds = new List<string>();
+            foreach (SawmillLumberLot lot in mill.LumberStock.Lots)
+            {
+                if (lot == null || lot.LumberUnits <= 0) continue;
+                string lotId = lot.LotId.ToString();
+                if (FindYardLotBySource(yard, lotId) != null) continue;
+                SawmillToYardTransferJob existing = driver.GetJob("yard-transfer:" + lotId);
+                if (existing != null && (existing.State == SawmillToYardTransferJobState.Planned || existing.State == SawmillToYardTransferJobState.Transferred)) continue;
+                transferableLotIds.Add(lotId);
+            }
+
+            if (openJobs.Count == 0 && transferableLotIds.Count == 0)
+            {
+                LogSawmillTransferWarningOnce("nothing-to-transfer",
+                    "Sawmill-to-yard transfer: no untransferred lots in the mill yard and no open jobs to re-attempt.");
+                return;
+            }
+
+            foreach (string lotId in transferableLotIds)
+            {
+                SawmillLumberLot lot = FindMillLumberLot(mill, lotId);
+                if (lot == null || lot.LumberUnits <= 0)
+                {
+                    diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: lot '{lotId}' is no longer in the mill yard — never conjured, skipped.");
+                    continue;
+                }
+                SawmillToYardTransferJob job = driver.BeginTransfer(lotId, LumberYardGradeCatalog.DefaultGradeId, 0, absoluteDayIndex, out string beginRefusal);
+                if (job == null)
+                {
+                    diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: lot '{lotId}' could not begin — {beginRefusal}");
+                    continue;
+                }
+                begunCount++;
+                if (RunYardTransferJobOnce(driver, job, absoluteDayIndex, diag, ref failedCount) && job.State == SawmillToYardTransferJobState.Transferred)
+                {
+                    transferredCount++;
+                }
+            }
+
+            // 7. Summary.
+            Debug.Log($"[SawmillTransfer] Day {absoluteDayIndex}: re-attempted {reattemptedCount} open job(s), began {begunCount} new job(s), {transferredCount} job(s) transferred, {failedCount} job(s) failed. {string.Join(" | ", diag)}", this);
+        }
+
+        /// <summary>
+        /// F7 yard-transfer wiring: runs one open transfer job once and
+        /// handles its refusal. An intake refusal leaves the job Planned
+        /// and the retry safe (note 100 Q2); a failed job is reconciled
+        /// with a diagnostic naming the lot (step 5). Never re-calls
+        /// RunTransfer the same day; the job is re-attempted on the next
+        /// day's drive. Returns true when the run succeeded.
+        /// </summary>
+        private bool RunYardTransferJobOnce(SawmillToYardTransferDriver driver, SawmillToYardTransferJob job, int dayIndex, List<string> diag, ref int failedCount)
+        {
+            if (driver == null || job == null) return false;
+            if (!driver.RunTransfer(job.JobId, dayIndex, out string refusal))
+            {
+                diag.Add($"[SawmillTransfer] Day {dayIndex}: job '{job.JobId}' refused — {refusal}");
+                // Step 5 reconciliation: both terminal paths. The
+                // mismatch path keys on the driver's own exact text
+                // ("cannot be verified"); the units already moved, the
+                // yard lot stays in yard stock, and no credit is
+                // invented — the next day's begin pass refuses the lot
+                // on the duplicate-source guard, so no double-move is
+                // possible.
+                if (job.State == SawmillToYardTransferJobState.Failed)
+                {
+                    failedCount++;
+                    if (refusal != null && refusal.Contains("cannot be verified"))
+                    {
+                        diag.Add($"[SawmillTransfer] Day {dayIndex}: job '{job.JobId}' for lot '{job.MillLotId}' mismatched its run — the output lot already exists in yard stock and no credit is invented; the next day's begin pass refuses the lot on the duplicate-source guard, so no double-move is possible.");
+                    }
+                    else
+                    {
+                        diag.Add($"[SawmillTransfer] Day {dayIndex}: job '{job.JobId}' for lot '{job.MillLotId}' FAILED — the lot stays in the mill yard, never re-invented; a fresh BeginTransfer is the recovery path.");
+                    }
+                }
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// F7 yard-transfer wiring: finds the yard lot holding lumber from
+        /// one mill lot, by source. A query, not a registration, so the
+        /// note-100 Q6 boundary does not apply. Mirrors the driver's
+        /// private scan; the duplicate-source guard makes it unambiguous.
+        /// </summary>
+        private static LumberYardLumberLot FindYardLotBySource(LumberYardShopRuntime yard, string millLotId)
+        {
+            if (yard == null || yard.LumberStock == null || string.IsNullOrWhiteSpace(millLotId)) return null;
+            foreach (LumberYardLumberLot lot in yard.LumberStock.Lots)
+            {
+                if (lot != null && string.Equals(lot.SourceSawmillLotId, millLotId, StringComparison.Ordinal)) return lot;
+            }
+            return null;
+        }
+
+        private static SawmillLumberLot FindMillLumberLot(SawmillShopRuntime mill, string lotId)
+        {
+            if (mill == null || mill.LumberStock == null || string.IsNullOrWhiteSpace(lotId)) return null;
+            foreach (SawmillLumberLot lot in mill.LumberStock.Lots)
+            {
+                if (lot != null && string.Equals(lot.LotId.ToString(), lotId, StringComparison.Ordinal)) return lot;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): runs one open production job once and
+        /// handles its refusal. A blade-gated refusal runs the filer loop
+        /// (the filer is the job's stored sawyer); a post-deduction failure
+        /// or a result mismatch is reconciled with a diagnostic naming the
+        /// lot (step 9, C7 sub-point). Never re-calls RunProduction the same
+        /// day (note 100 Q2); the job is re-attempted on the next day's drive.
+        /// Returns true when the run succeeded.
+        /// </summary>
+        private bool RunSawmillJobOnce(SawmillProductionDriver driver, SawmillShopRuntime mill, SawmillProductionJob job, int dayIndex, List<string> diag)
+        {
+            if (driver == null || mill == null || job == null) return false;
+            if (!driver.RunProduction(job.JobId, dayIndex, out string refusal))
+            {
+                diag.Add($"[SawmillProduction] Day {dayIndex}: job '{job.JobId}' refused — {refusal}");
+                // Filer loop: the filer is the job's stored sawyer. The loop
+                // runs whenever the blade gates a run, whether or not the
+                // blade was the refusal's cause — a dull blade needs filing
+                // either way, and filing consumes no budgeted minutes.
+                EntityId filer = new EntityId { Kind = (EntityKind)job.SawyerKind, Id = job.SawyerNumber };
+                if (mill.Blade != null && mill.Blade.CheckSawGate(dayIndex, diag) != null)
+                {
+                    RunSawmillFilerLoop(mill, filer, dayIndex, diag);
+                }
+                // Step 9 reconciliation (C7 sub-point): both refusal paths.
+                if (job.State == SawmillProductionJobState.Failed)
+                {
+                    diag.Add($"[SawmillProduction] Day {dayIndex}: job '{job.JobId}' for lot '{job.LotId}' FAILED after deduction — the deducted logs are lost, never re-invented; a fresh BeginProduction for any remainder is the recovery path.");
+                }
+                else if (job.State == SawmillProductionJobState.Sawing && refusal != null && refusal.Contains("does not match the job"))
+                {
+                    diag.Add($"[SawmillProduction] Day {dayIndex}: job '{job.JobId}' for lot '{job.LotId}' mismatched its run — the output lots already exist in the mill stock and the counters were NOT credited; no credit is invented, the lots stay in stock for the D1/F7 transfers.");
+                }
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): the filer loop (F6 §6 call site 3).
+        /// A dull blade is filed; a broken or retired blade is re-set, or
+        /// a real spare is fitted from the mill's blade inventory. The filer
+        /// is the sawyer (note 100 Q3). Filing consumes no budgeted minutes
+        /// (note 100 Finding 3). Returns true when the blade now passes the
+        /// saw gate.
+        /// </summary>
+        private bool RunSawmillFilerLoop(SawmillShopRuntime mill, EntityId filer, int dayIndex, List<string> diag)
+        {
+            if (mill == null || mill.Blade == null) return false;
+            if (mill.Blade.IsBroken)
+            {
+                if (mill.RecordSawReset(filer, dayIndex, diag) == null && mill.Blade.CheckSawGate(dayIndex, diag) == null) return true;
+                return TryFitSawmillSpareBlade(mill, dayIndex, diag);
+            }
+            if (mill.Blade.IsRetired || string.IsNullOrWhiteSpace(mill.Blade.BladeId))
+            {
+                return TryFitSawmillSpareBlade(mill, dayIndex, diag);
+            }
+            if (mill.Blade.IsDull)
+            {
+                if (mill.RecordSawFiling(filer, dayIndex, diag) == null && mill.Blade.CheckSawGate(dayIndex, diag) == null) return true;
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): fits one real spare blade from the
+        /// mill's blade inventory. One spare attempt per day — a failed fit
+        /// is diagnosed, not retried across spares; the job re-attempts on
+        /// the next day's drive. Returns true when the fitted blade passes
+        /// the saw gate.
+        /// </summary>
+        private bool TryFitSawmillSpareBlade(SawmillShopRuntime mill, int dayIndex, List<string> diag)
+        {
+            foreach (SawmillBladeState spare in mill.BladeInventory.Spares)
+            {
+                if (spare == null || spare.IsRetired || string.IsNullOrWhiteSpace(spare.BladeId)) continue;
+                if (mill.FitSpareBlade(spare.BladeId, dayIndex, diag) == null && mill.Blade.CheckSawGate(dayIndex, diag) == null) return true;
+                break;
+            }
+            LogSawmillProductionWarningOnce("no-spare-blade",
+                "Sawmill production: the fitted blade is broken or retired and no usable spare could be fitted — sawing stays gated until a spare blade is provisioned.");
+            return false;
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): the sawyer rule (C2). Owner-first,
+        /// then first active employee, built exactly as DriveGenericProduction
+        /// builds its roster. Returns Invalid when the mill has no owner
+        /// person and no active employees — never a phantom worker.
+        /// </summary>
+        private static EntityId PickSawmillSawyer(BusinessInstanceState millBusiness)
+        {
+            if (millBusiness == null) return EntityId.Invalid;
+            if (millBusiness.Owner != null && millBusiness.Owner.PersonId >= 0)
+            {
+                return EntityId.For(EntityKind.Person, millBusiness.Owner.PersonId);
+            }
+            if (millBusiness.RuntimeState?.EmploymentRegistry != null)
+            {
+                foreach (EmploymentRelationship relationship in millBusiness.RuntimeState.EmploymentRegistry.GetActiveByEmployer(millBusiness.InstanceId))
+                {
+                    if (relationship != null && relationship.EmployeePersonId >= 0)
+                    {
+                        return EntityId.For(EntityKind.Person, relationship.EmployeePersonId);
+                    }
+                }
+            }
+            return EntityId.Invalid;
+        }
+
+        private static LogLot FindSawmillYardLot(SawmillShopRuntime mill, string lotId)
+        {
+            if (mill == null || mill.LogStock == null || string.IsNullOrWhiteSpace(lotId)) return null;
+            foreach (LogLot lot in mill.LogStock.Lots)
+            {
+                if (lot != null && string.Equals(lot.LotId.ToString(), lotId, StringComparison.Ordinal)) return lot;
+            }
+            return null;
+        }
+
+        private void LogSawmillTransferWarningOnce(string key, string message)
+        {
+            string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
+            if (sawmillTransferWarningsLogged.Add(warningKey)) Debug.LogWarning("[SawmillTransfer] " + message, this);
+        }
+
+        private void LogSawmillProductionWarningOnce(string key, string message)
+        {
+            string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
+            if (sawmillProductionWarningsLogged.Add(warningKey)) Debug.LogWarning("[SawmillProduction] " + message, this);
+        }
+
+        private void LogFellingWarningOnce(string key, string message)
+        {
+            string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
+            if (fellingWarningsLogged.Add(warningKey)) Debug.LogWarning("[Felling] " + message, this);
+        }
+
+        private void LogHaulWarningOnce(string key, string message)
+        {
+            string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
+            if (logHaulWarningsLogged.Add(warningKey)) Debug.LogWarning("[LogHaul] " + message, this);
         }
 
         /// <summary>Attaches the scenario's real membership authority for the production shopping loop.</summary>
@@ -584,6 +1650,20 @@ namespace LandLedgers.Orchestration.Systems
                     householdId => householdMemberships != null
                         ? householdMemberships.GetActiveMembers(householdId)
                         : new List<int>());
+        }
+
+        /// <summary>
+        /// Slice C3: binds the construction price port. Sets ONLY
+        /// npcConstructionPricePort; it does not touch catalog,
+        /// materials, procurement, parcel authority, or labor. The
+        /// driver re-reads the field on every drive
+        /// (DriveNpcConstruction), so the next drive picks it up.
+        /// Do NOT route this through ConfigureNpcConstruction — that
+        /// would clear the other fields.
+        /// </summary>
+        public void BindConstructionPricePort(IConstructionMaterialPricePort port)
+        {
+            npcConstructionPricePort = port;
         }
 
         /// <summary>Queues an explicit household request; no autonomous build decision is made here.</summary>
@@ -736,6 +1816,48 @@ namespace LandLedgers.Orchestration.Systems
                 runtime.BindBusiness(business);
             hub.RegisterBoardingHouseRuntime(runtime);
             hub.RegisterBoardingHouseMealSource(runtime.MealDaySource);
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): registers the sawmill production
+        /// driver with the hub. Forwarder only — no BindBusiness-style
+        /// side effects (note 100 Q6 boundary).
+        /// </summary>
+        public void RegisterSawmillProductionDriver(SawmillProductionDriver driver)
+        {
+            if (driver == null || hub == null) return;
+            hub.RegisterSawmillProductionDriver(driver);
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): registers the sawmill labour counters
+        /// with the hub. Forwarder only.
+        /// </summary>
+        public void RegisterSawmillLabourCounters(SawmillLabourCounters counters)
+        {
+            if (counters == null || hub == null) return;
+            hub.RegisterSawmillLabourCounters(counters);
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): registers the log-lot custody ledger
+        /// with the hub. Forwarder only.
+        /// </summary>
+        public void RegisterLogLotCustodyLedger(LogLotCustodyLedger ledger)
+        {
+            if (ledger == null || hub == null) return;
+            hub.RegisterLogLotCustodyLedger(ledger);
+        }
+
+        /// <summary>
+        /// F7 yard-transfer wiring: registers the sawmill-to-yard transfer
+        /// driver with the hub. Forwarder only — no BindBusiness-style
+        /// side effects (note 100 Q6 boundary).
+        /// </summary>
+        public void RegisterSawmillToYardTransferDriver(SawmillToYardTransferDriver driver)
+        {
+            if (driver == null || hub == null) return;
+            hub.RegisterSawmillToYardTransferDriver(driver);
         }
 
         private void BuildHouseholdShoppingLoop()
@@ -2045,6 +3167,33 @@ namespace LandLedgers.Orchestration.Systems
             // boundary. This is execution of an already-started physical process;
             // it does not grant capability or create output from a policy alone.
             DriveGenericProduction(absoluteDayIndex);
+            // P10 (live felling driver): the day's logs are felled
+            // before the mill saws, so the day's output is in the
+            // landing stock before the mill reads it. The camp is
+            // one-day-once, so the daily call IS the re-attempt: a
+            // refused day is retried tomorrow.
+            DriveFelling(absoluteDayIndex);
+            // Plan 28 (log-haul dispatch/advance driver): the day's lots
+            // are dispatched and advanced after felling and before sawing,
+            // so a haul arriving in today's advance is delivered and sawn
+            // the same day. Day order is fell, haul, saw, transfer.
+            DriveLogHauls(absoluteDayIndex);
+            // P3 (F6 production wiring): sawing runs before the byproduct
+            // transfer so the day's output is in mill.ByproductStock before
+            // the transfer moves it, and before the bakery plans its day.
+            DriveSawmillProduction(absoluteDayIndex);
+            // F7 yard-transfer wiring: the day's sawn lumber moves into
+            // yard LumberStock before the byproduct transfer, so the day's
+            // output is in the yard before anything downstream reads it.
+            // The two transfers consume different stocks (LumberStock vs
+            // ByproductStock), so the order between them is narrative,
+            // not a correctness dependency.
+            DriveSawmillToYardTransfer(absoluteDayIndex);
+            // D1: the mill's byproduct lots move into the Fuel Dealer's
+            // intake by custody before the bakery plans its wholesale
+            // day, so the paid-source builder (when D-F2 lands) sees the
+            // day's transferred stock.
+            TransferSawmillByproductsToFuelDealer(absoluteDayIndex);
             DriveBakeryWholesalePlanning(absoluteDayIndex);
             DriveStagedBakeryDay(absoluteDayIndex);
 
@@ -3685,7 +4834,7 @@ namespace LandLedgers.Orchestration.Systems
                 && !sharedBusinessRuntime.TryFindByInstanceId("bakery_001", out bakery))
                 bakery = sharedBusinessRuntime.Businesses.FirstOrDefault(b => b != null && b.BusinessType == BusinessType.Bakery);
             BusinessInstanceState carrier = null;
-            bool carrierFound = sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out carrier);
+            bool carrierFound = FreightBusinessResolver.TryResolveFreightBusiness(sharedBusinessRuntime.Businesses, out carrier);
             if (bakery?.RuntimeState == null || bakery.Owner == null || bakery.Owner.PersonId < 0
                 || !carrierFound
                 || carrier?.Owner == null || carrier.Owner.PersonId < 0
@@ -4290,8 +5439,13 @@ namespace LandLedgers.Orchestration.Systems
         {
             if (hub == null || sharedBusinessRuntime == null || populationManager?.State == null
                 || hub.Animals == null || hub.Journeys == null) return;
-            if (!sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)
-                || freight?.RuntimeState == null || freight.Owner == null || freight.Owner.PersonId < 0) return;
+            if (!FreightBusinessResolver.TryResolveFreightBusiness(sharedBusinessRuntime.Businesses, out BusinessInstanceState freight))
+            {
+                LogRefusalDayKeyed("freight-resolver:feed", absoluteDayIndex,
+                    "[BusinessFeed] No LiveryFreight business resolved (preferred id 'livery_freight_003' absent and no fallback business of type LiveryFreight exists); feed procurement skipped for the day.");
+                return;
+            }
+            if (freight?.RuntimeState == null || freight.Owner == null || freight.Owner.PersonId < 0) return;
 
             // W4 (F-1): a refused return-leg receipt is retried here, on the
             // next feed-drive day, BEFORE any new purchase is placed for the
@@ -5332,14 +6486,15 @@ namespace LandLedgers.Orchestration.Systems
                             Debug.LogWarning($"[FreightAgreement] Exit route unplanned for shipment '{stableShipmentId}': logistics runtime unavailable.", this);
                         }
                         // Slice F1: plan via the carrier method, which
-                        // resolves staging with presentation parity (B3
-                        // anchor -> B3 plot -> operator home anchor ->
-                        // operator home plot, each in-bounds and a road
-                        // cell). NON-GATING, as in S8: a planning failure
-                        // is warned, never a registration failure.
+                        // resolves staging from the carrier premises
+                        // anchor -> carrier premises plot (each in-bounds
+                        // and a road cell) and refuses when no valid
+                        // assigned commercial premises exist — the same
+                        // gate the presentation layer applies.
+                        // NON-GATING, as in S8: a planning failure is
+                        // warned, never a registration failure.
                         else if (logisticsRuntime.TryPlanFreightExitRouteForCarrier(
                             carrier,
-                            populationManager?.State?.GetPerson(accepted.AcceptingOperatorPersonId)?.homeBuildingId ?? -1,
                             exitPoint, out LogisticsRoutePlan exitPlan, out string exitRouteReason,
                             out GridCoord stagingCell, out string stagingSource))
                         {
@@ -5552,9 +6707,14 @@ namespace LandLedgers.Orchestration.Systems
 
         private void DriveOpeningHitchPreparation(int absoluteDayIndex)
         {
-            if (hub == null || sharedBusinessRuntime == null || populationManager?.State == null
-                || !sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)
-                || freight?.Owner == null || freight.Owner.PersonId < 0) return;
+            if (hub == null || sharedBusinessRuntime == null || populationManager?.State == null) return;
+            if (!FreightBusinessResolver.TryResolveFreightBusiness(sharedBusinessRuntime.Businesses, out BusinessInstanceState freight))
+            {
+                LogRefusalDayKeyed("freight-resolver:hitch-prep", absoluteDayIndex,
+                    "[Hitching] No LiveryFreight business resolved (preferred id 'livery_freight_003' absent and no fallback business of type LiveryFreight exists); hitch preparation skipped for the day.");
+                return;
+            }
+            if (freight?.Owner == null || freight.Owner.PersonId < 0) return;
             AnimalState horse = null;
             foreach (AnimalState candidate in hub.Animals.ActiveAnimals)
                 if (candidate != null && candidate.IsActive && candidate.Species == AnimalSpecies.Horse
@@ -5756,8 +6916,13 @@ namespace LandLedgers.Orchestration.Systems
 
         private void StartQueuedOpeningHitchTask(int dayIndex, int tickStartMinute, int tickEndMinute)
         {
-            if (hub?.Tasks == null || sharedBusinessRuntime == null || populationManager?.State == null
-                || !sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)) return;
+            if (hub?.Tasks == null || sharedBusinessRuntime == null || populationManager?.State == null) return;
+            if (!FreightBusinessResolver.TryResolveFreightBusiness(sharedBusinessRuntime.Businesses, out BusinessInstanceState freight))
+            {
+                LogRefusalDayKeyed("freight-resolver:hitch-start", dayIndex,
+                    "[Hitching] No LiveryFreight business resolved (preferred id 'livery_freight_003' absent and no fallback business of type LiveryFreight exists); queued hitch task not started.");
+                return;
+            }
             EquipmentAsset wagon = hub.TransportAssets.Get("opening-freight-wagon");
             if (wagon == null || string.IsNullOrWhiteSpace(wagon.HitchPreparationTaskId)) return;
             WorkTask hitch = hub.Tasks.FindTaskByIdString(wagon.HitchPreparationTaskId);
@@ -6058,7 +7223,13 @@ namespace LandLedgers.Orchestration.Systems
 
         private void HandleCompletedOpeningHitchTask(WorkTask task, int dayIndex)
         {
-            if (task == null || !sharedBusinessRuntime.TryFindByInstanceId("livery_freight_003", out BusinessInstanceState freight)) return;
+            if (task == null) return;
+            if (!FreightBusinessResolver.TryResolveFreightBusiness(sharedBusinessRuntime.Businesses, out BusinessInstanceState freight))
+            {
+                LogRefusalDayKeyed("freight-resolver:hitch-complete", dayIndex,
+                    "[Hitching] No LiveryFreight business resolved (preferred id 'livery_freight_003' absent and no fallback business of type LiveryFreight exists); completed hitch task dropped.");
+                return;
+            }
             EquipmentAsset wagon = hub.TransportAssets.Get("opening-freight-wagon");
             if (wagon == null) return;
             if (task.CustomerRef.StartsWith(DevelopmentHitchTaskPrefix + "travel:", StringComparison.Ordinal))

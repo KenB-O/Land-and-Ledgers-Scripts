@@ -74,7 +74,7 @@ namespace LandLedgers.EditorTests.Economy
             return definition;
         }
 
-        private static Setup NewSetup(string flourInventoryUnit = "lb")
+        private static Setup NewSetup(string flourInventoryUnit = "lb", string bakeryId = "bakery_001")
         {
             var s = new Setup();
             s.Supplier = new OffMapAidBusinessRuntime(MillbrookDefinition(flourInventoryUnit));
@@ -83,7 +83,7 @@ namespace LandLedgers.EditorTests.Economy
                 "custody-test", "bakery_001", "Glen Pierce", 1, s.BakeryCash, 0, out OffMapAidCargoLot lot),
                 "fixture order must place");
             s.Lot = lot;
-            s.Bakery = new BakeryShopRuntime("bakery_001");
+            s.Bakery = new BakeryShopRuntime(bakeryId);
             s.Adapter = new MillbrookFlourFreightCustodyAdapter(s.Supplier, s.Bakery, s.Ids);
             s.Shipment = new LogisticsShipmentState
             {
@@ -99,13 +99,14 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         private static LogisticsShipmentState ShipmentLike(Setup s,
-            string shipmentId = null, string sourceBusinessInstanceId = null, string cargoLotId = null)
+            string shipmentId = null, string sourceBusinessInstanceId = null, string cargoLotId = null,
+            string destinationBusinessInstanceId = null)
         {
             return new LogisticsShipmentState
             {
                 shipmentId = shipmentId ?? s.Shipment.shipmentId,
                 sourceBusinessInstanceId = sourceBusinessInstanceId ?? s.Shipment.sourceBusinessInstanceId,
-                destinationBusinessInstanceId = s.Shipment.destinationBusinessInstanceId,
+                destinationBusinessInstanceId = destinationBusinessInstanceId ?? s.Shipment.destinationBusinessInstanceId,
                 cargoLotId = cargoLotId ?? s.Shipment.cargoLotId,
                 cargoSkuId = s.Shipment.cargoSkuId,
                 plannedQuantityUnits = s.Shipment.plannedQuantityUnits,
@@ -276,6 +277,45 @@ namespace LandLedgers.EditorTests.Economy
             AssertReasonContains(reason, "no valid pound quantity");
             Assert.AreEqual(0, s.Bakery.FlourStock.Lots.Count);
             Assert.IsTrue(!s.Lot.Received);
+        }
+
+        // Slice A5 (QA-06): a supplier refusal after prevalidation must
+        // add nothing to Bakery stock. The empty-destination seam is the
+        // single refusal that survives the adapter's prevalidation with
+        // real types (ReceiveAtBakery refuses an empty destination id,
+        // and ResolveLot passes "" == ""): on the old add-before-confirm
+        // order the flour is already in the first bakery's stock when the
+        // refusal lands (red); after the reorder nothing is added and a
+        // retry against the correct bakery delivers exactly once.
+        [Test]
+        public void SupplierRefusalAfterPrevalidation_AddsNothing_RetryDeliversExactlyOnce()
+        {
+            Setup s = NewSetup(bakeryId: "");
+            Assert.AreEqual("", s.Bakery.BusinessInstanceId, "the degenerate bakery has an empty id");
+            Assert.IsTrue(s.Adapter.CommitSourceLot(s.Shipment, 1, out string pickupReason), pickupReason);
+
+            Assert.IsTrue(!s.Adapter.ReceiveCargoLot(s.Shipment, 1, 1, out string reason),
+                "the receive must refuse on the empty destination");
+            AssertReasonContains(reason, "destination does not match");
+            Assert.AreEqual(0, s.Bakery.FlourStock.Lots.Count,
+                "a refused receive must add nothing to Bakery stock");
+            Assert.IsTrue(!s.Lot.Received, "the supplier lot must stay unreceived after the refusal");
+            Assert.AreEqual(220, s.Supplier.GetInventoryUnits("bakery_flour_sack"),
+                "the supplier inventory must be unchanged by the refusal");
+
+            // Retry against the correct bakery: a second adapter over the
+            // SAME supplier, with a shipment carrying the same shipment id,
+            // source, and cargo lot id but destination "bakery_001".
+            var bakery2 = new BakeryShopRuntime("bakery_001");
+            var adapter2 = new MillbrookFlourFreightCustodyAdapter(s.Supplier, bakery2, s.Ids);
+            LogisticsShipmentState retryShipment = ShipmentLike(s, destinationBusinessInstanceId: "bakery_001");
+            Assert.IsTrue(adapter2.ReceiveCargoLot(retryShipment, 1, 1, out string retryReason), retryReason);
+            Assert.AreEqual(1, bakery2.FlourStock.Lots.Count, "the retry must deliver exactly one Bakery lot");
+            Assert.AreEqual(10, bakery2.FlourStock.Lots[0].Units);
+            Assert.AreEqual(s.Lot.LotId, bakery2.FlourStock.Lots[0].ImportOrderId);
+            Assert.IsTrue(s.Lot.Received, "the supplier lot must be received after the retry");
+            Assert.AreEqual(0, s.Bakery.FlourStock.Lots.Count,
+                "the first bakery must still hold nothing — exactly one Bakery lot exists in total");
         }
     }
 }

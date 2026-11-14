@@ -565,6 +565,13 @@ namespace LandLedgers.Persistence
                 }
             }
 
+            // Plan 25: deferred sawmill restore. The four sawmill sections
+            // (driver, counters, ledger, transfer driver) load here, after
+            // the Pass 9 mill restore above — loading them at the :418 hub
+            // load would run before the yard is restored and drop valid
+            // jobs. The bootstrapper owns the restore; guard mirrors :449.
+            if (bootstrapper == null) Debug.LogWarning("[SaveLoad] Sawmill restore after Pass 9 was not applied: no FirstLedgerSliceBootstrapper found; the four sawmill sections will not restore.", this); else bootstrapper.ApplySawmillRestoreAfterPass9(save.systems);
+
             managementPanel?.Refresh();
             ConfigureFirstSessionGuidance();
 

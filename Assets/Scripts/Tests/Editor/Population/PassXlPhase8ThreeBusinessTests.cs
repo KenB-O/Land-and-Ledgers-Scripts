@@ -56,7 +56,7 @@ namespace LandLedgers.Editor.Population
         public void Run_EndToEnd_ThreeBusinessesProduceSellAndFeed_AllHouseholdsEat_CashReconciles()
         {
             ThreeBusinessSliceRunReport report = Run();
-            Assert.IsNotNull(report, "Composed run must succeed; see report diagnostics: " + (report != null ? string.Join("; ", report.Diagnostics) : "null"));
+            Assert.IsTrue(report != null && report.Succeeded, "Composed run must succeed; see report diagnostics: " + (report != null ? string.Join("; ", report.Diagnostics) : "null"));
 
             // Cash reconciliation, every step accounted for:
             // Store: 5000 - 1250 procurement - 1000 Kennedy draw + 800 flour sale + 240 feed sale - 100 final draw = 3690.
@@ -146,6 +146,7 @@ namespace LandLedgers.Editor.Population
                 LotId = ids.Allocate(EntityKind.Lot),
                 FuelWoodUnits = 8,
                 SourceMillBusinessId = "mill-1",
+                OwnerId = "mill-1",
                 SourceLogLotId = "log-42",
                 StandId = "stand-7",
                 Species = "white pine",
@@ -190,6 +191,7 @@ namespace LandLedgers.Editor.Population
             {
                 LotId = ids.Allocate(EntityKind.Lot), FuelWoodUnits = 3,
                 SourceMillBusinessId = "mill-1", SourceLogLotId = "log-1", StandId = "stand-1",
+                OwnerId = "mill-1",
             }, new List<string>()));
             var dealer = new BusinessRuntimeState();
             dealer.BindBusinessIdentity("fuel-dealer-1");
@@ -212,6 +214,7 @@ namespace LandLedgers.Editor.Population
             {
                 LotId = ids.Allocate(EntityKind.Lot), FuelWoodUnits = 2,
                 SourceMillBusinessId = "mill-1", SourceLogLotId = "log-2", StandId = "stand-1",
+                OwnerId = "mill-1",
             }, new List<string>()));
             string cashFailure = source.SupplyTo(bakery, 2, 1, new List<string>());
             Assert.IsNotNull(cashFailure);

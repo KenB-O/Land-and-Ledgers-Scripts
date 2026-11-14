@@ -1484,18 +1484,19 @@ namespace LandLedgers.Economy
 
         /// <summary>
         /// Slice F1 (Objectives 16-17): plan the staging-to-edge grid route
-        /// for a detailed freight shipment with presentation-parity staging
-        /// resolution. Staging is resolved in this order, each candidate
-        /// validated in-bounds AND a road cell by
-        /// FreightStagingCellSelector: (1) the carrier building's anchor
-        /// road-access coord, (2) the carrier building plot's
-        /// roadAccessCell, (3) the operator home building's anchor
-        /// road-access coord, (4) the operator home building plot's
-        /// roadAccessCell. Every candidate comes from authored building /
-        /// plot data; no world position is invented. On success the staging
-        /// cell and its source ("business-anchor" / "business-plot" /
-        /// "operator-home-anchor" / "operator-home-plot") are returned so
-        /// the caller can log them. Planning itself is identical to
+        /// for a detailed freight shipment. Staging requires valid assigned
+        /// commercial premises, gated by
+        /// FreightStagingCellSelector.TryValidateCommercialPremises,
+        /// mirroring the presentation gate
+        /// (OpeningTransportPresentationController): an operator's home is
+        /// not a substitute for commercial premises. Candidates are the
+        /// carrier building's anchor road-access coord and the carrier
+        /// building plot's roadAccessCell only, each validated in-bounds
+        /// AND a road cell by FreightStagingCellSelector. Every candidate
+        /// comes from authored building / plot data; no world position is
+        /// invented. On success the staging cell and its source
+        /// ("business-anchor" / "business-plot") are returned so the
+        /// caller can log them. Planning itself is identical to
         /// TryPlanFreightExitRoute (same GridExitSelector, same
         /// GridCoord-to-GridCoord request, ExtraOffMapCells = 0).
         /// SOURCE-REVIEWED ONLY: LogisticsRuntimeManager.cs is
@@ -1503,7 +1504,6 @@ namespace LandLedgers.Economy
         /// </summary>
         public bool TryPlanFreightExitRouteForCarrier(
             BusinessInstanceState carrier,
-            int operatorHomeBuildingId,
             RegionalExitPoint exitPoint,
             out LogisticsRoutePlan plan,
             out string reason,
@@ -1534,32 +1534,35 @@ namespace LandLedgers.Economy
                 return false;
             }
 
+            // Staging requires valid assigned commercial premises, mirroring
+            // the presentation gate (OpeningTransportPresentationController).
+            // An operator's home is not a substitute for commercial premises.
+            int assignedBuildingId = carrier.AssignedBuildingId;
+            int resolvedBuildingId = -1;
+            if (townWorld.TryGetBuildingById(assignedBuildingId, out PlacedBuilding assignedBuilding) && assignedBuilding != null)
+                resolvedBuildingId = assignedBuilding.id;
+            bool assignmentValid = sharedBusinessRuntime != null
+                && sharedBusinessRuntime.IsBusinessAssignmentValid(carrier);
+            if (!FreightStagingCellSelector.TryValidateCommercialPremises(
+                    assignedBuildingId, resolvedBuildingId, assignmentValid,
+                    out string premisesRefusal))
+            {
+                reason = $"TryPlanFreightExitRouteForCarrier: carrier '{carrier.InstanceId}' cannot stage: {premisesRefusal}";
+                return false;
+            }
+
             GridCoord? carrierAnchor = TryGetBuildingAnchorCoord(carrier.AssignedBuildingId);
             GridCoord? carrierPlot = TryGetBuildingPlotCell(carrier.AssignedBuildingId);
-            if (FreightStagingCellSelector.TrySelectStagingCell(
+            if (!FreightStagingCellSelector.TrySelectStagingCell(
                     carrierAnchor, carrierPlot, IsUsableRoadCell,
                     out GridCoord cell, out string source, out string carrierReason))
             {
-                stagingCell = cell;
-                stagingSource = "business-" + source;
+                reason = $"TryPlanFreightExitRouteForCarrier: no staging road cell for carrier '{carrier.InstanceId}' — business candidates: {carrierReason}.";
+                return false;
             }
-            else
-            {
-                GridCoord? homeAnchor = TryGetBuildingAnchorCoord(operatorHomeBuildingId);
-                GridCoord? homePlot = TryGetBuildingPlotCell(operatorHomeBuildingId);
-                if (!FreightStagingCellSelector.TrySelectStagingCell(
-                        homeAnchor, homePlot, IsUsableRoadCell,
-                        out cell, out source, out string homeReason))
-                {
-                    reason = $"TryPlanFreightExitRouteForCarrier: no staging road cell for carrier '{carrier.InstanceId}' — " +
-                        $"business candidates: {carrierReason}; " +
-                        $"operator-home candidates (homeBuildingId={operatorHomeBuildingId}): {homeReason}.";
-                    return false;
-                }
 
-                stagingCell = cell;
-                stagingSource = "operator-home-" + source;
-            }
+            stagingCell = cell;
+            stagingSource = "business-" + source;
 
             Debug.Log($"[FreightExit] staging=({stagingCell.x}, {stagingCell.z}) via {stagingSource} for carrier '{carrier.InstanceId}'.", this);
             return TryPlanExitRouteFromStaging(stagingCell, exitPoint, out plan, out reason);

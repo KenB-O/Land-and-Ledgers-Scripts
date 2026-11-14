@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using NUnit.Framework;
 using LandLedgers.Economy;
 using LandLedgers.Economy.BreadDrivers;
@@ -67,6 +68,118 @@ namespace LandLedgers.Editor.Economy
             public BusinessRuntimeState BakeryRuntime = new BusinessRuntimeState();
             public BakeryShopRuntime Bakery = new BakeryShopRuntime("pierce-bakery-1");
             public EntityIdRegistry Ids = new EntityIdRegistry();
+        }
+
+        private static void SetPrivateField(object target, string name, object value) =>
+            target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).SetValue(target, value);
+
+        private static RetailPricingDefinition Pricing(int baseline, int bandMin, int bandMax,
+            float sensitivity, float markup = 1f) => new RetailPricingDefinition
+        {
+            baselineCents = baseline,
+            baseWholesaleCostCents = 0,
+            importCostCents = 0,
+            localMarketBand = new PriceBand { minCents = bandMin, maxCents = bandMax },
+            markupMultiplier = markup,
+            supplyDemandSensitivity = sensitivity,
+        };
+
+        private static ItemCategoryDefinition Category(string categoryId, string displayName,
+            int sortOrder, float markup, string summary, params string[] itemIds)
+        {
+            var category = new ItemCategoryDefinition();
+            SetPrivateField(category, "categoryId", categoryId);
+            SetPrivateField(category, "displayName", displayName);
+            SetPrivateField(category, "role", (RetailCategoryRole)0);
+            SetPrivateField(category, "demandGroup", (RetailDemandGroup)3);
+            SetPrivateField(category, "sortOrder", sortOrder);
+            SetPrivateField(category, "defaultMarkupMultiplier", markup);
+            SetPrivateField(category, "lowStockThreshold01", 0.25f);
+            SetPrivateField(category, "playerFacingSummary", summary);
+            SetPrivateField(category, "itemIds", itemIds);
+            return category;
+        }
+
+        private static ItemDefinition Item(string itemId, string displayName, string categoryId,
+            int baseline, int bandMin, int bandMax, float sensitivity,
+            int startingStock, int reorderTarget, int reorderLot,
+            string[] producers, string[] consumers)
+        {
+            var item = new ItemDefinition();
+            SetPrivateField(item, "itemId", itemId);
+            SetPrivateField(item, "displayName", displayName);
+            SetPrivateField(item, "categoryId", categoryId);
+            SetPrivateField(item, "unit", "bundle");
+            SetPrivateField(item, "pricing", Pricing(baseline, bandMin, bandMax, sensitivity));
+            SetPrivateField(item, "startingStockUnits", startingStock);
+            SetPrivateField(item, "reorderTargetUnits", reorderTarget);
+            SetPrivateField(item, "reorderLotSize", reorderLot);
+            SetPrivateField(item, "coreStock", true);
+            SetPrivateField(item, "producerTags", producers);
+            SetPrivateField(item, "consumerTags", consumers);
+            return item;
+        }
+
+        // QA-28: the authored FuelDealerProfile.asset remains the authority.
+        // This builder reproduces its values in code because Resources.Load
+        // returns null in the Roslyn harness (no asset library there). If the
+        // asset changes, update this builder in the same change. Unity loads
+        // the real asset; this builder is harness-only scaffolding.
+        // Omitted on purpose (no test path reads them): workerSlots (authored:
+        // fuel_yard_keeper 1200c required, yard_helper 900c), operations
+        // cadences (1/1/1/1/2), siteRequirements (6x6, frontage 4, buildable
+        // 30, zones 1/0, road frontage), mainFocus fuel_yard.
+        private static BusinessProfileDefinition BuildFuelDealerProfile()
+        {
+            var economy = new BusinessEconomyDefinition();
+            SetPrivateField(economy, "startingCashCents", 13000);
+            SetPrivateField(economy, "weeklyReorderReserveCents", 1600);
+            SetPrivateField(economy, "defaultRetailMarkupMultiplier", 1.12f);
+            SetPrivateField(economy, "lowStockWarningThreshold01", 0.25f);
+            SetPrivateField(economy, "reliabilitySensitivity", 0.8f);
+            SetPrivateField(economy, "competitionSensitivity", 0.2f);
+            var business = new BusinessDefinition(BusinessType.FuelDealer, "fuel_dealer", "Fuel Dealer");
+            SetPrivateField(business, "economy", economy);
+            SetPrivateField(business, "ownedCategoryIds", new[] { "slabs_offcuts", "fuel_wood" });
+
+            var profile = ScriptableObject.CreateInstance<BusinessProfileDefinition>();
+            SetPrivateField(profile, "business", business);
+            SetPrivateField(profile, "categories", new[]
+            {
+                Category("slabs_offcuts", "Slabs / Offcuts", 10, 1f,
+                    "Low-grade slabs and offcuts bought from the sawmill.", "fuel_offcut_bundle"),
+                Category("fuel_wood", "Fuel Wood", 20, 1.12f,
+                    "Cut and bundled heating fuel for household reserves.", "fuel_wood_bundle"),
+            });
+            SetPrivateField(profile, "items", new[]
+            {
+                Item("fuel_offcut_bundle", "Slab / Offcut Bundle", "slabs_offcuts",
+                    22, 12, 40, 0.2f, 12, 32, 8,
+                    new[] { "sawmill" }, new[] { "fuel_dealer" }),
+                Item("fuel_wood_bundle", "Fuel Wood Bundle", "fuel_wood",
+                    28, 15, 48, 0.35f, 24, 72, 12,
+                    new[] { "fuel_dealer" }, new[] { "household", "heating" }),
+            });
+            SetPrivateField(profile, "archetype", BusinessArchetype.GoodsTransformer);
+            SetPrivateField(profile, "throughputMode", BusinessThroughputMode.Converter);
+            SetPrivateField(profile, "baselineWeeklyThroughputUnits", 36);
+            SetPrivateField(profile, "baselineDailyServiceCapacity", 0);
+            SetPrivateField(profile, "inputCategoryIds", new[] { "slabs_offcuts" });
+            SetPrivateField(profile, "outputCategoryIds", new[] { "fuel_wood" });
+            SetPrivateField(profile, "serviceCategoryIds", Array.Empty<string>());
+            return profile;
+        }
+
+        // QA-28: minimal stand-in for GeneralStoreProfile.asset. Test 3
+        // consumes only the business type (for the "not Fuel Dealer"
+        // refusal) and a working Create; no category/item access happens on
+        // the refusal paths, so the store catalog is not duplicated here.
+        private static BusinessProfileDefinition BuildGeneralStoreProfile()
+        {
+            var profile = ScriptableObject.CreateInstance<BusinessProfileDefinition>();
+            SetPrivateField(profile, "business",
+                new BusinessDefinition(BusinessType.GeneralStore, "general_store", "General Store"));
+            return profile;
         }
 
         private static Func<string, WorkstationComponentView?> OvenFinder()
@@ -160,6 +273,7 @@ namespace LandLedgers.Editor.Economy
                 LotId = ids.Allocate(EntityKind.Lot),
                 FuelWoodUnits = 20,
                 SourceMillBusinessId = "mill-1",
+                OwnerId = "mill-1",
                 SourceLogLotId = "log-1",
                 StandId = "stand-1",
                 Species = "pine",
@@ -180,6 +294,7 @@ namespace LandLedgers.Editor.Economy
                 LotId = ids.Allocate(EntityKind.Lot),
                 FuelWoodUnits = unitsA,
                 SourceMillBusinessId = "mill-1",
+                OwnerId = "mill-1",
                 SourceLogLotId = "log-lot-1",
                 StandId = "stand-1",
                 Species = "pine",
@@ -191,6 +306,7 @@ namespace LandLedgers.Editor.Economy
                     LotId = ids.Allocate(EntityKind.Lot),
                     FuelWoodUnits = unitsB,
                     SourceMillBusinessId = "mill-1",
+                    OwnerId = "mill-1",
                     SourceLogLotId = "log-lot-1",
                     StandId = "stand-1",
                     Species = "pine",
@@ -202,9 +318,7 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void FuelDealerLiveRegistration_UsesFormedBusinessAndProfilePrice_EmptyYardCannotSell()
         {
-            BusinessProfileDefinition profile = Resources.Load<BusinessProfileDefinition>(
-                "Core/Economy/BusinessProfiles/FuelDealerProfile");
-            Assert.NotNull(profile, "the production Fuel Dealer profile must be available");
+            BusinessProfileDefinition profile = BuildFuelDealerProfile();
             ItemDefinition fuel = profile.FindItem("fuel_wood_bundle");
             ItemCategoryDefinition category = profile.FindCategory("fuel_wood");
             Assert.NotNull(fuel);
@@ -251,8 +365,7 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void FuelDealerLiveRegistration_RequiresExplicitIntakeBundleConversion()
         {
-            BusinessProfileDefinition profile = Resources.Load<BusinessProfileDefinition>(
-                "Core/Economy/BusinessProfiles/FuelDealerProfile");
+            BusinessProfileDefinition profile = BuildFuelDealerProfile();
             ItemDefinition fuel = profile.FindItem("fuel_wood_bundle");
             ItemCategoryDefinition category = profile.FindCategory("fuel_wood");
             int configuredPrice = fuel.Pricing.GetCostPlusPriceCents(category.DefaultMarkupMultiplier, 0f);
@@ -264,6 +377,7 @@ namespace LandLedgers.Editor.Economy
             {
                 LotId = ids.Allocate(EntityKind.Lot),
                 FuelWoodUnits = 12,
+                OwnerId = "mill-1",
                 SourceMillBusinessId = "mill-1",
                 SourceLogLotId = "log-lot-1",
                 StandId = "stand-1",
@@ -294,14 +408,78 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void FuelDealerRegistration_StockedYardStillSellsNothing_ConversionUnset()
+        {
+            BusinessProfileDefinition profile = BuildFuelDealerProfile();
+            ItemDefinition fuel = profile.FindItem("fuel_wood_bundle");
+            ItemCategoryDefinition category = profile.FindCategory("fuel_wood");
+            int configuredPrice = fuel.Pricing.GetCostPlusPriceCents(category.DefaultMarkupMultiplier, 0f);
+            Assert.Greater(configuredPrice, 0, "price comes from the authored profile calculation, not an adapter fallback");
+
+            BusinessInstanceState business = BusinessInstanceState.Create(
+                "jacob-fuel-dealer", profile, 17, BusinessOwnerIdentity.Npc(5, "Jacob", "Miller"));
+            var intake = new FuelYardByproductIntake();
+            var ids = new EntityIdRegistry();
+            Assert.IsNull(intake.ReceiveByproductLot(business.InstanceId, new SlabOffcutFuelLot
+            {
+                LotId = ids.Allocate(EntityKind.Lot),
+                FuelWoodUnits = 20,
+                OwnerId = "mill-1",
+                SourceMillBusinessId = "mill-1",
+                SourceLogLotId = "log-lot-1",
+                StandId = "stand-1",
+                Species = "pine",
+                ProducedDayIndex = 1,
+            }, new List<string>()));
+            var cash = new Series2BusinessRuntimeCashPort(business.RuntimeState);
+            Assert.IsTrue(Series2FuelDealerSupplierAdapter.TryCreateForBusiness(
+                business, intake, cash, configuredPrice,
+                out Series2FuelDealerSupplierAdapter adapter, out string refusal), refusal);
+
+            var directory = new SupplierDirectory();
+            Series2FuelDealerSupplierAdapter.RegisterIn(directory, adapter);
+            Assert.AreEqual(1, directory.All.Count, "one existing business identity registers one supplier");
+            int fuelSellers = 0;
+            foreach (IGoodsSupplier supplier in directory.SuppliersFor("fuel_wood")) fuelSellers++;
+            Assert.AreEqual(1, fuelSellers, "the registered business is discoverable for its configured category");
+            Assert.AreEqual(0, adapter.FuelUnitsPerHouseholdUnit,
+                "live wiring must not turn the legacy 1:1 test convenience into an approved conversion");
+            Assert.AreEqual(0, adapter.ItemStockUnits("fuel_wood"), "a stocked yard sells nothing until the conversion decision lands");
+            Assert.IsFalse(adapter.OffersItem("fuel_wood"), "a stocked yard with no conversion is not a saleable offer");
+
+            var diagnostics = new List<string>();
+            int cashBefore = business.RuntimeState.CurrentCashCents;
+            Assert.AreEqual(0, adapter.SellItem("fuel_wood", 1, 0, CashSettlement(), diagnostics));
+            StringAssert.Contains("not configured", string.Join("; ", diagnostics));
+            Assert.AreEqual(cashBefore, business.RuntimeState.CurrentCashCents, "a refused sale moves no cash");
+            Assert.AreEqual(20, intake.TotalFuelWoodUnitsFor(business.InstanceId), "a refused sale leaves the yard untouched");
+        }
+
+        [Test]
+        public void FuelDealerRegistration_RefusesZeroPrice_NoOfferRegistered()
+        {
+            BusinessProfileDefinition profile = BuildFuelDealerProfile();
+            BusinessInstanceState business = BusinessInstanceState.Create(
+                "jacob-fuel-dealer", profile, 17, BusinessOwnerIdentity.Npc(5, "Jacob", "Miller"));
+            var intake = new FuelYardByproductIntake();
+            var cash = new Series2BusinessRuntimeCashPort(business.RuntimeState);
+
+            Assert.IsFalse(Series2FuelDealerSupplierAdapter.TryCreateForBusiness(
+                business, intake, cash, 0,
+                out Series2FuelDealerSupplierAdapter adapter, out string refusal));
+            StringAssert.Contains("no positive configured sale price", refusal);
+            Assert.IsNull(adapter, "a refused offer builds no adapter");
+
+            var directory = new SupplierDirectory();
+            Assert.AreEqual(0, directory.All.Count, "a refused offer registers nothing");
+        }
+
+        [Test]
         public void FuelDealerLiveRegistration_RejectsWrongBusinessAndUnassignedPremises()
         {
-            BusinessProfileDefinition profile = Resources.Load<BusinessProfileDefinition>(
-                "Core/Economy/BusinessProfiles/FuelDealerProfile");
+            BusinessProfileDefinition profile = BuildFuelDealerProfile();
             var intake = new FuelYardByproductIntake();
-            BusinessProfileDefinition storeProfile = Resources.Load<BusinessProfileDefinition>(
-                "Core/Economy/BusinessProfiles/GeneralStoreProfile");
-            Assert.NotNull(storeProfile);
+            BusinessProfileDefinition storeProfile = BuildGeneralStoreProfile();
             BusinessInstanceState store = BusinessInstanceState.Create(
                 "store-1", storeProfile, 17, BusinessOwnerIdentity.Npc(1, "Store", "Owner"));
             var cash = new Series2BusinessRuntimeCashPort(store.RuntimeState);
@@ -385,6 +563,7 @@ namespace LandLedgers.Editor.Economy
                 LotId = ids.Allocate(EntityKind.Lot),
                 FuelWoodUnits = 20,
                 SourceMillBusinessId = "mill-1",
+                OwnerId = "mill-1",
                 SourceLogLotId = "log-1",
                 StandId = "stand-1",
                 Species = "pine",

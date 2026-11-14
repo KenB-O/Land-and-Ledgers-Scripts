@@ -414,6 +414,27 @@ namespace LandLedgers.Economy
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
 
+        /// <summary>QA-20: the coordinator holds no save slot and is rebuilt
+        /// after a load, so its sequence restarts at 0. Seed it from the
+        /// freight service's own tracked shipments before minting, so a new
+        /// id never collides with one the service already holds (the service
+        /// persists its shipments through its own save DTO, and restores them
+        /// into the tracked list). Only the cship- prefix is ours; other
+        /// shipment ids are ignored. Never moves the sequence backward.</summary>
+        private void SeedSequenceFromService(FreightShipmentService service)
+        {
+            if (service == null) return;
+            foreach (LogisticsShipmentState existing in service.TrackedShipments)
+            {
+                if (existing == null) continue;
+                string id = existing.ShipmentId;
+                if (string.IsNullOrEmpty(id)
+                    || !id.StartsWith("cship-", StringComparison.Ordinal)) continue;
+                if (int.TryParse(id.Substring("cship-".Length), out int n) && n >= sequence)
+                    sequence = n + 1;
+            }
+        }
+
         /// <summary>
         /// Freights one recorded sale to the site. Returns null on success
         /// (goods in the stockpile); a refusal otherwise — on refusal the
@@ -454,6 +475,9 @@ namespace LandLedgers.Economy
                     return "ConstructionMaterialFreightCoordinator: freight charge unpaid — " + payProblem;
             }
 
+            // QA-20: seed from the service's tracked shipments so a fresh
+            // coordinator after load never re-issues a pre-save cship- id.
+            SeedSequenceFromService(plan.Freight);
             string shipmentId = $"cship-{sequence++}";
             // Pass XI WS2: the site stockpile IS the receiving authority for
             // this leg. Without a ReceiveShipment callback the shipment

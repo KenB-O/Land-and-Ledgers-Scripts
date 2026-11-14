@@ -474,8 +474,13 @@ namespace LandLedgers.Persistence
         // above. Same holder pattern as FuelIntake: Codex fills these with
         // the live instances before the first save; a null field captures
         // as an empty section and restores as a diagnostic, never a crash.
-        // No production driver owns these runtimes yet (Priority C timber
-        // integration), so they are null in production until wired.
+        // A2 plan 27 (P10 live felling driver, note 110 C4): the
+        // logging operation, stand registry, and logging camp ARE owned
+        // in production now — the bootstrapper constructs them into
+        // these slots in ConfigureSawmillProductionWiring, and
+        // SimulationDrivers.DriveFelling drives the camp daily. The
+        // sawmill, lumber yard, and customer queue slots keep the
+        // original shape: null until their own wiring lands.
         public LandLedgers.Economy.Businesses.Logging.LoggingStandRegistry StandRegistry;
         public LandLedgers.Economy.Businesses.Logging.LoggingOperationRuntime LoggingOperation;
         public LandLedgers.Economy.Businesses.Sawmill.SawmillShopRuntime Sawmill;
@@ -1196,10 +1201,25 @@ namespace LandLedgers.Persistence
                 diag.Add("Series2Pass9Save: sawmill log stock present in save but no sawmill supplied; mill stock NOT restored.");
             }
 
-            // QA-29: lumber yard shop.
-            if (LumberYard != null)
+            // QA-29 / C2: lumber yard shop. Identity-gated like the bakery
+            // above: a DTO for a different business id must not overwrite
+            // the live yard.
+            if (LumberYard != null && dto.LumberYard != null)
             {
-                LumberYard.LoadFromSaveDto(dto.LumberYard);
+                if (!string.Equals(LumberYard.BusinessInstanceId,
+                        dto.LumberYard.BusinessInstanceId ?? string.Empty,
+                        StringComparison.Ordinal))
+                {
+                    diag.Add($"Series2Pass9Save: Lumber yard runtime identity mismatch; live '{LumberYard.BusinessInstanceId}' was not overwritten by saved '{dto.LumberYard.BusinessInstanceId}'.");
+                }
+                else
+                {
+                    LumberYard.LoadFromSaveDto(dto.LumberYard);
+                }
+            }
+            else if (LumberYard != null)
+            {
+                LumberYard.LoadFromSaveDto(dto.LumberYard); // null dto clears honestly (old save).
             }
             else if (dto.LumberYard != null && dto.LumberYard.LumberStock != null && dto.LumberYard.LumberStock.Lots != null && dto.LumberYard.LumberStock.Lots.Count > 0)
             {

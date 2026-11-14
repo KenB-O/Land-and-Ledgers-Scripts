@@ -60,6 +60,17 @@ namespace LandLedgers.Economy.Logistics
         public int MinuteOfDay;
 
         /// <summary>
+        /// Slice A3 (QA-12): the registered dispatch task id for the shipment's
+        /// agreement, when one exists. Returns the TaskAuthority task id string
+        /// (as stored on FreightServiceAgreement.DispatchTaskId), or null/empty
+        /// when the shipment has no registered dispatch task. The service never
+        /// references the agreement book directly; the hooks builder supplies
+        /// the lookup from its own book. Null means no adoption is attempted
+        /// and BeginLoading mints as before.
+        /// </summary>
+        public Func<LogisticsShipmentState, string> FindRegisteredDispatchTask;
+
+        /// <summary>
         /// Slice A2 (QA-05): true when the hooks' caller already holds the
         /// handling crew's windows itself (ConstructionMaterialFreight
         /// reserves whole-day crew windows before driving the chain, so the
@@ -360,6 +371,59 @@ namespace LandLedgers.Economy.Logistics
             }
         }
 
+        /// <summary>Slice A3 (QA-12): adopt the pre-registered dispatch
+        /// task for the shipment's agreement instead of minting a second
+        /// load task. Returns true when the task was adopted and started
+        /// (the shipment is Loading). Returns false with a non-empty
+        /// reason when adoption was attempted but blocked (reserve or
+        /// start refused); the caller must return that refusal without
+        /// minting. Returns false with an empty reason when there is
+        /// nothing to adopt (no lookup, no registered id, task missing or
+        /// not adoptable); the caller falls through to minting. Never
+        /// calls AssignTask: the adopted task's budget was already
+        /// committed when it was assigned. Never cancels the adopted
+        /// task: it belongs to the agreement, not to BeginLoading.</summary>
+        private bool TryAdoptDispatchTask(LogisticsShipmentState shipment, EntityId loaderId,
+            FreightShipmentHooks hooks, out string reason)
+        {
+            reason = string.Empty;
+            string registeredTaskId = hooks?.FindRegisteredDispatchTask?.Invoke(shipment);
+            if (string.IsNullOrEmpty(registeredTaskId)) return false;
+            WorkTask adopted = hooks.Tasks.FindTaskByIdString(registeredTaskId);
+            if (adopted == null)
+            {
+                Log(hooks, $"shipment '{shipment.ShipmentId}': registered dispatch task '{registeredTaskId}' is not in the task authority; minting a fresh load task.");
+                return false;
+            }
+            if ((adopted.Status != TaskStatus.Assigned && adopted.Status != TaskStatus.ResourcesReserved)
+                || adopted.AssigneeId != loaderId)
+            {
+                Log(hooks, $"shipment '{shipment.ShipmentId}': registered dispatch task '{registeredTaskId}' is {adopted.Status} assigned to {adopted.AssigneeId}, not adoptable for loader {loaderId}; minting a fresh load task.");
+                return false;
+            }
+            // Reserve-first (QA-05) applies to the adopted task too: its
+            // window is booked from its own remaining minutes, before
+            // StartTask. Its budget is already committed; the reservation
+            // is the only new booking.
+            if (!ReserveHandlerWindow(hooks, loaderId, shipment.ShipmentId,
+                "freight:load:" + shipment.ShipmentId, adopted.MinutesRemaining, loadReservations, out reason))
+            {
+                reason = "FreightShipmentService: load window refused: " + reason;
+                return false;
+            }
+            if (!hooks.Tasks.StartTask(adopted.TaskId, hooks.DayIndex, out reason))
+            {
+                reason = "FreightShipmentService: registered dispatch task could not start: " + reason;
+                ReleaseHandlerWindow(loadReservations, hooks, shipment.ShipmentId, loaderId, "freight:load:" + shipment.ShipmentId);
+                return false;
+            }
+            loadTasks[shipment.ShipmentId] = adopted.TaskId;
+            shipment.state = LogisticsShipmentStatus.Loading;
+            shipment.stageElapsedGameSeconds = 0f;
+            Log(hooks, "shipment '" + shipment.ShipmentId + "': loading started (adopted dispatch task " + adopted.TaskId + ", " + adopted.DefinitionId + ").");
+            return true;
+        }
+
         /// Creates a shipment (Planned). Over-capacity cargo is blocked pre-load:
         /// Failed with a reason, zero cargo owned (MR-P001).
         /// </summary>
@@ -569,6 +633,23 @@ namespace LandLedgers.Economy.Logistics
                 reason = "FreightShipmentService: " + loadConflict;
                 return false;
             }
+            // Slice A3 (QA-12): adopt the pre-registered dispatch task
+            // instead of minting a second load task. The overnight
+            // recovery made StartTask refuse ResourcesReserved tasks, so
+            // minting a second task for a handler who already holds the
+            // registered dispatch task always refuses on occupancy.
+            if (TryAdoptDispatchTask(shipment, loaderId, hooks, out reason))
+                return true;
+            if (!string.IsNullOrEmpty(reason))
+            {
+                // Adoption was attempted but blocked (reserve or start
+                // refused). Do not fall through to minting: the registered
+                // task exists and the refusal is about this handler, not
+                // about a missing task.
+                return false;
+            }
+            // No registered task, or it could not be adopted: fall through
+            // to the minting path below.
             string defId = "freight:load:" + shipment.ShipmentId;
             if (hooks.Tasks.GetDefinition(defId) == null)
             {
@@ -1150,7 +1231,43 @@ namespace LandLedgers.Economy.Logistics
             return dto;
         }
 
-        /// <summary>Restores shipments; task bindings re-resolve by definition id (read-only).</summary>
+        /// <summary>
+        /// Slice A3b (QA-30): resolves the agreement's registered dispatch
+        /// task for a restored shipment, when the hooks wire that lookup.
+        /// Validated: the task must exist, be non-terminal, and carry the
+        /// load definition for this shipment ("freight:load:&lt;id&gt;" or
+        /// "fr.load-freight") — a miswired lookup returning the 1-minute
+        /// dispatch token (definition "freight-dispatch-assignment") can
+        /// never bind as a load task. Non-terminal is the full terminal
+        /// set (TaskDurationDiagnostics: Complete / Failed / Cancelled /
+        /// ReworkRequired) — ReworkRequired is terminal for the instance
+        /// (TaskModels: "failed work that needs a corrective task"), so a
+        /// rework task must never bind as a live load task. Returns null
+        /// when the lookup is unwired, empty, or fails validation.
+        /// </summary>
+        private WorkTask FindRegisteredLoadTask(FreightShipmentHooks hooks,
+            LogisticsShipmentState restored, string shipmentId)
+        {
+            if (hooks == null || hooks.Tasks == null || hooks.FindRegisteredDispatchTask == null || restored == null)
+                return null;
+            string registeredId = hooks.FindRegisteredDispatchTask(restored);
+            if (string.IsNullOrEmpty(registeredId))
+                return null;
+            WorkTask candidate = hooks.Tasks.FindTaskByIdString(registeredId);
+            if (candidate == null)
+                return null;
+            if (candidate.Status == TaskStatus.Complete
+                || candidate.Status == TaskStatus.Failed
+                || candidate.Status == TaskStatus.Cancelled
+                || candidate.Status == TaskStatus.ReworkRequired)
+                return null;
+            if (candidate.DefinitionId != "freight:load:" + shipmentId
+                && candidate.DefinitionId != "fr.load-freight")
+                return null;
+            return candidate;
+        }
+
+        /// <summary>Restores shipments; task bindings re-resolve through the registered-task lookup then by definition id (read-only). Shipments whose handling task cannot be re-bound are Delayed with a named reason instead of stalling (Slice A3b, QA-30).</summary>
         public List<LogisticsShipmentState> RestoreSaveDto(FreightServiceSaveDto dto,
             FreightShipmentHooks hooks)
         {
@@ -1209,20 +1326,86 @@ namespace LandLedgers.Economy.Logistics
                     dispatchAuthorities[restored.ShipmentId] = hooks.Reservations;
                 }
             }
-            // Rebind in-flight handling tasks by their deterministic definition ids.
+            // Slice A3b (QA-30): rebind in-flight handling tasks. The load
+            // task is found (1) through the agreement's registered dispatch
+            // task when the hooks wire that lookup (fixture scope — no
+            // production hooks builder wires it; the QA-12 identity
+            // decision keeps adoption fixture-only), validated so a
+            // miswired lookup returning the 1-minute dispatch token cannot
+            // bind it, then (2) by the deterministic definition id
+            // "freight:load:<shipmentId>" — the production minted task.
+            // No bare "fr.load-freight" definition fallback: that id is
+            // shared by the separate company-runtime delivery flow
+            // (DeliveryService.cs:408 mints it too) and a first-match
+            // lookup could bind another shipment's task. When neither
+            // lookup finds a task and the restored shipment is still
+            // Loading, the shipment is Delayed with a named reason and
+            // resumeState Planned instead of stalling forever in Loading
+            // (WorkLoading fails with "no load task" on a null rebind).
+            // The unload loop has no registered-task lookup (the dispatch
+            // task is a load task); its net resumes to Arrived so the
+            // unload flow restarts from the pre-unload state.
             if (hooks != null && hooks.Tasks != null)
             {
+                var restoredById = new Dictionary<string, LogisticsShipmentState>(StringComparer.Ordinal);
+                foreach (LogisticsShipmentState restored in out_)
+                {
+                    if (restored != null && !string.IsNullOrEmpty(restored.ShipmentId))
+                        restoredById[restored.ShipmentId] = restored;
+                }
                 foreach (string shipmentId in dto.ShipmentIdsWithLoadTasks)
                 {
-                    WorkTask t = hooks.Tasks.FindOpenTask("freight:load:" + shipmentId,
-                        EntityId.For(EntityKind.Business, 3), EntityId.Invalid);
-                    if (t != null) loadTasks[shipmentId] = t.TaskId;
+                    LogisticsShipmentState loadShipment;
+                    restoredById.TryGetValue(shipmentId, out loadShipment);
+                    WorkTask t = FindRegisteredLoadTask(hooks, loadShipment, shipmentId)
+                        ?? hooks.Tasks.FindOpenTask("freight:load:" + shipmentId,
+                            EntityId.For(EntityKind.Business, 3), EntityId.Invalid);
+                    // A3b follow-up nit (b): bind only an OPEN task.
+                    // FindOpenTask excludes Complete only, so without this
+                    // guard it would re-bind the same dead task the
+                    // registered lookup just rejected (Failed, Cancelled,
+                    // ReworkRequired) and the shipment would stall in
+                    // Loading with a non-null binding instead of hitting
+                    // the Delayed net below. IsOpen is the authority's own
+                    // predicate (Queued / Assigned / InProgress / Paused /
+                    // WaitingOnPassiveProcess / WaitingOnDependency /
+                    // ResourcesReserved).
+                    if (t != null && t.IsOpen)
+                    {
+                        loadTasks[shipmentId] = t.TaskId;
+                        continue;
+                    }
+                    if (loadShipment != null
+                        && loadShipment.Status == LogisticsShipmentStatus.Loading)
+                    {
+                        loadShipment.MarkDelayed(
+                            "restored shipment '" + shipmentId + "' is Loading but its load task could not be re-bound after restore (no open load task found); delaying for a fresh load attempt",
+                            LogisticsShipmentStatus.Planned);
+                        Log(hooks, "shipment '" + shipmentId + "' delayed: " + loadShipment.BlockedReason);
+                    }
                 }
                 foreach (string shipmentId in dto.ShipmentIdsWithUnloadTasks)
                 {
                     WorkTask t = hooks.Tasks.FindOpenTask("freight:unload:" + shipmentId,
                         EntityId.For(EntityKind.Business, 3), EntityId.Invalid);
-                    if (t != null) unloadTasks[shipmentId] = t.TaskId;
+                    // Same guard as the load loop, symmetric: a terminal
+                    // unload task must fall through to the Delayed net
+                    // below instead of binding a dead task.
+                    if (t != null && t.IsOpen)
+                    {
+                        unloadTasks[shipmentId] = t.TaskId;
+                        continue;
+                    }
+                    LogisticsShipmentState unloadShipment;
+                    if (restoredById.TryGetValue(shipmentId, out unloadShipment)
+                        && unloadShipment != null
+                        && unloadShipment.Status == LogisticsShipmentStatus.Unloading)
+                    {
+                        unloadShipment.MarkDelayed(
+                            "restored shipment '" + shipmentId + "' is Unloading but its unload task could not be re-bound after restore (no open unload task found); delaying for a fresh unload attempt",
+                            LogisticsShipmentStatus.Arrived);
+                        Log(hooks, "shipment '" + shipmentId + "' delayed: " + unloadShipment.BlockedReason);
+                    }
                 }
             }
             return out_;

@@ -1436,29 +1436,11 @@ namespace LandLedgers.Orchestration.Systems
             Housing.LoadFromSaveDto(dto.housing);
             LodgingRegistry.LoadFromSaveDto(dto.lodgingRegistry);
             LoadBoardingHouseRuntimes(dto.boardingHouseRuntimes);
-            // P3 (F6 production wiring): restore the sawmill production
-            // state. Counters first, then the driver (the driver load
-            // re-attaches open jobs against the yard lots), ledger
-            // unconstrained. Null-guarded: on a first Continue the
-            // bootstrapper constructs these after the hub load, so a
-            // missing runtime skips its section (recorded here); the yard
-            // lots themselves restore through the Pass 9 mill, so no goods
-            // are lost — only the in-progress job record. A follow-up
-            // slice owns first-Continue restore for these three sections.
-            // F7 yard-transfer wiring: the transfer driver restores after
-            // the other three sections (it re-attaches against both mill
-            // and yard LumberStock); the same follow-up owns its restore
-            // too — four sections in total. The F7 gap is benign (a lost
-            // Planned job self-heals through the begin pass), so it adds
-            // no new deadline.
-            if (sawmillLabourCounters != null) sawmillLabourCounters.LoadFromSaveDto(dto.sawmillLabourCounters);
-            else diagnostics.Add("SimulationSystemsHub: sawmill labour counters section skipped — no counters constructed yet; the bootstrapper owns construction.");
-            if (sawmillProductionDriver != null) sawmillProductionDriver.LoadFromSaveDto(dto.sawmillProductionDriver);
-            else diagnostics.Add("SimulationSystemsHub: sawmill production driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
-            if (logLotCustodyLedger != null) logLotCustodyLedger.LoadFromSaveDto(dto.logLotCustodyLedger);
-            else diagnostics.Add("SimulationSystemsHub: log-lot custody ledger section skipped — no ledger constructed yet; the bootstrapper owns construction.");
-            if (sawmillToYardTransferDriver != null) sawmillToYardTransferDriver.LoadFromSaveDto(dto.sawmillToYardTransferDriver);
-            else diagnostics.Add("SimulationSystemsHub: sawmill-to-yard transfer driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
+            // Sawmill sections (driver, counters, ledger, transfer driver) are NOT restored
+            // here. They load after the Pass 9 mill restore via
+            // FirstLedgerSliceBootstrapper.ApplySawmillRestoreAfterPass9 — loading
+            // them here would run before the yard is restored and drop valid jobs
+            // (plan 25).
             TenancyPayments.LoadFromSaveDto(dto.tenancyPayments);
             HouseholdDecisions.LoadFromSaveDto(dto.householdDecisions);
             HouseholdDecisionDriver.LoadFromSaveDto(dto.householdDecisionDriver);
@@ -1512,6 +1494,31 @@ namespace LandLedgers.Orchestration.Systems
                 }
             }
 
+            return diagnostics;
+        }
+
+        /// <summary>
+        /// Deferred sawmill restore. Called ONLY from FirstLedgerSliceBootstrapper
+        /// .ApplySawmillRestoreAfterPass9 after the Pass 9 mill restore — never
+        /// from LoadFromSaveDto — because the driver loads re-attach against
+        /// yard lots that do not exist until the Pass 9 restore runs.
+        /// </summary>
+        public List<string> LoadSawmillSectionsFromSaveDto(SystemsSaveDto dto)
+        {
+            var diagnostics = new List<string>();
+            if (dto == null)
+            {
+                return diagnostics;
+            }
+
+            if (sawmillLabourCounters != null) sawmillLabourCounters.LoadFromSaveDto(dto.sawmillLabourCounters);
+            else diagnostics.Add("SimulationSystemsHub: sawmill labour counters section skipped — no counters constructed yet; the bootstrapper owns construction.");
+            if (sawmillProductionDriver != null) sawmillProductionDriver.LoadFromSaveDto(dto.sawmillProductionDriver);
+            else diagnostics.Add("SimulationSystemsHub: sawmill production driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
+            if (logLotCustodyLedger != null) logLotCustodyLedger.LoadFromSaveDto(dto.logLotCustodyLedger);
+            else diagnostics.Add("SimulationSystemsHub: log-lot custody ledger section skipped — no ledger constructed yet; the bootstrapper owns construction.");
+            if (sawmillToYardTransferDriver != null) sawmillToYardTransferDriver.LoadFromSaveDto(dto.sawmillToYardTransferDriver);
+            else diagnostics.Add("SimulationSystemsHub: sawmill-to-yard transfer driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
             return diagnostics;
         }
 

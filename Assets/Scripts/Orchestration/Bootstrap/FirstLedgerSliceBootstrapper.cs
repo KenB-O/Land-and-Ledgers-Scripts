@@ -2013,6 +2013,26 @@ namespace LandLedgers.FirstLedger
             }
         }
 
+        // Plan 25: deferred sawmill restore. Called by SaveLoadManager.LoadDefaultSlot
+        // after the Pass 9 mill restore — the driver loads re-attach against yard
+        // lots that do not exist until the Pass 9 restore runs. Takes the DTO as
+        // a parameter and keeps no state (the loads are clear-then-load, so a
+        // second call in the same session is safe by construction).
+        public void ApplySawmillRestoreAfterPass9(SystemsSaveDto systems)
+        {
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[SaveLoad] Sawmill restore after Pass 9 was not applied: no SimulationSystemsHub found; the four sawmill sections will not restore.", this);
+                return;
+            }
+
+            foreach (string diagnostic in systemsHub.LoadSawmillSectionsFromSaveDto(systems))
+            {
+                Debug.LogWarning($"[SaveLoad] {diagnostic}");
+            }
+        }
+
         // Q04 Slice 1 (re-plan): called by SaveLoadManager.LoadDefaultSlot
         // AFTER the shared-business restore and BEFORE the Pass XL restore.
         // The Bakery instance exists only in that window (a pre-load call

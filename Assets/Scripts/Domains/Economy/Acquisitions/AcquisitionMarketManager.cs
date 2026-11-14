@@ -779,6 +779,12 @@ namespace LandLedgers.Economy
         [SerializeField]
         private List<LandAppreciationState> ownedLandAppreciations = new();
 
+        // R47: NPC land appreciation states, seeded from recorded NPC acquisition
+        // prices (same LandAppreciationState shape as the player list, separate
+        // list so the player refresh prune never touches them).
+        [SerializeField]
+        private List<LandAppreciationState> npcLandAppreciations = new();
+
         [SerializeField]
         private List<AcquisitionDealState> activeDeals = new();
 
@@ -1132,6 +1138,15 @@ namespace LandLedgers.Economy
                 }
             }
 
+            // R47: NPC list persists beside the player list (same DTO shape).
+            for (int i = 0; i < npcLandAppreciations.Count; i++)
+            {
+                if (npcLandAppreciations[i] != null)
+                {
+                    dto.npcLandAppreciations.Add(CaptureLandAppreciationSaveDto(npcLandAppreciations[i]));
+                }
+            }
+
             for (int i = 0; i < constructionSupportNodes.Count; i++)
             {
                 if (constructionSupportNodes[i] != null)
@@ -1178,6 +1193,7 @@ namespace LandLedgers.Economy
             ownedPlotIds.Clear();
             ownedBusinessBuildingIds.Clear();
             ownedLandAppreciations.Clear();
+            npcLandAppreciations.Clear();
             activeDeals.Clear();
             watchedListingIds.Clear();
             opportunityWindows.Clear();
@@ -1272,6 +1288,7 @@ namespace LandLedgers.Economy
             }
 
             RestoreLandAppreciations(dto.landAppreciations);
+            RestoreNpcLandAppreciations(dto.npcLandAppreciations);
             RestoreConstructionSupportNodes(dto.constructionSupportNodes);
             RestoreConstructionProjects(dto.constructionProjects);
             SyncSavedOwnershipToWorld();
@@ -6447,6 +6464,26 @@ namespace LandLedgers.Economy
             }
         }
 
+        private void RestoreNpcLandAppreciations(IReadOnlyList<LandAppreciationSaveDto> dtos)
+        {
+            npcLandAppreciations.Clear();
+            if (dtos == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < dtos.Count; i++)
+            {
+                LandAppreciationState state = CreateLandAppreciationState(dtos[i]);
+                if (state == null || state.plotId < 0 || FindNpcLandAppreciation(state.plotId) != null)
+                {
+                    continue;
+                }
+
+                npcLandAppreciations.Add(state);
+            }
+        }
+
         private void RefreshOwnedLandAppreciations()
         {
             AutoWire();
@@ -6475,6 +6512,116 @@ namespace LandLedgers.Economy
 
                 RefreshLandAppreciationState(state, plot, ResolveLandAppreciationBuilding(plot, state), currentDayIndex);
             }
+        }
+
+        /// <summary>
+        /// R47: seed land appreciation states for NPC holdings from their recorded
+        /// acquisition prices. Idempotent — a holding that already has a state, or
+        /// whose parcel key does not resolve to a live plot, seeds nothing.
+        /// Driven daily from SimulationDrivers.DriveNpcPropertyLifeDay, before the
+        /// NPC property-life drive, so the levy resolver answers from the seeded
+        /// state instead of the 1500c fallback. Seed values come only from recorded
+        /// acquisition prices (D1: basis = Max(1, P); D2: day indices = current day).
+        /// </summary>
+        public void SeedNpcLandAppreciations(IReadOnlyCollection<NpcPropertyHolding> holdings, int currentDayIndex)
+        {
+            AutoWire();
+            if (townWorld == null || townWorld.Plots == null || holdings == null)
+            {
+                return;
+            }
+
+            foreach (NpcPropertyHolding holding in holdings)
+            {
+                if (holding == null)
+                {
+                    continue;
+                }
+
+                if (!PlayerTitleBridge.TryPlotIdForParcelKey(holding.ParcelId, out int plotId))
+                {
+                    continue;
+                }
+
+                if (FindNpcLandAppreciation(plotId) != null)
+                {
+                    continue;
+                }
+
+                TownPlot plot = GetPlot(plotId);
+                if (plot == null)
+                {
+                    continue;
+                }
+
+                PlacedBuilding building = plot.buildingId >= 0 ? GetBuilding(plot.buildingId) : null;
+                LandAppreciationImprovementState improvementState = ResolveCurrentImprovementState(plot, building, LandAppreciationImprovementState.Empty);
+                int basis = Mathf.Max(1, holding.AcquisitionPriceCents);
+                LandAppreciationState state = new()
+                {
+                    plotId = plot.id,
+                    buildingId = building != null ? building.id : -1,
+                    holdingKind = LandAppreciationHoldingKind.UrbanParcel,
+                    improvementState = improvementState,
+                    purchaseBasisCents = basis,
+                    capitalizedImprovementCents = 0,
+                    currentEstimatedValueCents = basis,
+                    appreciationDeltaCents = 0,
+                    purchaseDayIndex = currentDayIndex,
+                    lastValuationDayIndex = currentDayIndex,
+                    townGrowthPressure01 = EstimateTownGrowthPressure01(plot),
+                    developmentReadiness01 = EstimateDevelopmentReadiness01(plot, building, improvementState)
+                };
+
+                npcLandAppreciations.Add(state);
+            }
+        }
+
+        /// <summary>
+        /// R47: daily refresh of the NPC land appreciation list. Prunes states whose
+        /// plot is gone or whose holding was removed; otherwise re-runs the shared
+        /// valuation refresh. NEVER touches the player list and never calls the
+        /// player refresh prune or IsPlayerOwnedPlot.
+        /// </summary>
+        public void RefreshNpcLandAppreciations(IReadOnlyCollection<NpcPropertyHolding> holdings, int currentDayIndex)
+        {
+            AutoWire();
+            if (townWorld == null || townWorld.Plots == null || holdings == null)
+            {
+                return;
+            }
+
+            for (int i = npcLandAppreciations.Count - 1; i >= 0; i--)
+            {
+                LandAppreciationState state = npcLandAppreciations[i];
+                if (state == null)
+                {
+                    npcLandAppreciations.RemoveAt(i);
+                    continue;
+                }
+
+                TownPlot plot = GetPlot(state.plotId);
+                if (plot == null || !HasNpcHoldingForPlot(holdings, state.plotId))
+                {
+                    npcLandAppreciations.RemoveAt(i);
+                    continue;
+                }
+
+                RefreshLandAppreciationState(state, plot, ResolveLandAppreciationBuilding(plot, state), currentDayIndex);
+            }
+        }
+
+        private static bool HasNpcHoldingForPlot(IReadOnlyCollection<NpcPropertyHolding> holdings, int plotId)
+        {
+            foreach (NpcPropertyHolding holding in holdings)
+            {
+                if (holding != null && PlayerTitleBridge.TryPlotIdForParcelKey(holding.ParcelId, out int holdingPlotId) && holdingPlotId == plotId)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void BackfillMissingLandAppreciationsForOwnedPlots()
@@ -6662,6 +6809,21 @@ namespace LandLedgers.Economy
             for (int i = 0; i < ownedLandAppreciations.Count; i++)
             {
                 LandAppreciationState state = ownedLandAppreciations[i];
+                if (state != null && state.plotId == plotId)
+                {
+                    return state;
+                }
+            }
+
+            return null;
+        }
+
+        // R47: NPC-list mirror of FindLandAppreciation — NPC list only.
+        private LandAppreciationState FindNpcLandAppreciation(int plotId)
+        {
+            for (int i = 0; i < npcLandAppreciations.Count; i++)
+            {
+                LandAppreciationState state = npcLandAppreciations[i];
                 if (state != null && state.plotId == plotId)
                 {
                     return state;
@@ -8642,6 +8804,16 @@ namespace LandLedgers.Economy
                 int estimated = Mathf.Max(0, state.currentEstimatedValueCents);
                 return estimated > 0 ? estimated : Mathf.Max(0, state.TotalBasisCents);
             }
+
+            // R47: NPC holdings answer from the seeded NPC list, identical return shape.
+            for (int i = 0; i < npcLandAppreciations.Count; i++)
+            {
+                LandAppreciationState state = npcLandAppreciations[i];
+                if (state == null || state.plotId != plotId) continue;
+                int estimated = Mathf.Max(0, state.currentEstimatedValueCents);
+                return estimated > 0 ? estimated : Mathf.Max(0, state.TotalBasisCents);
+            }
+
             return 0;
         }
 

@@ -1559,6 +1559,7 @@ namespace LandLedgers.Persistence
             EnsureList(ref save.acquisition.activeDeals, report, "Active acquisition deals");
             EnsureList(ref save.acquisition.watchedListingIds, report, "Watched acquisition listings");
             EnsureList(ref save.acquisition.landAppreciations, report, "Land appreciations");
+            EnsureList(ref save.acquisition.npcLandAppreciations, report, "NPC land appreciations");
             EnsureList(ref save.acquisition.constructionSupportNodes, report, "Construction support nodes");
             EnsureList(ref save.acquisition.constructionProjects, report, "Construction projects");
             EnsureTopLevel(ref save.acquisition.ownershipAptitude, report, "Ownership aptitude");

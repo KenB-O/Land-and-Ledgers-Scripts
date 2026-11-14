@@ -1212,6 +1212,8 @@ namespace LandLedgers.Persistence
         public List<AcquisitionDealSaveDto> activeDeals = new();
         public List<string> watchedListingIds = new();
         public List<LandAppreciationSaveDto> landAppreciations = new();
+        // R47: NPC land appreciation states, seeded from recorded NPC acquisition prices.
+        public List<LandAppreciationSaveDto> npcLandAppreciations = new();
         public List<ConstructionSupportNodeSaveDto> constructionSupportNodes = new();
         public List<ConstructionProjectSaveDto> constructionProjects = new();
         public OwnershipAptitudeSaveDto ownershipAptitude = new();

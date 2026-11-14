@@ -3105,6 +3105,14 @@ namespace LandLedgers.Orchestration.Systems
             // the same persisted record as the player path. Null saleContext keeps the
             // honest no-op (disputes == null records nothing).
             if (saleContext != null) saleContext.FeedDisputes(acquisitionMarket.PropertyDisputes);
+            // R47: seed/refresh the NPC land appreciation states before the NPC
+            // property-life drive, so the levy resolver answers from the recorded
+            // acquisition price instead of the 1500c fallback.
+            if (acquisitionMarket != null)
+            {
+                acquisitionMarket.SeedNpcLandAppreciations(hub.NpcPropertyLife.Holdings, absoluteDayIndex);
+                acquisitionMarket.RefreshNpcLandAppreciations(hub.NpcPropertyLife.Holdings, absoluteDayIndex);
+            }
             NpcPropertyLifeReport report = hub.NpcPropertyLife.DriveNpcPropertyLife(
                 hub.CreditCash, hub.NpcPropertyLife.Taxes, hub.FinancialObligations,
                 hub.CivicTreasury, absoluteDayIndex, diag, saleContext, hub.Ids, hub.CreditInstruments,

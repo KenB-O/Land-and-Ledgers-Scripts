@@ -2535,8 +2535,8 @@ namespace LandLedgers.Population
             JourneyRoute freight = journeys.FindRoute(store, home, TravelMode.Wagon);
             int minutes = freight.Found ? Math.Max(1, freight.TotalMinutes) : 0;
             AddEvent(trip.Result, trip.DayIndex, ShoppingEventKind.Delivery, trip.ShopperPersonId, trip.Need,
-                $"Arranged delivery scheduled: {trip.UnitsSettled}u {trip.Need.ItemId} by wagon ({minutes} min).",
-                "freight already settled; custody transfers at the door — real time, not instant.");
+                $"Arranged delivery scheduled: {trip.UnitsSettled}u {trip.Need.ItemId} by wagon ({minutes} min){CarrierSuffix(trip)}.",
+                $"freight already settled{CarrierSuffix(trip)}; custody transfers at the door — real time, not instant.");
             return minutes;
         }
 
@@ -2837,9 +2837,9 @@ namespace LandLedgers.Population
             }
 
             AddEvent(trip.Result, dayIndex, ShoppingEventKind.Delivery, trip.ShopperPersonId, need,
-                $"Delivery arrived: {unitsReceived}u {need.ItemId} received at the household door ({batch.BatchId}).",
-                "freight ran its real minutes; custody transferred at the door.");
-            diag.Add($"Day {dayIndex}: delivery {batch.BatchId} received ({unitsReceived}u {need.ItemId}).");
+                $"Delivery arrived: {unitsReceived}u {need.ItemId} received at the household door ({batch.BatchId}){CarrierSuffix(trip)}.",
+                $"freight ran its real minutes{CarrierSuffix(trip)}; custody transferred at the door.");
+            diag.Add($"Day {dayIndex}: delivery {batch.BatchId} received ({unitsReceived}u {need.ItemId}){CarrierSuffix(trip)}.");
             return null;
         }
 
@@ -3573,9 +3573,9 @@ namespace LandLedgers.Population
             JourneyRoute freight = journeys.FindRoute(chosen.Supplier.LocationId, homeLocation, TravelMode.Wagon);
             int freightMinutes = freight.Found ? Math.Max(1, freight.TotalMinutes) : 0;
             AddEvent(result, dayIndex, ShoppingEventKind.Delivery, shopperId, need,
-                $"Arranged delivery executing: {batch.Units}u {batch.ItemId} by wagon ({freightMinutes} min, {freight.TotalMiles:F1} mi).",
-                $"batch {batch.BatchId}; freight {chosen.DeliveryFeeCents}c already settled; custody transfers at the door.");
-            diag.Add($"Day {dayIndex}: delivery {batch.BatchId} executed ({freightMinutes} min wagon freight).");
+                $"Arranged delivery executing: {batch.Units}u {batch.ItemId} by wagon ({freightMinutes} min, {freight.TotalMiles:F1} mi){CarrierSuffix(chosen)}.",
+                $"batch {batch.BatchId}; freight {chosen.DeliveryFeeCents}c already settled{CarrierSuffix(chosen)}; custody transfers at the door.");
+            diag.Add($"Day {dayIndex}: delivery {batch.BatchId} executed ({freightMinutes} min wagon freight){CarrierSuffix(chosen)}.");
         }
 
         // ---------- helpers ----------
@@ -3628,6 +3628,19 @@ namespace LandLedgers.Population
             {
                 person.scheduleState = state;
             }
+        }
+
+        /// <summary>P28 carrier leg: " via carrier '{id}'" when a carrier is bound, else empty.</summary>
+        private static string CarrierSuffix(PlannedShoppingTrip trip)
+        {
+            string id = trip != null && trip.Candidate != null ? trip.Candidate.CarrierBusinessInstanceId ?? string.Empty : string.Empty;
+            return string.IsNullOrEmpty(id) ? string.Empty : $" via carrier '{id}'";
+        }
+
+        private static string CarrierSuffix(ShoppingCandidate chosen)
+        {
+            string id = chosen != null ? chosen.CarrierBusinessInstanceId ?? string.Empty : string.Empty;
+            return string.IsNullOrEmpty(id) ? string.Empty : $" via carrier '{id}'";
         }
 
         private void AddEvent(

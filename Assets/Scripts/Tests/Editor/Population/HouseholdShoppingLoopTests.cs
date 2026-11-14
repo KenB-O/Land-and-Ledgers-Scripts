@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Population;
@@ -163,6 +165,13 @@ namespace LandLedgers.EditorTests.Population
             }
         }
 
+        private enum CarrierBinding
+        {
+            None,
+            Bound,
+            Unresolvable,
+        }
+
         private sealed class Fixture
         {
             public PopulationState Population;
@@ -180,13 +189,14 @@ namespace LandLedgers.EditorTests.Population
             public EntityIdRegistry EntityIds;
             public HouseholdShoppingLoop Loop;
             public FakeStorePort Port;
+            public BusinessRuntimeState Carrier;
             public Dictionary<int, string> PersonLocations = new Dictionary<int, string>();
             public List<string> Diagnostics = new List<string>();
 
             public int HouseholdId = 7;
             public int Day = 0; // Monday (DayOfWeekIndex 0)
 
-            public static Fixture Create(bool withEdge = true, bool includeChild = true, bool wipeKnowledge = false)
+            public static Fixture Create(bool withEdge = true, bool includeChild = true, bool wipeKnowledge = false, CarrierBinding carrier = CarrierBinding.None)
             {
                 var f = new Fixture();
                 f.Population = new PopulationState();
@@ -242,10 +252,37 @@ namespace LandLedgers.EditorTests.Population
                     f.Knowledge.LearnSupplier(1, "store-1", "lives in the same town", 0);
                 }
 
-                f.Loop = new HouseholdShoppingLoop(
-                    f.Population, f.Membership, f.Ledgers, f.Inventories, f.Needs,
-                    f.Directory, f.Journeys, f.Tasks, f.Budgets, f.Tracker, f.Knowledge,
-                    f.Obligations, f.EntityIds);
+                // P28 carrier leg: the carrier till is built the
+                // FreightCompanyTests way — BindBusinessIdentity, never a
+                // BusinessId setter (the id is getter-only). The till starts
+                // empty so every cent in it after a test is a fee this
+                // slice posted. Mirrors the P28 fixture exactly.
+                f.Carrier = new BusinessRuntimeState();
+                f.Carrier.BindBusinessIdentity("carrier-1");
+                f.Carrier.SetCurrentCashCents(0);
+
+                if (carrier == CarrierBinding.None)
+                {
+                    f.Loop = new HouseholdShoppingLoop(
+                        f.Population, f.Membership, f.Ledgers, f.Inventories, f.Needs,
+                        f.Directory, f.Journeys, f.Tasks, f.Budgets, f.Tracker, f.Knowledge,
+                        f.Obligations, f.EntityIds);
+                }
+                else
+                {
+                    f.Loop = new HouseholdShoppingLoop(
+                        f.Population, f.Membership, f.Ledgers, f.Inventories, f.Needs,
+                        f.Directory, f.Journeys, f.Tasks, f.Budgets, f.Tracker, f.Knowledge,
+                        f.Obligations, f.EntityIds,
+                        carrierBusinessIdForSupplier: supplier =>
+                            string.Equals(supplier.SupplierBusinessId, "store-1", StringComparison.Ordinal)
+                                ? "carrier-1"
+                                : string.Empty,
+                        carrierRuntimeResolver: id => carrier == CarrierBinding.Bound
+                            && string.Equals(id, "carrier-1", StringComparison.Ordinal)
+                                ? f.Carrier
+                                : null);
+                }
 
                 f.PersonLocations[1] = "home";
                 f.PersonLocations[2] = "home";
@@ -710,7 +747,15 @@ namespace LandLedgers.EditorTests.Population
         [Test]
         public void ExecuteNeed_UnaffordableFreight_BuysOnlyWhatShopperCanCarry()
         {
-            Fixture f = Fixture.Create();
+            // P28 carrier leg: this test binds the seams (Bound) so its
+            // premise still holds. Under the P28 B shape a quoted fee with
+            // no carrier bound is forced to 0, so with no seams the 9000c
+            // fee vanishes, the delivery becomes affordable (7200c), and
+            // all 60u arrive — the test failed at 87ca16d8 with the
+            // original fixture. With a carrier bound the 9000c fee is real,
+            // the delivery is unaffordable (7200 + 9000 > 10000 fund), and
+            // the shopper carries the affordable partial amount, as before.
+            Fixture f = Fixture.Create(carrier: CarrierBinding.Bound);
             f.Fund(10000);
             f.Port.OffersDeliveryValue = true;
             f.Port.DeliveryFeeValue = 9000; // freight alone breaks the budget
@@ -738,7 +783,12 @@ namespace LandLedgers.EditorTests.Population
         [Test]
         public void ExecuteNeed_DeliveryAffordable_ArrangedDeliveryExecutes()
         {
-            Fixture f = Fixture.Create();
+            // P28 carrier leg (F2/F10 update): under the P28 B shape the
+            // fee belongs to the carrier, never the store — outflow 7400
+            // splits store 7200 / carrier 200. The fixture binds the seams
+            // (Bound), mirroring the P28 fixture; T18 is the executed
+            // counterpart of this pin in the harness-included file.
+            Fixture f = Fixture.Create(carrier: CarrierBinding.Bound);
             f.Fund(20000);
             f.Port.OffersDeliveryValue = true;
             f.Port.DeliveryFeeValue = 200;
@@ -752,9 +802,11 @@ namespace LandLedgers.EditorTests.Population
 
             Assert.IsTrue(result.Success, result.FailureReason);
             Assert.AreEqual(GoodsCustodyState.ArrangedDelivery, custodyAtTrip);
-            // 60u * 120c + 200c freight.
+            // 60u * 120c + 200c freight, split store 7200 / carrier 200.
             Assert.AreEqual(7400, result.BuyerOutflowCents);
-            Assert.AreEqual(7400, result.StoreCashInCents);
+            Assert.AreEqual(7200, result.StoreCashInCents);
+            Assert.AreEqual(200, result.CarrierCashInCents);
+            Assert.AreEqual(200, f.Carrier.CurrentCashCents, "Carrier till holds exactly the fee.");
             Assert.AreEqual(60, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId));
             bool sawDelivery = false;
             foreach (ShoppingDiagnosticEvent e in result.Events)

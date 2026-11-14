@@ -961,5 +961,203 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsNotNull(authority.AccrueInterest(obligation.ObligationId, 100),
                 "A cancelled obligation is inert to accrual.");
         }
+
+        [Test]
+        public void P28_T18_BoundCarrierMoneySplit()
+        {
+            // The F2 mirror pin, in the harness-included file: the same
+            // bound-carrier split F2 pins in place (outflow 7400, store
+            // 7200, carrier 200), executed here. Green-at-base by design —
+            // it pins behavior the P28 landing already established through
+            // the fixture seams (T5/T8 pin the same split in other shapes).
+            // Its red half lives in the F2 scratch verification build.
+            Fixture f = DeliveryFixture(CarrierBinding.Bound, 200);
+            f.Fund(20000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 60);
+
+            GoodsCustodyState custodyAtTrip = GoodsCustodyState.InHand;
+            f.Loop.MidTripObserver = (trip, batch) => { custodyAtTrip = batch.Custody; };
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(GoodsCustodyState.ArrangedDelivery, custodyAtTrip);
+            Assert.AreEqual(7400, result.BuyerOutflowCents, "60u * 120c + 200c freight.");
+            Assert.AreEqual(7200, result.StoreCashInCents, "Store posts goods-only, never the fee.");
+            Assert.AreEqual(200, result.CarrierCashInCents, "Carrier posts exactly the fee.");
+            Assert.AreEqual(200, f.Carrier.CurrentCashCents, "Carrier till holds exactly the fee.");
+            Assert.AreEqual(60, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId));
+            bool sawDelivery = false;
+            foreach (ShoppingDiagnosticEvent e in result.Events)
+            {
+                if (e.Kind == ShoppingEventKind.Delivery) sawDelivery = true;
+            }
+
+            Assert.IsTrue(sawDelivery, "no delivery event recorded");
+        }
+
+        [Test]
+        public void P28_T19_DriverPathDeliveryNamesCarrier()
+        {
+            // The driver-path naming pin (note 141 C1: the
+            // EstimateDeliveryMinutes event is a fourth delivery string and
+            // is asserted here too, alongside the ReceiveDelivery event and
+            // the scheduled-delivery diagnostic). Q4: "via carrier '{id}'"
+            // in the title AND the detail of every event. Runtime-red at
+            // base: no diagnostic or event names the carrier today.
+            Fixture f = DeliveryFixture(CarrierBinding.Bound, 200);
+            f.Fund(20000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 60);
+
+            f.Driver.PlanForHousehold(f.HouseholdId, f.Needs, f.Day, f.Options(), f.Diagnostics);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count, "one trip must be planned");
+            PlannedShoppingTrip trip = f.Driver.ActiveTrips[0];
+            Assert.IsNotNull(trip.Candidate, "the planned trip must carry its candidate");
+            Assert.AreEqual("carrier-1", trip.Candidate.CarrierBusinessInstanceId);
+
+            // Drive the trip through the driver (the InTransitSaveLoadTests
+            // precedent: AdvanceTick + PopDue / HandleDueEvent) until the
+            // delivery due event fires and ReceiveDelivery runs.
+            for (int t = 0; t < 2000 && f.Driver.ActiveTrips.Count > 0; t++)
+            {
+                float now = f.Day * 86400f + t * 300f;
+                f.Driver.AdvanceTick(now, f.Day, f.DueEvents, f.Diagnostics);
+                foreach (DueEvent ev in f.DueEvents.PopDue(now))
+                {
+                    f.Driver.HandleDueEvent(ev, f.Day, ev.DueGameSeconds, f.DueEvents, f.Diagnostics);
+                }
+
+                if (trip.Batch != null && trip.Batch.Custody == GoodsCustodyState.ReceivedAtHousehold)
+                {
+                    break;
+                }
+            }
+
+            Assert.IsNotNull(trip.Batch, "the driver drive must settle a batch");
+            Assert.AreEqual(GoodsCustodyState.ReceivedAtHousehold, trip.Batch.Custody,
+                "the driver drive must reach ReceiveDelivery (delivery due event never fired)");
+            Assert.IsNotNull(trip.Result, "the settled trip must carry its result");
+            Assert.AreEqual(7400, trip.Result.BuyerOutflowCents);
+            Assert.AreEqual(7200, trip.Result.StoreCashInCents);
+            Assert.AreEqual(200, trip.Result.CarrierCashInCents);
+            Assert.AreEqual(200, f.Carrier.CurrentCashCents, "Carrier till holds exactly the fee.");
+            Assert.AreEqual(60, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
+
+            bool sawScheduled = false;
+            bool sawArrived = false;
+            foreach (ShoppingDiagnosticEvent e in trip.Result.Events)
+            {
+                if (e.Kind != ShoppingEventKind.Delivery) continue;
+                if (e.Summary.IndexOf("Arranged delivery scheduled", StringComparison.Ordinal) >= 0)
+                {
+                    sawScheduled = true;
+                    Assert.IsTrue(e.Summary.IndexOf("via carrier 'carrier-1'", StringComparison.Ordinal) >= 0,
+                        "the scheduled-delivery event title must name the carrier: " + e.Summary);
+                    Assert.IsTrue(e.Details.IndexOf("via carrier 'carrier-1'", StringComparison.Ordinal) >= 0,
+                        "the scheduled-delivery event detail must name the carrier: " + e.Details);
+                }
+
+                if (e.Summary.IndexOf("Delivery arrived", StringComparison.Ordinal) >= 0)
+                {
+                    sawArrived = true;
+                    Assert.IsTrue(e.Summary.IndexOf("via carrier 'carrier-1'", StringComparison.Ordinal) >= 0,
+                        "the arrived event title must name the carrier: " + e.Summary);
+                    Assert.IsTrue(e.Details.IndexOf("via carrier 'carrier-1'", StringComparison.Ordinal) >= 0,
+                        "the arrived event detail must name the carrier: " + e.Details);
+                }
+            }
+
+            Assert.IsTrue(sawScheduled, "no 'Arranged delivery scheduled' event on the trip");
+            Assert.IsTrue(sawArrived, "no 'Delivery arrived' event on the trip");
+            string diag = string.Join("\n", f.Diagnostics);
+            Assert.IsTrue(diag.IndexOf("delivery freight scheduled", StringComparison.Ordinal) >= 0,
+                "the scheduled-delivery diagnostic must appear: " + diag);
+            Assert.IsTrue(diag.IndexOf("via carrier 'carrier-1'", StringComparison.Ordinal) >= 0,
+                "the scheduled-delivery diagnostic must name the carrier: " + diag);
+        }
+
+        [Test]
+        public void P28_T20_InstantPathDeliveryNamesCarrier()
+        {
+            // The instant-path naming pin: ExecuteDelivery names the
+            // carrier in its event and diagnostic. Runtime-red at base.
+            // The timing collapse is unchanged: receipt is same-tick on
+            // this path, and the test asserts nothing about minutes.
+            Fixture f = DeliveryFixture(CarrierBinding.Bound, 200);
+            f.Fund(20000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 60);
+
+            GoodsCustodyState custodyAtTrip = GoodsCustodyState.InHand;
+            f.Loop.MidTripObserver = (trip, batch) => { custodyAtTrip = batch.Custody; };
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(GoodsCustodyState.ArrangedDelivery, custodyAtTrip);
+            Assert.AreEqual(7400, result.BuyerOutflowCents);
+            Assert.AreEqual(7200, result.StoreCashInCents);
+            Assert.AreEqual(200, result.CarrierCashInCents);
+            Assert.AreEqual(200, f.Carrier.CurrentCashCents, "Carrier till holds exactly the fee.");
+            Assert.AreEqual(60, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId));
+            bool sawExecuting = false;
+            foreach (ShoppingDiagnosticEvent e in result.Events)
+            {
+                if (e.Kind != ShoppingEventKind.Delivery) continue;
+                if (e.Summary.IndexOf("Arranged delivery executing", StringComparison.Ordinal) >= 0)
+                {
+                    sawExecuting = true;
+                    Assert.IsTrue(e.Summary.IndexOf("via carrier 'carrier-1'", StringComparison.Ordinal) >= 0,
+                        "the executing event title must name the carrier: " + e.Summary);
+                    Assert.IsTrue(e.Details.IndexOf("via carrier 'carrier-1'", StringComparison.Ordinal) >= 0,
+                        "the executing event detail must name the carrier: " + e.Details);
+                }
+            }
+
+            Assert.IsTrue(sawExecuting, "no 'Arranged delivery executing' event on the trip");
+        }
+
+        [Test]
+        public void P28_T21_NoCarrierNamesNoCarrier()
+        {
+            // The conditional-naming pin: with no carrier bound the fee is
+            // forced to 0, the delivery still executes, and no string names
+            // a carrier. Scoped to "carrier-1" and "via carrier", not the
+            // bare word "carrier" (note 141 section 3). Green-at-base by
+            // design: no carrier is named today.
+            Fixture f = DeliveryFixture(CarrierBinding.None, 200);
+            f.Fund(20000);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 60);
+
+            GoodsCustodyState custodyAtTrip = GoodsCustodyState.InHand;
+            f.Loop.MidTripObserver = (trip, batch) => { custodyAtTrip = batch.Custody; };
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual(GoodsCustodyState.ArrangedDelivery, custodyAtTrip);
+            Assert.AreEqual(7200, result.BuyerOutflowCents, "With no carrier bound, no fee may be charged.");
+            Assert.AreEqual(7200, result.StoreCashInCents);
+            Assert.AreEqual(0, result.CarrierCashInCents);
+            Assert.AreEqual(0, f.Carrier.CurrentCashCents);
+            Assert.AreEqual(60, f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId));
+            foreach (ShoppingDiagnosticEvent e in result.Events)
+            {
+                Assert.IsTrue(e.Summary.IndexOf("carrier-1", StringComparison.Ordinal) < 0,
+                    "no event title may name a carrier: " + e.Summary);
+                Assert.IsTrue(e.Details.IndexOf("carrier-1", StringComparison.Ordinal) < 0,
+                    "no event detail may name a carrier: " + e.Details);
+                Assert.IsTrue(e.Summary.IndexOf("via carrier", StringComparison.Ordinal) < 0,
+                    "no event title may name a carrier: " + e.Summary);
+                Assert.IsTrue(e.Details.IndexOf("via carrier", StringComparison.Ordinal) < 0,
+                    "no event detail may name a carrier: " + e.Details);
+            }
+
+            string diag = string.Join("\n", f.Diagnostics);
+            Assert.IsTrue(diag.IndexOf("carrier-1", StringComparison.Ordinal) < 0,
+                "no diagnostic may name a carrier: " + diag);
+            Assert.IsTrue(diag.IndexOf("via carrier", StringComparison.Ordinal) < 0,
+                "no diagnostic may name a carrier: " + diag);
+        }
     }
 }

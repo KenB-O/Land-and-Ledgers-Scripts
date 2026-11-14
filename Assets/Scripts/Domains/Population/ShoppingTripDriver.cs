@@ -735,7 +735,9 @@ namespace LandLedgers.Population
                 dueEvents.Schedule(DueEventKind.JourneyStageDue,
                     currentGameSeconds + trip.DeliveryMinutes * 60f,
                     "delivery:" + trip.TripId, out dueId);
-                diag.Add($"ShoppingTripDriver: delivery freight scheduled ({trip.DeliveryMinutes} min).");
+                string carrierId = trip.Candidate != null ? trip.Candidate.CarrierBusinessInstanceId ?? string.Empty : string.Empty;
+                string carrierSuffix = string.IsNullOrEmpty(carrierId) ? string.Empty : $" via carrier '{carrierId}'";
+                diag.Add($"ShoppingTripDriver: delivery freight scheduled ({trip.DeliveryMinutes} min){carrierSuffix}.");
             }
 
             ScheduleLegDue(trip, LegKind.InStore,

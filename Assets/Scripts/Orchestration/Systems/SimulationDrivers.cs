@@ -1889,7 +1889,29 @@ namespace LandLedgers.Orchestration.Systems
                     hub.FinancialObligations,
                     hub.Ids,
                     personEntityId: null,
-                    spendingPolicyProvider: householdId => hub.HouseholdDecisionDriver.GetSpendingPolicy(householdId));
+                    spendingPolicyProvider: householdId => hub.HouseholdDecisionDriver.GetSpendingPolicy(householdId),
+                    // P28 carrier leg: bind the Q33-resolved livery freight business at the
+                    // loop seams. Both lambdas read the sharedBusinessRuntime field at
+                    // evaluation time (never a captured local); per candidate, never cached.
+                    // The null-guard in each lambda degrades to the resolver-false shape
+                    // (load-bearing on the pre-B60 bootstrap path, where shopping can run
+                    // before the runtime is assigned).
+                    carrierBusinessIdForSupplier: supplier =>
+                    {
+                        // Guard degrades to resolver-false (no carrier) when the runtime is null.
+                        if (sharedBusinessRuntime == null) return string.Empty;
+                        BusinessInstanceState carrier;
+                        return FreightBusinessResolver.TryResolveFreightBusiness(sharedBusinessRuntime.Businesses, out carrier)
+                            ? carrier.InstanceId
+                            : string.Empty;
+                    },
+                    carrierRuntimeResolver: id =>
+                    {
+                        // Guard degrades to resolver-false (no till) when the runtime is null.
+                        if (sharedBusinessRuntime == null) return null;
+                        BusinessInstanceState found;
+                        return sharedBusinessRuntime.TryFindByInstanceId(id, out found) ? found.RuntimeState : null;
+                    });
             }
             else
             {

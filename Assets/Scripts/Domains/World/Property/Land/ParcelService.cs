@@ -105,6 +105,46 @@ namespace LandLedgers.World.Property
             IndexPlotLink(record);
         }
 
+        /// <summary>
+        /// R34: seeds the legal-parcel registry from the town plots of a fresh
+        /// New Game — one ParcelRecord per town plot. The parcel id IS the
+        /// canonical plot key (PlayerTitleBridge.ParcelKeyForPlot), so the
+        /// registry and the title chain name the same parcel; the footprint is
+        /// the plot's bounds and the use is the plot's zone. Idempotent:
+        /// a plot that already has a linked parcel is skipped, and
+        /// RegisterParcelRecord is first-wins on id, so a re-seed can never
+        /// duplicate a parcel. Returns the number of parcels seeded.
+        /// </summary>
+        public int SeedParcelsFromTownPlots(IReadOnlyList<TownPlot> plots, string worldId)
+        {
+            if (plots == null) return 0;
+            int seeded = 0;
+            foreach (TownPlot plot in plots)
+            {
+                if (plot == null) continue;
+                if (ParcelForPlot(plot.id) != null) continue;
+                var record = new ParcelRecord
+                {
+                    Id = PlayerTitleBridge.ParcelKeyForPlot(plot.id),
+                    WorldId = worldId ?? string.Empty,
+                    Footprint = plot.bounds.IsValid
+                        ? new List<GridRect> { plot.bounds }
+                        : new List<GridRect>(),
+                    SurveyDescription = $"Town plot {plot.id}",
+                    ParcelUse = plot.zone.ToString(),
+                    Jurisdiction = string.Empty,
+                    Status = LandStatus.Unknown,
+                    PlotId = plot.id.ToString(),
+                    AccessNotes = string.Empty,
+                };
+                record.AreaSquareMeters = FootprintCellCount(record.Footprint)
+                    * DefaultCellSizeMeters * DefaultCellSizeMeters;
+                RegisterParcelRecord(record);
+                seeded++;
+            }
+            return seeded;
+        }
+
         public ParcelRecord GetParcel(string parcelId)
         {
             return !string.IsNullOrWhiteSpace(parcelId) && parcels.TryGetValue(parcelId, out ParcelRecord r) ? r : null;

@@ -43,6 +43,9 @@ namespace LandLedgers.World.Property
     /// Legal ownership truth lives in TitleAuthority's chain; this record carries
     /// the legal-geography dimension TitleAuthority keys off.
     /// ID convention: "parcel-" + 32 lowercase hex chars (no dashes).
+    /// Exception: town-plot parcels seeded at New Game carry the canonical
+    /// plot key "plot-{id}" as their Id (R34), so the registry and the title
+    /// chain name the same parcel.
     /// </summary>
     [Serializable]
     public class ParcelRecord

@@ -459,6 +459,23 @@ namespace LandLedgers.FirstLedger
             // New Game, not only after a later save restore.
             FindAnyObjectByType<SimulationDrivers>()?.Rebind();
 
+            // R34: seed the legal parcel registry from the town plots on a fresh
+            // New Game, so the registry is populated from the same plots the
+            // physical world already has. New-Game-only: a Continue restores the
+            // registry from the save (hub LoadFromSaveDto), and a re-run is a
+            // no-op — InitializeSlice's already-initialized guard plus the seam's
+            // per-plot link guard. Runs in every build, like the notions
+            // registration below.
+            if (startupIntent == WorldStartupIntent.NewGame)
+            {
+                systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+                if (systemsHub != null && townWorld != null)
+                {
+                    int seededParcels = systemsHub.Parcels.SeedParcelsFromTownPlots(townWorld.Plots, string.Empty);
+                    Debug.Log($"[WorldStartup] Seeded {seededParcels} legal parcels from {townWorld.Plots.Count} town plots.", this);
+                }
+            }
+
             ConfigurePopulationManager();
             ConfigureCivicFoundation();
             AppendStartupTiming(timing, stepTimer, "population/civic configure");

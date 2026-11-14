@@ -110,6 +110,8 @@ namespace LandLedgers.World.Property
         public bool SaleCompleted;
         public string SaleHoldingId = string.Empty;
         public string SaleNote = string.Empty;
+        public int LiensFiled;
+        public int TaxSalesAwaitingBidders;
 
         public NpcPropertyLifeReport() { }
     }
@@ -274,7 +276,8 @@ namespace LandLedgers.World.Property
         /// </summary>
         public string PayPropertyTax(
             PropertyTaxService taxService, CreditCashBridge cash, NpcPropertyHolding holding,
-            TaxAssessment assessment, int amountCents, int dayIndex, List<string> diag)
+            TaxAssessment assessment, int amountCents, int dayIndex, List<string> diag,
+            CreditRegistry registry = null)
         {
             diag = diag ?? diagnostics;
             if (taxService == null || cash == null || holding == null || assessment == null)
@@ -298,7 +301,26 @@ namespace LandLedgers.World.Property
             assessment.FeesPaidCents += assessment.FeePortionOfPaymentCents(amountCents);
             assessment.FeesPaidTracked = true;
             holding.Decisions.Add($"day {dayIndex}: paid {amountCents}c property tax on '{holding.ParcelId}' from real cash.");
+            ReleaseTaxLienOnSatisfaction(registry, assessment, dayIndex, diag);
             return null;
+        }
+
+        /// <summary>R31: when a payment satisfies a LienFiled assessment, the
+        /// recorded senior tax lien is satisfied in the registry too — a paid
+        /// assessment must never leave a stale Active lien behind. A refusal
+        /// is logged and the payment stands; no lien, no registry, or an
+        /// unsatisfied assessment is a no-op.</summary>
+        private static void ReleaseTaxLienOnSatisfaction(
+            CreditRegistry registry, TaxAssessment assessment, int dayIndex, List<string> diag)
+        {
+            if (registry == null || assessment == null) return;
+            if (assessment.Status != TaxAssessmentStatus.Satisfied) return;
+            if (string.IsNullOrEmpty(assessment.TaxLienInstrumentId)) return;
+            string problem = registry.SatisfyInstrument(assessment.TaxLienInstrumentId, diag);
+            if (problem != null)
+                diag.Add("NpcPropertyLife: tax lien release refused: " + problem);
+            else
+                diag.Add($"NpcPropertyLife: tax lien '{assessment.TaxLienInstrumentId}' satisfied day {dayIndex} — assessment paid in full.");
         }
 
         /// <summary>
@@ -321,7 +343,7 @@ namespace LandLedgers.World.Property
             IEnumerable<NpcPropertyHolding> persons,
             FinancialObligationAuthority obligations,
             CivicTreasuryService treasury, int dayIndex, List<string> diag,
-            out int totalPaidCents)
+            out int totalPaidCents, CreditRegistry registry = null)
         {
             totalPaidCents = 0;
             int totalCredited = 0;
@@ -345,6 +367,9 @@ namespace LandLedgers.World.Property
                     if (assessment == null || assessment.Status == TaxAssessmentStatus.Satisfied) continue;
                     int owed = assessment.TotalOwedCents();
                     if (owed <= 0) continue;
+                    // R31: the audit pays only at/past the due date — a
+                    // not-yet-due assessment stands untouched (silent skip).
+                    if (dayIndex < assessment.DueDayIndex) continue;
                     IRealCashStore store = cash.FindStore(payer);
                     if (store == null)
                     {
@@ -423,6 +448,7 @@ namespace LandLedgers.World.Property
                     }
                     totalPaidCents += absorbed;
                     holding.Decisions.Add($"day {dayIndex}: tax audit paid {absorbed}c on '{holding.ParcelId}' ({credit}c principal/fees to civic treasury{(collectorPaid ? $", {feePortion}c fees to County Tax Collector" : "")}).");
+                    ReleaseTaxLienOnSatisfaction(registry, assessment, dayIndex, diag);
                 }
             }
             return totalCredited;
@@ -454,10 +480,37 @@ namespace LandLedgers.World.Property
         }
 
         /// <summary>
+        /// Files the senior tax lien for ONE delinquent assessment — the lien
+        /// half of the delinquency step. The book-level clock
+        /// (<see cref="PropertyTaxService.AdvanceDay"/>) is NOT advanced here:
+        /// it accrues daily interest on every call, so the drive advances it
+        /// exactly once per drive and then files per assessment through this
+        /// method (R31). A non-delinquent assessment is a no-op.
+        /// </summary>
+        public string FileTaxLienIfDelinquent(
+            PropertyTaxService taxService, CreditRegistry registry, EntityIdRegistry ids,
+            NpcPropertyHolding holding, TaxAssessment assessment, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (taxService == null || holding == null || assessment == null)
+                return "NpcPropertyLife.FileTaxLienIfDelinquent: tax service, holding and assessment required.";
+            if (assessment.Status != TaxAssessmentStatus.Delinquent) return null;
+            string lienProblem = taxService.FileTaxLien(assessment, ids, registry, dayIndex, diag);
+            if (lienProblem != null) return "NpcPropertyLife.FileTaxLienIfDelinquent: " + lienProblem;
+            holding.Decisions.Add($"day {dayIndex}: {assessment.TaxYear} tax delinquent — SENIOR tax lien filed on '{holding.ParcelId}'.");
+            diag.Add($"NpcPropertyLife: H{holding.OwnerHouseholdId} tax delinquent on '{holding.ParcelId}' — senior lien filed (real enforcement path).");
+            return null;
+        }
+
+        /// <summary>
         /// Advances the tax clock and files the senior tax lien when an
         /// assessment is delinquent — the REAL tax enforcement path (lien in
         /// Phase E's credit registry; the tax sale itself is the collector's
-        /// auction, run through <see cref="PropertyTaxService"/>).
+        /// auction, run through <see cref="PropertyTaxService"/>). Thin
+        /// wrapper over <see cref="FileTaxLienIfDelinquent"/>: the clock
+        /// advances once per call here, so a caller driving many holdings
+        /// must advance the book once itself and file per assessment
+        /// instead (see <see cref="DriveNpcPropertyLife"/>).
         /// </summary>
         public string ProcessTaxDelinquency(
             PropertyTaxService taxService, CreditRegistry registry, EntityIdRegistry ids,
@@ -467,14 +520,7 @@ namespace LandLedgers.World.Property
             if (taxService == null || holding == null || assessment == null)
                 return "NpcPropertyLife.ProcessTaxDelinquency: tax service, holding and assessment required.";
             taxService.AdvanceDay(dayIndex, diag);
-            if (assessment.Status == TaxAssessmentStatus.Delinquent)
-            {
-                string lienProblem = taxService.FileTaxLien(assessment, ids, registry, dayIndex, diag);
-                if (lienProblem != null) return "NpcPropertyLife.ProcessTaxDelinquency: " + lienProblem;
-                holding.Decisions.Add($"day {dayIndex}: {assessment.TaxYear} tax delinquent — SENIOR tax lien filed on '{holding.ParcelId}'.");
-                diag.Add($"NpcPropertyLife: H{holding.OwnerHouseholdId} tax delinquent on '{holding.ParcelId}' — senior lien filed (real enforcement path).");
-            }
-            return null;
+            return FileTaxLienIfDelinquent(taxService, registry, ids, holding, assessment, dayIndex, diag);
         }
 
         #endregion
@@ -1059,19 +1105,20 @@ namespace LandLedgers.World.Property
 
         /// <summary>
         /// Pass IX WS6: the periodic production step over hub holdings —
-        /// (1) tax audit into the civic treasury, (2) maintenance pass
-        /// (fund the oldest affordable need per holding from real cash;
-        /// neglect degrades the rest), (3) at most ONE overdue/distress
-        /// sale through <see cref="TryBrokerSaleFromDistress"/>. Called
-        /// daily by SimulationDrivers.DriveDemographicDay; a world with no
-        /// holdings (or no cash stores) no-ops cleanly with diagnostics,
-        /// never invented money or buyers.
+        /// (0) annual levy, (1) delinquency clock and lien filing, (2) tax
+        /// audit into the civic treasury, (3) maintenance pass (fund the
+        /// oldest affordable need per holding from real cash; neglect
+        /// degrades the rest), (4) at most ONE overdue/distress sale
+        /// through <see cref="TryBrokerSaleFromDistress"/>. Called daily by
+        /// SimulationDrivers.DriveDemographicDay; a world with no holdings
+        /// (or no cash stores) no-ops cleanly with diagnostics, never
+        /// invented money or buyers.
         /// </summary>
         public NpcPropertyLifeReport DriveNpcPropertyLife(
             CreditCashBridge cash, PropertyTaxService tax,
             FinancialObligationAuthority obligations, CivicTreasuryService treasury,
             int dayIndex, List<string> diag, NpcDistressSaleContext saleContext = null,
-            EntityIdRegistry ids = null)
+            EntityIdRegistry ids = null, CreditRegistry registry = null)
         {
             diag = diag ?? diagnostics;
             var report = new NpcPropertyLifeReport();
@@ -1104,10 +1151,42 @@ namespace LandLedgers.World.Property
                 }
             }
 
-            // 1) Tax audit.
+            // 1) Delinquency clock (R31): advance the tax book exactly once
+            // per drive — AdvanceDay accrues daily interest on every call,
+            // so per-holding calls would over-accrue — then file a senior
+            // tax lien per delinquent assessment through the real registry.
+            // A filed lien freezes accrual; the sale step waits on the
+            // bidder-source owner decision and is never faked here.
+            if (tax != null)
+            {
+                tax.AdvanceDay(dayIndex, diag);
+                foreach (NpcPropertyHolding holding in new List<NpcPropertyHolding>(holdings.Values))
+                {
+                    if (holding == null) continue;
+                    foreach (string assessmentId in new List<string>(holding.TaxAssessmentIds))
+                    {
+                        TaxAssessment assessment = tax.GetAssessment(assessmentId);
+                        if (assessment == null) continue;
+                        if (assessment.Status == TaxAssessmentStatus.Delinquent)
+                        {
+                            string lienProblem = FileTaxLienIfDelinquent(tax, registry, ids, holding, assessment, dayIndex, diag);
+                            if (lienProblem != null)
+                            {
+                                diag.Add("NpcPropertyLife.Drive: " + lienProblem);
+                                continue;
+                            }
+                            if (assessment.Status == TaxAssessmentStatus.LienFiled) report.LiensFiled++;
+                        }
+                        if (assessment.Status == TaxAssessmentStatus.LienFiled)
+                            report.TaxSalesAwaitingBidders++;
+                    }
+                }
+            }
+
+            // 2) Tax audit.
             if (cash != null && tax != null && treasury != null)
             {
-                report.TreasuryCreditedCents = AuditTaxes(tax, cash, holdings.Values, obligations, treasury, dayIndex, diag, out int paid);
+                report.TreasuryCreditedCents = AuditTaxes(tax, cash, holdings.Values, obligations, treasury, dayIndex, diag, out int paid, registry);
                 report.TaxesPaidCents = paid;
             }
             else
@@ -1115,7 +1194,7 @@ namespace LandLedgers.World.Property
                 diag.Add("NpcPropertyLife.Drive: tax audit skipped — cash bridge, tax service or treasury not supplied.");
             }
 
-            // 2) Maintenance pass.
+            // 3) Maintenance pass.
             foreach (NpcPropertyHolding holding in new List<NpcPropertyHolding>(holdings.Values))
             {
                 if (holding == null) continue;
@@ -1134,7 +1213,7 @@ namespace LandLedgers.World.Property
                 if (holding.Condition01 < before) report.HoldingsDegraded++;
             }
 
-            // 3) At most ONE distress sale.
+            // 4) At most ONE distress sale.
             foreach (NpcPropertyHolding holding in new List<NpcPropertyHolding>(holdings.Values))
             {
                 if (holding == null) continue;

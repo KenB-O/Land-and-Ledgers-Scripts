@@ -202,7 +202,7 @@ namespace LandLedgers.EditorTests.World
             // levied for the CURRENT tax year, so the drive's own annual
             // catch-up levy (R-07) sees this year's assessment as present.
             TaxAssessment assessment = f.Life.LevyPropertyTax(f.Life.Taxes, f.Ids, holding,
-                PropertyTaxCalibration.TaxYearForDay(50), 1200, 100, 100, 600, 10, f.Diag);
+                PropertyTaxCalibration.TaxYearForDay(50), 1200, 50, 100, 600, 10, f.Diag);
             Assert.IsNotNull(assessment);
             // Maintenance need the owner can afford.
             NpcPropertyMaintenanceNeed need = f.Life.ReportMaintenanceNeed(holding, "fix gate", 800, 10, f.Diag);

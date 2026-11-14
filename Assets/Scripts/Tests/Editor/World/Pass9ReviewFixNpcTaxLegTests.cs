@@ -128,13 +128,19 @@ namespace LandLedgers.EditorTests.World
                 "", "", NpcPropertyHoldingKind.OwnerOccupied, f.Diag);
             var treasury = new CivicTreasuryService();
 
-            NpcPropertyLifeReport report = f.Life.DriveNpcPropertyLife(
+            NpcPropertyLifeReport day5 = f.Life.DriveNpcPropertyLife(
                 f.Cash, f.Life.Taxes, f.Authority, treasury, 5, f.Diag, null, f.Ids);
+            Assert.AreEqual(1, day5.TaxesLevied);
+            Assert.AreEqual(0, day5.TaxesPaidCents, "not yet due — the drive-levied assessment is due day 65");
+            Assert.AreEqual(0, treasury.BalanceCents);
+
+            NpcPropertyLifeReport day65 = f.Life.DriveNpcPropertyLife(
+                f.Cash, f.Life.Taxes, f.Authority, treasury, 65, f.Diag, null, f.Ids);
 
             int levy = PropertyTaxCalibration.ComputeLevyCents(100000);
-            Assert.AreEqual(1, report.TaxesLevied);
-            Assert.AreEqual(levy, report.TaxesPaidCents, "the funded owner pays the drive-levied assessment");
-            Assert.AreEqual(levy, report.TreasuryCreditedCents, "no penalties accrued — the whole payment is principal to the treasury");
+            Assert.AreEqual(0, day65.TaxesLevied, "same tax year — never levied twice");
+            Assert.AreEqual(levy, day65.TaxesPaidCents, "the funded owner pays the drive-levied assessment at due");
+            Assert.AreEqual(levy, day65.TreasuryCreditedCents, "no penalties accrued — the whole payment is principal to the treasury");
             Assert.AreEqual(levy, treasury.BalanceCents);
             Assert.AreEqual(10000 - levy, owner.GetBalanceCents(), "owner debit == treasury credit");
         }

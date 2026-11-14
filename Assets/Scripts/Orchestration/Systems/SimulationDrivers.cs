@@ -1963,7 +1963,7 @@ namespace LandLedgers.Orchestration.Systems
             if (saleContext != null) saleContext.FeedDisputes(acquisitionMarket.PropertyDisputes);
             NpcPropertyLifeReport report = hub.NpcPropertyLife.DriveNpcPropertyLife(
                 hub.CreditCash, hub.NpcPropertyLife.Taxes, hub.FinancialObligations,
-                hub.CivicTreasury, absoluteDayIndex, diag, saleContext, hub.Ids);
+                hub.CivicTreasury, absoluteDayIndex, diag, saleContext, hub.Ids, hub.CreditInstruments);
             if (diag.Count > 0)
             {
                 Debug.Log("[SimulationDrivers] npc property life day " + absoluteDayIndex + ": " +

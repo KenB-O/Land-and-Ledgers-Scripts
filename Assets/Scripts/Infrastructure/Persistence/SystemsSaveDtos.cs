@@ -4,6 +4,8 @@ using LandLedgers.Animals;
 using LandLedgers.Civic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.BoardingHouse;
+using LandLedgers.Economy.Businesses.Logging;
+using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Economy.Butcher;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Farming;
@@ -89,6 +91,10 @@ namespace LandLedgers.Persistence
         public PersonScheduleTrackerSaveDto personSchedule = new();
         public RentCollectionService.RentCollectionServiceSaveDto rentCollection = new();
         public List<BoardingHouseShopRuntime.BoardingHouseShopRuntimeSaveDto> boardingHouseRuntimes = new();
+        /// <summary>P3 (F6 production wiring): the sawmill production driver, labour counters, and custody ledger — one shared instance each.</summary>
+        public SawmillProductionDriver.SawmillProductionDriverSaveDto sawmillProductionDriver = new();
+        public SawmillLabourCounters.SawmillLabourCountersDto sawmillLabourCounters = new();
+        public LogLotCustodyLedger.LogLotCustodyLedgerSaveDto logLotCustodyLedger = new();
         public NpcFormationAssetRegisterSaveDto npcFormationAssets = new();
         public List<NpcBusinessLifeRecordSaveDto> npcBusinessLifecycle = new();
         public NpcBusinessInvestigationSaveDto npcBusinessInvestigation = new();

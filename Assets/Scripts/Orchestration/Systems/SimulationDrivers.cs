@@ -15,7 +15,9 @@ using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.FuelDealer;
 using LandLedgers.Economy.Businesses.GeneralStore;
+using LandLedgers.Economy.Businesses.Logging;
 using LandLedgers.Economy.Businesses.LumberYard;
+using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Businesses.Bakery;
@@ -352,6 +354,7 @@ namespace LandLedgers.Orchestration.Systems
         private readonly HashSet<string> fuelDealerSupplierRegistrationLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> fuelDealerSupplierWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> sawmillTransferWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> sawmillProductionWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private EmbodiedPurchaseExecutor purchaseExecutor;
         private HouseholdMembershipRegistry householdMemberships;
         private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
@@ -621,10 +624,338 @@ namespace LandLedgers.Orchestration.Systems
             Debug.Log($"[SawmillTransfer] Day {dayIndex}: transferred {transferred} byproduct lot(s) from mill '{mill.BusinessInstanceId}' to FuelDealer '{dealerBusiness.InstanceId}' by custody ({string.Join("; ", diag)}).", this);
         }
 
+        /// <summary>
+        /// P3 (F6 production wiring): the daily sawmill production drive.
+        /// Delivers arrived hauls into the mill yard, re-attempts open jobs
+        /// from prior days (C7), then saws newly delivered lots whole,
+        /// filing or re-setting the blade when it gates a run. Byproducts
+        /// stay in mill.ByproductStock for the D1 transfer that follows.
+        /// Until live felling and haul dispatch land, the delivery finds
+        /// zero Arrived hauls and the yard stays empty: the chain is bound
+        /// but no logs appear.
+        /// </summary>
+        private void DriveSawmillProduction(int absoluteDayIndex)
+        {
+            // 1. Resolve the mill and the runtime (D1 pattern).
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogSawmillProductionWarningOnce("no-business-runtime",
+                    "Sawmill production skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogSawmillProductionWarningOnce("no-pass9",
+                    "Sawmill production skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            BusinessInstanceState millBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Sawmill)
+                {
+                    if (millBusiness == null) millBusiness = business;
+                    else LogSawmillProductionWarningOnce("second-mill",
+                        $"Second Sawmill business '{business.InstanceId}' is unwired: the production drive saws the first mill only.");
+                }
+            }
+
+            // Agent 3 note 68 ruling (2), as in the D1 transfer: pass9.Sawmill
+            // is PRIMARY — the bootstrapper owns the holder. The hub accessor
+            // is the fallback only when the holder is null AND a Sawmill
+            // business is formed, with a warning.
+            SawmillShopRuntime mill = pass9.Sawmill;
+            if (mill == null)
+            {
+                if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId))
+                {
+                    LogSawmillProductionWarningOnce("no-mill",
+                        "Sawmill production skipped: no formed Sawmill business is present in the shared runtime.");
+                    return;
+                }
+
+                LogSawmillProductionWarningOnce("holder-fallback",
+                    $"Sawmill production: Pass 9 mill holder is null; resolving the formed Sawmill '{millBusiness.InstanceId}' through the hub (empty runtime until the bootstrapper owns it).");
+                mill = hub.SawmillRuntimeFor(millBusiness.InstanceId);
+                if (mill == null)
+                {
+                    LogSawmillProductionWarningOnce("hub-no-mill",
+                        "Sawmill production skipped: hub returned no mill runtime.");
+                    return;
+                }
+            }
+
+            LoggingOperationRuntime loggingOperation = pass9.LoggingOperation;
+            if (loggingOperation == null)
+            {
+                LogSawmillProductionWarningOnce("no-logging-operation",
+                    "Sawmill production skipped: no logging operation runtime is bound (the Pass 9 slot is empty).");
+                return;
+            }
+
+            // 2. Resolve the driver from the hub.
+            SawmillProductionDriver driver = hub.SawmillProductionDriver;
+            if (driver == null)
+            {
+                LogSawmillProductionWarningOnce("no-driver",
+                    "Sawmill production skipped: no sawmill production driver is registered in the hub.");
+                return;
+            }
+
+            var diag = new List<string>();
+            int driverDiagMark = driver.Diagnostics.Count;
+
+            // 3. Snapshot the lot ids currently in the yard.
+            var yardIdsBefore = new HashSet<string>(StringComparer.Ordinal);
+            foreach (LogLot yardLot in mill.LogStock.Lots)
+            {
+                if (yardLot != null) yardIdsBefore.Add(yardLot.LotId.ToString());
+            }
+
+            // 4. Deliver first (C1): Arrived hauls move into the yard.
+            loggingOperation.DeliverArrivedHauls(mill.LogStock, diag);
+
+            // 5. Delivered lots = lot ids in the yard now, minus the snapshot
+            // (Q1 snapshot-diff: DeliverArrivedHauls returns nothing).
+            var deliveredLotIds = new List<string>();
+            foreach (LogLot yardLot in mill.LogStock.Lots)
+            {
+                if (yardLot != null && !yardIdsBefore.Contains(yardLot.LotId.ToString()))
+                {
+                    deliveredLotIds.Add(yardLot.LotId.ToString());
+                }
+            }
+
+            // Open jobs from prior days, for the C7 re-attempt pass below.
+            var openJobs = new List<SawmillProductionJob>();
+            openJobs.AddRange(driver.JobsInState(SawmillProductionJobState.Planned));
+            openJobs.AddRange(driver.JobsInState(SawmillProductionJobState.Sawing));
+            openJobs.Sort((a, b) =>
+            {
+                int byDay = a.CreatedDayIndex.CompareTo(b.CreatedDayIndex);
+                return byDay != 0 ? byDay : string.CompareOrdinal(a.JobId, b.JobId);
+            });
+
+            if (openJobs.Count == 0 && deliveredLotIds.Count == 0)
+            {
+                LogSawmillProductionWarningOnce("nothing-to-saw",
+                    "Sawmill production: no lots delivered today and no open jobs to re-attempt.");
+                return;
+            }
+
+            int reattemptedCount = 0;
+            int begunCount = 0;
+            int completedCount = 0;
+
+            // C7: re-attempt open jobs from prior days BEFORE the
+            // delivered-lot pass (FIFO: a pending job names an older lot
+            // than today's deliveries). Failed jobs are terminal and are
+            // never re-attempted. The job's stored sawyer runs it — no new
+            // sawyer pick, no BeginProduction, so the duplicate and FIFO
+            // guards are not re-triggered.
+            foreach (SawmillProductionJob openJob in openJobs)
+            {
+                reattemptedCount++;
+                if (RunSawmillJobOnce(driver, mill, openJob, absoluteDayIndex, diag) && openJob.State == SawmillProductionJobState.Complete)
+                {
+                    completedCount++;
+                }
+            }
+
+            // 6-7. Saw each delivered lot, whole-lot first use. The sawyer
+            // is picked only when there is something to saw (C2).
+            if (deliveredLotIds.Count > 0)
+            {
+                EntityId sawyerId = PickSawmillSawyer(millBusiness);
+                if (!sawyerId.IsValid || sawyerId.Kind != EntityKind.Person)
+                {
+                    LogSawmillProductionWarningOnce("no-sawyer",
+                        "Sawmill production: the mill has no owner person and no active employees — no sawyer, never a phantom worker.");
+                }
+                else
+                {
+                    foreach (string lotId in deliveredLotIds)
+                    {
+                        LogLot lot = FindSawmillYardLot(mill, lotId);
+                        if (lot == null || lot.LogUnits < 1)
+                        {
+                            diag.Add($"[SawmillProduction] Day {absoluteDayIndex}: delivered lot '{lotId}' is no longer in the mill yard — never conjured, skipped.");
+                            continue;
+                        }
+                        SawmillProductionJob job = driver.BeginProduction(lotId, sawyerId, lot.LogUnits, absoluteDayIndex, out string beginRefusal);
+                        if (job == null)
+                        {
+                            diag.Add($"[SawmillProduction] Day {absoluteDayIndex}: lot '{lotId}' could not begin — {beginRefusal}");
+                            continue;
+                        }
+                        begunCount++;
+                        if (RunSawmillJobOnce(driver, mill, job, absoluteDayIndex, diag) && job.State == SawmillProductionJobState.Complete)
+                        {
+                            completedCount++;
+                        }
+                    }
+                }
+            }
+
+            // 10. MarkProcessed refusal: the driver's completion records a
+            // refusal in its diagnostics when the ledger could not record
+            // a lot as Processed. Log it naming the lot and the reason; the
+            // job is already Complete and the counters are already credited,
+            // so no recovery action is taken and no record is invented.
+            for (int i = driverDiagMark; i < driver.Diagnostics.Count; i++)
+            {
+                string entry = driver.Diagnostics[i];
+                if (entry != null && entry.Contains("MarkLedgerProcessed") && entry.Contains("could not record"))
+                {
+                    Debug.LogWarning("[SawmillProduction] Day " + absoluteDayIndex + ": " + entry, this);
+                }
+            }
+
+            // 11. Byproducts stay in mill.ByproductStock for the D1 daily
+            // transfer that follows this method. No new transfer call here.
+            Debug.Log($"[SawmillProduction] Day {absoluteDayIndex}: delivered {deliveredLotIds.Count} lot(s), re-attempted {reattemptedCount} open job(s), began {begunCount} new job(s), {completedCount} job(s) complete. {string.Join(" | ", diag)}", this);
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): runs one open production job once and
+        /// handles its refusal. A blade-gated refusal runs the filer loop
+        /// (the filer is the job's stored sawyer); a post-deduction failure
+        /// or a result mismatch is reconciled with a diagnostic naming the
+        /// lot (step 9, C7 sub-point). Never re-calls RunProduction the same
+        /// day (note 100 Q2); the job is re-attempted on the next day's drive.
+        /// Returns true when the run succeeded.
+        /// </summary>
+        private bool RunSawmillJobOnce(SawmillProductionDriver driver, SawmillShopRuntime mill, SawmillProductionJob job, int dayIndex, List<string> diag)
+        {
+            if (driver == null || mill == null || job == null) return false;
+            if (!driver.RunProduction(job.JobId, dayIndex, out string refusal))
+            {
+                diag.Add($"[SawmillProduction] Day {dayIndex}: job '{job.JobId}' refused — {refusal}");
+                // Filer loop: the filer is the job's stored sawyer. The loop
+                // runs whenever the blade gates a run, whether or not the
+                // blade was the refusal's cause — a dull blade needs filing
+                // either way, and filing consumes no budgeted minutes.
+                EntityId filer = new EntityId { Kind = (EntityKind)job.SawyerKind, Id = job.SawyerNumber };
+                if (mill.Blade != null && mill.Blade.CheckSawGate(dayIndex, diag) != null)
+                {
+                    RunSawmillFilerLoop(mill, filer, dayIndex, diag);
+                }
+                // Step 9 reconciliation (C7 sub-point): both refusal paths.
+                if (job.State == SawmillProductionJobState.Failed)
+                {
+                    diag.Add($"[SawmillProduction] Day {dayIndex}: job '{job.JobId}' for lot '{job.LotId}' FAILED after deduction — the deducted logs are lost, never re-invented; a fresh BeginProduction for any remainder is the recovery path.");
+                }
+                else if (job.State == SawmillProductionJobState.Sawing && refusal != null && refusal.Contains("does not match the job"))
+                {
+                    diag.Add($"[SawmillProduction] Day {dayIndex}: job '{job.JobId}' for lot '{job.LotId}' mismatched its run — the output lots already exist in the mill stock and the counters were NOT credited; no credit is invented, the lots stay in stock for the D1/F7 transfers.");
+                }
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): the filer loop (F6 §6 call site 3).
+        /// A dull blade is filed; a broken or retired blade is re-set, or
+        /// a real spare is fitted from the mill's blade inventory. The filer
+        /// is the sawyer (note 100 Q3). Filing consumes no budgeted minutes
+        /// (note 100 Finding 3). Returns true when the blade now passes the
+        /// saw gate.
+        /// </summary>
+        private bool RunSawmillFilerLoop(SawmillShopRuntime mill, EntityId filer, int dayIndex, List<string> diag)
+        {
+            if (mill == null || mill.Blade == null) return false;
+            if (mill.Blade.IsBroken)
+            {
+                if (mill.RecordSawReset(filer, dayIndex, diag) == null && mill.Blade.CheckSawGate(dayIndex, diag) == null) return true;
+                return TryFitSawmillSpareBlade(mill, dayIndex, diag);
+            }
+            if (mill.Blade.IsRetired || string.IsNullOrWhiteSpace(mill.Blade.BladeId))
+            {
+                return TryFitSawmillSpareBlade(mill, dayIndex, diag);
+            }
+            if (mill.Blade.IsDull)
+            {
+                if (mill.RecordSawFiling(filer, dayIndex, diag) == null && mill.Blade.CheckSawGate(dayIndex, diag) == null) return true;
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): fits one real spare blade from the
+        /// mill's blade inventory. One spare attempt per day — a failed fit
+        /// is diagnosed, not retried across spares; the job re-attempts on
+        /// the next day's drive. Returns true when the fitted blade passes
+        /// the saw gate.
+        /// </summary>
+        private bool TryFitSawmillSpareBlade(SawmillShopRuntime mill, int dayIndex, List<string> diag)
+        {
+            foreach (SawmillBladeState spare in mill.BladeInventory.Spares)
+            {
+                if (spare == null || spare.IsRetired || string.IsNullOrWhiteSpace(spare.BladeId)) continue;
+                if (mill.FitSpareBlade(spare.BladeId, dayIndex, diag) == null && mill.Blade.CheckSawGate(dayIndex, diag) == null) return true;
+                break;
+            }
+            LogSawmillProductionWarningOnce("no-spare-blade",
+                "Sawmill production: the fitted blade is broken or retired and no usable spare could be fitted — sawing stays gated until a spare blade is provisioned.");
+            return false;
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): the sawyer rule (C2). Owner-first,
+        /// then first active employee, built exactly as DriveGenericProduction
+        /// builds its roster. Returns Invalid when the mill has no owner
+        /// person and no active employees — never a phantom worker.
+        /// </summary>
+        private static EntityId PickSawmillSawyer(BusinessInstanceState millBusiness)
+        {
+            if (millBusiness == null) return EntityId.Invalid;
+            if (millBusiness.Owner != null && millBusiness.Owner.PersonId >= 0)
+            {
+                return EntityId.For(EntityKind.Person, millBusiness.Owner.PersonId);
+            }
+            if (millBusiness.RuntimeState?.EmploymentRegistry != null)
+            {
+                foreach (EmploymentRelationship relationship in millBusiness.RuntimeState.EmploymentRegistry.GetActiveByEmployer(millBusiness.InstanceId))
+                {
+                    if (relationship != null && relationship.EmployeePersonId >= 0)
+                    {
+                        return EntityId.For(EntityKind.Person, relationship.EmployeePersonId);
+                    }
+                }
+            }
+            return EntityId.Invalid;
+        }
+
+        private static LogLot FindSawmillYardLot(SawmillShopRuntime mill, string lotId)
+        {
+            if (mill == null || mill.LogStock == null || string.IsNullOrWhiteSpace(lotId)) return null;
+            foreach (LogLot lot in mill.LogStock.Lots)
+            {
+                if (lot != null && string.Equals(lot.LotId.ToString(), lotId, StringComparison.Ordinal)) return lot;
+            }
+            return null;
+        }
+
         private void LogSawmillTransferWarningOnce(string key, string message)
         {
             string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
             if (sawmillTransferWarningsLogged.Add(warningKey)) Debug.LogWarning("[SawmillTransfer] " + message, this);
+        }
+
+        private void LogSawmillProductionWarningOnce(string key, string message)
+        {
+            string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
+            if (sawmillProductionWarningsLogged.Add(warningKey)) Debug.LogWarning("[SawmillProduction] " + message, this);
         }
 
         /// <summary>Attaches the scenario's real membership authority for the production shopping loop.</summary>
@@ -863,6 +1194,37 @@ namespace LandLedgers.Orchestration.Systems
                 runtime.BindBusiness(business);
             hub.RegisterBoardingHouseRuntime(runtime);
             hub.RegisterBoardingHouseMealSource(runtime.MealDaySource);
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): registers the sawmill production
+        /// driver with the hub. Forwarder only — no BindBusiness-style
+        /// side effects (note 100 Q6 boundary).
+        /// </summary>
+        public void RegisterSawmillProductionDriver(SawmillProductionDriver driver)
+        {
+            if (driver == null || hub == null) return;
+            hub.RegisterSawmillProductionDriver(driver);
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): registers the sawmill labour counters
+        /// with the hub. Forwarder only.
+        /// </summary>
+        public void RegisterSawmillLabourCounters(SawmillLabourCounters counters)
+        {
+            if (counters == null || hub == null) return;
+            hub.RegisterSawmillLabourCounters(counters);
+        }
+
+        /// <summary>
+        /// P3 (F6 production wiring): registers the log-lot custody ledger
+        /// with the hub. Forwarder only.
+        /// </summary>
+        public void RegisterLogLotCustodyLedger(LogLotCustodyLedger ledger)
+        {
+            if (ledger == null || hub == null) return;
+            hub.RegisterLogLotCustodyLedger(ledger);
         }
 
         private void BuildHouseholdShoppingLoop()
@@ -2091,6 +2453,10 @@ namespace LandLedgers.Orchestration.Systems
             // boundary. This is execution of an already-started physical process;
             // it does not grant capability or create output from a policy alone.
             DriveGenericProduction(absoluteDayIndex);
+            // P3 (F6 production wiring): sawing runs before the byproduct
+            // transfer so the day's output is in mill.ByproductStock before
+            // the transfer moves it, and before the bakery plans its day.
+            DriveSawmillProduction(absoluteDayIndex);
             // D1: the mill's byproduct lots move into the Fuel Dealer's
             // intake by custody before the bakery plans its wholesale
             // day, so the paid-source builder (when D-F2 lands) sees the

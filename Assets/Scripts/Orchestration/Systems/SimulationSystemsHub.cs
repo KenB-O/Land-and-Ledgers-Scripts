@@ -196,6 +196,14 @@ namespace LandLedgers.Orchestration.Systems
         // runtime holds no mill stock.
         private Dictionary<string, SawmillShopRuntime> sawmillRuntimes;
 
+        // P3 (F6 production wiring): one shared sawmill production driver,
+        // one labour counters, one custody ledger. Single instances, not
+        // lists — each is one shared authority, wired by
+        // FirstLedgerSliceBootstrapper.ConfigureSawmillProductionWiring.
+        private SawmillProductionDriver sawmillProductionDriver;
+        private SawmillLabourCounters sawmillLabourCounters;
+        private LogLotCustodyLedger logLotCustodyLedger;
+
         /// <summary>Slice S2: the equipment register for one business, created on first use (empty).</summary>
         public BusinessEquipmentRegister EquipmentRegisterFor(string businessInstanceId)
         {
@@ -274,6 +282,48 @@ namespace LandLedgers.Orchestration.Systems
             sawmillRuntimes[runtime.BusinessInstanceId] = runtime;
         }
 
+        /// <summary>
+        /// P3 (F6 production wiring): adopts the sawmill production driver
+        /// as the hub's live holder. Single instance; re-registering the
+        /// same driver is idempotent.
+        /// </summary>
+        public void RegisterSawmillProductionDriver(SawmillProductionDriver driver)
+        {
+            if (driver == null) return;
+            sawmillProductionDriver = driver;
+        }
+
+        /// <summary>P3 (F6 production wiring): the live sawmill production driver, or null when unwired.</summary>
+        public SawmillProductionDriver SawmillProductionDriver => sawmillProductionDriver;
+
+        /// <summary>
+        /// P3 (F6 production wiring): adopts the sawmill labour counters as
+        /// the hub's live holder. Single instance; re-registering the same
+        /// counters is idempotent.
+        /// </summary>
+        public void RegisterSawmillLabourCounters(SawmillLabourCounters counters)
+        {
+            if (counters == null) return;
+            sawmillLabourCounters = counters;
+        }
+
+        /// <summary>P3 (F6 production wiring): the live sawmill labour counters, or null when unwired.</summary>
+        public SawmillLabourCounters SawmillLabourCounters => sawmillLabourCounters;
+
+        /// <summary>
+        /// P3 (F6 production wiring): adopts the log-lot custody ledger as
+        /// the hub's live holder. Single instance; re-registering the same
+        /// ledger is idempotent.
+        /// </summary>
+        public void RegisterLogLotCustodyLedger(LogLotCustodyLedger ledger)
+        {
+            if (ledger == null) return;
+            logLotCustodyLedger = ledger;
+        }
+
+        /// <summary>P3 (F6 production wiring): the live log-lot custody ledger, or null when unwired.</summary>
+        public LogLotCustodyLedger LogLotCustodyLedger => logLotCustodyLedger;
+
         // Pass IV Worker 2: the unified reservation authority (persisted),
         // the hub-owned draft-power service (reserves through the authority),
         // and the equipment capacity service (6 capacity models).
@@ -326,6 +376,14 @@ namespace LandLedgers.Orchestration.Systems
             return null;
         }
 
+        // P3 (F6 production wiring): the installed equipment gate, retained
+        // so the sawmill production driver receives the same instance the
+        // TaskAuthority holds — never a second gate.
+        private EquipmentTaskGate installedEquipmentTaskGate;
+
+        /// <summary>P3 (F6 production wiring): the installed equipment task gate, or null when no gate has been installed yet.</summary>
+        public EquipmentTaskGate InstalledEquipmentTaskGate => installedEquipmentTaskGate;
+
         /// <summary>
         /// Pass IV: installs the equipment execution gate (Canon 4.1) on the
         /// hub's TaskAuthority. Suppliers are wired to hub-owned truth — the
@@ -336,6 +394,11 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public void InstallEquipmentTaskGate(Func<float> nowGameSeconds = null)
         {
+            // P3 (F6 production wiring): idempotent — the bootstrapper and
+            // SimulationDrivers.Awake both call this, and the driver must
+            // hold the same gate instance the TaskAuthority holds. A second
+            // gate would diverge on reservations for the same saw.
+            if (installedEquipmentTaskGate != null) return;
             var gate = new EquipmentTaskGate
             {
                 AssetsSupplier = CollectGateAssets,
@@ -345,6 +408,7 @@ namespace LandLedgers.Orchestration.Systems
                 NowGameSecondsSupplier = nowGameSeconds,
                 HandOccupancySupplier = PersonHands.SnapshotFor,
             };
+            installedEquipmentTaskGate = gate;
             Tasks.SetExecutionGate(gate);
         }
 
@@ -1233,6 +1297,12 @@ namespace LandLedgers.Orchestration.Systems
                 housing = Housing.CaptureSaveDto(),
                 lodgingRegistry = LodgingRegistry.CaptureSaveDto(),
                 boardingHouseRuntimes = CaptureBoardingHouseRuntimes(),
+                // P3 (F6 production wiring): one section per shared sawmill
+                // authority. Null at capture means unwired (old save, degraded
+                // path) — the section stays an empty DTO, never null.
+                sawmillProductionDriver = sawmillProductionDriver != null ? sawmillProductionDriver.ToSaveDto() : new SawmillProductionDriver.SawmillProductionDriverSaveDto(),
+                sawmillLabourCounters = sawmillLabourCounters != null ? sawmillLabourCounters.ToSaveDto() : new SawmillLabourCounters.SawmillLabourCountersDto(),
+                logLotCustodyLedger = logLotCustodyLedger != null ? logLotCustodyLedger.CaptureSaveDto() : new LogLotCustodyLedger.LogLotCustodyLedgerSaveDto(),
                 // Pass IV (Worker 1): deterministic due-event schedule.
                 dueEvents = DueEvents.CaptureSaveDto(),
                 // Pass IV Worker 2: unified reservations, draft holds, capacity registrations.
@@ -1343,6 +1413,21 @@ namespace LandLedgers.Orchestration.Systems
             Housing.LoadFromSaveDto(dto.housing);
             LodgingRegistry.LoadFromSaveDto(dto.lodgingRegistry);
             LoadBoardingHouseRuntimes(dto.boardingHouseRuntimes);
+            // P3 (F6 production wiring): restore the sawmill production
+            // state. Counters first, then the driver (the driver load
+            // re-attaches open jobs against the yard lots), ledger
+            // unconstrained. Null-guarded: on a first Continue the
+            // bootstrapper constructs these after the hub load, so a
+            // missing runtime skips its section (recorded here); the yard
+            // lots themselves restore through the Pass 9 mill, so no goods
+            // are lost — only the in-progress job record. A follow-up
+            // slice owns first-Continue restore for these three sections.
+            if (sawmillLabourCounters != null) sawmillLabourCounters.LoadFromSaveDto(dto.sawmillLabourCounters);
+            else diagnostics.Add("SimulationSystemsHub: sawmill labour counters section skipped — no counters constructed yet; the bootstrapper owns construction.");
+            if (sawmillProductionDriver != null) sawmillProductionDriver.LoadFromSaveDto(dto.sawmillProductionDriver);
+            else diagnostics.Add("SimulationSystemsHub: sawmill production driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
+            if (logLotCustodyLedger != null) logLotCustodyLedger.LoadFromSaveDto(dto.logLotCustodyLedger);
+            else diagnostics.Add("SimulationSystemsHub: log-lot custody ledger section skipped — no ledger constructed yet; the bootstrapper owns construction.");
             TenancyPayments.LoadFromSaveDto(dto.tenancyPayments);
             HouseholdDecisions.LoadFromSaveDto(dto.householdDecisions);
             HouseholdDecisionDriver.LoadFromSaveDto(dto.householdDecisionDriver);

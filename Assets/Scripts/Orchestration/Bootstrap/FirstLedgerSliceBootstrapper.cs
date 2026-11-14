@@ -10,6 +10,7 @@ using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.LumberYard;
+using LandLedgers.Economy.Businesses.Logging;
 using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Creation;
@@ -2304,6 +2305,91 @@ namespace LandLedgers.FirstLedger
             }
 
             Debug.Log($"[SawmillRuntime] Bootstrap owns one live SawmillShopRuntime for '{millBusiness.RuntimeDisplayName}' ({millBusiness.InstanceId}); its Pass 9 state is registered with SaveLoadManager.", this);
+
+            // P3 (F6 production wiring): bind the sawmill production
+            // driver, counters, ledger, and logging operation runtime
+            // into the daily flow. Runs on NewGame and restore alike.
+            ConfigureSawmillProductionWiring(millBusiness, pass9);
+        }
+
+        // P3 (F6 production wiring): constructs the sawmill production
+        // driver, the labour counters, and the custody ledger, registers
+        // them via the SimulationDrivers forwarders, and constructs the
+        // logging operation runtime into the Pass 9 slot. Reuse, never
+        // replace (the mill rule in ConfigureLiveSawmillSaveOwner): a
+        // second call in the same session keeps the existing instances,
+        // so a restored job record is never discarded by re-construction.
+        private void ConfigureSawmillProductionWiring(BusinessInstanceState millBusiness, Series2Pass9SaveState pass9)
+        {
+            if (millBusiness == null || string.IsNullOrWhiteSpace(millBusiness.InstanceId) || pass9 == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Wiring was not created: no authored Sawmill business instance or Pass 9 state.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Wiring was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Wiring was not created: SimulationDrivers is missing.", this);
+                return;
+            }
+
+            SawmillShopRuntime liveMillRuntime = systemsHub.SawmillRuntimeFor(millBusiness.InstanceId);
+            if (liveMillRuntime == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Wiring was not created: hub returned no mill runtime.", this);
+                return;
+            }
+
+            // C3: the driver must receive the hub-retained gate, never a
+            // second gate. InstallEquipmentTaskGate is idempotent, so this
+            // is safe regardless of whether SimulationDrivers.Awake
+            // already installed it.
+            if (systemsHub.InstalledEquipmentTaskGate == null)
+            {
+                systemsHub.InstallEquipmentTaskGate();
+            }
+            EquipmentTaskGate gate = systemsHub.InstalledEquipmentTaskGate;
+            if (gate == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Wiring was not created: no equipment task gate could be installed.", this);
+                return;
+            }
+
+            SawmillLabourCounters counters = systemsHub.SawmillLabourCounters ?? new SawmillLabourCounters();
+            LogLotCustodyLedger ledger = systemsHub.LogLotCustodyLedger ?? new LogLotCustodyLedger(new List<string>());
+            SawmillProductionDriver driver = systemsHub.SawmillProductionDriver;
+            if (driver == null)
+            {
+                driver = new SawmillProductionDriver(
+                    liveMillRuntime,
+                    systemsHub.Tasks,
+                    systemsHub.WorkTimeBudgets,
+                    gate,
+                    counters,
+                    new List<string>(),
+                    ledger);
+            }
+            drivers.RegisterSawmillProductionDriver(driver);
+            drivers.RegisterSawmillLabourCounters(counters);
+            drivers.RegisterLogLotCustodyLedger(ledger);
+
+            // C4: construct the logging operation runtime with the LIVE
+            // registry (never a second registry) and assign it to the
+            // Pass 9 slot. Reuse, never replace.
+            if (pass9.LoggingOperation == null)
+            {
+                pass9.LoggingOperation = new LoggingOperationRuntime(millBusiness.InstanceId, systemsHub.Tasks.IdRegistry);
+            }
+
+            Debug.Log($"[SawmillProduction] Bootstrap wired the sawmill production driver for '{millBusiness.InstanceId}' (driver, counters, ledger, Pass 9 logging runtime).", this);
         }
 
         // C3: mirrors ConfigureLiveLumberYardSaveOwner for the construction

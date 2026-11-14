@@ -166,6 +166,10 @@ namespace LandLedgers.Population
             public string species = string.Empty;
             [Min(0)] public float kilogramsPerLog;
             [Min(0)] public int standingTimberUnits;
+            // Plan 28 (note 113 C4): authored road miles from this stand's
+            // landing to the mill; 0 = none authored, and the haul driver
+            // refuses loudly until the authoring lands.
+            [Min(0)] public float milesToMill;
         }
 
         /// <summary>

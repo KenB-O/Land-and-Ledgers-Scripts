@@ -2499,6 +2499,7 @@ namespace LandLedgers.FirstLedger
                         LocationId = standEntry.locationId ?? string.Empty,
                         Species = standEntry.species ?? string.Empty,
                         KilogramsPerLog = standEntry.kilogramsPerLog,
+                        MilesToMill = standEntry.milesToMill,
                         StandingTimberUnits = standEntry.standingTimberUnits,
                     });
                     if (!string.IsNullOrWhiteSpace(standRefusal))

@@ -357,6 +357,7 @@ namespace LandLedgers.Orchestration.Systems
         private readonly HashSet<string> sawmillTransferWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> sawmillProductionWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> fellingWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> logHaulWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private EmbodiedPurchaseExecutor purchaseExecutor;
         private HouseholdMembershipRegistry householdMemberships;
         private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
@@ -825,6 +826,161 @@ namespace LandLedgers.Orchestration.Systems
                 if (releasePerLogger > 0)
                     hub.WorkTimeBudgets.GetOrCreate(logger).ReleaseCommitment(releasePerLogger);
                 hub.WorkTimeBudgets.GetOrCreate(logger).RecordWorked(minutesPerLogger);
+            }
+        }
+
+        /// <summary>
+        /// A2 plan 28 (2026-11-14, note 113): the daily log-haul driver.
+        /// Dispatches every lot waiting at the landing to the first Sawmill
+        /// business, then advances all active hauls by the working day
+        /// (600 minutes, C3). Day order is fell, haul, saw, transfer, so a
+        /// haul arriving in today's advance is delivered and sawn the same
+        /// day. The driver lands BEFORE the miles authoring (Q1): a stand
+        /// with no authored miles refuses loudly and once-only per stand,
+        /// and the lot stays at the landing. No teamster budget is charged
+        /// (Q8) — there is no identified teamster and no per-person minute
+        /// cost for hauling as written, so the slice lands WITHOUT a
+        /// TryCommitTask pre-commit and says so in a loud diagnostic each
+        /// day it dispatches or advances. The Canon 4.1 wagon gate is
+        /// passed null (Q5) until the log-wagon endowment lands; the skip
+        /// is recorded in the same daily diagnostic.
+        /// </summary>
+        private void DriveLogHauls(int absoluteDayIndex)
+        {
+            // 1. Resolve the mill and the runtime (D1 pattern,
+            // mirroring DriveSawmillProduction and DriveFelling).
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogHaulWarningOnce("no-business-runtime",
+                    "Hauling skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogHaulWarningOnce("no-pass9",
+                    "Hauling skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            BusinessInstanceState millBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Sawmill)
+                {
+                    if (millBusiness == null) millBusiness = business;
+                    else LogHaulWarningOnce("second-mill",
+                        "Hauling goes to the first Sawmill business only: second Sawmill business '" + business.InstanceId + "' is unwired; the Pass 9 slot holds one mill only.");
+                }
+            }
+            if (millBusiness == null)
+            {
+                LogHaulWarningOnce("no-mill",
+                    "Hauling skipped: no Sawmill business is present in the shared runtime.");
+                return;
+            }
+
+            LoggingOperationRuntime loggingOperation = pass9.LoggingOperation;
+            if (loggingOperation == null)
+            {
+                LogHaulWarningOnce("no-logging-operation",
+                    "Hauling skipped: no logging operation is wired on the Pass 9 state.");
+                return;
+            }
+
+            LoggingStandRegistry registry = pass9.StandRegistry;
+            if (registry == null)
+            {
+                LogHaulWarningOnce("no-registry",
+                    "Hauling skipped: no timber stand registry is wired on the Pass 9 state.");
+                return;
+            }
+
+            // 2. Dispatch every lot at the landing, FIFO by FelledDayIndex
+            // (Q6: dispatch-all; landing-stock order breaks ties).
+            var diag = new List<string>();
+            string millLocationId = millBusiness.InstanceId + "-yard"; // C5
+            var lots = new List<LogLot>(loggingOperation.LandingStock);
+            var orderedLots = lots.OrderBy(lot => lot == null ? int.MaxValue : lot.FelledDayIndex).ToList();
+            int dispatched = 0;
+            foreach (LogLot lot in orderedLots)
+            {
+                if (lot == null) continue;
+                TimberStand stand = registry.GetStand(lot.StandId);
+                if (stand == null)
+                {
+                    LogHaulWarningOnce("no-stand-" + lot.StandId,
+                        "Haul refused: lot " + lot.LotId + " names stand '" + lot.StandId + "', which the stand registry does not hold; the lot stays at the landing.");
+                    continue;
+                }
+                if (string.IsNullOrWhiteSpace(stand.LocationId))
+                {
+                    LogHaulWarningOnce("no-location-" + stand.StandId,
+                        "Haul refused: stand '" + stand.StandId + "' has no authored landing location; the lot stays at the landing.");
+                    continue;
+                }
+                // C4/Q1: miles ride on the stand. Zero or absent means the
+                // authoring has not landed — refuse loudly, invent nothing.
+                if (stand.MilesToMill <= 0f)
+                {
+                    LogHaulWarningOnce("no-miles-" + stand.StandId,
+                        "Haul refused: stand '" + stand.StandId + "' has no authored miles to the mill (MilesToMill is 0); dispatch waits on the authoring and the lot stays at the landing.");
+                    continue;
+                }
+                string routeProblem = LogHaulRoute.EnsureRoute(hub.Journeys, stand.LocationId, stand.DisplayName,
+                    millLocationId, millBusiness.InstanceId, millBusiness.RuntimeDisplayName, stand.MilesToMill, "logging road", diag);
+                if (routeProblem != null)
+                {
+                    LogHaulWarningOnce("route-" + lot.LotId,
+                        "Haul refused: " + routeProblem);
+                    continue;
+                }
+                LogHaul haul = loggingOperation.DispatchLogHaul(lot.LotId, millBusiness.InstanceId, millLocationId,
+                    hub.Journeys, stand.LocationId, absoluteDayIndex, diag, null); // Q5: gate null until the wagon endowment lands
+                if (haul != null) dispatched++;
+            }
+
+            // 3. Advance all active hauls by the working day (C3: 600
+            // minutes, not daylight). Snapshot the wagon-minutes before
+            // and after so the Q8 audit diagnostic can report exactly
+            // what advanced.
+            int loadingBefore = 0;
+            int transitBefore = 0;
+            foreach (LogHaul haul in loggingOperation.Hauls)
+            {
+                if (haul == null || !haul.IsActive) continue;
+                loadingBefore += haul.LoadingMinutesRemaining;
+                transitBefore += haul.TransitMinutesRemaining;
+            }
+            loggingOperation.AdvanceHauls(WorkTimeBudget.DefaultDailyWorkMinutes, diag, absoluteDayIndex);
+            int loadingAfter = 0;
+            int transitAfter = 0;
+            foreach (LogHaul haul in loggingOperation.Hauls)
+            {
+                if (haul == null || !haul.IsActive) continue;
+                loadingAfter += haul.LoadingMinutesRemaining;
+                transitAfter += haul.TransitMinutesRemaining;
+            }
+            int loadingAdvanced = loadingBefore - loadingAfter;
+            int transitAdvanced = transitBefore - transitAfter;
+
+            // Q8 + Q5: one loud diagnostic each day the driver dispatches
+            // or advances, stating plainly that no teamster budget was
+            // charged and that the Canon 4.1 wagon gate was skipped (no
+            // log-wagon endowment yet). Teamster identity and the rest
+            // model stay an owner decision (A5 P15).
+            if (dispatched > 0 || loadingAdvanced + transitAdvanced > 0)
+            {
+                Debug.LogWarning("[LogHaul] Day " + absoluteDayIndex + ": dispatched " + dispatched + " haul(s), advanced "
+                    + (loadingAdvanced + transitAdvanced) + " wagon-minutes (" + loadingAdvanced + " loading + " + transitAdvanced + " transit); "
+                    + "no teamster budget was charged — hauling has no identified teamster and no per-person minute cost as written (note 113 Q8). "
+                    + "The log-wagon gate was skipped (null gate, Q5) until the wagon endowment lands.", this);
             }
         }
 
@@ -1412,6 +1568,12 @@ namespace LandLedgers.Orchestration.Systems
         {
             string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
             if (fellingWarningsLogged.Add(warningKey)) Debug.LogWarning("[Felling] " + message, this);
+        }
+
+        private void LogHaulWarningOnce(string key, string message)
+        {
+            string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
+            if (logHaulWarningsLogged.Add(warningKey)) Debug.LogWarning("[LogHaul] " + message, this);
         }
 
         /// <summary>Attaches the scenario's real membership authority for the production shopping loop.</summary>
@@ -2926,6 +3088,11 @@ namespace LandLedgers.Orchestration.Systems
             // one-day-once, so the daily call IS the re-attempt: a
             // refused day is retried tomorrow.
             DriveFelling(absoluteDayIndex);
+            // Plan 28 (log-haul dispatch/advance driver): the day's lots
+            // are dispatched and advanced after felling and before sawing,
+            // so a haul arriving in today's advance is delivered and sawn
+            // the same day. Day order is fell, haul, saw, transfer.
+            DriveLogHauls(absoluteDayIndex);
             // P3 (F6 production wiring): sawing runs before the byproduct
             // transfer so the day's output is in mill.ByproductStock before
             // the transfer moves it, and before the bakery plans its day.

@@ -24,6 +24,7 @@ namespace LandLedgers.Economy.Farming.Timber
         public string TimberRightsHolderId = string.Empty; // business/household/town that may fell here
         public string Species = string.Empty; // e.g. "white pine"
         public float KilogramsPerLog = 300f; // provisional mature-tree usable yield; authored variation is permitted
+        public float MilesToMill; // plan 28 (note 113 C4): authored road miles from this stand's landing to the mill; 0 = none authored
         public int StandingTimberUnits; // logs still standing
         public int LastFelledDayIndex = -1;
 

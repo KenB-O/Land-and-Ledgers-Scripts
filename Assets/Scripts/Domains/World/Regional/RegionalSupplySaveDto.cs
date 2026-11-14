@@ -17,6 +17,10 @@ namespace LandLedgers.World.Regional
     /// or clamped with a diagnostic, never trusted blindly. A missing or
     /// null DTO restores to the registry's starting position (fresh
     /// suppliers, no open orders) — an old save simply predates the region.
+    /// R39: the DTO also carries one cash row per supplier, so each
+    /// supplier's live cash ledger survives save/load on this same surface;
+    /// a DTO with no cash rows restores every ledger to its authored
+    /// opening cash.
     /// </summary>
     [Serializable]
     public sealed class RegionalSupplierStockRow
@@ -27,10 +31,19 @@ namespace LandLedgers.World.Regional
         public int LastProductionWeek = -1;
     }
 
+    /// <summary>R39: one supplier's live cash ledger balance in a save.</summary>
+    [Serializable]
+    public sealed class RegionalSupplierCashRow
+    {
+        public string SupplierId = string.Empty;
+        public int CashCents;
+    }
+
     [Serializable]
     public sealed class RegionalSupplySaveDto
     {
         public List<RegionalSupplierStockRow> SupplierStocks = new List<RegionalSupplierStockRow>();
+        public List<RegionalSupplierCashRow> SupplierCash = new List<RegionalSupplierCashRow>();
         public List<StoreProcurementOrder> Orders = new List<StoreProcurementOrder>();
         public List<StoreDelivery> Deliveries = new List<StoreDelivery>();
         public int NextOrderSequence;

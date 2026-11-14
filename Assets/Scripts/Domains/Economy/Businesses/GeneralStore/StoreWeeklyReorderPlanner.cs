@@ -164,12 +164,13 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         /// this order, recorded exactly once per order — the shipment
         /// carries it as sellerUnitRevenueCents so the delivery branch can
         /// credit it through CreditSellerRevenue when the source resolves
-        /// to a town business. For an off-map regional supplier there is no
-        /// town seller cash account (the registry authors OpeningCashCents
-        /// only; the adapter holds no live cash ledger), so the revenue is
-        /// off-map by construction and the receipt logs it as such — the
-        /// seller-side conservation for a regional supplier is the Ship()
-        /// stock decrement, pinned by the receipt tests.
+        /// to a town business. R39: for an off-map regional supplier the
+        /// adapter now holds a live cash ledger, and the receipt credits
+        /// it by the accepted units at the pre-ship goods quote — the
+        /// seller-side conservation for a regional supplier is that ledger
+        /// credit plus the Ship() stock decrement as the stock half. The
+        /// ledger is off-map cash by construction and enters the town
+        /// economy only if a future sell side pays it back (R8).
         /// </summary>
         public sealed class WeeklyReorderShipmentTerms
         {
@@ -380,9 +381,20 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 result.BuyerSpendCents -= unacceptedSpend;
             }
 
+            // R39: credit the seller's live ledger by the accepted units
+            // at the pre-ship goods quote — the settlement value, captured
+            // before Ship() (Ship() ships cheapest-first, so the quote
+            // prices exactly the goods shipped). Only accepted units are
+            // credited; the refunded remainder never lands. A supplier
+            // without a ledger settles uncredited, exactly as before.
+            if (supplier is ISupplierCashLedger ledger)
+            {
+                ledger.CreditCashCents(accepted * goodsQuoteCents);
+            }
+
             result.ShortfallUnits = Math.Max(0, units - shipped);
             result.StatusLine = $"Received {accepted}u {categoryId} from {supplier.SupplierName} " +
-                $"for {spend}c (seller revenue {accepted * goodsQuoteCents}c off-map)" +
+                $"for {spend}c (seller revenue {accepted * goodsQuoteCents}c credited to {supplier.SupplierName}'s ledger)" +
                 (result.ShortfallUnits > 0 ? $"; shortfall of {result.ShortfallUnits}u still owed by the shipment." : ".");
             return result;
         }

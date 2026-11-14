@@ -1156,15 +1156,14 @@ namespace LandLedgers.Economy
                         }
                         else
                         {
-                            // W1: credit the seller, mirroring the
-                            // GeneralStoreLocalSupply branch. For a named
-                            // regional supplier the source id resolves to no
-                            // town business, so no town-side credit is minted
-                            // — the supplier's revenue is off-map (its stock
-                            // decrement is the seller-side conservation) —
-                            // and the receipt is logged as such. For an
-                            // anonymous shipment the receipt is uncredited,
-                            // loudly, not silently.
+                            // W1 (R39): the seller-side credit for a named
+                            // regional supplier is minted by the planner —
+                            // the weekly receipt credits the supplier's live
+                            // cash ledger — so CreditSellerRevenue's early
+                            // return for a regional id is correct: the town
+                            // side mints nothing here. For an anonymous
+                            // shipment the receipt is uncredited, loudly,
+                            // not silently.
                             CreditSellerRevenue(shipment, accepted);
                             if (string.IsNullOrWhiteSpace(shipment.sourceBusinessInstanceId))
                             {
@@ -1172,7 +1171,7 @@ namespace LandLedgers.Economy
                             }
                             else
                             {
-                                Debug.Log($"[Logistics] named reorder received {accepted}u {shipment.destinationCategoryId} from supplier '{shipment.sourceBusinessInstanceId}' for {FormatMoney(accepted * shipment.sellerUnitRevenueCents)} seller revenue (off-map).", this);
+                                Debug.Log($"[Logistics] named reorder received {accepted}u {shipment.destinationCategoryId} from supplier '{shipment.sourceBusinessInstanceId}' — seller revenue credited to the supplier's ledger.", this);
                             }
                         }
 

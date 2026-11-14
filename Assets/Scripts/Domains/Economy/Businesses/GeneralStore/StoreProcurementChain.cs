@@ -31,6 +31,21 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     }
 
     /// <summary>
+    /// R39: optional cash-ledger extension for upstream suppliers. A
+    /// supplier that holds a live cash ledger implements this so the
+    /// chain can credit it when the store pays for received goods. A
+    /// supplier without it settles uncredited, exactly as before — the
+    /// ledger is opt-in per supplier, never assumed.
+    /// </summary>
+    public interface ISupplierCashLedger
+    {
+        /// <summary>Live cash balance in cents, seeded from the authored opening cash.</summary>
+        int CashCents { get; }
+        /// <summary>Credits a payment for goods sold to the town; zero and negative amounts are refused.</summary>
+        void CreditCashCents(int amountCents);
+    }
+
+    /// <summary>
     /// Slice 18: optional exact-item extension for upstream suppliers.
     /// A category-only supplier stays source compatible; a supplier that
     /// can quote, count, and ship a NAMED item implements this so the
@@ -672,6 +687,21 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     continue;
                 }
 
+                // R39: the supplier is paid first (above); credit the
+                // seller's live ledger by exactly what the store paid
+                // for the received units. A supplier without a ledger
+                // settles uncredited. The credit is units x the
+                // order's goods quote — identical to the paid cost
+                // by construction.
+                IUpstreamGoodsSupplier ledgerSupplier = FindSupplier(upstreamSuppliers, order.UpstreamSupplierId);
+                string ledgerNote = string.Empty;
+                if (ledgerSupplier is ISupplierCashLedger ledger)
+                {
+                    int ledgerBefore = ledger.CashCents;
+                    ledger.CreditCashCents(unitsToReceive * Math.Max(0, unitCost));
+                    ledgerNote = $" supplier='{order.UpstreamSupplierId}' ledger={ledgerBefore}c -> {ledger.CashCents}c";
+                }
+
                 delivery.Units -= unitsToReceive;
                 if (delivery.Units <= 0)
                 {
@@ -685,7 +715,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 outDiagnostics.Add($"Day {dayIndex}: received {unitsToReceive}u {delivery.CategoryId} ({provenance})." +
                     $" [StoreReceipt] business='{store.StoreBusinessId}' item='{delivery.ItemId}' lot='{lotId}' " +
                     $"paid={cost}c cash={cashBeforeReceipt}->{store.CurrentCashCents}c stock={stockBeforeReceipt}->{store.CategoryStockUnits(delivery.CategoryId)}u." +
-                    (delivery.Units > 0 ? $" {delivery.Units}u still at the dock." : string.Empty));
+                    (delivery.Units > 0 ? $" {delivery.Units}u still at the dock." : string.Empty) + ledgerNote);
             }
         }
 

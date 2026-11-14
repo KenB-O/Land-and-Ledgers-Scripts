@@ -70,8 +70,11 @@ namespace LandLedgers.World.Regional
         }
     }
 
-    /// <summary>One regional business as a live upstream supplier.</summary>
-    public sealed class RegionalSupplierAdapter : IUpstreamGoodsSupplier, IItemLevelUpstreamGoodsSupplier
+    /// <summary>
+    /// One regional business as a live upstream supplier. R39: the adapter
+    /// also holds the business's live cash ledger (see <see cref="CashCents"/>).
+    /// </summary>
+    public sealed class RegionalSupplierAdapter : IUpstreamGoodsSupplier, IItemLevelUpstreamGoodsSupplier, ISupplierCashLedger
     {
         /// <summary>Wagon miles per day: 4 mph x 24 h. Lead time is one-way miles / 96, rounded up.</summary>
         public const float WagonMilesPerDay = 96f;
@@ -80,6 +83,7 @@ namespace LandLedgers.World.Regional
         private readonly Dictionary<string, int> onHand =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private int lastProductionWeek = -1;
+        private int cashCents;
 
         public RegionalSupplierAdapter(RegionalBusinessRegistry.RegionalBusinessDefinition definition)
         {
@@ -90,6 +94,7 @@ namespace LandLedgers.World.Regional
                 if (offer != null && !string.IsNullOrWhiteSpace(offer.ItemId))
                     onHand[offer.ItemId] = Math.Max(0, offer.StartingUnits);
             }
+            cashCents = Math.Max(0, definition.OpeningCashCents);
         }
 
         public string SupplierId => definition.BusinessId;
@@ -98,6 +103,23 @@ namespace LandLedgers.World.Regional
 
         /// <summary>Production week the adapter has processed through (dayIndex / 7). -1 before the first drive.</summary>
         public int LastProductionWeek => lastProductionWeek;
+
+        /// <summary>
+        /// R39: this supplier's live cash ledger, seeded once from its
+        /// authored OpeningCashCents at New Game. Town payments for goods
+        /// credit it (daily chain receipt, weekly planner receipt); it is
+        /// off-map cash by construction and enters the town economy only
+        /// if a future sell side pays it back (R8). There is no debit
+        /// method: the sell side is not built here.
+        /// </summary>
+        public int CashCents => cashCents;
+
+        /// <summary>R39: credits a payment for goods sold to the town. Zero and negative amounts are refused.</summary>
+        public void CreditCashCents(int amountCents)
+        {
+            if (amountCents <= 0) return;
+            cashCents += amountCents;
+        }
 
         /// <summary>Units of one item on hand right now.</summary>
         public int OnHandUnits(string itemId)
@@ -109,7 +131,9 @@ namespace LandLedgers.World.Regional
         /// <summary>
         /// Slice 17: appends this supplier's stock rows (one per offered
         /// item, plus the production week) to a save DTO. Call once per
-        /// supplier per capture.
+        /// supplier per capture. R39: also appends this supplier's cash
+        /// ledger row, so the ledger survives save/load on the same DTO
+        /// surface as the stock.
         /// </summary>
         public void CaptureInto(RegionalSupplySaveDto dto)
         {
@@ -126,6 +150,11 @@ namespace LandLedgers.World.Regional
                     LastProductionWeek = lastProductionWeek,
                 });
             }
+            dto.SupplierCash.Add(new RegionalSupplierCashRow
+            {
+                SupplierId = definition.BusinessId,
+                CashCents = cashCents,
+            });
         }
 
         /// <summary>
@@ -135,7 +164,13 @@ namespace LandLedgers.World.Regional
         /// ignored; rows for items this supplier does not offer are skipped
         /// with a diagnostic; negative units are clamped to zero with a
         /// diagnostic. A missing row therefore restores starting stock,
-        /// never a stale value.
+        /// never a stale value. R39: the cash ledger follows the same
+        /// pattern — it first resets to the authored OpeningCashCents, and
+        /// a cash row for this supplier then overwrites it. A cash row for
+        /// an unknown supplier is silently skipped (no code sees the whole
+        /// DTO against the supplier set); a negative cash row for this
+        /// supplier is clamped to 0 with a diagnostic. A DTO with no cash
+        /// rows (an old save) therefore restores opening cash.
         /// </summary>
         public void RestoreFrom(RegionalSupplySaveDto dto, List<string> diagnostics)
         {
@@ -147,6 +182,7 @@ namespace LandLedgers.World.Regional
                     onHand[offer.ItemId] = Math.Max(0, offer.StartingUnits);
             }
             lastProductionWeek = -1;
+            cashCents = Math.Max(0, definition.OpeningCashCents);
             if (dto == null || dto.SupplierStocks == null) return;
             int restoredWeek = -1;
             for (int i = 0; i < dto.SupplierStocks.Count; i++)
@@ -172,6 +208,22 @@ namespace LandLedgers.World.Regional
                     restoredWeek = Math.Max(restoredWeek, row.LastProductionWeek);
             }
             if (restoredWeek >= 0) lastProductionWeek = restoredWeek;
+            if (dto == null || dto.SupplierCash == null) return;
+            for (int i = 0; i < dto.SupplierCash.Count; i++)
+            {
+                RegionalSupplierCashRow row = dto.SupplierCash[i];
+                if (row == null) continue;
+                if (!string.Equals(row.SupplierId, definition.BusinessId, StringComparison.OrdinalIgnoreCase)) continue;
+                if (row.CashCents < 0)
+                {
+                    diagnostics.Add($"RegionalSupplier '{SupplierName}': save row for cash had negative amount ({row.CashCents}); clamped to 0.");
+                    cashCents = 0;
+                }
+                else
+                {
+                    cashCents = row.CashCents;
+                }
+            }
         }
 
         public int QuoteUnitCostCents(string categoryId)

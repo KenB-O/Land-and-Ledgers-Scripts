@@ -873,6 +873,122 @@ namespace LandLedgers.EditorTests.Tasks
             Assert.AreEqual(TaskStatus.InProgress, task.Status, "RecordWorkProgress never completes by itself");
         }
 
+        // Maintenance pass 2026-11-15, Part A: a task queued for days behind
+        // its owner's other work (person-time is exclusive) is waiting for a
+        // turn, not overrunning. Queued time no longer counts toward the
+        // overrun, with no refusal fed in at all.
+        [Test]
+        public void Classify_QueuedForDays_IsLegitimate_NoRefusalNeeded()
+        {
+            var clock = new FakeClock { Now = Day(0, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(0);
+
+            WorkTask task = authority.CreateTask("test.sweep", Business(1), 0);
+
+            clock.Now = Day(5, 28800); // five days queued, never assigned
+            TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 5);
+            Assert.IsNotNull(verdict);
+            Assert.AreEqual(TaskTimingVerdictKind.Legitimate, verdict.Verdict,
+                "five days queued is scheduling, not a stuck task");
+            Assert.AreEqual(0f, verdict.UncoveredSeconds, 0.001f,
+                "the whole queued span is explained as waiting");
+            Assert.AreEqual(5f * 86400f, verdict.CoveredSeconds, 0.001f);
+        }
+
+        // Maintenance pass 2026-11-15, Part A: the same for an assigned task
+        // whose start window has not arrived yet — assigned-waiting is
+        // explained even without a RecordRefusal (refusals are only fed by
+        // the shopping loop; every other driver leaves the wait unexplained).
+        [Test]
+        public void Classify_AssignedWaitingForDays_IsLegitimate_NoRefusalNeeded()
+        {
+            var clock = new FakeClock { Now = Day(0, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(0);
+
+            string reason;
+            WorkTask task = authority.CreateTask("test.sweep", Business(1), 0);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 0, out reason), reason);
+
+            clock.Now = Day(4, 28800); // four days assigned, never started
+            TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 4);
+            Assert.IsNotNull(verdict);
+            Assert.AreEqual(TaskTimingVerdictKind.Legitimate, verdict.Verdict,
+                "four days assigned-waiting is scheduling, not a stuck task");
+            Assert.AreEqual(0f, verdict.UncoveredSeconds, 0.001f);
+        }
+
+        // Maintenance pass 2026-11-15, Part A: a task that waited queued for
+        // days and then completed on time must NOT warn as a
+        // completed-overrun. The pre-fix Classify counted the queued days as
+        // unexplained span, so every successfully completed scheduled task
+        // warned once at completion.
+        [Test]
+        public void Classify_QueuedForDays_ThenCompletedOnTime_WarnsNothing()
+        {
+            var clock = new FakeClock { Now = Day(0, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            List<string> lines = CaptureLines(diagnostics);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(0);
+
+            string reason;
+            WorkTask task = authority.CreateTask("test.sweep", Business(1), 0);
+            Assert.AreEqual(10, task.PlannedMinutes);
+
+            clock.Now = Day(5, 28800); // five days queued for its window
+            budgets.EnsureDay(5);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 5, out reason), reason);
+            Assert.IsTrue(authority.StartTask(task.TaskId, 5, out reason), reason);
+            clock.Now = Day(5, 30600); // 30 min of work, inside the 10-min expectation's 2x + 15-min bound
+            Assert.IsTrue(authority.CompleteTask(task.TaskId, TaskOutcome.Success, 5, budgets));
+            Assert.AreEqual(TaskStatus.Complete, task.Status);
+
+            diagnostics.Evaluate(clock.Now, 5);
+            Assert.AreEqual(0, CountLinesStartingWith(lines, "[TaskDuration] completed-overrun"),
+                "a task that waited for its window and then completed on time is not an overrun");
+            Assert.AreEqual(0, lines.Count,
+                "no warning and no summary: nothing overran");
+        }
+
+        // Maintenance pass 2026-11-15, Part A (guard): the waiting fix must
+        // not silence a genuinely stuck task. Queued four days, then
+        // InProgress two days with no progress: the active overrun still
+        // warns, with the queued days explained and the active days not.
+        [Test]
+        public void Classify_QueuedThenStuckActive_StillUnexplained()
+        {
+            var clock = new FakeClock { Now = Day(0, 28800) };
+            TaskDurationDiagnostics diagnostics;
+            TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(0);
+
+            string reason;
+            WorkTask task = authority.CreateTask("test.sweep", Business(1), 0);
+            clock.Now = Day(4, 28800); // four days queued
+            budgets.EnsureDay(4);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Person(1), budgets, 4, out reason), reason);
+            Assert.IsTrue(authority.StartTask(task.TaskId, 4, out reason), reason);
+
+            clock.Now = Day(6, 28800); // two more days InProgress, 0 minutes worked
+            Assert.AreEqual(0, task.MinutesWorked);
+            TaskTimingVerdict verdict = diagnostics.Classify(diagnostics.GetRecord(task.TaskId), clock.Now, 6);
+            Assert.IsNotNull(verdict);
+            Assert.AreEqual(TaskTimingVerdictKind.Unexplained, verdict.Verdict,
+                "the active stall still warns; only the queued wait is explained");
+            Assert.AreEqual(4f * 86400f, verdict.CoveredSeconds, 0.001f,
+                "only the four queued days are covered");
+            Assert.AreEqual(2f * 86400f, verdict.UncoveredSeconds, 0.001f,
+                "the two InProgress days remain unexplained");
+        }
+
         // Slice 2 / §2.1: queue + assigned-waiting + active + blocked + travel sums to
         // the open span within one short tick (900 s). Driven through queue -> assign
         // -> start -> wait -> resume -> complete at distinct clock times, so the sum
@@ -1910,25 +2026,31 @@ namespace LandLedgers.EditorTests.Tasks
             Assert.AreEqual(2 * 86400f, queuedRecord.CreatedSeconds, 0.001f);
             Assert.AreEqual(-1f, queuedRecord.StartedSeconds, 0.001f, "never started: no started time");
 
-            // Day 4, 08:00: both rebuilt tasks are now >1 day un-progressed, so both
-            // warn — once each that day, never duplicated within the day.
+            // Day 4, 08:00: the rebuilt started task is >1 day un-progressed
+            // and InProgress, so it warns — once that day, never duplicated
+            // within the day. The rebuilt queued task does NOT warn:
+            // maintenance pass 2026-11-15, Part A — a task that has never
+            // started is waiting for a turn (or its window), not overrunning;
+            // "no progress" is only a stall once work has begun. (Before the
+            // fix this asserted 2 warnings, one per rebuilt task.)
             clock.Now = Day(4, 28800);
             rebuilt.Evaluate(clock.Now, 4);
-            Assert.AreEqual(2, CountLinesStartingWith(lines, "[TaskDuration] overrun day 4:"),
-                "one warning per open task on the first evaluation after the load");
+            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] overrun day 4:"),
+                "only the started task warns on the first evaluation after the load");
             Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] summary day 4:"));
             int linesAfterFirst = lines.Count;
             rebuilt.Evaluate(clock.Now, 4);
             Assert.AreEqual(linesAfterFirst, lines.Count,
                 "a second evaluation the same day adds no duplicate warnings");
             Assert.AreEqual(1, CountOverrunLinesForTask(lines, started.TaskId));
-            Assert.AreEqual(1, CountOverrunLinesForTask(lines, queued.TaskId));
+            Assert.AreEqual(0, CountOverrunLinesForTask(lines, queued.TaskId),
+                "the queued task never warns: waiting is not an overrun");
 
             clock.Now = Day(5, 28800);
             rebuilt.Evaluate(clock.Now, 5);
             Assert.AreEqual(2, CountOverrunLinesForTask(lines, started.TaskId),
                 "the next day warns again (a repeating warning, not a same-day duplicate)");
-            Assert.AreEqual(2, CountOverrunLinesForTask(lines, queued.TaskId));
+            Assert.AreEqual(0, CountOverrunLinesForTask(lines, queued.TaskId));
         }
 
         // Slice 5 / §4.2 + A5: 60 simulated days x 20 open tasks (10 stuck, 5

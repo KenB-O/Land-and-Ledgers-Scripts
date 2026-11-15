@@ -362,7 +362,10 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
 
         if (swapPending && queuedClip != null)
         {
-            Debug.Log($"[LLMainMusicPlayer] Removed '{removedClip.name}' from the music order. '{queuedClip.name}' is already next.");
+            if (debugLogging)
+            {
+                Debug.Log($"[LLMainMusicPlayer] Removed '{removedClip.name}' from the music order. '{queuedClip.name}' is already next.");
+            }
             return true;
         }
 
@@ -376,9 +379,12 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
             PrepareQueuedTrack(next, startTime, fade, true);
         }
 
-        Debug.Log(next != null
-            ? $"[LLMainMusicPlayer] Removed '{removedClip.name}' from playlist asset '{playlistAsset.name}'. The audio file was kept."
-            : $"[LLMainMusicPlayer] Removed '{removedClip.name}' from playlist asset '{playlistAsset.name}'. The audio file was kept; no tracks remain.");
+        if (debugLogging)
+        {
+            Debug.Log(next != null
+                ? $"[LLMainMusicPlayer] Removed '{removedClip.name}' from playlist asset '{playlistAsset.name}'. The audio file was kept."
+                : $"[LLMainMusicPlayer] Removed '{removedClip.name}' from playlist asset '{playlistAsset.name}'. The audio file was kept; no tracks remain.");
+        }
         return true;
     }
 
@@ -547,11 +553,14 @@ public sealed class LLMainMusicPlayer : MonoBehaviour
         startupFadeEndDsp = currentStartDsp + Mathf.Max(0.1f, startupFadeDuration);
 
         RecordHistory(clip);
-
-        if (debugLogging)
-        {
-            Debug.Log($"[LLMainMusicPlayer] Now playing: {clip.name} | Tracks found: {discoveredTrackCount}");
-        }
+        // Maintenance pass 2026-11-15, Part A: no per-track "Now playing"
+        // announcement. A track change is routine playback, and this line
+        // fired on every track change (the scene serializes debugLogging on,
+        // so gating it was not enough). The current track stays visible via
+        // currentTrackName / the inspector, and the one-time startup
+        // diagnostics still report the track count. Actionable playback
+        // warnings (unexpected stop, multiple listeners, no tracks) and the
+        // missing-listener / empty-playlist errors are untouched.
     }
 
     private void QueueNextScheduledTrack()

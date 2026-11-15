@@ -382,6 +382,10 @@ namespace LandLedgers.Orchestration.Systems
         // (townWorld null / Grid null / zero road components) instead of
         // re-occurring silently.
         private string lastTownJourneyNetworkFailure = string.Empty;
+        // Maintenance pass 2026-11-15, Part A: the "no journey locations"
+        // warning in DriveDailyNeeds fires once per empty spell, not once
+        // per day; reset when locations appear so a later regression warns.
+        private bool noJourneyLocationsWarningLogged;
         // Plan 03 Slice 0 (P0-2): the instance id of the TownWorldController
         // whose identity was last logged, so the drivers' held instance is
         // named once per instance (including the null -> instance
@@ -5210,8 +5214,21 @@ namespace LandLedgers.Orchestration.Systems
                 // needs service can still settle food already held by the
                 // household; the shopping loop will leave any unmet purchase
                 // need open when no valid destination can be reached.
-                Debug.LogWarning("[SimulationDrivers] No journey locations are registered; " +
-                    "daily needs will consume eligible household stock, while new errands remain blocked.");
+                // Maintenance pass 2026-11-15, Part A: an empty journey model
+                // is an expected startup / pre-generation state, so warn once
+                // per empty spell instead of once per day while it lasts.
+                // The flag resets when locations appear, so a later
+                // regression still warns once.
+                if (!noJourneyLocationsWarningLogged)
+                {
+                    noJourneyLocationsWarningLogged = true;
+                    Debug.LogWarning("[SimulationDrivers] No journey locations are registered; " +
+                        "daily needs will consume eligible household stock, while new errands remain blocked.");
+                }
+            }
+            else
+            {
+                noJourneyLocationsWarningLogged = false;
             }
 
             // PopulationManager owns the current membership registry and may
@@ -9999,6 +10016,15 @@ namespace LandLedgers.Orchestration.Systems
             // This is a planning pass: physical trips settle later, only at
             // confirmed Store arrival. Do not report plans as purchases.
             var shoppingFailureByNeed = new Dictionary<string, string>(StringComparer.Ordinal);
+            // Maintenance pass 2026-11-15, Part A: trips still in flight are
+            // NOT failures. They used to be written into shoppingFailureByNeed
+            // above (as "trip …: Outbound/AtStore/…"), so every planned
+            // shopping trip opened a warning-level [Incident] for its need and
+            // every leg transition (Planned → Outbound → AtStore → …) fired a
+            // [CAUSE-CHANGED] warning as the "cause" text changed. In-flight
+            // trips are tracked separately, for the summary text only, and
+            // never reach ObserveHouseholdSupplyIncident.
+            var shoppingActiveTripByNeed = new Dictionary<string, string>(StringComparer.Ordinal);
 
             if (householdShoppingLoop != null)
                 foreach (ShoppingTripResult result in householdShoppingLoop.TripHistory)
@@ -10041,8 +10067,22 @@ namespace LandLedgers.Orchestration.Systems
                     if (trip?.Need != null)
                     {
                         string key = trip.HouseholdId + ":" + trip.Need.ItemId;
-                        if (!shoppingFailureByNeed.ContainsKey(key))
-                            shoppingFailureByNeed[key] = $"trip {trip.TripId} need {trip.Need.NeedSequence}: {trip.State}";
+                        if (trip.State == PlannedShoppingTrip.TripState.Failed)
+                        {
+                            // A failed trip is a genuine supply failure: its
+                            // recorded reason (when present) is the incident
+                            // cause. Any other active state is a trip still in
+                            // flight — recorded separately, never as a failure.
+                            if (!shoppingFailureByNeed.ContainsKey(key))
+                                shoppingFailureByNeed[key] = string.IsNullOrWhiteSpace(trip.FailureReason)
+                                    ? $"trip {trip.TripId} need {trip.Need.NeedSequence}: Failed"
+                                    : trip.FailureReason;
+                        }
+                        else if (!shoppingActiveTripByNeed.ContainsKey(key))
+                        {
+                            shoppingActiveTripByNeed[key] =
+                                $"trip {trip.TripId} need {trip.Need.NeedSequence} in progress ({trip.State})";
+                        }
                     }
 
             // Plan 02 Slice 5: one daily shopping summary line (not one line
@@ -10100,7 +10140,9 @@ namespace LandLedgers.Orchestration.Systems
                     {
                         string reason = shoppingFailureByNeed.TryGetValue(failureKey, out string recorded)
                             ? recorded
-                            : "no attempt today";
+                            : shoppingActiveTripByNeed.TryGetValue(failureKey, out string inProgress)
+                                ? inProgress
+                                : "no attempt today";
                         stillOpenParts.Add($"H{household.id} {openNeed.ItemId} ({reason})");
                     }
                 }
@@ -10114,7 +10156,9 @@ namespace LandLedgers.Orchestration.Systems
                 string longestFailureKey = longestOpenHouseholdId + ":" + longestOpenNeed.ItemId;
                 string longestReason = shoppingFailureByNeed.TryGetValue(longestFailureKey, out string longestRecorded)
                     ? longestRecorded
-                    : "no attempt today";
+                    : shoppingActiveTripByNeed.TryGetValue(longestFailureKey, out string longestInProgress)
+                        ? longestInProgress
+                        : "no attempt today";
                 int longestAgeDays = Math.Max(0, absoluteDayIndex - longestOpenNeed.CreatedDayIndex);
                 longestOpenText = $"; longest open: H{longestOpenHouseholdId} '{longestOpenNeed.ItemId}' open since day {longestOpenNeed.CreatedDayIndex} ({longestAgeDays}d) — {longestReason}";
             }

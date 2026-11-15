@@ -978,6 +978,8 @@ namespace LandLedgers.Tasks
         /// the task finished; P2 alone decides).
         ///
         /// UnexplainedSpanSeconds = openSpan − queueExplained − assignedExplained −
+        /// waitingExplained (the Queued / Assigned remainder: waiting for a turn is
+        /// scheduling, not work, maintenance pass 2026-11-15 Part A) −
         /// activeExplained(L3) − legitimateBlocked − expectedTravelSeconds (0 in this
         /// slice: no travel linkage exists, §2.3). Each explained term covers only
         /// the bucket it belongs to, so the terms are disjoint and their sum never
@@ -1129,7 +1131,23 @@ namespace LandLedgers.Tasks
                 primaryEvidence = "sleep/rest windows (L3)";
             }
 
-            float covered = queueExplained + assignedExplained + sleepCovered + legitimateBlocked + expectedTravelSeconds;
+            // ---- Waiting for a turn is scheduling, not an overrun (maintenance
+            // pass 2026-11-15, Part A): Queued / Assigned / ResourcesReserved time
+            // is time the task spent waiting for its worker's exclusive person-time
+            // or its scheduled start window, not time spent doing the work. Before
+            // this, only the slice a refusal budget covered was explained, so a
+            // task created days ahead of its window — or queued behind the owner's
+            // other work — accrued "unexplained" span at 24 h/day and warned as
+            // an overrun (and, once completed on time, as a completed-overrun)
+            // even though the work itself never exceeded its expectation. The
+            // wait beyond any refusal budget is explained here, so the overrun
+            // predicate now measures active time (net of sleep) plus unexplained
+            // blocked time against the expectation. A genuinely stuck active
+            // task still warns: its active span is untouched by this term.
+            float waitingExplained = Math.Max(0f, queueTotal - queueExplained)
+                + Math.Max(0f, assignedTotal - assignedExplained);
+
+            float covered = queueExplained + assignedExplained + waitingExplained + sleepCovered + legitimateBlocked + expectedTravelSeconds;
             float uncovered = Math.Max(0f, openSpan - covered);
 
             float lastProgress = record.LastProgressSeconds >= 0f

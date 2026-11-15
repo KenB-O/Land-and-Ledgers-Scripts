@@ -591,14 +591,22 @@ namespace LandLedgers.Time
             }
 
             settings.Sanitize();
-            // Pass V P0-1: the clock starts on the scenario start date derived
-            // from the Gregorian anchor (default 1892-03-01). absoluteDayIndex
-            // remains the persisted truth; the start is an anchor offset now.
-            calendarDayOffset = 0;
+            // Campaign C (DEF-012): the scenario start is the sole clock
+            // authority. Route it through the calendarDayOffset mechanism
+            // exactly as StartNewScenarioAtDate does: the campaign day index
+            // starts at zero and the offset carries the anchor-relative
+            // distance to the start (default 1870-01-01, offset -3712), so a
+            // pre-anchor start is no longer floored to the anchor date.
+            // The old shape (offset 0, absoluteDayIndex set to the
+            // anchor-relative start) disagreed with StartNewScenarioAtDate
+            // and, through the old Mathf.Max(0, ...) clamp in
+            // GetScenarioStartAbsoluteDayIndex, turned the math epoch into
+            // a floor for any pre-anchor start.
+            calendarDayOffset = settings.GetScenarioStartAbsoluteDayIndex();
             pendingGameSeconds = 0d;
             gameSecondsRemainder = 0d;
             shortTickRemainder = 0d;
-            absoluteDayIndex = settings.GetScenarioStartAbsoluteDayIndex();
+            absoluteDayIndex = 0;
             currentDate = BuildTimelineDate();
             ApplyTimeOfDay(settings.startingTimeOfDay01 * settings.GameSecondsPerDay);
             ResetShortTickStateForCurrentTimeOfDay();

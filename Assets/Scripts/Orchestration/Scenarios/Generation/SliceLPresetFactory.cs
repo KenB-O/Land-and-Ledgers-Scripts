@@ -19,9 +19,11 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
 
         /// <summary>
         /// Builds the slice-L preset. The start date is configurable; every
-        /// other authored value is fixed by the scenario author.
+        /// other authored value is fixed by the scenario author. The default
+        /// start is the ordinary opening (1870-01-01, First Ledger) per
+        /// owner Decision 8 — not the math epoch.
         /// </summary>
-        public static ScenarioPreset Build(int startYear = 1880, int startMonth = 3, int startDay = 1)
+        public static ScenarioPreset Build(int startYear = 1870, int startMonth = 1, int startDay = 1)
         {
             var preset = new ScenarioPreset();
             preset.SetIdentity(PresetId, "Slice L: Hearth and Ledger", "1.0.0");

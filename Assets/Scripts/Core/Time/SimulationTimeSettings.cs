@@ -83,10 +83,10 @@ namespace LandLedgers.Time
         // ScenarioBootstrapFactory and applied through
         // TimeManager.LoadFromSaveDto. Do not read these fields as "today".
         [Min(1)]
-        public int startingYear = 1892;
+        public int startingYear = 1870;
 
         [Min(1)]
-        public int startingMonth = 3;
+        public int startingMonth = 1;
 
         [Min(1)]
         [Tooltip("Pass V P0-1: scenario start day-of-month on the true Gregorian calendar. Replaces the 336-day week/day-of-week start fields below.")]
@@ -178,16 +178,20 @@ namespace LandLedgers.Time
         public CalendarAnchor Anchor => new CalendarAnchor(anchorYear, anchorMonth, anchorDay);
 
         /// <summary>
-        /// Pass V P0-1: the scenario start as an absolute day index, derived from
-        /// the Gregorian anchor. The canon March start is preserved (default
-        /// 1892-03-01): only the calendar math changed, not the start date.
+        /// Campaign C (DEF-012): the scenario start as an anchor-relative day
+        /// index, derived from the Gregorian anchor. The value may be
+        /// negative for a pre-anchor start (the ordinary 1870-01-01 opening
+        /// is -3712): it is carried as TimeManager's calendarDayOffset, never
+        /// floored to the anchor date, so the scenario start — not the epoch
+        /// — determines the clock. The old Mathf.Max(0, ...) clamp turned the
+        /// math epoch into a floor and is removed.
         /// </summary>
         public int GetScenarioStartAbsoluteDayIndex()
         {
             CalendarAnchor anchor = Anchor;
             int month = Mathf.Clamp(startingMonth, 1, 12);
             int day = Mathf.Clamp(startingDayOfMonth, 1, GregorianDateMath.DaysInMonth(Mathf.Max(1, startingYear), month));
-            return Mathf.Max(0, anchor.ToAbsoluteDay(Mathf.Max(1, startingYear), month, day));
+            return anchor.ToAbsoluteDay(Mathf.Max(1, startingYear), month, day);
         }
 
         public float GameSecondsPerDay => 24f * 60f * 60f;

@@ -5021,7 +5021,11 @@ namespace LandLedgers.Orchestration.Systems
                         horse == null ? "A0" : null,
                         wagon == null ? "assigned wagon" : null
                     }.Where(value => value != null));
-                    LogFreightAgreementBlockerOnce("dispatch-prerequisite:" + agreement.AgreementId,
+                    // Campaign C (DEF-050): this stall retries daily but used
+                    // to log once per session, so a held shipment whose task
+                    // was never created went silent after day 1. One line
+                    // per day keeps it visible; the message is unchanged.
+                    LogRefusalDayKeyed("dispatch-prerequisite:" + agreement.AgreementId, dayIndex,
                         $"[FreightDispatch] Accepted agreement '{agreement.AgreementId}' remains prepared; dispatch assignment deferred because {missing} is unresolved.");
                     continue;
                 }
@@ -7538,14 +7542,16 @@ namespace LandLedgers.Orchestration.Systems
             if (hub?.Tasks == null || agreement == null || shipment == null || freight?.Owner == null
                 || horse == null || wagon == null)
             {
-                LogFreightAgreementBlockerOnce("dispatch-context:" + agreement?.AgreementId,
+                // Campaign C (DEF-050): day-keyed, not once-only — see the
+                // note on the prerequisite branch below.
+                LogRefusalDayKeyed("dispatch-context:" + agreement?.AgreementId, dayIndex,
                     "[FreightDispatch] Prepared shipment retained; TaskAuthority, agreement, shipment, Ethan, A0, or wagon is unresolved.");
                 return;
             }
             int operatorId = freight.Owner.PersonId;
             if (operatorId < 0 || operatorId != agreement.AcceptingOperatorPersonId)
             {
-                LogFreightAgreementBlockerOnce("dispatch-operator:" + shipment.ShipmentId,
+                LogRefusalDayKeyed("dispatch-operator:" + shipment.ShipmentId, dayIndex,
                     $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains prepared; B3 operator P{operatorId} does not match accepted operator P{agreement.AcceptingOperatorPersonId}.");
                 return;
             }
@@ -7557,7 +7563,7 @@ namespace LandLedgers.Orchestration.Systems
                 || !string.Equals(shipment.physicalWagonAssetId, wagon.AssetId, StringComparison.Ordinal)
                 || shipment.physicalTransportBound)
             {
-                LogFreightAgreementBlockerOnce("dispatch-state:" + shipment.ShipmentId,
+                LogRefusalDayKeyed("dispatch-state:" + shipment.ShipmentId, dayIndex,
                     $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains prepared; accepted agreement, shipment hold, or status did not match.");
                 return;
             }
@@ -7567,7 +7573,7 @@ namespace LandLedgers.Orchestration.Systems
                 || wagon.OwnerKind != "business" || !string.Equals(wagon.OwnerId, freight.InstanceId, StringComparison.Ordinal)
                 || wagon.HitchingAnimalIds == null || !wagon.HitchingAnimalIds.Contains(horse.AnimalId.ToString()))
             {
-                LogFreightAgreementBlockerOnce("dispatch-team:" + shipment.ShipmentId,
+                LogRefusalDayKeyed("dispatch-team:" + shipment.ShipmentId, dayIndex,
                     $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains prepared; A0/wagon attachment or B3 ownership is invalid.");
                 return;
             }
@@ -7576,9 +7582,41 @@ namespace LandLedgers.Orchestration.Systems
             if (!string.IsNullOrWhiteSpace(agreement.DispatchTaskId))
             {
                 WorkTask recorded = hub.Tasks.FindTaskByIdString(agreement.DispatchTaskId);
-                if (recorded != null && string.Equals(recorded.CustomerRef, taskRef, StringComparison.Ordinal)) return;
-                LogFreightAgreementBlockerOnce("dispatch-task-missing:" + agreement.AgreementId,
-                    $"[FreightDispatch] Shipment '{shipment.ShipmentId}' retains its recorded task ID '{agreement.DispatchTaskId}', but that TaskAuthority record is unavailable; no replacement was created.");
+                if (recorded != null && string.Equals(recorded.CustomerRef, taskRef, StringComparison.Ordinal))
+                {
+                    // Campaign C (DEF-050): a recorded task that is still
+                    // open is the live path — stay silent. A terminal
+                    // recorded task strands the hold: no handler re-creates
+                    // a dispatch task for an already-prepared shipment, so
+                    // name the strand once per day instead of returning
+                    // silently. Terminal day follows the prune's anchor
+                    // (CompletedDayIndex, else CreatedDayIndex).
+                    string strand = DispatchHoldStrandReason.Describe(
+                        new DispatchHoldStrandReason.DispatchHoldTaskState(
+                            shipment.ShipmentId, agreement.AgreementId,
+                            agreement.DispatchTaskId, true, recorded.CustomerRef, taskRef,
+                            recorded.IsOpen, recorded.Status.ToString(), recorded.Outcome.ToString(),
+                            recorded.CompletedDayIndex >= 0 ? recorded.CompletedDayIndex : recorded.CreatedDayIndex,
+                            agreement.AcceptedDayIndex),
+                        dayIndex);
+                    if (strand != null)
+                        LogRefusalDayKeyed("dispatch-hold-stranded:" + shipment.ShipmentId, dayIndex, strand);
+                    return;
+                }
+                // Campaign C (DEF-050): the recorded id resolves to a
+                // different task, or to no TaskAuthority record at all
+                // (pruned 7 days after terminalizing, or lost). Either way
+                // no replacement is created — log once per day instead of
+                // once per session so the stranded hold stays visible.
+                LogRefusalDayKeyed("dispatch-task-missing:" + agreement.AgreementId, dayIndex,
+                    DispatchHoldStrandReason.Describe(
+                        new DispatchHoldStrandReason.DispatchHoldTaskState(
+                            shipment.ShipmentId, agreement.AgreementId,
+                            agreement.DispatchTaskId, recorded != null,
+                            recorded != null ? recorded.CustomerRef : string.Empty, taskRef,
+                            false, string.Empty, string.Empty, dayIndex,
+                            agreement.AcceptedDayIndex),
+                        dayIndex));
                 return;
             }
 
@@ -7590,7 +7628,10 @@ namespace LandLedgers.Orchestration.Systems
                 string recoveryRefusal = FreightProduction.ServiceAgreements.RegisterDispatchTask(
                     agreement.AgreementId, shipment.ShipmentId, existing.TaskId.ToString());
                 if (recoveryRefusal != null)
-                    LogFreightAgreementBlockerOnce("dispatch-link-existing:" + agreement.AgreementId,
+                    // Campaign C (DEF-050): day-keyed, not once-only — an
+                    // unlinked open task is a held shipment that stays
+                    // visible while it waits for its link.
+                    LogRefusalDayKeyed("dispatch-link-existing:" + agreement.AgreementId, dayIndex,
                         $"[FreightDispatch] Existing task '{existing.TaskId}' could not be linked: {recoveryRefusal}");
                 return;
             }

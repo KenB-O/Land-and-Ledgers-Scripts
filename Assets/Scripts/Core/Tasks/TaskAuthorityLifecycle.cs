@@ -338,7 +338,20 @@ namespace LandLedgers.Tasks
 
             if (dueEventScheduler != null)
             {
+                // Campaign C (DEF-062): cancel the task's pending due events
+                // and say so — but only when one actually existed, so terminal
+                // transitions for tasks with no pending due stay silent.
+                // ScheduledCount drops immediately on both schedulers
+                // (DueEventScheduler removes from byId; SimpleDueEventScheduler
+                // removes from its list), so the before/after count is exact.
+                int scheduledBefore = dueEventScheduler.ScheduledCount;
                 dueEventScheduler.CancelForPayload(task.TaskId.ToString());
+                int cancelledDueEvents = scheduledBefore - dueEventScheduler.ScheduledCount;
+                if (cancelledDueEvents > 0)
+                {
+                    Debug.Log("[TaskAuthority] Cancelled " + cancelledDueEvents +
+                        " due event(s) for task " + task.TaskId + " on terminal transition.");
+                }
             }
 
             task.SetDueEventId(string.Empty);

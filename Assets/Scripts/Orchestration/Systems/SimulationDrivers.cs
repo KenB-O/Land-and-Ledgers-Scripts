@@ -2600,6 +2600,17 @@ namespace LandLedgers.Orchestration.Systems
             // ResumeTask re-commits).
             hub.Tasks.SetWorkTimeBudgetStore(hub.WorkTimeBudgets);
 
+            // Campaign C (DEF-062): install the hub's due-event scheduler on the
+            // hub's TaskAuthority, so CancelTask / CompleteTask / InterruptTask
+            // cancel the task's pending due events via ReleaseTaskResources
+            // instead of leaving stale dues that fire and no-op silently.
+            // The cancel code already existed (TaskAuthorityLifecycle:339-341);
+            // only this installation was missing — SetDueEventScheduler had
+            // zero production callers. The hub owns both instances and the
+            // restore is in-place (SimulationSystemsHub:1388, :1481), so one
+            // install here survives save/load.
+            hub.Tasks.SetDueEventScheduler(hub.DueEvents);
+
             // Priority 4 Slice 4: install the task-duration diagnostic on
             // the hub's TaskAuthority, clocked by the authoritative
             // TimeManager timeline. See EnsureTaskDurationDiagnostics.

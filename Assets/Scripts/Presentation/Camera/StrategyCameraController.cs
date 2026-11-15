@@ -7,6 +7,8 @@ namespace LandLedgers.CameraSystem
     [DefaultExecutionOrder(-50)]
     public sealed class StrategyCameraController : MonoBehaviour
     {
+        private const float StandardWheelDeltaPerNotch = 120f;
+
         [Header("Settings")]
         [SerializeField]
         private StrategyCameraSettings settings;
@@ -57,6 +59,8 @@ namespace LandLedgers.CameraSystem
         private float terrainHeightVelocity;
         private bool cursorLockedByCamera;
         private bool stateInitialized;
+        private bool wasRotatingWithMouse;
+        private bool closeViewPivotActive;
         private Transform followTarget;
 
         public StrategyCameraSettings Settings => settings;
@@ -76,12 +80,17 @@ namespace LandLedgers.CameraSystem
         public bool Follow(Transform target)
         {
             if (target == null || !target.gameObject.activeInHierarchy) return false;
+            closeViewPivotActive = false;
             followTarget = target;
             targetFocusPosition = target.position;
             return true;
         }
 
-        public void StopFollowing() => followTarget = null;
+        public void StopFollowing()
+        {
+            followTarget = null;
+            closeViewPivotActive = false;
+        }
 
         public void ConfigureRigReferences(
             StrategyCameraSettings newSettings,
@@ -101,11 +110,13 @@ namespace LandLedgers.CameraSystem
 
         public void SetFocus(Vector3 worldPosition)
         {
+            closeViewPivotActive = false;
             targetFocusPosition = worldPosition;
         }
 
         public void JumpTo(Vector3 worldFocusPosition, float yawDegrees, float zoomDistance)
         {
+            closeViewPivotActive = false;
             targetFocusPosition = worldFocusPosition;
             targetYaw = yawDegrees;
             targetZoomDistance = ClampZoom(zoomDistance);
@@ -116,6 +127,7 @@ namespace LandLedgers.CameraSystem
 
         public void JumpTo(Vector3 worldFocusPosition, float yawDegrees, float zoomDistance, float pitchDegrees)
         {
+            closeViewPivotActive = false;
             targetFocusPosition = worldFocusPosition;
             targetYaw = yawDegrees;
             targetZoomDistance = ClampZoom(zoomDistance);
@@ -173,6 +185,8 @@ namespace LandLedgers.CameraSystem
         private void OnDisable()
         {
             ReleaseCursorIfNeeded();
+            wasRotatingWithMouse = false;
+            closeViewPivotActive = false;
         }
 
         private void OnValidate()
@@ -222,8 +236,15 @@ namespace LandLedgers.CameraSystem
                 if (!followTarget.gameObject.activeInHierarchy) followTarget = null;
                 else targetFocusPosition = followTarget.position;
             }
+            if (targetZoomDistance > settings.closeControlStartDistance)
+            {
+                closeViewPivotActive = false;
+            }
             ApplyBounds(dt);
-            ApplyTerrainTargetHeight(dt);
+            if (!closeViewPivotActive)
+            {
+                ApplyTerrainTargetHeight(dt);
+            }
             SmoothAndApplyRig(dt);
         }
 
@@ -234,6 +255,7 @@ namespace LandLedgers.CameraSystem
                 return;
             }
 
+            closeViewPivotActive = false;
             settings.Sanitize();
             targetFocusPosition = settings.defaultFocusPosition;
             targetYaw = settings.defaultYaw;
@@ -257,6 +279,7 @@ namespace LandLedgers.CameraSystem
                 return;
             }
 
+            closeViewPivotActive = false;
             settings.Sanitize();
             targetFocusPosition = transform.position;
             targetYaw = yawPivot != null ? yawPivot.localEulerAngles.y : settings.defaultYaw;
@@ -280,6 +303,7 @@ namespace LandLedgers.CameraSystem
                 && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject())
             {
                 UpdateCursorLock(false);
+                wasRotatingWithMouse = false;
                 return;
             }
             Keyboard keyboard = Keyboard.current;
@@ -288,6 +312,11 @@ namespace LandLedgers.CameraSystem
             Vector2 panInput = keyboard != null ? ReadKeyboardPan(keyboard, SuppressArrowKeyPan) : Vector2.zero;
 
             bool isRotatingWithMouse = mouse != null && IsRotateMouseButtonPressed(mouse);
+            if (isRotatingWithMouse && !wasRotatingWithMouse)
+            {
+                TryAdoptCloseViewPivot();
+            }
+            wasRotatingWithMouse = isRotatingWithMouse;
             UpdateCursorLock(isRotatingWithMouse);
 
             if (settings.edgePanEnabled && mouse != null && (!settings.suppressEdgePanWhileRotating || !isRotatingWithMouse))
@@ -302,7 +331,9 @@ namespace LandLedgers.CameraSystem
 
             if (panInput.sqrMagnitude > 0f)
             {
-                float speed = settings.EvaluatePanSpeed(targetZoomDistance);
+                closeViewPivotActive = false;
+                float speed = settings.EvaluatePanSpeed(targetZoomDistance)
+                    * settings.EvaluateClosePanSensitivity(targetZoomDistance);
                 if (keyboard != null && IsKeyPressed(keyboard, settings.fastPanKey))
                 {
                     speed *= settings.fastPanMultiplier;
@@ -325,6 +356,10 @@ namespace LandLedgers.CameraSystem
                 pitchInput += verticalDrag * settings.mousePitchSensitivity * pitchSign;
             }
 
+            float rotationSensitivity = settings.EvaluateCloseRotationSensitivity(targetZoomDistance);
+            yawInput *= rotationSensitivity;
+            pitchInput *= rotationSensitivity;
+
             targetYaw += yawInput;
 
             if (Mathf.Abs(pitchInput) > 0.0001f)
@@ -338,7 +373,11 @@ namespace LandLedgers.CameraSystem
                 float scrollY = mouse.scroll.ReadValue().y;
                 if (Mathf.Abs(scrollY) > 0.01f)
                 {
-                    float zoomInput = scrollY * settings.wheelZoomSensitivity * settings.EvaluateWheelZoomMultiplier(targetZoomDistance);
+                    float zoomInput = CalculateWheelZoomInput(
+                        scrollY,
+                        settings.wheelZoomSensitivity,
+                        settings.EvaluateWheelZoomMultiplier(targetZoomDistance),
+                        settings.EvaluateDistanceWheelZoomScale(targetZoomDistance));
                     float newZoom = ClampZoom(targetZoomDistance - zoomInput);
 
                     if (!Mathf.Approximately(newZoom, targetZoomDistance))
@@ -615,6 +654,83 @@ namespace LandLedgers.CameraSystem
             }
         }
 
+        private void TryAdoptCloseViewPivot()
+        {
+            if (!settings.focusViewCenterWhenRotatingClose
+                || followTarget != null
+                || controlledCamera == null
+                || cameraTransform == null
+                || targetZoomDistance > settings.closeControlStartDistance
+                || Vector3.Distance(transform.position, targetFocusPosition) > 0.15f)
+            {
+                return;
+            }
+
+            float localZoom = Mathf.Abs(cameraTransform.localPosition.z);
+            if (localZoom <= 0.001f)
+            {
+                return;
+            }
+
+            float actualWorldDistance = Vector3.Distance(controlledCamera.transform.position, transform.position);
+            float worldPerLocalUnit = actualWorldDistance / localZoom;
+            if (worldPerLocalUnit <= 0.001f)
+            {
+                return;
+            }
+
+            Vector3 cameraPosition = controlledCamera.transform.position;
+            Vector3 cameraForward = controlledCamera.transform.forward;
+            float maximumPivotDistance = Mathf.Min(actualWorldDistance, targetZoomDistance * worldPerLocalUnit);
+            if (!Physics.Raycast(
+                    cameraPosition,
+                    cameraForward,
+                    out RaycastHit hit,
+                    maximumPivotDistance,
+                    settings.closePivotLayers,
+                    QueryTriggerInteraction.Ignore))
+            {
+                return;
+            }
+
+            float minimumWorldDistance = settings.minZoomDistance * worldPerLocalUnit;
+            if (hit.distance < minimumWorldDistance || hit.distance >= maximumPivotDistance - 0.05f)
+            {
+                return;
+            }
+
+            Vector2 focusXZ = new(hit.point.x, hit.point.z);
+            if (TryGetBounds(out _, out Rect softBounds, out _) && !softBounds.Contains(focusXZ))
+            {
+                return;
+            }
+
+            // The hit lies on the view ray, so rebasing focus and zoom together
+            // preserves the camera's world position and viewing direction.
+            targetFocusPosition = hit.point;
+            targetZoomDistance = ClampZoom(hit.distance / worldPerLocalUnit);
+            transform.position = targetFocusPosition;
+            movementVelocity = Vector3.zero;
+            zoomVelocity = 0f;
+            terrainHeightVelocity = 0f;
+
+            if (yawPivot != null)
+            {
+                targetYaw = yawPivot.localEulerAngles.y;
+            }
+            if (pitchPivot != null)
+            {
+                targetPitchDegrees = settings.ClampPitch(NormalizeSignedAngle(pitchPivot.localEulerAngles.x));
+                currentPitch = targetPitchDegrees;
+            }
+
+            yawVelocity = 0f;
+            pitchVelocity = 0f;
+            RefreshManualPitchOffset();
+            closeViewPivotActive = true;
+            ApplyRigImmediate();
+        }
+
         private void SmoothAndApplyRig(float dt)
         {
             transform.position = Vector3.SmoothDamp(
@@ -635,11 +751,13 @@ namespace LandLedgers.CameraSystem
                 dt);
 
             float currentZoom = cameraTransform != null ? Mathf.Abs(cameraTransform.localPosition.z) : targetZoomDistance;
+            float zoom01 = settings.Zoom01(currentZoom);
+            float adaptiveZoomSmoothing = settings.zoomSmoothing * Mathf.Lerp(0.8f, 1.25f, zoom01);
             float smoothedZoom = Mathf.SmoothDamp(
                 currentZoom,
                 targetZoomDistance,
                 ref zoomVelocity,
-                settings.zoomSmoothing,
+                adaptiveZoomSmoothing,
                 Mathf.Infinity,
                 dt);
 
@@ -654,6 +772,20 @@ namespace LandLedgers.CameraSystem
 
             targetManualPitchOffset = settings.ManualOffsetFromFinalPitch(currentPitch, smoothedZoom);
             ApplyRig(smoothedYaw, currentPitch, smoothedZoom);
+        }
+
+        private static float CalculateWheelZoomInput(
+            float rawScrollDelta,
+            float wheelSensitivity,
+            float distanceMultiplier,
+            float distanceScale)
+        {
+            // Input System devices vary: some report one unit per wheel notch,
+            // while others report the traditional 120-unit detent.
+            float notches = Mathf.Abs(rawScrollDelta) > 10f
+                ? rawScrollDelta / StandardWheelDeltaPerNotch
+                : rawScrollDelta;
+            return notches * wheelSensitivity * distanceMultiplier * distanceScale;
         }
 
         private void ApplyRigImmediate()

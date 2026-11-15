@@ -1,4 +1,5 @@
 using LandLedgers.Time;
+using System;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
@@ -19,7 +20,11 @@ namespace LandLedgers.Presentation
         [SerializeField, Min(0.1f)] private float transitionSeconds = 2.5f;
         [SerializeField, Range(0f, 0.8f)] private float maximumSunDim01 = 0.65f;
         [SerializeField, Range(0f, 0.6f)] private float maximumAmbientDim01 = 0.45f;
-        [SerializeField, Range(0f, 4f)] private float maximumNightExposureStops = 3.5f;
+        [SerializeField, HideInInspector, Range(0f, 4f)] private float maximumNightExposureStops = 3.5f;
+
+        [Header("Night Lighting By Speed")]
+        [Tooltip("Set the nighttime HDRP exposure change for each named speed. 1.5–2 stops is clearly darker; lower values soften the cycle. Edit these rows instead of the simulation clock.")]
+        [SerializeField] private SpeedNightExposurePreset[] speedNightExposure = CreateDefaultSpeedProfile();
 
         private TimeManager timeManager;
         private Light sun;
@@ -34,6 +39,46 @@ namespace LandLedgers.Presentation
         private bool authoredFixedExposureOverride;
         private float currentNightLevel;
         private bool capturedLighting;
+
+        [Serializable]
+        public struct SpeedNightExposurePreset
+        {
+            public SimulationSpeed speed;
+            [Tooltip("HDRP exposure increase at midnight. 0 keeps the daytime exposure; higher values make night darker.")]
+            [Range(0f, 4f)] public float nightExposureStops;
+
+            public SpeedNightExposurePreset(SimulationSpeed speed, float nightExposureStops)
+            {
+                this.speed = speed;
+                this.nightExposureStops = nightExposureStops;
+            }
+        }
+
+        private static readonly SpeedNightExposurePreset[] DefaultSpeedProfile = CreateDefaultSpeedProfile();
+
+        private static SpeedNightExposurePreset[] CreateDefaultSpeedProfile()
+        {
+            // Values are exposure stops applied at full midnight. Higher EV
+            // values make the HDRP image darker. Preset identity comes from
+            // SimulationSpeed; no simulation timing or multipliers are changed.
+            return new[]
+            {
+                new SpeedNightExposurePreset(SimulationSpeed.RealTime, 1.20f),
+                new SpeedNightExposurePreset(SimulationSpeed.Observe, 0.50f),
+                new SpeedNightExposurePreset(SimulationSpeed.Speed1x, 0.50f),
+                new SpeedNightExposurePreset(SimulationSpeed.Speed2x, 0.46f),
+                new SpeedNightExposurePreset(SimulationSpeed.Speed4x, 0.40f),
+                new SpeedNightExposurePreset(SimulationSpeed.Speed5x, 0.38f),
+                new SpeedNightExposurePreset(SimulationSpeed.Speed6x, 0.36f),
+                new SpeedNightExposurePreset(SimulationSpeed.Speed10x, 0.29f),
+                new SpeedNightExposurePreset(SimulationSpeed.Speed25x, 0.17f),
+                new SpeedNightExposurePreset(SimulationSpeed.Speed50x, 0.11f),
+                new SpeedNightExposurePreset(SimulationSpeed.Speed100x, 0.07f),
+                new SpeedNightExposurePreset(SimulationSpeed.Speed250x, 0.04f),
+                new SpeedNightExposurePreset(SimulationSpeed.Speed500x, 0.025f),
+                new SpeedNightExposurePreset(SimulationSpeed.Paused, 0.50f)
+            };
+        }
 
         /// <summary>Returns the night envelope for a normalized authoritative time of day.</summary>
         public static float ResolveNightEnvelope(float timeOfDay01)
@@ -66,29 +111,59 @@ namespace LandLedgers.Presentation
         /// </summary>
         public static float ResolveSpeedAttenuation(SimulationSpeed speed, float speedMultiplier)
         {
-            if (speed == SimulationSpeed.RealTime || speed == SimulationSpeed.Paused)
+            return ResolveSpeedAttenuation(speed, speedMultiplier, DefaultSpeedProfile);
+        }
+
+        /// <summary>
+        /// Ratio between the selected preset's night exposure and the 1x
+        /// gameplay reference. The multiplier is retained for call-site
+        /// compatibility; named presets are intentionally tuned independently.
+        /// </summary>
+        public static float ResolveSpeedAttenuation(
+            SimulationSpeed speed,
+            float speedMultiplier,
+            SpeedNightExposurePreset[] presetExposureStops)
+        {
+            SpeedNightExposurePreset[] profile = presetExposureStops ?? DefaultSpeedProfile;
+            float normalStops = ResolvePresetExposureStops(SimulationSpeed.Speed1x, profile, 1.6f);
+            float selectedStops = ResolvePresetExposureStops(speed, profile, normalStops);
+            return normalStops <= 0.0001f ? 0f : selectedStops / normalStops;
+        }
+
+        public static float ResolvePresetExposureStops(
+            SimulationSpeed speed,
+            SpeedNightExposurePreset[] presetExposureStops,
+            float fallbackStops)
+        {
+            if (presetExposureStops != null)
             {
-                return 1f;
+                for (int i = 0; i < presetExposureStops.Length; i++)
+                {
+                    if (presetExposureStops[i].speed == speed)
+                    {
+                        return Mathf.Max(0f, presetExposureStops[i].nightExposureStops);
+                    }
+                }
             }
-            switch (speed)
+            return Mathf.Max(0f, fallbackStops);
+        }
+
+        private float ResolvePresetExposureStops(SimulationSpeed speed)
+        {
+            if (speedNightExposure != null)
             {
-                // Accelerated time keeps the astronomical clock authoritative,
-                // while retaining a recognizable night presentation. This is
-                // a lighting floor, not a second or randomized lighting clock.
-                case SimulationSpeed.Speed1x: return 0.55f;
-                case SimulationSpeed.Speed2x: return 0.53f;
-                case SimulationSpeed.Speed4x: return 0.51f;
-                case SimulationSpeed.Speed5x:
-                case SimulationSpeed.Speed6x: return 0.49f;
-                case SimulationSpeed.Observe: return 0.55f;
-                case SimulationSpeed.Speed10x: return 0.47f;
-                case SimulationSpeed.Speed25x: return 0.45f;
-                case SimulationSpeed.Speed50x: return 0.43f;
-                case SimulationSpeed.Speed100x:
-                case SimulationSpeed.Speed250x:
-                case SimulationSpeed.Speed500x: return 0.40f;
-                default: return 0.40f;
+                for (int i = 0; i < speedNightExposure.Length; i++)
+                {
+                    if (speedNightExposure[i].speed == speed)
+                    {
+                        return Mathf.Max(0f, speedNightExposure[i].nightExposureStops);
+                    }
+                }
             }
+
+            // Keep old scene/prefab instances useful if their new profile is
+            // empty or a row was removed in the Inspector.
+            return Mathf.Max(0f, maximumNightExposureStops);
         }
 
         public static float ResolveNightLevel(float timeOfDay01, SimulationSpeed speed, float speedMultiplier)
@@ -96,20 +171,52 @@ namespace LandLedgers.Presentation
             return ResolveNightEnvelope(timeOfDay01) * ResolveSpeedAttenuation(speed, speedMultiplier);
         }
 
+        public static float ResolveNightLevel(
+            float timeOfDay01,
+            SimulationSpeed speed,
+            float speedMultiplier,
+            SpeedNightExposurePreset[] profile)
+        {
+            return ResolveNightEnvelope(timeOfDay01)
+                * ResolveSpeedAttenuation(speed, speedMultiplier, profile);
+        }
+
         public static float ResolveNightExposureStops(float timeOfDay01, SimulationSpeed speed, float speedMultiplier)
         {
-            // HDRP Fixed Exposure is expressed as EV100: higher values reduce
-            // sensor exposure. Subtracting here brightened midnight instead.
-            return 3.5f * ResolveNightLevel(timeOfDay01, speed, speedMultiplier);
+            float stops = ResolvePresetExposureStops(speed, DefaultSpeedProfile, 1.6f);
+            return ResolveNightEnvelope(timeOfDay01) * stops;
+        }
+
+        public static float ResolveNightExposureStops(
+            float timeOfDay01,
+            SimulationSpeed speed,
+            float speedMultiplier,
+            SpeedNightExposurePreset[] profile)
+        {
+            float stops = ResolvePresetExposureStops(
+                speed,
+                profile ?? DefaultSpeedProfile,
+                ResolvePresetExposureStops(SimulationSpeed.Speed1x, profile ?? DefaultSpeedProfile, 1.6f));
+            return ResolveNightEnvelope(timeOfDay01) * stops;
+        }
+
+        public static float SmoothNightLevel(float current, float target, float unscaledDeltaSeconds, float transitionDurationSeconds)
+        {
+            float dt = Mathf.Max(0f, unscaledDeltaSeconds);
+            float duration = Mathf.Max(0.1f, transitionDurationSeconds);
+            float blend = dt <= 0f ? 0f : 1f - Mathf.Exp(-dt / duration);
+            return Mathf.Lerp(current, target, blend);
         }
 
         private void Awake()
         {
+            EnsureSpeedNightProfile();
             CaptureAuthoredLighting();
         }
 
         private void OnEnable()
         {
+            EnsureSpeedNightProfile();
             if (timeManager == null)
             {
                 timeManager = GetComponent<TimeManager>();
@@ -122,6 +229,14 @@ namespace LandLedgers.Presentation
             }
 
             CaptureAuthoredLighting();
+        }
+
+        private void EnsureSpeedNightProfile()
+        {
+            if (speedNightExposure == null || speedNightExposure.Length == 0)
+            {
+                speedNightExposure = CreateDefaultSpeedProfile();
+            }
         }
 
         private void OnDisable()
@@ -202,12 +317,22 @@ namespace LandLedgers.Presentation
         private void OnVisualFrameUpdated(SimulationFrameContext context)
         {
             CaptureAuthoredLighting();
-            float targetNightLevel = ResolveNightLevel(context.TimeOfDay01, context.Speed, context.SpeedMultiplier);
-            float dt = Mathf.Max(0f, global::UnityEngine.Time.unscaledDeltaTime);
-            float blend = dt <= 0f ? 0f : 1f - Mathf.Exp(-dt / Mathf.Max(0.1f, transitionSeconds));
-            currentNightLevel = Mathf.Lerp(currentNightLevel, targetNightLevel, blend);
+            float targetNightLevel = ResolveNightLevel(
+                context.TimeOfDay01,
+                context.Speed,
+                context.SpeedMultiplier,
+                speedNightExposure);
+            currentNightLevel = SmoothNightLevel(
+                currentNightLevel,
+                targetNightLevel,
+                global::UnityEngine.Time.unscaledDeltaTime,
+                transitionSeconds);
 
-            float sunDim = currentNightLevel * maximumSunDim01;
+            // Keep direct/ambient light dimming at its authored night maximum.
+            // Real Time can use a deeper exposure profile than 1x, but should
+            // not drive the sun or ambient contribution below zero.
+            float lightingNightLevel = Mathf.Clamp01(currentNightLevel);
+            float sunDim = lightingNightLevel * maximumSunDim01;
             if (sun != null)
             {
                 if (hdSun != null)
@@ -220,17 +345,17 @@ namespace LandLedgers.Presentation
                 }
 
                 Color nightTint = new Color(0.66f, 0.74f, 0.90f, authoredSunColor.a);
-                sun.color = Color.Lerp(authoredSunColor, nightTint, currentNightLevel * 0.28f);
+                sun.color = Color.Lerp(authoredSunColor, nightTint, lightingNightLevel * 0.28f);
             }
 
             RenderSettings.ambientIntensity = authoredAmbientIntensity
-                * (1f - currentNightLevel * maximumAmbientDim01);
+                * (1f - lightingNightLevel * maximumAmbientDim01);
 
             if (exposure != null)
             {
                 exposure.fixedExposure.overrideState = true;
                 exposure.fixedExposure.value = authoredFixedExposure
-                    + maximumNightExposureStops * currentNightLevel;
+                    + ResolvePresetExposureStops(SimulationSpeed.Speed1x) * currentNightLevel;
             }
         }
 

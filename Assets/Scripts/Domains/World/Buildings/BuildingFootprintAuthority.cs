@@ -6,6 +6,7 @@ using UnityEngine;
 
 #if UNITY_EDITOR
 using UnityEditor;
+using UnityEditor.SceneManagement;
 #endif
 
 namespace LandLedgers.World
@@ -114,6 +115,10 @@ namespace LandLedgers.World
         public string displayName = "Ground Floor";
         public int floorIndex;
         public float floorHeightLocal;
+        [Tooltip("Prefer upward-facing mesh triangles at this floor elevation as the walkable surface. Manual polygons remain the fallback when no readable floor mesh is found.")]
+        public bool deriveWalkableFromFloorGeometry;
+        [Min(0.01f), Tooltip("Maximum local vertical difference from the authored floor elevation when discovering floor mesh triangles.")]
+        public float floorGeometryHeightTolerance = 0.08f;
         public List<InteriorPolygonAuthoring> walkableAreas = new();
         public List<InteriorPolygonAuthoring> exclusionAreas = new();
     }
@@ -193,6 +198,44 @@ namespace LandLedgers.World
         [SerializeField, HideInInspector]
         private List<BuildingActivityLocationAuthoring> activityLocations = new();
 
+        [NonSerialized]
+        private BuildingEquipmentPlacement[] equipmentPlacementCache;
+
+        [NonSerialized]
+        private Collider[] interiorColliderCache;
+
+        [NonSerialized]
+        private Dictionary<int, InteriorGeometryCache> interiorGeometryCache;
+
+        private readonly struct WalkableFloorTriangle
+        {
+            public readonly Vector3 A;
+            public readonly Vector3 B;
+            public readonly Vector3 C;
+            public readonly float MinX;
+            public readonly float MaxX;
+            public readonly float MinZ;
+            public readonly float MaxZ;
+
+            public WalkableFloorTriangle(Vector3 a, Vector3 b, Vector3 c)
+            {
+                A = a; B = b; C = c;
+                MinX = Mathf.Min(a.x, Mathf.Min(b.x, c.x));
+                MaxX = Mathf.Max(a.x, Mathf.Max(b.x, c.x));
+                MinZ = Mathf.Min(a.z, Mathf.Min(b.z, c.z));
+                MaxZ = Mathf.Max(a.z, Mathf.Max(b.z, c.z));
+            }
+        }
+
+        private sealed class InteriorGeometryCache
+        {
+            public readonly List<WalkableFloorTriangle> Triangles = new();
+            public Bounds Bounds;
+            public bool HasBounds;
+            public bool Built;
+            public string FailureReason;
+        }
+
         public bool UsesCornerAuthoring => useCornerAuthoring;
         public float AuthoringCellSizeMeters => Mathf.Max(0.1f, authoringCellSizeMeters);
         public int MinimumFootprintWidthCells => MinimumFootprintSizeCells.x;
@@ -211,6 +254,177 @@ namespace LandLedgers.World
         public IReadOnlyList<InteriorFloorAuthoring> InteriorFloors => interiorFloors;
         public IReadOnlyList<BuildingEntrancePairAuthoring> EntrancePairs => entrancePairs;
         public IReadOnlyList<BuildingActivityLocationAuthoring> ActivityLocations => activityLocations;
+
+        internal void InvalidateEquipmentPlacementCache()
+        {
+            equipmentPlacementCache = null;
+            interiorColliderCache = null;
+            interiorGeometryCache?.Clear();
+        }
+
+        /// <summary>Refreshes geometry-derived floors and physical obstruction caches after authored module edits.</summary>
+        public void RefreshDerivedInteriorGeometry() => InvalidateEquipmentPlacementCache();
+
+        private void OnTransformChildrenChanged() => InvalidateEquipmentPlacementCache();
+
+        private InteriorGeometryCache GetInteriorGeometryCache(InteriorFloorAuthoring floor)
+        {
+            interiorGeometryCache ??= new Dictionary<int, InteriorGeometryCache>();
+            if (interiorGeometryCache.TryGetValue(floor.floorIndex, out InteriorGeometryCache existing) && existing.Built)
+                return existing;
+
+            InteriorGeometryCache cache = existing ?? new InteriorGeometryCache();
+            cache.Built = true;
+            cache.FailureReason = string.Empty;
+            cache.Triangles.Clear();
+            cache.HasBounds = false;
+            MeshFilter[] filters = GetComponentsInChildren<MeshFilter>(false);
+            foreach (MeshFilter filter in filters)
+            {
+                if (filter == null || filter.sharedMesh == null || filter.GetComponentInParent<BuildingEquipmentPlacement>() != null)
+                    continue;
+
+                Mesh mesh = filter.sharedMesh;
+                if (!mesh.isReadable)
+                {
+                    cache.FailureReason = $"Floor mesh '{mesh.name}' is not readable; use manual polygon fallback for this geometry.";
+                    continue;
+                }
+
+                try
+                {
+                    Vector3[] vertices = mesh.vertices;
+                    int[] indices = mesh.triangles;
+                    Matrix4x4 toBuildingLocal = transform.worldToLocalMatrix * filter.transform.localToWorldMatrix;
+                    float tolerance = Mathf.Max(0.01f, floor.floorGeometryHeightTolerance);
+                    for (int i = 0; i + 2 < indices.Length; i += 3)
+                    {
+                        Vector3 a = toBuildingLocal.MultiplyPoint3x4(vertices[indices[i]]);
+                        Vector3 b = toBuildingLocal.MultiplyPoint3x4(vertices[indices[i + 1]]);
+                        Vector3 c = toBuildingLocal.MultiplyPoint3x4(vertices[indices[i + 2]]);
+                        Vector3 normal = Vector3.Cross(b - a, c - a);
+                        if (normal.sqrMagnitude < 0.000001f || normal.y < normal.magnitude * 0.85f)
+                            continue;
+                        float averageY = (a.y + b.y + c.y) / 3f;
+                        if (Mathf.Abs(averageY - floor.floorHeightLocal) > tolerance)
+                            continue;
+
+                        WalkableFloorTriangle triangle = new(a, b, c);
+                        if ((triangle.MaxX - triangle.MinX) * (triangle.MaxZ - triangle.MinZ) < 0.0001f)
+                            continue;
+                        cache.Triangles.Add(triangle);
+                        if (!cache.HasBounds)
+                        {
+                            cache.Bounds = new Bounds(a, Vector3.zero);
+                            cache.HasBounds = true;
+                        }
+                        cache.Bounds.Encapsulate(a);
+                        cache.Bounds.Encapsulate(b);
+                        cache.Bounds.Encapsulate(c);
+                    }
+                }
+                catch (UnityException exception)
+                {
+                    cache.FailureReason = $"Floor mesh '{mesh.name}' cannot expose triangle data: {exception.Message}";
+                }
+            }
+
+            interiorGeometryCache[floor.floorIndex] = cache;
+            if (cache.Triangles.Count == 0 && string.IsNullOrEmpty(cache.FailureReason))
+                cache.FailureReason = $"No upward-facing floor triangles were found within {floor.floorGeometryHeightTolerance:F2} m of local Y {floor.floorHeightLocal:F2}.";
+            return cache;
+        }
+
+        private bool TrySampleInteriorFloorMesh(InteriorFloorAuthoring floor, float x, float z,
+            out float surfaceY, out InteriorGeometryCache cache)
+        {
+            surfaceY = floor != null ? floor.floorHeightLocal : 0f;
+            cache = null;
+            if (floor == null || !floor.deriveWalkableFromFloorGeometry) return false;
+            cache = GetInteriorGeometryCache(floor);
+            if (cache.Triangles.Count == 0) return false;
+
+            float bestDistance = float.PositiveInfinity;
+            bool found = false;
+            foreach (WalkableFloorTriangle triangle in cache.Triangles)
+            {
+                if (x < triangle.MinX - 0.001f || x > triangle.MaxX + 0.001f
+                    || z < triangle.MinZ - 0.001f || z > triangle.MaxZ + 0.001f) continue;
+
+                float denominator = (triangle.B.z - triangle.C.z) * (triangle.A.x - triangle.C.x)
+                    + (triangle.C.x - triangle.B.x) * (triangle.A.z - triangle.C.z);
+                if (Mathf.Abs(denominator) < 0.000001f) continue;
+                float aWeight = ((triangle.B.z - triangle.C.z) * (x - triangle.C.x)
+                    + (triangle.C.x - triangle.B.x) * (z - triangle.C.z)) / denominator;
+                float bWeight = ((triangle.C.z - triangle.A.z) * (x - triangle.C.x)
+                    + (triangle.A.x - triangle.C.x) * (z - triangle.C.z)) / denominator;
+                float cWeight = 1f - aWeight - bWeight;
+                if (aWeight < -0.001f || bWeight < -0.001f || cWeight < -0.001f) continue;
+                float candidateY = aWeight * triangle.A.y + bWeight * triangle.B.y + cWeight * triangle.C.y;
+                float distance = Mathf.Abs(candidateY - floor.floorHeightLocal);
+                if (distance >= bestDistance) continue;
+                bestDistance = distance;
+                surfaceY = candidateY;
+                found = true;
+            }
+
+            if (!found) return false;
+            return true;
+        }
+
+        private bool TryGetInteriorQueryBounds(InteriorFloorAuthoring floor, string functionalSpaceId,
+            List<InteriorPolygonAuthoring> polygonFallback, out float minX, out float maxX, out float minZ, out float maxZ)
+        {
+            if (floor != null && floor.deriveWalkableFromFloorGeometry && string.IsNullOrWhiteSpace(functionalSpaceId))
+            {
+                InteriorGeometryCache cache = GetInteriorGeometryCache(floor);
+                if (cache.HasBounds)
+                {
+                    minX = cache.Bounds.min.x; maxX = cache.Bounds.max.x;
+                    minZ = cache.Bounds.min.z; maxZ = cache.Bounds.max.z;
+                    return true;
+                }
+            }
+
+            if (polygonFallback == null || polygonFallback.Count == 0
+                || polygonFallback.Any(area => area?.vertices == null || area.vertices.Count < 3))
+            {
+                minX = maxX = minZ = maxZ = 0f;
+                return false;
+            }
+
+            minX = polygonFallback.SelectMany(area => area.vertices).Min(v => v.x);
+            maxX = polygonFallback.SelectMany(area => area.vertices).Max(v => v.x);
+            minZ = polygonFallback.SelectMany(area => area.vertices).Min(v => v.z);
+            maxZ = polygonFallback.SelectMany(area => area.vertices).Max(v => v.z);
+            return true;
+        }
+
+        private float InteriorNodeHeight(InteriorFloorAuthoring floor, float x, float z)
+        {
+            return TrySampleInteriorFloorMesh(floor, x, z, out float y, out _) ? y : floor.floorHeightLocal;
+        }
+
+        internal bool TryGetDerivedFloorPreview(int floorIndex, out List<Vector3> triangleVertices, out string reason)
+        {
+            triangleVertices = new List<Vector3>();
+            reason = string.Empty;
+            InteriorFloorAuthoring floor = FindInteriorFloor(floorIndex);
+            if (floor == null || !floor.deriveWalkableFromFloorGeometry)
+            {
+                reason = "Geometry-derived walkability is disabled for this floor.";
+                return false;
+            }
+            InteriorGeometryCache cache = GetInteriorGeometryCache(floor);
+            reason = cache.FailureReason;
+            foreach (WalkableFloorTriangle triangle in cache.Triangles)
+            {
+                triangleVertices.Add(triangle.A);
+                triangleVertices.Add(triangle.B);
+                triangleVertices.Add(triangle.C);
+            }
+            return triangleVertices.Count > 0;
+        }
 
         /// <summary>
         /// Find an authored station of the requested type with a valid route from
@@ -402,16 +616,24 @@ namespace LandLedgers.World
             InteriorFloorAuthoring floor = FindInteriorFloor(activity.FloorIndex);
             List<InteriorPolygonAuthoring> boundaries = floor?.walkableAreas?
                 .FindAll(area => area != null && MatchesSpace(area.functionalSpaceId, activity.FunctionalSpaceId));
-            if (boundaries == null || boundaries.Count == 0 || boundaries.Exists(area => area.vertices == null || area.vertices.Count < 3))
+            bool useGeometry = floor != null && floor.deriveWalkableFromFloorGeometry
+                && string.IsNullOrWhiteSpace(activity.FunctionalSpaceId)
+                && GetInteriorGeometryCache(floor).Triangles.Count > 0;
+            if (!useGeometry && (boundaries == null || boundaries.Count == 0
+                || boundaries.Exists(area => area.vertices == null || area.vertices.Count < 3)))
             {
-                reason = $"Activity '{activityId}' has no matching walkable floor polygon.";
+                InteriorGeometryCache cache = floor != null && floor.deriveWalkableFromFloorGeometry
+                    ? GetInteriorGeometryCache(floor) : null;
+                reason = $"Activity '{activityId}' has no readable matching floor mesh or walkable polygon. {cache?.FailureReason}".Trim();
                 return false;
             }
 
-            float minX = boundaries.SelectMany(area => area.vertices).Min(v => v.x);
-            float maxX = boundaries.SelectMany(area => area.vertices).Max(v => v.x);
-            float minZ = boundaries.SelectMany(area => area.vertices).Min(v => v.z);
-            float maxZ = boundaries.SelectMany(area => area.vertices).Max(v => v.z);
+            if (!TryGetInteriorQueryBounds(floor, activity.FunctionalSpaceId, boundaries,
+                    out float minX, out float maxX, out float minZ, out float maxZ))
+            {
+                reason = $"Activity '{activityId}' has no usable floor bounds.";
+                return false;
+            }
             const float step = 0.4f;
             int width = Mathf.CeilToInt((maxX - minX) / step) + 1;
             int depth = Mathf.CeilToInt((maxZ - minZ) / step) + 1;
@@ -420,7 +642,11 @@ namespace LandLedgers.World
                 reason = "Walkable floor bounds are too small or too large for an interior route.";
                 return false;
             }
-            Vector3 Node(int x, int z) => new(minX + x * step, floor.floorHeightLocal, minZ + z * step);
+            Vector3 Node(int x, int z)
+            {
+                float nodeX = minX + x * step, nodeZ = minZ + z * step;
+                return new Vector3(nodeX, InteriorNodeHeight(floor, nodeX, nodeZ), nodeZ);
+            }
             bool Walkable(int x, int z) => x >= 0 && x < width && z >= 0 && z < depth
                 && TryEvaluateInteriorLocalPoint(Node(x, z), activity.FloorIndex, activity.FunctionalSpaceId, out _);
             bool TryNearest(Vector3 point, out Vector2Int cell)
@@ -474,6 +700,7 @@ namespace LandLedgers.World
                     int nx = x + dx[i], nz = z + dz[i];
                     if (!Walkable(nx,nz)) continue;
                     if (dx[i] != 0 && dz[i] != 0 && (!Walkable(x + dx[i],z) || !Walkable(x,z + dz[i]))) continue;
+                    if (floor.deriveWalkableFromFloorGeometry && IsInteriorSegmentBlocked(Node(x, z), Node(nx, nz), activity.FloorIndex)) continue;
                     int next = nz * width + nx;
                     float candidate = score[current] + ((dx[i] == 0 || dz[i] == 0) ? 1f : 1.4142f);
                     if (candidate >= score[next]) continue;
@@ -532,19 +759,27 @@ namespace LandLedgers.World
             InteriorFloorAuthoring floor = FindInteriorFloor(floorIndex);
             List<InteriorPolygonAuthoring> areas = floor?.walkableAreas?
                 .FindAll(area => area != null && MatchesSpace(area.functionalSpaceId, functionalSpaceId));
-            if (areas == null || areas.Count == 0 || areas.Exists(area => area.vertices == null || area.vertices.Count < 3))
+            bool useGeometry = floor != null && floor.deriveWalkableFromFloorGeometry
+                && string.IsNullOrWhiteSpace(functionalSpaceId)
+                && GetInteriorGeometryCache(floor).Triangles.Count > 0;
+            if (!useGeometry && (areas == null || areas.Count == 0
+                || areas.Exists(area => area.vertices == null || area.vertices.Count < 3)))
             {
-                reason = $"No valid walkable polygon exists for floor {floorIndex} and functional space '{DisplaySpace(functionalSpaceId)}'.";
+                string geometryReason = floor != null && floor.deriveWalkableFromFloorGeometry
+                    ? GetInteriorGeometryCache(floor).FailureReason : string.Empty;
+                reason = $"No readable floor mesh or valid walkable polygon exists for floor {floorIndex} and functional space '{DisplaySpace(functionalSpaceId)}'. {geometryReason}".Trim();
                 return false;
             }
             Vector3 startLocal = transform.InverseTransformPoint(startWorld);
             Vector3 targetLocal = transform.InverseTransformPoint(targetWorld);
             if (!TryEvaluateInteriorLocalPoint(startLocal, floorIndex, functionalSpaceId, out reason)) return false;
 
-            float minX = areas.SelectMany(area => area.vertices).Min(v => v.x);
-            float maxX = areas.SelectMany(area => area.vertices).Max(v => v.x);
-            float minZ = areas.SelectMany(area => area.vertices).Min(v => v.z);
-            float maxZ = areas.SelectMany(area => area.vertices).Max(v => v.z);
+            if (!TryGetInteriorQueryBounds(floor, functionalSpaceId, areas,
+                    out float minX, out float maxX, out float minZ, out float maxZ))
+            {
+                reason = "No usable walkable floor bounds were found from geometry or manual authoring.";
+                return false;
+            }
             const float step = 0.4f;
             int width = Mathf.CeilToInt((maxX - minX) / step) + 1;
             int depth = Mathf.CeilToInt((maxZ - minZ) / step) + 1;
@@ -553,7 +788,11 @@ namespace LandLedgers.World
                 reason = "Walkable floor bounds are too small or too large for an interior route.";
                 return false;
             }
-            Vector3 Node(int x, int z) => new(minX + x * step, floor.floorHeightLocal, minZ + z * step);
+            Vector3 Node(int x, int z)
+            {
+                float nodeX = minX + x * step, nodeZ = minZ + z * step;
+                return new Vector3(nodeX, InteriorNodeHeight(floor, nodeX, nodeZ), nodeZ);
+            }
             bool Walkable(int x, int z) => x >= 0 && x < width && z >= 0 && z < depth
                 && TryEvaluateInteriorLocalPoint(Node(x, z), floorIndex, functionalSpaceId, out _);
             bool Nearest(Vector3 point, out Vector2Int cell)
@@ -610,6 +849,7 @@ namespace LandLedgers.World
                     int nx = x + dx[i], nz = z + dz[i];
                     if (!Walkable(nx, nz) || (dx[i] != 0 && dz[i] != 0
                         && (!Walkable(x + dx[i], z) || !Walkable(x, z + dz[i])))) continue;
+                    if (floor.deriveWalkableFromFloorGeometry && IsInteriorSegmentBlocked(Node(x, z), Node(nx, nz), floorIndex)) continue;
                     int next = nz * width + nx;
                     float candidate = score[current] + ((dx[i] == 0 || dz[i] == 0) ? 1f : 1.4142f);
                     if (candidate >= score[next]) continue;
@@ -660,34 +900,52 @@ namespace LandLedgers.World
                 return false;
             }
 
-            bool hasMatchingArea = false;
             bool insideWalkableArea = false;
-            if (floor.walkableAreas != null)
+            bool useGeometry = floor.deriveWalkableFromFloorGeometry && string.IsNullOrWhiteSpace(functionalSpaceId)
+                && GetInteriorGeometryCache(floor).Triangles.Count > 0;
+            if (useGeometry)
             {
-                foreach (InteriorPolygonAuthoring area in floor.walkableAreas)
+                bool onMesh = TrySampleInteriorFloorMesh(floor, localPoint.x, localPoint.z, out float surfaceY, out _);
+                float verticalTolerance = Mathf.Max(0.25f, floor.floorGeometryHeightTolerance * 2f);
+                insideWalkableArea = onMesh && Mathf.Abs(localPoint.y - surfaceY) <= verticalTolerance;
+                if (!insideWalkableArea)
                 {
-                    if (area == null || !MatchesSpace(area.functionalSpaceId, functionalSpaceId)) continue;
-                    hasMatchingArea = true;
-                    if (!TryValidateInteriorPolygon(area.vertices, out string validationError))
-                    {
-                        reason = $"Walkable area '{area.label}' is invalid: {validationError}";
-                        return false;
-                    }
-
-                    if (ContainsPoint(area.vertices, localPoint)) insideWalkableArea = true;
+                    reason = $"Point is outside the discovered floor mesh surface for floor {floorIndex} at local Y {floor.floorHeightLocal:F2}.";
+                    return false;
                 }
             }
-
-            if (!hasMatchingArea)
+            else
             {
-                reason = $"No walkable area is authored for floor {floorIndex} and functional space '{DisplaySpace(functionalSpaceId)}'.";
-                return false;
-            }
+                bool hasMatchingArea = false;
+                if (floor.walkableAreas != null)
+                {
+                    foreach (InteriorPolygonAuthoring area in floor.walkableAreas)
+                    {
+                        if (area == null || !MatchesSpace(area.functionalSpaceId, functionalSpaceId)) continue;
+                        hasMatchingArea = true;
+                        if (!TryValidateInteriorPolygon(area.vertices, out string validationError))
+                        {
+                            reason = $"Walkable area '{area.label}' is invalid: {validationError}";
+                            return false;
+                        }
 
-            if (!insideWalkableArea)
-            {
-                reason = $"Point is outside the authored walkable floor area on floor {floorIndex}.";
-                return false;
+                        if (ContainsPoint(area.vertices, localPoint)) insideWalkableArea = true;
+                    }
+                }
+
+                if (!hasMatchingArea)
+                {
+                    string geometryReason = floor.deriveWalkableFromFloorGeometry
+                        ? GetInteriorGeometryCache(floor).FailureReason : string.Empty;
+                    reason = $"No readable floor mesh or walkable area is available for floor {floorIndex} and functional space '{DisplaySpace(functionalSpaceId)}'. {geometryReason}".Trim();
+                    return false;
+                }
+
+                if (!insideWalkableArea)
+                {
+                    reason = $"Point is outside the authored walkable floor area on floor {floorIndex}.";
+                    return false;
+                }
             }
 
             if (floor.exclusionAreas != null)
@@ -709,7 +967,77 @@ namespace LandLedgers.World
                 }
             }
 
+            equipmentPlacementCache ??= GetComponentsInChildren<BuildingEquipmentPlacement>(false);
+            foreach (BuildingEquipmentPlacement placement in equipmentPlacementCache)
+            {
+                if (placement == null || !placement.BlocksInteriorPoint(this, localPoint, floorIndex)) continue;
+                reason = $"Point is blocked by installed equipment '{placement.DisplayName}' ({placement.DefinitionId}).";
+                return false;
+            }
+
+            if (floor.deriveWalkableFromFloorGeometry && TryGetSolidBuildingCollider(localPoint, floorIndex, out Collider blockingCollider))
+            {
+                reason = $"Point is blocked by building collider '{blockingCollider.name}'.";
+                return false;
+            }
+
             return true;
+        }
+
+        private bool TryGetSolidBuildingCollider(Vector3 localPoint, int floorIndex, out Collider blockingCollider)
+        {
+            blockingCollider = null;
+            if (IsWithinAuthoredEntranceCorridor(localPoint, floorIndex)) return false;
+            interiorColliderCache ??= GetComponentsInChildren<Collider>(false);
+            Vector3 worldFloor = transform.TransformPoint(localPoint);
+            const float clearanceRadius = 0.14f;
+            float radiusSquared = clearanceRadius * clearanceRadius;
+            foreach (Collider candidate in interiorColliderCache)
+            {
+                if (candidate == null || !candidate.enabled || candidate.isTrigger
+                    || !candidate.transform.IsChildOf(transform)) continue;
+                Bounds bounds = candidate.bounds;
+                bounds.Expand(clearanceRadius * 2f);
+                for (int sampleIndex = 0; sampleIndex < 3; sampleIndex++)
+                {
+                    float height = sampleIndex == 0 ? 0.18f : sampleIndex == 1 ? 0.78f : 1.38f;
+                    Vector3 sample = worldFloor + Vector3.up * height;
+                    if (!bounds.Contains(sample)) continue;
+                    Vector3 closest = candidate.ClosestPoint(sample);
+                    if ((closest - sample).sqrMagnitude > radiusSquared) continue;
+                    blockingCollider = candidate;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private bool IsInteriorSegmentBlocked(Vector3 fromLocal, Vector3 toLocal, int floorIndex)
+        {
+            for (int i = 0; i <= 2; i++)
+                if (TryGetSolidBuildingCollider(Vector3.Lerp(fromLocal, toLocal, i * 0.5f), floorIndex, out _)) return true;
+            return false;
+        }
+
+        private bool IsWithinAuthoredEntranceCorridor(Vector3 localPoint, int floorIndex)
+        {
+            if (entrancePairs == null) return false;
+            foreach (BuildingEntrancePairAuthoring entrance in entrancePairs)
+            {
+                if (entrance == null || entrance.floorIndex != floorIndex) continue;
+                Vector2 start = new(entrance.indoorPositionLocal.x, entrance.indoorPositionLocal.z);
+                Vector2 end = new(entrance.outdoorApproachLocal.x, entrance.outdoorApproachLocal.z);
+                Vector2 point = new(localPoint.x, localPoint.z);
+                Vector2 segment = end - start;
+                float lengthSquared = segment.sqrMagnitude;
+                if (lengthSquared < 0.01f) continue;
+                float t = Mathf.Clamp01(Vector2.Dot(point - start, segment) / lengthSquared);
+                Vector2 nearest = start + segment * t;
+                float halfWidth = Mathf.Max(0.2f, entrance.clearWidthMeters * 0.5f);
+                if ((point - nearest).sqrMagnitude <= halfWidth * halfWidth
+                    && Mathf.Abs(localPoint.y - entrance.indoorPositionLocal.y) <= 1.6f) return true;
+            }
+            return false;
         }
 
         public static bool TryValidateInteriorPolygon(IReadOnlyList<Vector3> vertices, out string error)
@@ -1028,6 +1356,7 @@ namespace LandLedgers.World
 
         private void OnValidate()
         {
+            InvalidateEquipmentPlacementCache();
             NormalizeAuthoring();
         }
 
@@ -1431,6 +1760,11 @@ namespace LandLedgers.World
         private static readonly Color ExclusionFillColor = new(0.95f, 0.18f, 0.12f, 0.22f);
         private static readonly Color ExclusionOutlineColor = new(0.95f, 0.12f, 0.08f, 1f);
         private bool showInteriorAreas = true;
+        private GameObject equipmentPrefab;
+        private int equipmentFloorIndex;
+        private Vector3 equipmentLocalPosition;
+        private float equipmentYawDegrees;
+        private bool equipmentPositionInitialized;
 
         public override void OnInspectorGUI()
         {
@@ -1455,6 +1789,7 @@ namespace LandLedgers.World
 
             serializedObject.Update();
             DrawInteriorFloorAuthoring();
+            DrawEquipmentPlacementAuthoring((BuildingFootprintAuthority)target);
             DrawEntranceAndActivityAuthoring();
             serializedObject.ApplyModifiedProperties();
         }
@@ -1525,6 +1860,21 @@ namespace LandLedgers.World
             {
                 SerializedProperty floor = floors.GetArrayElementAtIndex(f);
                 float height = floor.FindPropertyRelative("floorHeightLocal").floatValue;
+                if (floor.FindPropertyRelative("deriveWalkableFromFloorGeometry").boolValue
+                    && authority.TryGetDerivedFloorPreview(floor.FindPropertyRelative("floorIndex").intValue,
+                        out List<Vector3> triangles, out _))
+                {
+                    using (new Handles.DrawingScope(new Color(0.15f, 0.9f, 0.35f, 0.16f)))
+                    {
+                        for (int i = 0; i + 2 < triangles.Count; i += 3)
+                        {
+                            Vector3 a = authority.transform.TransformPoint(triangles[i]) + authority.transform.up * 0.012f;
+                            Vector3 b = authority.transform.TransformPoint(triangles[i + 1]) + authority.transform.up * 0.012f;
+                            Vector3 c = authority.transform.TransformPoint(triangles[i + 2]) + authority.transform.up * 0.012f;
+                            Handles.DrawAAConvexPolygon(a, b, c);
+                        }
+                    }
+                }
                 DrawPolygonListInScene(authority, floor.FindPropertyRelative("walkableAreas"), height, false);
                 DrawPolygonListInScene(authority, floor.FindPropertyRelative("exclusionAreas"), height, true);
             }
@@ -1975,6 +2325,7 @@ namespace LandLedgers.World
 
         private void DrawInteriorFloorAuthoring()
         {
+            BuildingFootprintAuthority authority = (BuildingFootprintAuthority)target;
             SerializedProperty floors = serializedObject.FindProperty("interiorFloors");
             if (floors == null) return;
 
@@ -1995,6 +2346,28 @@ namespace LandLedgers.World
                     EditorGUILayout.PropertyField(floor.FindPropertyRelative("displayName"));
                     EditorGUILayout.PropertyField(floor.FindPropertyRelative("floorIndex"));
                     EditorGUILayout.PropertyField(floor.FindPropertyRelative("floorHeightLocal"));
+                    EditorGUILayout.PropertyField(floor.FindPropertyRelative("deriveWalkableFromFloorGeometry"),
+                        new GUIContent("Derive Walkable Surface From Meshes"));
+                    EditorGUILayout.PropertyField(floor.FindPropertyRelative("floorGeometryHeightTolerance"),
+                        new GUIContent("Mesh Height Tolerance"));
+                    if (floor.FindPropertyRelative("deriveWalkableFromFloorGeometry").boolValue)
+                    {
+                        if (authority.TryGetDerivedFloorPreview(floor.FindPropertyRelative("floorIndex").intValue,
+                                out List<Vector3> derived, out string geometryReason))
+                            EditorGUILayout.HelpBox($"Using {derived.Count / 3} actual floor mesh triangles. Manual polygons remain as fallback; exclusions still apply.", MessageType.Info);
+                        else
+                            EditorGUILayout.HelpBox($"Floor geometry unavailable: {geometryReason}. Manual walkable polygons will be used.", MessageType.Warning);
+                        if (GUILayout.Button("Refresh Derived Floor Geometry"))
+                        {
+                            authority.InvalidateEquipmentPlacementCache();
+                            SceneView.RepaintAll();
+                        }
+                    }
+                    Vector3 floorOrigin = authority.transform.TransformPoint(
+                        new Vector3(0f, floor.FindPropertyRelative("floorHeightLocal").floatValue, 0f));
+                    EditorGUILayout.HelpBox(
+                        $"Scene-view authoring plane: building-local Y {floor.FindPropertyRelative("floorHeightLocal").floatValue:F3} · world elevation {floorOrigin.y:F3} m. Doorway threshold height is authored separately.",
+                        MessageType.None);
                     DrawPolygonList(floor.FindPropertyRelative("walkableAreas"), floor.FindPropertyRelative("floorHeightLocal").floatValue, false);
                     DrawPolygonList(floor.FindPropertyRelative("exclusionAreas"), floor.FindPropertyRelative("floorHeightLocal").floatValue, true);
                     if (GUILayout.Button("Remove Floor"))
@@ -2021,6 +2394,200 @@ namespace LandLedgers.World
             }
 
             showInteriorAreas = EditorGUILayout.ToggleLeft("Show interior polygons and handles in Scene view", showInteriorAreas);
+        }
+
+        private void DrawEquipmentPlacementAuthoring(BuildingFootprintAuthority authority)
+        {
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Placed Building Equipment", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "Equipment placed here becomes a child of this scene building instance. Its placement record does not grant ownership or create inventory. Rendered geometry blocks the assigned interior floor at runtime.",
+                MessageType.Info);
+
+            if (equipmentPrefab == null)
+                equipmentPrefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Environment/Props/Shelf.prefab");
+            equipmentPrefab = (GameObject)EditorGUILayout.ObjectField("Equipment Prefab", equipmentPrefab, typeof(GameObject), false);
+
+            if (authority.InteriorFloors == null || authority.InteriorFloors.Count == 0)
+            {
+                EditorGUILayout.HelpBox("Add and validate an interior floor before placing equipment.", MessageType.Warning);
+                return;
+            }
+
+            int[] floorIndices = authority.InteriorFloors.Where(f => f != null).Select(f => f.floorIndex).Distinct().ToArray();
+            if (floorIndices.Length == 0) return;
+            if (!floorIndices.Contains(equipmentFloorIndex)) equipmentFloorIndex = floorIndices[0];
+            string[] floorLabels = floorIndices.Select(index =>
+            {
+                InteriorFloorAuthoring floor = authority.InteriorFloors.First(f => f != null && f.floorIndex == index);
+                return $"{floor.displayName} ({index})";
+            }).ToArray();
+            int selectedIndex = Array.IndexOf(floorIndices, equipmentFloorIndex);
+            selectedIndex = EditorGUILayout.Popup("Assigned Floor", selectedIndex, floorLabels);
+            equipmentFloorIndex = floorIndices[Mathf.Clamp(selectedIndex, 0, floorIndices.Length - 1)];
+
+            InteriorFloorAuthoring selectedFloor = authority.InteriorFloors.FirstOrDefault(f => f != null && f.floorIndex == equipmentFloorIndex);
+            if (!equipmentPositionInitialized && selectedFloor != null)
+            {
+                equipmentLocalPosition.y = selectedFloor.floorHeightLocal;
+                equipmentPositionInitialized = true;
+            }
+            equipmentLocalPosition = EditorGUILayout.Vector3Field("Building-Local Position", equipmentLocalPosition);
+            equipmentYawDegrees = EditorGUILayout.FloatField("Building-Local Yaw", equipmentYawDegrees);
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Align to Nearest Floor Wall"))
+                {
+                    if (equipmentPrefab == null)
+                    {
+                        EditorUtility.DisplayDialog("Equipment placement", "Choose a furniture prefab first.", "OK");
+                    }
+                    else if (TryAlignPlacementToNearestWall(authority, selectedFloor, equipmentPrefab,
+                                 equipmentLocalPosition, out Vector3 alignedPosition, out float alignedYaw, out string alignmentError))
+                    {
+                        equipmentLocalPosition = alignedPosition;
+                        equipmentYawDegrees = alignedYaw;
+                        SceneView.RepaintAll();
+                    }
+                    else
+                    {
+                        EditorUtility.DisplayDialog("Equipment placement", alignmentError, "OK");
+                    }
+                }
+
+                using (new EditorGUI.DisabledScope(equipmentPrefab == null || selectedFloor == null
+                           || PrefabStageUtility.GetPrefabStage(authority.gameObject) != null))
+                {
+                    if (GUILayout.Button("Place In This Scene Building"))
+                        PlaceEquipmentInSceneBuilding(authority, equipmentPrefab, selectedFloor,
+                            equipmentLocalPosition, equipmentYawDegrees);
+                }
+            }
+
+            if (PrefabStageUtility.GetPrefabStage(authority.gameObject) != null)
+                EditorGUILayout.HelpBox("Equipment placement is limited to scene building instances; this avoids baking tenant or resident equipment into the shared building prefab.", MessageType.None);
+        }
+
+        private static bool TryAlignPlacementToNearestWall(BuildingFootprintAuthority authority,
+            InteriorFloorAuthoring floor, GameObject prefab, Vector3 nearLocal, out Vector3 position,
+            out float yawDegrees, out string error)
+        {
+            position = nearLocal;
+            yawDegrees = 0f;
+            error = "No valid walkable polygon or rendered furniture footprint is available.";
+            InteriorPolygonAuthoring area = floor?.walkableAreas?.FirstOrDefault(p => p != null && p.vertices != null && p.vertices.Count >= 3);
+            if (authority == null || area == null || prefab == null
+                || !BuildingFootprintAuthority.TryValidateInteriorPolygon(area.vertices, out error)) return false;
+
+            Vector2[] outline = area.vertices.Select(v => new Vector2(v.x, v.z)).ToArray();
+            Vector2 query = new(nearLocal.x, nearLocal.z);
+            float nearestDistance = float.PositiveInfinity;
+            Vector2 bestStart = default, bestEnd = default;
+            for (int i = 0; i < outline.Length; i++)
+            {
+                Vector2 a = outline[i], b = outline[(i + 1) % outline.Length];
+                Vector2 edge = b - a;
+                if (edge.sqrMagnitude < 0.01f) continue;
+                float t = Mathf.Clamp01(Vector2.Dot(query - a, edge) / edge.sqrMagnitude);
+                float distance = (query - (a + edge * t)).sqrMagnitude;
+                if (distance >= nearestDistance) continue;
+                nearestDistance = distance;
+                bestStart = a;
+                bestEnd = b;
+            }
+
+            Vector2 tangent = (bestEnd - bestStart).normalized;
+            if (tangent.sqrMagnitude < 0.5f)
+            {
+                error = "The walkable floor polygon has no usable wall edge.";
+                return false;
+            }
+
+            float signedArea = 0f;
+            for (int i = 0; i < outline.Length; i++)
+                signedArea += outline[i].x * outline[(i + 1) % outline.Length].y - outline[(i + 1) % outline.Length].x * outline[i].y;
+            Vector2 inward = signedArea >= 0f ? new Vector2(-tangent.y, tangent.x) : new Vector2(tangent.y, -tangent.x);
+
+            yawDegrees = Mathf.Atan2(-tangent.y, tangent.x) * Mathf.Rad2Deg;
+            if (!TryGetPrefabFootprint(prefab, yawDegrees, out Vector3 footprintSize, out float minimumY))
+            {
+                error = $"Prefab '{prefab.name}' has no enabled renderer from which to derive a physical footprint.";
+                return false;
+            }
+
+            float edgeLength = Vector2.Distance(bestStart, bestEnd);
+            float halfWidth = footprintSize.x * 0.5f;
+            if (edgeLength < footprintSize.x + 0.1f)
+            {
+                error = $"The nearest floor edge is {edgeLength:F2} m long, shorter than the equipment's {footprintSize.x:F2} m wall-facing width.";
+                return false;
+            }
+
+            Vector2 projected = bestStart + tangent * Mathf.Clamp(Vector2.Dot(query - bestStart, tangent), halfWidth + 0.05f, edgeLength - halfWidth - 0.05f);
+            Vector2 center = projected + inward * (footprintSize.z * 0.5f + 0.05f);
+            position = new Vector3(center.x, floor.floorHeightLocal - minimumY, center.y);
+            error = string.Empty;
+            return true;
+        }
+
+        private static bool TryGetPrefabFootprint(GameObject prefab, float yawDegrees, out Vector3 size, out float minimumY)
+        {
+            size = Vector3.zero;
+            minimumY = float.PositiveInfinity;
+            Vector3 min = new(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+            Vector3 max = new(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+            bool found = false;
+            Quaternion yaw = Quaternion.Euler(0f, yawDegrees, 0f);
+            foreach (Renderer renderer in prefab.GetComponentsInChildren<Renderer>(false))
+            {
+                Bounds bounds = renderer.localBounds;
+                for (int x = 0; x <= 1; x++)
+                    for (int y = 0; y <= 1; y++)
+                        for (int z = 0; z <= 1; z++)
+                        {
+                            Vector3 corner = new(x == 0 ? bounds.min.x : bounds.max.x,
+                                y == 0 ? bounds.min.y : bounds.max.y,
+                                z == 0 ? bounds.min.z : bounds.max.z);
+                            Vector3 sourceLocal = prefab.transform.InverseTransformPoint(renderer.transform.TransformPoint(corner));
+                            Vector3 scaled = Vector3.Scale(sourceLocal, prefab.transform.localScale);
+                            Vector3 rotated = yaw * scaled;
+                            min = Vector3.Min(min, rotated);
+                            max = Vector3.Max(max, rotated);
+                            found = true;
+                        }
+            }
+            if (!found) return false;
+            size = max - min;
+            minimumY = min.y;
+            return size.x > 0.05f && size.z > 0.05f;
+        }
+
+        private static void PlaceEquipmentInSceneBuilding(BuildingFootprintAuthority authority,
+            GameObject prefab, InteriorFloorAuthoring floor, Vector3 localPosition, float yawDegrees)
+        {
+            if (authority == null || prefab == null || floor == null
+                || PrefabStageUtility.GetPrefabStage(authority.gameObject) != null) return;
+            GameObject instance = PrefabUtility.InstantiatePrefab(prefab, authority.gameObject.scene) as GameObject;
+            if (instance == null)
+            {
+                EditorUtility.DisplayDialog("Equipment placement", "Unity could not instantiate the selected prefab in the active scene.", "OK");
+                return;
+            }
+
+            Undo.RegisterCreatedObjectUndo(instance, $"Place {prefab.name} in building");
+            Undo.SetTransformParent(instance.transform, authority.transform, $"Parent {prefab.name} to building");
+            instance.transform.localPosition = localPosition;
+            instance.transform.localRotation = Quaternion.Euler(0f, yawDegrees, 0f);
+            instance.transform.localScale = prefab.transform.localScale;
+            BuildingEquipmentPlacement placement = Undo.AddComponent<BuildingEquipmentPlacement>(instance);
+            placement.Configure(Guid.NewGuid().ToString("N"),
+                $"furniture.{prefab.name.ToLowerInvariant().Replace(' ', '.')}", prefab.name, floor.floorIndex);
+            EditorUtility.SetDirty(instance);
+            PrefabUtility.RecordPrefabInstancePropertyModifications(instance.transform);
+            PrefabUtility.RecordPrefabInstancePropertyModifications(placement);
+            authority.InvalidateEquipmentPlacementCache();
+            SceneView.RepaintAll();
         }
 
         private void DrawPolygonList(SerializedProperty polygons, float floorHeight, bool exclusion)

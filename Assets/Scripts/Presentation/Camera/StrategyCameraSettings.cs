@@ -86,6 +86,29 @@ namespace LandLedgers.CameraSystem
         [Range(0.01f, 0.25f)]
         public float rotationSmoothing = 0.055f;
 
+        [Header("Close-Range Interior Controls")]
+        [Tooltip("At or below this zoom distance, close-range camera sensitivity applies.")]
+        [Min(0.1f)]
+        public float closeControlStartDistance = 16f;
+
+        [Tooltip("At or above this zoom distance, existing pan and rotation response is fully restored.")]
+        [Min(0.1f)]
+        public float standardControlDistance = 40f;
+
+        [Tooltip("Pan speed scale at close range. Shift acceleration remains applied on top of this value.")]
+        [Range(0.05f, 1f)]
+        public float closePanSensitivity = 0.2f;
+
+        [Tooltip("Mouse and keyboard rotation scale at close range.")]
+        [Range(0.05f, 1f)]
+        public float closeRotationSensitivity = 0.25f;
+
+        [Tooltip("When a close-range mouse rotation begins, use the nearest surface under the view center as the orbit focus when it is within zoom limits.")]
+        public bool focusViewCenterWhenRotatingClose = true;
+
+        [Tooltip("Layers eligible to provide the physical close-range orbit focus.")]
+        public LayerMask closePivotLayers = ~0;
+
         [Header("Zoom")]
         [Tooltip("Closest camera distance from the focus point.")]
         [Min(0.1f)]
@@ -106,6 +129,30 @@ namespace LandLedgers.CameraSystem
         [Tooltip("Additional wheel zoom multiplier at far zoom so strategic overview does not feel sluggish.")]
         [Min(0.1f)]
         public float farZoomWheelMultiplier = 1.2f;
+
+        [Tooltip("Distance where wheel zoom transitions from precise interior control to the faster mid-range ramp.")]
+        [Min(0.1f)]
+        public float preciseWheelZoomDistance = 16f;
+
+        [Tooltip("Distance where the wheel zoom reaches its far-range speed. The curve remains smooth beyond this distance.")]
+        [Min(0.1f)]
+        public float fastWheelZoomDistance = 40f;
+
+        [Tooltip("Distance-based wheel scale at the minimum zoom distance. Keep this low for precise interior inspection.")]
+        [Min(0.01f)]
+        public float closeWheelZoomScale = 0.08f;
+
+        [Tooltip("Distance-based wheel scale at the precise-to-mid-range transition.")]
+        [Min(0.01f)]
+        public float preciseWheelZoomScale = 0.25f;
+
+        [Tooltip("Distance-based wheel scale at and beyond the far-range transition.")]
+        [Min(0.01f)]
+        public float farWheelZoomScale = 2f;
+
+        [Tooltip("Distance-based wheel scale at the maximum zoom distance, allowing faster travel across the town at very large views.")]
+        [Min(0.01f)]
+        public float maximumWheelZoomScale = 4f;
 
         [Tooltip("When enabled, wheel zoom preserves the player's current final pitch instead of re-deriving a new one from zoom.")]
         public bool preserveAbsolutePitchWhileZooming = true;
@@ -259,9 +306,48 @@ namespace LandLedgers.CameraSystem
             return Mathf.Lerp(panSpeedClose, panSpeedFar, Zoom01(zoomDistance));
         }
 
+        public float EvaluateClosePanSensitivity(float zoomDistance)
+        {
+            return EvaluateCloseRangeSensitivity(zoomDistance, closePanSensitivity);
+        }
+
+        public float EvaluateCloseRotationSensitivity(float zoomDistance)
+        {
+            return EvaluateCloseRangeSensitivity(zoomDistance, closeRotationSensitivity);
+        }
+
+        private float EvaluateCloseRangeSensitivity(float zoomDistance, float closeSensitivity)
+        {
+            float blend = Mathf.InverseLerp(closeControlStartDistance, standardControlDistance, zoomDistance);
+            return Mathf.Lerp(closeSensitivity, 1f, Mathf.SmoothStep(0f, 1f, blend));
+        }
+
         public float EvaluateWheelZoomMultiplier(float zoomDistance)
         {
             return Mathf.Lerp(closeZoomWheelMultiplier, farZoomWheelMultiplier, Zoom01(zoomDistance));
+        }
+
+        public float EvaluateDistanceWheelZoomScale(float zoomDistance)
+        {
+            float minimum = Mathf.Min(minZoomDistance, maxZoomDistance);
+            float maximum = Mathf.Max(minZoomDistance, maxZoomDistance);
+            float precise = Mathf.Clamp(preciseWheelZoomDistance, minimum, maximum);
+            float fast = Mathf.Clamp(fastWheelZoomDistance, precise, maximum);
+
+            if (zoomDistance <= precise)
+            {
+                float t = Mathf.InverseLerp(minimum, precise, zoomDistance);
+                return Mathf.Lerp(closeWheelZoomScale, preciseWheelZoomScale, Mathf.SmoothStep(0f, 1f, t));
+            }
+
+            if (zoomDistance <= fast)
+            {
+                float t = Mathf.InverseLerp(precise, fast, zoomDistance);
+                return Mathf.Lerp(preciseWheelZoomScale, farWheelZoomScale, Mathf.SmoothStep(0f, 1f, t));
+            }
+
+            float farT = Mathf.InverseLerp(fast, maximum, zoomDistance);
+            return Mathf.Lerp(farWheelZoomScale, maximumWheelZoomScale, Mathf.SmoothStep(0f, 1f, farT));
         }
 
         public float ClampManualPitchOffset(float manualPitchOffset, float zoomDistance)
@@ -300,10 +386,23 @@ namespace LandLedgers.CameraSystem
             rotationSmoothing = Mathf.Max(0.001f, rotationSmoothing);
             minZoomDistance = Mathf.Max(0.1f, minZoomDistance);
             maxZoomDistance = Mathf.Max(minZoomDistance + 0.1f, maxZoomDistance);
+            closeControlStartDistance = Mathf.Clamp(closeControlStartDistance, minZoomDistance, maxZoomDistance);
+            standardControlDistance = Mathf.Clamp(
+                standardControlDistance,
+                Mathf.Min(closeControlStartDistance + 0.1f, maxZoomDistance),
+                maxZoomDistance);
+            closePanSensitivity = Mathf.Clamp(closePanSensitivity, 0.05f, 1f);
+            closeRotationSensitivity = Mathf.Clamp(closeRotationSensitivity, 0.05f, 1f);
             defaultZoomDistance = Mathf.Clamp(defaultZoomDistance, minZoomDistance, maxZoomDistance);
             wheelZoomSensitivity = Mathf.Max(0f, wheelZoomSensitivity);
             closeZoomWheelMultiplier = Mathf.Max(0.1f, closeZoomWheelMultiplier);
             farZoomWheelMultiplier = Mathf.Max(0.1f, farZoomWheelMultiplier);
+            preciseWheelZoomDistance = Mathf.Clamp(preciseWheelZoomDistance, minZoomDistance, maxZoomDistance);
+            fastWheelZoomDistance = Mathf.Clamp(fastWheelZoomDistance, preciseWheelZoomDistance, maxZoomDistance);
+            closeWheelZoomScale = Mathf.Max(0.01f, closeWheelZoomScale);
+            preciseWheelZoomScale = Mathf.Max(closeWheelZoomScale, preciseWheelZoomScale);
+            farWheelZoomScale = Mathf.Max(preciseWheelZoomScale, farWheelZoomScale);
+            maximumWheelZoomScale = Mathf.Max(farWheelZoomScale, maximumWheelZoomScale);
             zoomSmoothing = Mathf.Max(0.001f, zoomSmoothing);
             closePitch = Mathf.Clamp(closePitch, 5f, 85f);
             farPitch = Mathf.Clamp(farPitch, 5f, 85f);

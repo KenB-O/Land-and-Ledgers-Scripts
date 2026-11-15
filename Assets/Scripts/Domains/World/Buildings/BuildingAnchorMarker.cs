@@ -18,17 +18,34 @@ namespace LandLedgers.World
         public AnchorType Type => type;
         public bool UseAsRoadAccessAnchor => useAsRoadAccessAnchor || type == AnchorType.FrontDoor;
 
+#if UNITY_EDITOR
         private void OnDrawGizmos()
         {
-            if (Application.isPlaying)
+            if (Application.isPlaying || type == AnchorType.Service) return;
+
+            Color previousColor = Gizmos.color;
+            Matrix4x4 previousMatrix = Gizmos.matrix;
+            Gizmos.color = GetColor(type);
+            Gizmos.matrix = transform.localToWorldMatrix;
+
+            if (type == AnchorType.DropOff)
             {
-                return;
+                // Compact parcel/crate symbol: visible for authoring without obscuring the scene.
+                Gizmos.DrawWireCube(Vector3.zero, new Vector3(0.34f, 0.28f, 0.26f));
+                Gizmos.DrawLine(new Vector3(-0.17f, 0.14f, 0f), new Vector3(0.17f, 0.14f, 0f));
+                Gizmos.DrawLine(new Vector3(0f, 0.14f, -0.13f), new Vector3(0f, 0.14f, 0.13f));
+            }
+            else
+            {
+                float radius = Mathf.Min(gizmoRadius, 0.16f);
+                Gizmos.DrawWireSphere(Vector3.zero, radius);
+                Gizmos.DrawLine(Vector3.zero, Vector3.forward * radius * 2f);
             }
 
-            Gizmos.color = GetColor(type);
-            Gizmos.DrawSphere(transform.position, gizmoRadius);
-            Gizmos.DrawLine(transform.position, transform.position + transform.forward * gizmoRadius * 2f);
+            Gizmos.matrix = previousMatrix;
+            Gizmos.color = previousColor;
         }
+#endif
 
         private static Color GetColor(AnchorType anchorType)
         {

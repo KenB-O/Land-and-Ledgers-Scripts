@@ -12,11 +12,50 @@ namespace LandLedgers.World
         [SerializeField]
         private Animator doorAnimator;
 
+        [SerializeField, Tooltip("Optional movable door leaf. Its colliders remain enabled and move with the leaf.")]
+        private Transform physicalLeaf;
+
+        [SerializeField, Tooltip("Local rotation offset from the closed pose when the leaf is open.")]
+        private Vector3 openLocalEulerOffset = new(0f, 90f, 0f);
+
         private bool setupValidated;
         private bool hasDoorActionTrigger;
         private int lastTriggerFrame = -1;
         private float authoredAnimatorSpeed = 1f;
         private bool authoredSpeedCaptured;
+        private Quaternion closedLeafLocalRotation;
+        private bool closedLeafRotationCaptured;
+        private bool isOpen;
+
+        public bool HasPhysicalLeaf => physicalLeaf != null;
+        public bool IsOpen => isOpen;
+
+        /// <summary>Configures a real hinged leaf; framing and its colliders remain untouched.</summary>
+        public bool ConfigurePhysicalLeaf(Transform leaf, Vector3 openedLocalEulerOffset)
+        {
+            if (leaf == null || leaf == transform || !leaf.IsChildOf(transform)) return false;
+            physicalLeaf = leaf;
+            openLocalEulerOffset = openedLocalEulerOffset;
+            closedLeafLocalRotation = leaf.localRotation;
+            closedLeafRotationCaptured = true;
+            isOpen = false;
+            return true;
+        }
+
+        public bool SetDoorOpen(bool open)
+        {
+            if (physicalLeaf == null) return false;
+            if (!closedLeafRotationCaptured)
+            {
+                closedLeafLocalRotation = physicalLeaf.localRotation;
+                closedLeafRotationCaptured = true;
+            }
+            isOpen = open;
+            physicalLeaf.localRotation = open
+                ? closedLeafLocalRotation * Quaternion.Euler(openLocalEulerOffset)
+                : closedLeafLocalRotation;
+            return true;
+        }
 
         public void TriggerDoorAction()
         {
@@ -27,6 +66,9 @@ namespace LandLedgers.World
 
             EnsureAnimator();
             ValidateSetup();
+
+            if (physicalLeaf != null)
+                SetDoorOpen(!isOpen);
 
             if (doorAnimator == null || !hasDoorActionTrigger || !doorAnimator.isInitialized || lastTriggerFrame == UnityEngine.Time.frameCount)
             {
@@ -111,6 +153,15 @@ namespace LandLedgers.World
         private void Awake()
         {
             EnsureAnimator();
+            CaptureLeafPose();
+        }
+
+        private void CaptureLeafPose()
+        {
+            if (physicalLeaf == null) return;
+            closedLeafLocalRotation = physicalLeaf.localRotation;
+            closedLeafRotationCaptured = true;
+            isOpen = false;
         }
 
         private void Reset()
@@ -123,6 +174,8 @@ namespace LandLedgers.World
         {
             setupValidated = false;
             EnsureAnimator();
+            if (physicalLeaf != null && !physicalLeaf.IsChildOf(transform)) physicalLeaf = null;
+            if (physicalLeaf != null) CaptureLeafPose();
         }
 
         private void OnDisable()

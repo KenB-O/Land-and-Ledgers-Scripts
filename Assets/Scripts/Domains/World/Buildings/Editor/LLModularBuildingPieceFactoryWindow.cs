@@ -82,7 +82,9 @@ namespace LandAndLedgers.Buildings.Editor
         private string manualSaveFolder = DefaultKitRootFolder + "/Manual";
 
         private BatchMode batchMode = BatchMode.CreateOrUpdateAll;
-        private bool cleanGeneratedOutputFirst = true;
+        // Retained for EditorWindow layout compatibility. Generated assets now refresh in place:
+        // deleting this tree would invalidate catalog, prefab and paired-LOD GUID references.
+        private bool cleanGeneratedOutputFirst;
         private bool relinkMaterialsFromWesternFolder = true;
         private bool allowLod0FallbackForMissingLod1 = true;
         private bool keepGeneratedSourcePrefabs = true;
@@ -181,7 +183,7 @@ namespace LandAndLedgers.Buildings.Editor
         {
             EditorGUILayout.Space(6f);
             EditorGUILayout.LabelField("Automation Settings", EditorStyles.boldLabel);
-            cleanGeneratedOutputFirst = EditorGUILayout.Toggle("Clean Auto Extracted First", cleanGeneratedOutputFirst);
+            EditorGUILayout.HelpBox("Batch refresh overwrites generated prefabs at their existing paths to preserve GUIDs and LOD links. It does not delete the Auto Extracted tree.", MessageType.Info);
             relinkMaterialsFromWesternFolder = EditorGUILayout.Toggle("Relink Materials From Western Folder", relinkMaterialsFromWesternFolder);
             allowLod0FallbackForMissingLod1 = EditorGUILayout.Toggle("Allow LOD0 Fallback For Missing LOD1", allowLod0FallbackForMissingLod1);
             keepGeneratedSourcePrefabs = EditorGUILayout.Toggle("Keep Generated Source Prefabs", keepGeneratedSourcePrefabs);
@@ -338,13 +340,7 @@ namespace LandAndLedgers.Buildings.Editor
             try
             {
                 if (cleanGeneratedOutputFirst)
-                {
-                    string generatedRoot = CombineAssetPath(kitRootFolder, AutoExtractedFolderName);
-                    if (AssetDatabase.IsValidFolder(generatedRoot))
-                    {
-                        AssetDatabase.DeleteAsset(generatedRoot);
-                    }
-                }
+                    batchNotes.Add("A destructive clean was requested by a previous editor-window state and was skipped. Existing generated assets and GUIDs are preserved; matching outputs are refreshed in place.");
 
                 materialLookup = null;
                 for (int i = 0; i < buildingPaths.Length; i++)
@@ -362,6 +358,7 @@ namespace LandAndLedgers.Buildings.Editor
 
             batchNotes.Add("Processed " + buildingPaths.Length + " building FBX assets from " + westernBuildingsFolder + ".");
             ScanSources();
+            LLModularBuildingAssemblyEditor.BuildCatalog();
         }
 
         private void ProcessSingleBuilding(string buildingPath, bool rescanAfter)
@@ -466,6 +463,7 @@ namespace LandAndLedgers.Buildings.Editor
             if (rescanAfter)
             {
                 ScanSources();
+                LLModularBuildingAssemblyEditor.BuildCatalog();
             }
         }
 

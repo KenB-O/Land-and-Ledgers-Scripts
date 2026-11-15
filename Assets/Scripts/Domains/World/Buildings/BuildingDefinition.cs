@@ -91,7 +91,6 @@ namespace LandLedgers.World
         private BuildingAnchorRule[] anchorRules =
         {
             new BuildingAnchorRule { type = AnchorType.FrontDoor, side = BuildingAnchorSide.Front, offsetFromSideCenter = new Vector2Int(0, 1) },
-            new BuildingAnchorRule { type = AnchorType.Service, side = BuildingAnchorSide.Back, offsetFromSideCenter = new Vector2Int(0, 1) },
             new BuildingAnchorRule { type = AnchorType.DropOff, side = BuildingAnchorSide.Front, offsetFromSideCenter = new Vector2Int(0, 2) }
         };
 
@@ -269,16 +268,10 @@ namespace LandLedgers.World
                 case AnchorType.FrontDoor:
                     return BuildingAnchorExpectation.Required;
                 case AnchorType.Service:
-                    if (HasDedicatedAgriculturalRole || CanHostWorkplace)
-                    {
-                        return BuildingAnchorExpectation.Required;
-                    }
-
-                    if (PrimaryUse == BuildingUseType.Civic)
-                    {
-                        return BuildingAnchorExpectation.Preferred;
-                    }
-
+                    // Service interaction is resolved from people, equipment and
+                    // reachable context-specific locations. Keep legacy service
+                    // anchors readable, but never require an arbitrary marker.
+                    if (HasDedicatedAgriculturalRole) return BuildingAnchorExpectation.Required;
                     return BuildingAnchorExpectation.Optional;
                 case AnchorType.DropOff:
                     if (HasDedicatedAgriculturalRole)

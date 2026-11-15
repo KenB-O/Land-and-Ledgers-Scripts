@@ -1878,18 +1878,33 @@ namespace LandLedgers.Population
             }
             else if (settlement.Mode == ShoppingSettlementMode.TradeCreditObligation)
             {
-                // P28 (C1): the credit branch never trued any field — a credit
-                // partial fill left StoreReceivableCents at the PLANNED
-                // goodsCost while the store posted only sold * unitPrice.
-                // Trued here: the store's receivable is the goods actually
-                // sold, the carrier's receivable stands (freight is not
-                // refunded — Q4). The obligation principals stay as created
-                // (the §8.2 wart class): the store's obligation still covers
-                // the planned units and the household must reconcile it.
+                // DEF-043: a credit partial fill must true the obligation
+                // as well as the result. The goods obligation was created
+                // before the sale for the planned units; the store posted
+                // only the goods actually sold, so the obligation's
+                // outstanding principal is reduced by the undelivered
+                // value — the household owes only for the goods delivered.
+                // OriginalPrincipalCents stays as created for audit. The
+                // carrier's receivable stands (freight is not refunded —
+                // Q4) and the freight obligation is untouched. If the
+                // reduction is refused, the old loud INCONSISTENCY
+                // diagnostic is kept — never silent.
                 result.StoreReceivableCents = sold * unitPrice;
                 result.CarrierReceivableCents = freightCost;
-                diag.Add($"Day {dayIndex}: INCONSISTENCY — trade credit {settlement.ObligationId} " +
-                    $"covers {units}u but only {sold}u were delivered; manual reconciliation required.");
+                int undeliveredCents = (units - sold) * unitPrice;
+                string reductionRefusal = obligations.ReduceOutstandingPrincipal(
+                    settlement.ObligationId, undeliveredCents,
+                    $"partial fill at the counter: {sold}u of {units}u {need.ItemId} delivered on day {dayIndex}; obligation reduced to delivered units only");
+                if (reductionRefusal == null)
+                {
+                    diag.Add($"Day {dayIndex}: partial fill — trade credit {settlement.ObligationId} " +
+                        $"reduced by {undeliveredCents}c to {sold * unitPrice}c for the {sold}u actually delivered.");
+                }
+                else
+                {
+                    diag.Add($"Day {dayIndex}: INCONSISTENCY — trade credit {settlement.ObligationId} " +
+                        $"covers {units}u but only {sold}u were delivered; principal reduction refused ({reductionRefusal}); manual reconciliation required.");
+                }
             }
 
             // Counter shortfall is a third partial-fill cause, after

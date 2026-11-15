@@ -147,6 +147,16 @@ namespace LandLedgers.Economy.Financing
         // (first reason wins). Append-only audit record; old saves load
         // with an empty string. CloneObligation copies it (note 138 C1).
         public string CancellationReason = string.Empty;
+        // DEF-043: cumulative cents removed from the outstanding principal
+        // by ReduceOutstandingPrincipal for goods never delivered (a
+        // partial-fill true-up), and the first reason recorded for it.
+        // Never a payment: the Payments list records payments only, and
+        // OriginalPrincipalCents stays as created for audit. Reconcile()
+        // counts this alongside payments so the conservation law
+        // (paid + outstanding + reduced == original) still holds exactly.
+        // Old saves load with 0 / empty. CloneObligation copies both.
+        public int PrincipalReducedCents;
+        public string PrincipalReductionReason = string.Empty;
         public FinancialPaymentTerms PaymentTerms = new FinancialPaymentTerms();
         public string ScheduleReference = string.Empty;
         public string SourceEconomicEventId = string.Empty;
@@ -341,6 +351,37 @@ namespace LandLedgers.Economy.Financing
             obligation.AccruedInterestCents = 0;
             obligation.FeesCents = 0;
             obligation.CancellationReason = reason ?? string.Empty;
+            return null;
+        }
+
+        /// <summary>
+        /// DEF-043: reduces the outstanding principal of an obligation
+        /// for goods never delivered — the partial-fill true-up. The
+        /// obligation was created before the sale for the planned units;
+        /// the store posted only the goods actually sold, so the
+        /// household must owe only the delivered value. Null on success,
+        /// a refusal string otherwise, per the CancelObligation
+        /// convention. Unknown ids refuse; non-positive amounts refuse;
+        /// an amount above the outstanding principal refuses (never
+        /// reduce below zero); an already-settled obligation refuses (a
+        /// paid or cancelled obligation is a settled fact). The status
+        /// is not flipped: Settled already holds when the outstanding
+        /// total reaches zero. OriginalPrincipalCents and the Payments
+        /// list are preserved for audit; the reduction is recorded in
+        /// PrincipalReducedCents and PrincipalReductionReason (first
+        /// reason wins).
+        /// </summary>
+        public string ReduceOutstandingPrincipal(string obligationId, int amountCents, string reason)
+        {
+            FinancialObligation obligation = Find(obligationId);
+            if (obligation == null) return "Unknown financial obligation.";
+            if (amountCents <= 0) return "Reduction amount must be positive.";
+            if (obligation.Settled) return "Financial obligation is already settled.";
+            if (amountCents > obligation.OutstandingPrincipalCents) return "Reduction exceeds the outstanding principal.";
+            obligation.OutstandingPrincipalCents = checked(obligation.OutstandingPrincipalCents - amountCents);
+            obligation.PrincipalReducedCents = checked(obligation.PrincipalReducedCents + amountCents);
+            if (string.IsNullOrEmpty(obligation.PrincipalReductionReason))
+                obligation.PrincipalReductionReason = reason ?? string.Empty;
             return null;
         }
 
@@ -797,6 +838,8 @@ namespace LandLedgers.Economy.Financing
                 LegalRegimeId = o.LegalRegimeId,
                 Terms = o.Terms,
                 CancellationReason = o.CancellationReason,
+                PrincipalReducedCents = o.PrincipalReducedCents,
+                PrincipalReductionReason = o.PrincipalReductionReason,
                 PaymentTerms = o.PaymentTerms != null ? new FinancialPaymentTerms
                 {
                     AnnualInterestRateBps = o.PaymentTerms.AnnualInterestRateBps,
@@ -939,8 +982,18 @@ namespace LandLedgers.Economy.Financing
                         if (payment != null && !paymentIds.Add(payment.PaymentId)) errors.Add("Duplicate payment event: " + payment.PaymentId);
                         if (payment != null) principalPaid = checked(principalPaid + Math.Max(0, payment.PrincipalCents));
                     }
-                if (obligation != null && obligation.OriginalPrincipalCents >= 0
-                    && principalPaid + obligation.OutstandingPrincipalCents != obligation.OriginalPrincipalCents)
+                // DEF-043: the conservation law counts every way principal
+                // leaves the outstanding balance — paid, plus reduced for
+                // undelivered goods. A Cancelled obligation is exempt: the
+                // remainder was written off by CancelObligation (documented
+                // write-off semantics — a partially-paid obligation may be
+                // cancelled and only the remainder is zeroed), so it cannot
+                // satisfy paid + outstanding + reduced == original by
+                // construction; without the exemption every P28 credit void
+                // would report a conservation mismatch.
+                if (obligation != null && obligation.Status != FinancialObligationStatus.Cancelled
+                    && obligation.OriginalPrincipalCents >= 0
+                    && principalPaid + obligation.OutstandingPrincipalCents + obligation.PrincipalReducedCents != obligation.OriginalPrincipalCents)
                     errors.Add("Principal conservation mismatch on " + obligation.ObligationId + ".");
             }
             foreach (SecurityInterestRecord security in securities.Values)

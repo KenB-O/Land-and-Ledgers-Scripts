@@ -7747,9 +7747,11 @@ namespace LandLedgers.Orchestration.Systems
             // (same supplier, SKU, 15c/sack, 20-sack lot) only when
             // coverage is below one full lot and no feed order is
             // outstanding; it logs only when it orders or is refused.
-            // In release builds the feed counterparty is not registered
-            // (ConfigurePlaytestHorseFeed is dev-only), so the planner
-            // refuses loudly here instead of ordering from nobody.
+            // Campaign B (DEF-008): the feed counterparty is now also
+            // registered in release builds (RegisterNotionsProcurement
+            // calls RegisterReleaseHorseFeed), so the planner orders
+            // there too; it refuses loudly here only if that
+            // registration failed or was skipped.
             var feedReorderDiag = new List<string>();
             LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorderResult feedReorder =
                 LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorder.RunDay(

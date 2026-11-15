@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Core;
+using LandLedgers.Population;
 
 namespace LandLedgers.Economy.Businesses.GeneralStore
 {
@@ -69,6 +71,74 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
         /// <summary>Authored opening feed lot, sacks per order.</summary>
         public const int OpeningLotSacks = 20;
+
+        /// <summary>Authored feed category (dev ConfigurePlaytestHorseFeed).</summary>
+        public const string FeedCategoryId = "animal_feed";
+
+        /// <summary>Authored feed display name (dev ConfigurePlaytestHorseFeed).</summary>
+        public const string FeedDisplayName = "Horse Feed";
+
+        /// <summary>Authored feed unit label (dev ConfigurePlaytestHorseFeed).</summary>
+        public const string FeedUnitLabel = "sack";
+
+        /// <summary>Authored feed conversion: one sack is two feed units.</summary>
+        public const int FeedUnitsPerSack = 2;
+
+        /// <summary>Authored feed transit: one day from Millbrook.</summary>
+        public const int FeedTransitDays = 1;
+
+        /// <summary>Authored Millbrook display name (dev ConfigurePlaytestHorseFeed).</summary>
+        public const string MillbrookDisplayName = "Millbrook Grain Co.";
+
+        /// <summary>
+        /// Campaign B (DEF-008): the Millbrook feed counterparty on the
+        /// authored opening terms — the same counterparty the dev-only
+        /// ConfigurePlaytestHorseFeed builds inline. Both build flavors
+        /// call this builder so the terms cannot drift between them.
+        /// </summary>
+        public static ExternalCounterparty BuildMillbrookCounterparty()
+        {
+            return new ExternalCounterparty
+            {
+                CounterpartyId = MillbrookSupplierId,
+                DisplayName = MillbrookDisplayName,
+                TransitDays = FeedTransitDays,
+                InitialBudgetCents = 0,
+                SupplyUnits = new Dictionary<string, int> { [FeedSkuId] = OpeningLotSacks },
+            };
+        }
+
+        /// <summary>
+        /// Campaign B (DEF-008): the store feed registry item on the
+        /// authored opening terms — the same item the dev-only
+        /// ConfigurePlaytestHorseFeed builds inline. The retail price is
+        /// the opening 15c/sack and one sack converts to two feed units.
+        /// </summary>
+        public static Review2StoreFeedItem BuildFeedRegistryItem(string storeBusinessInstanceId)
+        {
+            return new Review2StoreFeedItem
+            {
+                BusinessInstanceId = storeBusinessInstanceId ?? string.Empty,
+                FeedCategoryId = FeedCategoryId,
+                FeedItemId = FeedSkuId,
+                DisplayName = FeedDisplayName,
+                UnitLabel = FeedUnitLabel,
+                RetailPriceCents = FeedPriceCentsPerSack,
+                FeedUnitsPerStoreUnitNumerator = FeedUnitsPerSack,
+                FeedUnitsPerStoreUnitDenominator = 1,
+            };
+        }
+
+        /// <summary>
+        /// Campaign B (DEF-008): the household catalog item for the feed
+        /// SKU — the same definition the dev-only
+        /// ConfigurePlaytestHorseFeed registers. Without it the trading
+        /// port drops the feed offer even when stock is on the shelf.
+        /// </summary>
+        public static HouseholdItemDefinition BuildFeedCatalogItem()
+        {
+            return new HouseholdItemDefinition(FeedSkuId, FeedDisplayName, FeedUnitLabel, FeedCategoryId, 1, false);
+        }
 
         public static StoreHorseFeedReorderResult RunDay(StoreHorseFeedReorderInputs inputs, List<string> diag)
         {

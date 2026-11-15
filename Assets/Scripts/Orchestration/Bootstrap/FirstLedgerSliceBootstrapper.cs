@@ -619,9 +619,13 @@ namespace LandLedgers.FirstLedger
             // that and returns without overwriting (AttachStoreFeedProcurement
             // overwrites unconditionally, and the dev service also carries
             // the horse-feed order). In release builds this is the only
-            // registration. The store is the NPC General Store (the bakery's
-            // wholesale buyer); if it does not resolve, the method logs the
-            // gap and the daily driver names the missing service (F19).
+            // registration — and Campaign B (DEF-008) extended it to also
+            // register the Millbrook feed counterparty, the household
+            // catalog item, and the store feed registry item, so release
+            // builds get the same feed loop dev builds have. The store is
+            // the NPC General Store (the bakery's wholesale buyer); if it
+            // does not resolve, the method logs the gap and the daily
+            // driver names the missing service (F19).
             if (startupIntent == WorldStartupIntent.NewGame && simulationDrivers != null)
                 RegisterNotionsProcurement(FindDevelopmentNpcGeneralStore(), simulationDrivers);
             // Register the live store with the shared supplier directory. The
@@ -2982,7 +2986,11 @@ namespace LandLedgers.FirstLedger
         /// (PassXlProcurementService non-null) and returns WITHOUT
         /// overwriting, because AttachStoreFeedProcurement overwrites
         /// unconditionally and the dev service also carries the horse-feed
-        /// order. In release builds this is the only registration. Do NOT
+        /// order. In release builds this is the only registration. Campaign
+        /// B (DEF-008): the release branch below also registers the
+        /// Millbrook feed counterparty, the household catalog item, and
+        /// the store feed registry item (RegisterReleaseHorseFeed), so
+        /// release builds get the same feed loop dev builds have. Do NOT
         /// "simplify" by deleting either site: deleting the dev half would
         /// strip the counterparty from the shared dev service, and deleting
         /// this method would leave release builds with no notions service
@@ -3040,6 +3048,17 @@ namespace LandLedgers.FirstLedger
                 $"{LandLedgers.Economy.BreadDrivers.BakeryNotionsDailySupply.FiniteExternalOrderUnits}u; " +
                 "the daily driver orders the day's shortfall (BakeryNotionsDailySupply).", this);
 
+            // Campaign B (DEF-008): release builds never run
+            // ConfigurePlaytestHorseFeed, so the Millbrook feed
+            // counterparty — and the retail registrations the store needs
+            // to sell the feed it orders — are registered here, on the
+            // same opening terms, on this same market. A failure is logged
+            // loudly and the notions service below still attaches; feed
+            // simply stays unavailable until the named gap is fixed, and
+            // notions never regresses.
+            if (!RegisterReleaseHorseFeed(market, storeBusiness, drivers))
+                Debug.LogWarning("[FeedSupply] release horse-feed registration incomplete; the standing feed reorder will refuse until the named gap is fixed. Notions procurement is unaffected.", this);
+
             var procurement = new OffMapNamedSkuProcurementService(
                 storeBusiness.InstanceId, market,
                 new Series2BusinessRuntimeCashPort(storeBusiness.RuntimeState));
@@ -3053,36 +3072,88 @@ namespace LandLedgers.FirstLedger
             }
         }
 
+        /// <summary>
+        /// Campaign B (DEF-008): the release-build half of the horse-feed
+        /// registration. ConfigurePlaytestHorseFeed (dev-only) registers
+        /// three things the feed loop needs — the Millbrook counterparty
+        /// on the procurement market, the household catalog item, and the
+        /// store feed registry item the trading port offers from. Release
+        /// builds run none of that, so the standing reorder refused loudly
+        /// instead of ordering from nobody. This registers the same three
+        /// things here, on the same opening terms single-sourced on
+        /// StoreHorseFeedReorder, on the notions market (both
+        /// counterparties share one market and one service, exactly as in
+        /// dev). Returns false — after logging the precise failure loudly
+        /// — when any step fails; the caller still attaches the notions
+        /// service, so a feed gap never breaks notions. No opening order
+        /// is placed here: with the counterparty registered, the standing
+        /// reorder self-primes on its first daily drive (coverage 0, no
+        /// outstanding order), so the first lot arrives one day later
+        /// than the dev opening order at most.</summary>
+        private bool RegisterReleaseHorseFeed(
+            ExternalMarketAuthority market, BusinessInstanceState storeBusiness, SimulationDrivers drivers)
+        {
+            if (market == null || drivers == null || storeBusiness?.RuntimeState == null)
+            {
+                Debug.LogError("[FeedSupply] release horse-feed registration refused: no market, drivers, or store runtime.", this);
+                return false;
+            }
+            if (review2D3SaveState == null)
+            {
+                Debug.LogError("[FeedSupply] release horse-feed registration refused: no Review2 D3 save state for the household catalog item.", this);
+                return false;
+            }
+            var catalogDiag = new List<string>();
+            string catalogRefusal = review2D3SaveState.RegisterRuntimeItem(
+                StoreHorseFeedReorder.BuildFeedCatalogItem(), catalogDiag);
+            if (catalogRefusal != null)
+            {
+                Debug.LogError($"[FeedSupply] release horse-feed registration refused: household catalog item refused: {catalogRefusal}", this);
+                return false;
+            }
+            var feedDiag = new List<string>();
+            string feedRefusal = drivers.RegisterStoreFeedItem(
+                StoreHorseFeedReorder.BuildFeedRegistryItem(storeBusiness.InstanceId), feedDiag);
+            if (feedRefusal != null)
+            {
+                Debug.LogError($"[FeedSupply] release horse-feed registration refused: store feed item refused: {feedRefusal}", this);
+                return false;
+            }
+            string marketRefusal = market.RegisterCounterparty(
+                StoreHorseFeedReorder.BuildMillbrookCounterparty());
+            if (marketRefusal != null)
+            {
+                Debug.LogError($"[FeedSupply] release horse-feed registration refused: Millbrook counterparty refused: {marketRefusal}", this);
+                return false;
+            }
+            Debug.Log("[FeedSupply] Millbrook Grain Co. feed counterparty registered in the release build on opening terms (20 sacks at 15c/sack, 1-day transit, cash on arrival); household catalog item and store feed item registered; the standing reorder self-primes on its first daily drive.", this);
+            return true;
+        }
+
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         private void ConfigurePlaytestHorseFeed(BusinessInstanceState storeBusiness, SimulationDrivers drivers)
         {
             const string itemId = "store_horse_feed_sack";
-            const string categoryId = "animal_feed";
             // Part B maintenance (2026-11-15): the opening feed terms are
             // single-sourced on StoreHorseFeedReorder, which reorders on
             // these same terms; changing them there changes both the
-            // opening order below and every standing reorder.
+            // opening order below and every standing reorder. Campaign B
+            // (DEF-008): the catalog item, registry item, and counterparty
+            // below are built by StoreHorseFeedReorder builders so the
+            // release registration in RegisterNotionsProcurement uses the
+            // identical terms.
             const string supplierId = StoreHorseFeedReorder.MillbrookSupplierId;
             var diagnostics = new List<string>();
             string itemRefusal = review2D3SaveState.RegisterRuntimeItem(
-                new HouseholdItemDefinition(itemId, "Horse Feed", "sack", categoryId, 1, false), diagnostics);
+                StoreHorseFeedReorder.BuildFeedCatalogItem(), diagnostics);
             if (itemRefusal != null)
             {
                 Debug.LogError($"[FeedSupply] household catalog registration refused: {itemRefusal}", this);
                 return;
             }
 
-            string registrationRefusal = drivers.RegisterStoreFeedItem(new Review2StoreFeedItem
-            {
-                BusinessInstanceId = storeBusiness.InstanceId,
-                FeedCategoryId = categoryId,
-                FeedItemId = itemId,
-                DisplayName = "Horse Feed",
-                UnitLabel = "sack",
-                RetailPriceCents = StoreHorseFeedReorder.FeedPriceCentsPerSack,
-                FeedUnitsPerStoreUnitNumerator = 2,
-                FeedUnitsPerStoreUnitDenominator = 1,
-            }, diagnostics);
+            string registrationRefusal = drivers.RegisterStoreFeedItem(
+                StoreHorseFeedReorder.BuildFeedRegistryItem(storeBusiness.InstanceId), diagnostics);
             if (registrationRefusal != null)
             {
                 Debug.LogError($"[FeedSupply] store feed registration refused: {registrationRefusal}", this);
@@ -3098,14 +3169,7 @@ namespace LandLedgers.FirstLedger
             }
 
             var market = new ExternalMarketAuthority();
-            var counterparty = new ExternalCounterparty
-            {
-                CounterpartyId = supplierId,
-                DisplayName = "Millbrook Grain Co.",
-                TransitDays = 1,
-                InitialBudgetCents = 0,
-                SupplyUnits = new Dictionary<string, int> { [itemId] = StoreHorseFeedReorder.OpeningLotSacks },
-            };
+            var counterparty = StoreHorseFeedReorder.BuildMillbrookCounterparty();
             string marketRefusal = market.RegisterCounterparty(counterparty);
             if (marketRefusal != null)
             {

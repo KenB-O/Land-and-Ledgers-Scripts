@@ -8348,6 +8348,30 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// CAMPAIGN-C, DEF-025 (owner Decision 11): feeds one no-worker fact into
+        /// the task-duration diagnostics so a task with no viable worker warns on
+        /// the 1/3/7-day ladder. Diagnostic only: it never assigns, hires, or
+        /// changes any task, and it never commissions anything. Null-safe: when
+        /// the diagnostics service is not installed the feed is a no-op (the
+        /// service itself also drops unknown tasks and empty reasons).
+        /// </summary>
+        private void RecordNoWorker(string taskId, string reason, int dayIndex)
+        {
+            if (string.IsNullOrEmpty(taskId) || hub == null)
+            {
+                return;
+            }
+
+            TaskDurationDiagnostics diagnosticsService = hub.DurationDiagnostics;
+            if (diagnosticsService == null)
+            {
+                return;
+            }
+
+            diagnosticsService.RecordNoWorker(taskId, reason, dayIndex);
+        }
+
+        /// <summary>
         /// One business's blanket assignment pass: open Queued tasks and the
         /// AddLaborWorker pool (budget-derived availability) through
         /// WorkScheduler.AssignDailyWork, then ReserveAndAssignTasks
@@ -8408,8 +8432,26 @@ namespace LandLedgers.Orchestration.Systems
                 taskByTextId[task.TaskId.ToString()] = task;
             }
 
-            if (schedulerWork.Count == 0 || workers.Count == 0)
+            if (schedulerWork.Count == 0)
             {
+                return;
+            }
+
+            if (workers.Count == 0)
+            {
+                // CAMPAIGN-C, DEF-025 (owner Decision 11): the business has no
+                // workers at all, so the scheduler is never reached — every Queued
+                // task here is workerless. Feed the no-worker fact into the
+                // task-duration diagnostics so the 1/3/7-day ladder can warn.
+                // Diagnostic only; assignment behaviour is unchanged.
+                foreach (SchedulerOpenWorkItem item in schedulerWork)
+                {
+                    if (item != null)
+                    {
+                        RecordNoWorker(item.TaskId, "unassignable: no workers available", absoluteDayIndex);
+                    }
+                }
+
                 return;
             }
 
@@ -8421,6 +8463,22 @@ namespace LandLedgers.Orchestration.Systems
                     OpenWork = schedulerWork,
                     Workers = workers,
                 }, diagnostics);
+            // CAMPAIGN-C, DEF-025 (owner Decision 11): the scheduler's unassigned
+            // tasks (PersonId -1) are skipped silently by ReserveAndAssignTasks —
+            // feed their unassignable notes into the task-duration diagnostics so
+            // the 1/3/7-day ladder can warn. Diagnostic only; assignment
+            // behaviour is unchanged.
+            if (assignments != null && assignments.Assignments != null)
+            {
+                foreach (WorkAssignment assignment in assignments.Assignments)
+                {
+                    if (assignment != null && assignment.PersonId < 0)
+                    {
+                        RecordNoWorker(assignment.TaskId, assignment.Note, absoluteDayIndex);
+                    }
+                }
+            }
+
             ReserveAndAssignBusinessTasks(assignments, taskByTextId, absoluteDayIndex, diagnostics);
         }
 

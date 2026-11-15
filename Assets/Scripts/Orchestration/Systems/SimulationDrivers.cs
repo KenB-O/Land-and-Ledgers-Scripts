@@ -6151,8 +6151,23 @@ namespace LandLedgers.Orchestration.Systems
                 Debug.LogWarning($"[FreightAgreement] Meeting '{request.RequestId}' deferred: requester, operator, or staging building is unresolved.", this);
                 return;
             }
-            if (!IsPersonVisuallyAtBuilding(glen.id, ethan.homeBuildingId)
-                || !IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return;
+            // CAMPAIGN-B (DEF-007): this was a silent return — a meeting
+            // stuck in AtMeeting because one of the two people is not
+            // physically at the staging building produced no signal at all
+            // after Glen's arrival log. The gate itself is intentional (Nov
+            // 13 physical-presence decision); the stall is now logged once
+            // per day per request, naming who is missing.
+            bool requesterPresent = IsPersonVisuallyAtBuilding(glen.id, ethan.homeBuildingId);
+            bool carrierPresent = IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId);
+            if (!requesterPresent || !carrierPresent)
+            {
+                string presenceStall = FreightMeetingStallReason.DescribePresenceStall(
+                    request.RequestId, glen.id, ethan.id, ethan.homeBuildingId,
+                    requesterPresent, carrierPresent);
+                if (presenceStall != null)
+                    LogRefusalDayKeyed("freight-meeting-presence:" + request.RequestId, dayIndex, presenceStall);
+                return;
+            }
             if (request.Quote == null)
             {
                 DevelopmentTownConfiguration.BusinessDefinition carrierDefinition = null;
@@ -6188,9 +6203,18 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             int minutes = Math.Max(1, freightMeetingMinutes);
-            int startMinute = FindCommonPersonStartMinute(glen.id, ethan.id, dayIndex,
-                timeManager != null ? Mathf.FloorToInt(timeManager.TimeOfDay01 * 1440f) : 480, minutes);
-            if (startMinute < 0) return;
+            int nowMinute = timeManager != null ? Mathf.FloorToInt(timeManager.TimeOfDay01 * 1440f) : 480;
+            int startMinute = FindCommonPersonStartMinute(glen.id, ethan.id, dayIndex, nowMinute, minutes);
+            if (startMinute < 0)
+            {
+                // CAMPAIGN-B (DEF-007): this was a silent return — both
+                // people present but no common window left today. Logged
+                // once per day per request instead of going silent.
+                LogRefusalDayKeyed("freight-meeting-window:" + request.RequestId, dayIndex,
+                    FreightMeetingStallReason.DescribeNoWindowStall(
+                        request.RequestId, glen.id, ethan.id, nowMinute, minutes));
+                return;
+            }
             var trip = new FreightMeetingTripTaskData
             {
                 RequestId = request.RequestId,

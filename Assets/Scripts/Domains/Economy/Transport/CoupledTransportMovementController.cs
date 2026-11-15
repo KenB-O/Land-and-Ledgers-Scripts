@@ -106,6 +106,13 @@ namespace LandLedgers.Economy.Transport
         private LandLedgers.Time.TimeManager subscribedTimeManager;
         private Vector3 authoritativeHorsePosition;
 
+        // Campaign C (DEF-030): the SimulationDrivers reference, resolved
+        // once at bind time and held, instead of a per-arrival scene
+        // lookup. Runtime-only, never serialized: the controller is
+        // attached at runtime and the cache is re-resolved on every leg
+        // bind. A null cache re-resolves on demand (see ResolveDrivers).
+        [NonSerialized] private SimulationDrivers cachedDrivers;
+
         public bool IsLegActive => legActive || regionalLegActive;
         public string PhysicalJourneyId => physicalJourneyId;
 
@@ -210,6 +217,9 @@ namespace LandLedgers.Economy.Transport
             regionalLegActive = false;
             distanceTravelledMetres = 0f;
             lastHeading = Quaternion.identity;
+            // Campaign C (DEF-030): resolve the drivers reference once at
+            // bind time; the arrival sites use the cache.
+            ResolveDrivers();
             legActive = true;
             SetDriving(true);
             Debug.Log($"[CoupledTransport] {this.legLabel} started: {path.Count} waypoints from {path[0]} to {path[path.Count - 1]} at {wagonSpeedMetresPerSecond} m/s.", this);
@@ -355,6 +365,10 @@ namespace LandLedgers.Economy.Transport
             wagonView = restoredWagonView;
             authoritativeHorsePosition = horseView.transform.position;
             lastHeading = Quaternion.identity;
+
+            // Campaign C (DEF-030): resolve the drivers reference once at
+            // bind time; the arrival sites use the cache.
+            ResolveDrivers();
 
             if (dto.isRegional)
             {
@@ -503,6 +517,9 @@ namespace LandLedgers.Economy.Transport
             SetRegionalPresentationVisible(false);
             distanceTravelledMetres = 0f;
             lastHeading = Quaternion.identity;
+            // Campaign C (DEF-030): resolve the drivers reference once at
+            // bind time; the arrival sites use the cache.
+            ResolveDrivers();
             regionalLegActive = true;
             SetDriving(true);
             Debug.Log($"[CoupledTransport] {legLabel} started from {FormatWorld(horseView.transform.position)} toward the authored town gateway and return route.", this);
@@ -543,7 +560,7 @@ namespace LandLedgers.Economy.Transport
                 GridCoord arrival = path[path.Count - 1];
                 if (!hideOnArrival && !string.IsNullOrWhiteSpace(physicalOriginLocationId))
                 {
-                    SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+                    SimulationDrivers drivers = ResolveDrivers();
                     if (drivers == null || !drivers.ConfirmPhysicalFreightOriginArrival(
                             physicalVehicleId, ethanPersonId, physicalJourneyId, physicalOriginLocationId))
                     {
@@ -579,9 +596,15 @@ namespace LandLedgers.Economy.Transport
                             / wagonSpeedMetresPerSecond;
                         SetRegionalPresentationVisible(false);
                         float remainingRegionalMetres = Vector3.Distance(authoritativeHorsePosition, regionalTarget);
+                        // Campaign C (DEF-031): the line describes the
+                        // presentation handoff — the team continues beyond
+                        // the boundary, hidden, while the regional leg runs
+                        // on simulation time — not a missing completion
+                        // mechanism. The regional leg completes on the
+                        // timer and confirms arrival itself.
                         Debug.Log($"[CoupledTransport] continuing physically beyond the town boundary for {legLabel}: " +
                             $"horse={FormatWorld(authoritativeHorsePosition)}, destination={FormatWorld(regionalTarget)}, " +
-                            $"remaining={remainingRegionalMetres:0.0}m; regional destination trigger required.", this);
+                            $"remaining={remainingRegionalMetres:0.0}m; regional leg continues on simulation time (presentation hidden beyond the boundary).", this);
                     }
                     else
                     {
@@ -618,6 +641,23 @@ namespace LandLedgers.Economy.Transport
             // TimeManager reports the game-time increment it actually
             // processed. Do not rescale wall-clock frame time here.
             AdvanceSimulationTime(context.GameDeltaSeconds);
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-030): returns the cached SimulationDrivers,
+        /// resolving it once by scene lookup when the cache is empty. The
+        /// scene holds exactly one drivers object, so the cached instance
+        /// is the one a fresh lookup would return. A null cache re-resolves
+        /// on demand, so a drivers object that appears after bind time is
+        /// still found at arrival, exactly as the old per-arrival lookup
+        /// would have found it; a destroyed cached reference reads as null
+        /// and re-resolves the same way.
+        /// </summary>
+        private SimulationDrivers ResolveDrivers()
+        {
+            if (cachedDrivers == null)
+                cachedDrivers = FindAnyObjectByType<SimulationDrivers>();
+            return cachedDrivers;
         }
 
         private bool SubscribeToSimulationClock()
@@ -706,7 +746,7 @@ namespace LandLedgers.Economy.Transport
                 || !string.Equals(businessId, physicalDestinationBusinessId, System.StringComparison.Ordinal))
                 return false;
 
-            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            SimulationDrivers drivers = ResolveDrivers();
             if (drivers == null || !drivers.ConfirmPhysicalFreightDestinationArrival(
                     physicalVehicleId, ethanPersonId, physicalJourneyId, locationId))
             {

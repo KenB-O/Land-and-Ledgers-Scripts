@@ -7675,6 +7675,35 @@ namespace LandLedgers.Orchestration.Systems
                     RegisterGeneralStoreSupplier(storeManager.BuildHouseholdTradingPort(
                         storeFeedProcurementBusiness, storeFeedRegistry));
             }
+
+            // Part B maintenance (2026-11-15): standing horse-feed
+            // reorder. The opening order was finite (20 sacks, supply
+            // exhausted on arrival) and nothing ever reordered it, so
+            // the store sold out and the freight horse starved. The
+            // planner reorders one lot on the opening order's own terms
+            // (same supplier, SKU, 15c/sack, 20-sack lot) only when
+            // coverage is below one full lot and no feed order is
+            // outstanding; it logs only when it orders or is refused.
+            // In release builds the feed counterparty is not registered
+            // (ConfigurePlaytestHorseFeed is dev-only), so the planner
+            // refuses loudly here instead of ordering from nobody.
+            var feedReorderDiag = new List<string>();
+            LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorderResult feedReorder =
+                LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorder.RunDay(
+                    new LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorderInputs
+                    {
+                        Service = storeFeedProcurement,
+                        SupplierId = LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorder.MillbrookSupplierId,
+                        SkuId = HorseFeedSku,
+                        UnitPriceCents = LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorder.FeedPriceCentsPerSack,
+                        LotSacks = LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorder.OpeningLotSacks,
+                        StoreSacksOnHand = storeRuntime.GetRetailItemStockUnits(HorseFeedSku, HorseFeedCategory),
+                        DayIndex = absoluteDayIndex,
+                    }, feedReorderDiag);
+            if (feedReorder.Ordered)
+                Debug.Log("[FeedSupply] " + string.Join(" | ", feedReorderDiag), this);
+            else if (!string.IsNullOrWhiteSpace(feedReorder.Refusal))
+                Debug.LogWarning("[FeedSupply] " + feedReorder.Refusal, this);
         }
 
         private IHorseFeedStock ResolveHorseFeedStock(AnimalState horse)

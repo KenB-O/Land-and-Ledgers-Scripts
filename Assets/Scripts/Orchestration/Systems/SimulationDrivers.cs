@@ -2015,10 +2015,6 @@ namespace LandLedgers.Orchestration.Systems
             // save; a loop attached after the hub load leaves the custody
             // section unrestored for that load.
             hub.ShoppingLoop = householdShoppingLoop;
-            // Slice 25: attach the driver beside the loop, same shape —
-            // the hub only holds the reference for save/load.
-            hub.ShoppingTripDriver = shoppingTripDriver;
-
             // Physical shopping is driven through the existing phased loop.
             // The transaction driver may settle only after the visible person
             // has reached the seller building and may deposit only after the
@@ -2035,6 +2031,15 @@ namespace LandLedgers.Orchestration.Systems
                     timeManager != null && timeManager.Settings != null
                         ? timeManager.Settings.ShortTickIntervalGameSeconds : 900f);
             }
+
+            // Slice 25: attach the driver beside the loop, same shape —
+            // the hub only holds the reference for save/load. The attach
+            // MUST run after the creation above: attaching first hands
+            // the hub a null driver on the first build, and the hub load
+            // that follows drops any saved trips (DEF-028). Attaching
+            // the live driver also drains any trips the hub held pending
+            // from the load (see SimulationSystemsHub.ShoppingTripDriver).
+            hub.ShoppingTripDriver = shoppingTripDriver;
 
             // Campaign C (DEF-049): the daily terminal-task prune must never remove
             // a task a live shopping trip still references (rehydrate requires every

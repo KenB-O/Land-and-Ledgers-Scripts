@@ -486,7 +486,44 @@ namespace LandLedgers.Persistence
         public LandLedgers.Economy.Businesses.Sawmill.SawmillShopRuntime Sawmill;
         public LandLedgers.Economy.Businesses.LumberYard.LumberYardShopRuntime LumberYard;
         public LandLedgers.Economy.Businesses.Logging.LoggingCampSite LoggingCamp;
-        public LandLedgers.Economy.GeneralStore.CustomerQueue CustomerQueue;
+
+        /// <summary>
+        /// QA-29: the live store waiting-customer queue. Bound by the
+        /// bootstrapper before the Pass 9 restore
+        /// (EnsurePass9SaveOwnerForRestore) and at loop build
+        /// (SimulationDrivers.BuildHouseholdShoppingLoop).
+        ///
+        /// Campaign C (DEF-028): a queue section that arrives while no
+        /// queue is bound is HELD in pendingCustomerQueue, not dropped,
+        /// and the bind drains it into the queue (LoadFromSaveDto,
+        /// clear-then-load). The drain runs before the first post-load
+        /// tick, so the queue holds no live entries the drain could
+        /// wipe; a second bind after the drain is a no-op (pending is
+        /// cleared on drain). Follows the RestoredStagedBakeryChain
+        /// precedent in this file (a DTO recovered by Restore, applied
+        /// when its owner appears) — except the drain here is automatic
+        /// at bind time, so no consumer call is needed.
+        /// </summary>
+        private LandLedgers.Economy.GeneralStore.CustomerQueue customerQueue;
+        private LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto pendingCustomerQueue;
+
+        /// <summary>Campaign C (DEF-028): true while a queue section recovered by Restore waits for a queue to bind.</summary>
+        public bool HasPendingCustomerQueue => pendingCustomerQueue != null;
+
+        public LandLedgers.Economy.GeneralStore.CustomerQueue CustomerQueue
+        {
+            get => customerQueue;
+            set
+            {
+                customerQueue = value;
+                if (customerQueue != null && pendingCustomerQueue != null)
+                {
+                    LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto deferred = pendingCustomerQueue;
+                    pendingCustomerQueue = null;
+                    customerQueue.LoadFromSaveDto(deferred);
+                }
+            }
+        }
 
         /// <summary>
         /// Slice S2: live per-business equipment registers, held here so
@@ -1243,7 +1280,11 @@ namespace LandLedgers.Persistence
             }
             else if (dto.CustomerQueue != null && dto.CustomerQueue.Waiting != null && dto.CustomerQueue.Waiting.Count > 0)
             {
-                diag.Add("Series2Pass9Save: customer queue present in save but no customer queue supplied; queue NOT restored.");
+                // Campaign C (DEF-028): defer, do not drop. The bind
+                // (BuildHouseholdShoppingLoop, Rebind) drains this into
+                // the live queue when it appears.
+                pendingCustomerQueue = dto.CustomerQueue;
+                diag.Add("Series2Pass9Save: customer queue present in save but no customer queue supplied yet; queue held pending the queue bind (DEF-028), not dropped.");
             }
 
             // Slice S2: equipment registers — clear-then-load, idempotent.

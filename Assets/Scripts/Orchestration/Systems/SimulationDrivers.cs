@@ -367,6 +367,13 @@ namespace LandLedgers.Orchestration.Systems
         private HouseholdShoppingLoop householdShoppingLoop;
         private ShoppingTripDriver shoppingTripDriver;
 
+        // Campaign C (DEF-023): sticky record of a shopping-trip rehydration
+        // skipped at Rebind because the hub or TimeManager was not available
+        // yet. Read by ApplyRestoredShoppingTrips (records the skip loudly)
+        // and OnShortTick (one late retry, then a one-tick backstop shield).
+        // Runtime-only, never serialized; see ShoppingRehydrateGuard.
+        private readonly ShoppingRehydrateGuard shoppingRehydrateGuard = new ShoppingRehydrateGuard();
+
         // Plan 07 (Slice 07): cached staged-bakery driver, rebuilt when
         // the Pass 9 state's chain instance changes (covers restore).
         private StagedBakeryChainDriver stagedBakeryDriver;
@@ -2308,8 +2315,33 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public void ApplyRestoredShoppingTrips()
         {
-            if (shoppingTripDriver == null || !shoppingTripDriver.NeedsRehydrateAfterLoad) return;
-            if (hub == null || timeManager == null) return;
+            if (shoppingTripDriver == null || !shoppingTripDriver.NeedsRehydrateAfterLoad)
+            {
+                // Campaign C (DEF-023): no pending restored trips — a New Game
+                // rebind, a second rebind, or a load with no trips. Any earlier
+                // skip is no longer pending.
+                shoppingRehydrateGuard.RecordCleared();
+                return;
+            }
+            if (hub == null || timeManager == null)
+            {
+                // Campaign C (DEF-023): FAIL LOUDLY instead of silently dropping
+                // the pending trips. Rebind is the only production caller, so a
+                // skip here leaves NeedsRehydrateAfterLoad set: the driver's
+                // leg/service maps stay empty, and the per-tick backstop
+                // (SyncTaskCompletionDueEvents) will re-schedule the leg dues
+                // while the MAP-ONLY service due is never re-registered. The
+                // guard in OnShortTick attempts one late apply and shields the
+                // first tick; this error names the exact loss. Logged only when
+                // the skip is newly armed, so a late retry on every tick cannot
+                // spam the Console.
+                int pending = shoppingTripDriver.ActiveTrips != null ? shoppingTripDriver.ActiveTrips.Count : 0;
+                if (shoppingRehydrateGuard.RecordSkipped(pending))
+                {
+                    Debug.LogError("[SimulationDrivers] ApplyRestoredShoppingTrips SKIPPED: " + pending + " restored shopping trip(s) are pending rehydration but " + (hub == null ? "SimulationSystemsHub" : "TimeManager") + " is not available. No retry exists after Rebind — the trips stay unrehydrated until the missing authority is restored. See DEF-023.", this);
+                }
+                return;
+            }
             var diag = new List<string>();
             shoppingTripDriver.RehydrateAfterLoad(
                 hub.Tasks,
@@ -2322,6 +2354,8 @@ namespace LandLedgers.Orchestration.Systems
             {
                 if (!string.IsNullOrWhiteSpace(message)) Debug.Log("[ShoppingTrips] " + message, this);
             }
+            // Campaign C (DEF-023): rehydration ran — clear any earlier skip.
+            shoppingRehydrateGuard.RecordCleared();
         }
 
         private IGoodsSupplier SupplierByBusinessId(string businessId)
@@ -10719,11 +10753,48 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // Campaign C (DEF-023): rehydration must have run before the first
+            // post-load tick. Two ways it can still be pending here: Rebind ran
+            // and skipped it (authorities missing — recorded loudly in
+            // ApplyRestoredShoppingTrips), or Rebind never ran after this load
+            // at all (DEF-065 dev-hotkey path: SaveLoadManager loads the slot
+            // directly and never calls Rebind). Retry once here, before any due
+            // pops or backstop scheduling; if the retry still cannot run, fail
+            // loudly and shield this first tick's backstop only — the backstop
+            // is idempotent and re-runs every tick, so skipping it once is
+            // harmless, while running it with empty driver maps would
+            // re-schedule the leg dues and lose the MAP-ONLY service due.
+            // Later ticks run the backstop normally: the skip is already logged,
+            // and holding the backstop off forever would stall every other
+            // task's dues. This guard does NOT fix DEF-065 — on that path
+            // Rebind's other work (supplier adapters, diagnostics, task
+            // definitions) is still skipped; it only keeps the shopping trips
+            // from being silently corrupted on the first tick.
+            bool skippedAtRebind = shoppingRehydrateGuard.SkippedAfterLoad;
+            bool rehydratePendingAtTick = skippedAtRebind
+                || (shoppingTripDriver != null && shoppingTripDriver.NeedsRehydrateAfterLoad);
+            if (rehydratePendingAtTick)
+            {
+                ApplyRestoredShoppingTrips();
+                if (!skippedAtRebind && !shoppingRehydrateGuard.SkippedAfterLoad)
+                {
+                    Debug.LogWarning("[SimulationDrivers] Restored shopping trips rehydrated late on the first post-load tick — Rebind did not run after this load (see DEF-065). The trips are intact; Rebind's other restore work is still missing.", this);
+                }
+            }
+            bool shieldBackstopThisTick = shoppingRehydrateGuard.TakeFirstTickGuard();
+
             // Pass IV (Worker 1): due events pop in due order BEFORE any further
             // advancement, so accelerated ticks cannot skip task completions,
             // passive completions, or deadlines.
             ProcessDueEvents();
-            SyncTaskCompletionDueEvents();
+            if (shieldBackstopThisTick)
+            {
+                Debug.LogError("[SimulationDrivers] First post-load tick with " + shoppingRehydrateGuard.SkippedTripCount + " restored shopping trip(s) still unrehydrated — skipping the task-due backstop this tick so it cannot re-schedule their leg dues (service dues are MAP-ONLY and would be lost). The trips are diagnosed in ApplyRestoredShoppingTrips. See DEF-023.", this);
+            }
+            else
+            {
+                SyncTaskCompletionDueEvents();
+            }
 
             if (timeManager != null && shoppingTripDriver != null)
             {

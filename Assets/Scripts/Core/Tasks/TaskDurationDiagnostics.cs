@@ -451,6 +451,9 @@ namespace LandLedgers.Tasks
         private int lastEvaluationFailedDay = -1;
         private int evictedCountAtLastSummary;
 
+        /// <summary>Identities of records evicted since the last summary was emitted, in eviction order (CAMPAIGN-C, DEF-063). Cleared when the summary is emitted, at the same point as <see cref="evictedCountAtLastSummary"/>. Bounded by record churn between summaries — an eviction only happens when a new record arrives while the store is full — so this list cannot grow without bound on its own.</summary>
+        private readonly List<string> evictedSinceLastSummaryIdentities = new List<string>();
+
         public TaskDurationDiagnostics()
         {
         }
@@ -528,7 +531,10 @@ namespace LandLedgers.Tasks
         /// day (day-keyed, <see cref="lastWarnedDay"/>). The summary is emitted at
         /// most once per day, and only when at least one overrun is open or a terminal
         /// overrun was warned that day; excess warnings are counted in its omitted
-        /// count, never silently dropped.
+        /// count, never silently dropped — and the omitted tasks' identities are
+        /// emitted on a following "[TaskDuration] omitted" line, with evicted
+        /// records' identities on a "[TaskDuration] evicted" line when any were
+        /// evicted since the last summary (CAMPAIGN-C, DEF-063).
         ///
         /// Evaluation points only (§4.2): this is called once per day by the day drive
         /// (Slice 4) and once at a terminal transition — never per tick, never per
@@ -565,6 +571,10 @@ namespace LandLedgers.Tasks
             int newCount = 0;
             int repeatingCount = 0;
             int omittedCount = 0;
+            // CAMPAIGN-C, DEF-063: the identities of the open overruns the caps
+            // omit this evaluation, in record order — the summary counts them,
+            // the omitted line below names them.
+            var omittedIdentities = new List<string>();
             int terminalWarnedToday = 0;
             TaskTimingRecord longestOpen = null;
             TaskTimingVerdict longestVerdict = null;
@@ -636,12 +646,14 @@ namespace LandLedgers.Tasks
                 if (perTask >= diagnosticSettings.MaxWarningsPerTaskPerDay)
                 {
                     omittedCount++;
+                    omittedIdentities.Add(FormatTaskIdentity(record));
                     continue;
                 }
 
                 if (warningsToday >= diagnosticSettings.MaxWarningsPerDay)
                 {
                     omittedCount++;
+                    omittedIdentities.Add(FormatTaskIdentity(record));
                     continue;
                 }
 
@@ -650,6 +662,7 @@ namespace LandLedgers.Tasks
                 if (perDefinition >= diagnosticSettings.MaxWarningsPerDefinitionPerDay)
                 {
                     omittedCount++;
+                    omittedIdentities.Add(FormatTaskIdentity(record));
                     continue;
                 }
 
@@ -672,8 +685,25 @@ namespace LandLedgers.Tasks
             {
                 Emit(FormatSummaryLine(nowDay, openOverrunCount, newCount, repeatingCount,
                     omittedCount, longestOpen, longestVerdict));
+                // CAMPAIGN-C, DEF-063: the summary counts the omitted warnings and
+                // the evicted records; these lines name them. Each is emitted only
+                // when it has something to name, and only as part of the summary
+                // emission — at most once per day, sharing the summary's fate (a
+                // second evaluation on a day whose summary was already emitted
+                // reports neither the count nor the identities for that pass, as
+                // the count already behaved before this change).
+                if (omittedIdentities.Count > 0)
+                {
+                    Emit(FormatOmittedLine(nowDay, omittedCount, omittedIdentities));
+                }
+                int evictedSinceLastSummary = EvictedRecordCount - evictedCountAtLastSummary;
+                if (evictedSinceLastSummary > 0)
+                {
+                    Emit(FormatEvictedLine(nowDay, evictedSinceLastSummary, evictedSinceLastSummaryIdentities));
+                }
                 lastSummaryDay = nowDay;
                 evictedCountAtLastSummary = EvictedRecordCount;
+                evictedSinceLastSummaryIdentities.Clear();
             }
         }
 
@@ -783,6 +813,28 @@ namespace LandLedgers.Tasks
             }
 
             return line;
+        }
+
+        /// <summary>One task identity in the exact fragment the warning and summary lines use: task id plus definition id.</summary>
+        private static string FormatTaskIdentity(TaskTimingRecord record)
+        {
+            return "task " + record.TaskId + " '" + record.DefinitionId + "'";
+        }
+
+        /// <summary>The §4.1 omitted-identities line (CAMPAIGN-C, DEF-063): which open overruns the §4.2 warning caps omitted this evaluation, in record order. The caps themselves are unchanged — this line names the tasks the caps hid, so a stall that would have warned on a quiet day is visible on a busy one.</summary>
+        private static string FormatOmittedLine(int nowDay, int omittedCount, List<string> omittedIdentities)
+        {
+            return "[TaskDuration] omitted day " + nowDay
+                + ": " + omittedCount + " omitted by cap: "
+                + string.Join(", ", omittedIdentities.ToArray());
+        }
+
+        /// <summary>The §4.1 evicted-identities line (CAMPAIGN-C, DEF-063): which records were evicted from the bounded store since the last summary, in eviction order. The eviction count itself is already on the summary line; this line names the records.</summary>
+        private static string FormatEvictedLine(int nowDay, int evictedCount, List<string> evictedIdentities)
+        {
+            return "[TaskDuration] evicted day " + nowDay
+                + ": " + evictedCount + " evicted: "
+                + string.Join(", ", evictedIdentities.ToArray());
         }
 
         /// <summary>
@@ -1678,12 +1730,14 @@ namespace LandLedgers.Tasks
                 // task to make room for another record. If the store holds only
                 // open records, the new observation is dropped instead.
                 string evictKey = null;
+                TaskTimingRecord evictRecord = null;
                 foreach (string candidateKey in recordOrder)
                 {
                     TaskTimingRecord candidate;
                     if (records.TryGetValue(candidateKey, out candidate) && IsTerminalStatus(candidate.CurrentStatus))
                     {
                         evictKey = candidateKey;
+                        evictRecord = candidate;
                         break;
                     }
                 }
@@ -1696,6 +1750,9 @@ namespace LandLedgers.Tasks
                 records.Remove(evictKey);
                 recordOrder.Remove(evictKey);
                 EvictedRecordCount++;
+                // CAMPAIGN-C, DEF-063: the eviction count alone hides which record
+                // was evicted. Retain the identity so the next summary names it.
+                evictedSinceLastSummaryIdentities.Add(FormatTaskIdentity(evictRecord));
             }
 
             records.Add(record.TaskId, record);

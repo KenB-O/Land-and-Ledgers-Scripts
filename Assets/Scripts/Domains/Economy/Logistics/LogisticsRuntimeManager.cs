@@ -147,7 +147,10 @@ namespace LandLedgers.Economy
         {
             LogisticsRuntimeSaveDto dto = new()
             {
-                lastTownLedgerSummary = LastTownLedgerSummary
+                lastTownLedgerSummary = LastTownLedgerSummary,
+                // Campaign C (DEF-047): the wagon's in-flight leg, or null
+                // when no leg is active. Old saves have no such section.
+                wagonLeg = FindAnyObjectByType<CoupledTransportMovementController>()?.CaptureLegSaveDto(),
             };
 
             for (int i = 0; i < shipments.Count; i++)
@@ -164,10 +167,32 @@ namespace LandLedgers.Economy
             return dto;
         }
 
+        // Campaign C (DEF-047): the wagon leg restored by the last load, or
+        // null when the save carried no leg (old save, or no leg in flight).
+        // SimulationDrivers.ApplyRestoredWagonLeg consumes this once per
+        // Rebind; it is NOT re-applied on later rebinds.
+        private WagonLegSaveDto restoredWagonLeg;
+        public WagonLegSaveDto RestoredWagonLeg => restoredWagonLeg;
+
+        /// <summary>
+        /// Campaign C (DEF-047): takes the restored leg out of the pending
+        /// slot (after a successful resume, or after a refused resume was
+        /// diagnosed). A second Rebind must not retry a leg that already
+        /// resumed or already failed loudly once.
+        /// </summary>
+        public void ClearRestoredWagonLeg()
+        {
+            restoredWagonLeg = null;
+        }
+
         public void LoadFromSaveDto(LogisticsRuntimeSaveDto dto)
         {
             shipments.Clear();
             AutoWire();
+            // Campaign C (DEF-047): keep the restored leg pending for the
+            // Rebind-time resume. A null dto (or a save without the section)
+            // clears it, so a New Game rebind is a no-op.
+            restoredWagonLeg = dto?.wagonLeg;
             if (dto != null && dto.shipments != null)
             {
                 for (int i = 0; i < dto.shipments.Count; i++)

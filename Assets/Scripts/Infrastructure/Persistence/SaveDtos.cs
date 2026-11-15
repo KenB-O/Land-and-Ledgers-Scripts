@@ -578,6 +578,47 @@ namespace LandLedgers.Persistence
     {
         public string lastTownLedgerSummary = string.Empty;
         public List<LogisticsShipmentSaveDto> shipments = new();
+        // Campaign C (DEF-047) additive: the wagon's in-flight leg state, or
+        // null when no leg was active at save time. Old saves without this
+        // field restore null (no leg), which is today's behaviour.
+        public WagonLegSaveDto wagonLeg;
+    }
+
+    /// <summary>
+    /// Campaign C (DEF-047): snapshot of one in-flight wagon leg, so a
+    /// Save/Continue mid-haul resumes the leg instead of stranding the
+    /// wagon. All fields are plain data (Vector3s as x/y/z floats, the path
+    /// as grid cells); the regional destination Transform is NOT persisted,
+    /// the persisted regional target position is authoritative instead.
+    /// </summary>
+    [Serializable]
+    public sealed class WagonLegSaveDto
+    {
+        public bool isActive;
+        public bool isRegional;
+        public bool regionalReturnToTownPath;
+        public List<GridCoordSaveDto> path = new();
+        public float distanceTravelledMetres;
+        public float cellSizeMetres;
+        public float gridOriginX;
+        public float gridOriginY;
+        public float gridOriginZ;
+        public float wagonSpeedMetresPerSecond;
+        public float pairSeparationMetres;
+        public float turnSpeedDegreesPerSecond;
+        public int ethanPersonId = -1;
+        public string legLabel = string.Empty;
+        public bool hideOnArrival;
+        public float regionalTargetX;
+        public float regionalTargetY;
+        public float regionalTargetZ;
+        public float regionalTravelElapsedSeconds;
+        public float regionalTravelDurationSeconds;
+        public string physicalJourneyId = string.Empty;
+        public string physicalDestinationLocationId = string.Empty;
+        public string physicalDestinationBusinessId = string.Empty;
+        public string physicalVehicleId = string.Empty;
+        public string physicalOriginLocationId = string.Empty;
     }
 
     [Serializable]

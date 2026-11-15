@@ -2310,6 +2310,11 @@ namespace LandLedgers.Orchestration.Systems
 
             // Slice 25: rehydrate shopping trips restored by the hub save.
             ApplyRestoredShoppingTrips();
+
+            // Campaign C (DEF-047): resume a wagon leg restored by the hub
+            // save. Runs only while a restored leg is pending, so New Game
+            // rebinds and loads without a leg are no-ops.
+            ApplyRestoredWagonLeg();
         }
 
         /// <summary>
@@ -2368,6 +2373,44 @@ namespace LandLedgers.Orchestration.Systems
             }
             // Campaign C (DEF-023): rehydration ran — clear any earlier skip.
             shoppingRehydrateGuard.RecordCleared();
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-047): resumes the wagon leg restored by the hub
+        /// save, exactly once per load. Runs only while the logistics
+        /// runtime reports a pending restored leg, so New Game rebinds and
+        /// loads without a leg are no-ops. Unlike shopping-trip rehydration
+        /// there is no per-tick backstop that would silently re-schedule a
+        /// skipped leg, so a refused resume fails LOUDLY once (warning
+        /// naming the leg) and is not retried: the wagon stays where it
+        /// stands, exactly as before this fix. The leg is consumed either
+        /// way, so a second Rebind cannot resume it twice.
+        /// MUST run before the first post-load tick, like
+        /// ApplyRestoredShoppingTrips: the daily freight drives start new
+        /// legs from journey events and must not overwrite a leg that is
+        /// about to resume.
+        /// </summary>
+        public void ApplyRestoredWagonLeg()
+        {
+            LogisticsRuntimeManager logisticsRuntime = FindAnyObjectByType<LogisticsRuntimeManager>();
+            WagonLegSaveDto restoredLeg = logisticsRuntime != null ? logisticsRuntime.RestoredWagonLeg : null;
+            if (restoredLeg == null || !restoredLeg.isActive)
+            {
+                logisticsRuntime?.ClearRestoredWagonLeg();
+                return;
+            }
+            OpeningTransportPresentationController transportPresentation =
+                FindAnyObjectByType<OpeningTransportPresentationController>();
+            logisticsRuntime.ClearRestoredWagonLeg();
+            if (transportPresentation == null)
+            {
+                Debug.LogWarning($"[CoupledTransport] ApplyRestoredWagonLeg SKIPPED: leg '{restoredLeg.legLabel}' (journey '{restoredLeg.physicalJourneyId}') was restored from the save, but no opening transport presentation exists in this scene — the wagon team was never presented (Present runs on New Game, not on Continue), so the leg cannot resume. The wagon stays absent and the shipment keeps its saved state. See DEF-047.", this);
+                return;
+            }
+            if (!transportPresentation.ResumeCoupledLeg(restoredLeg))
+            {
+                Debug.LogWarning($"[CoupledTransport] ApplyRestoredWagonLeg FAILED: leg '{restoredLeg.legLabel}' (journey '{restoredLeg.physicalJourneyId}') was restored from the save but the resume was refused (see the [CoupledTransport] refusal above); the wagon stays where it stands and the shipment keeps its saved state. See DEF-047.", this);
+            }
         }
 
         private IGoodsSupplier SupplierByBusinessId(string businessId)

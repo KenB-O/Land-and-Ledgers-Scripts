@@ -2611,6 +2611,18 @@ namespace LandLedgers.Orchestration.Systems
             // install here survives save/load.
             hub.Tasks.SetDueEventScheduler(hub.DueEvents);
 
+            // Campaign C (DEF-074): install the hub's unified reservation
+            // authority on the hub's TaskAuthority, so CancelTask /
+            // CompleteTask / InterruptTask release the task's reservations
+            // via ReleaseTaskResources instead of leaving them held.
+            // The release code already existed
+            // (TaskAuthorityLifecycle:340-341); only this installation was
+            // missing — SetReservationAuthority had zero production
+            // callers. The hub owns both instances and the restore is
+            // in-place (SimulationSystemsHub:1400, :1501), so one install
+            // here survives save/load.
+            hub.Tasks.SetReservationAuthority(hub.ReservationAuthority);
+
             // Priority 4 Slice 4: install the task-duration diagnostic on
             // the hub's TaskAuthority, clocked by the authoritative
             // TimeManager timeline. See EnsureTaskDurationDiagnostics.

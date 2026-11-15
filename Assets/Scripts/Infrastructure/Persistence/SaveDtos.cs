@@ -310,6 +310,14 @@ namespace LandLedgers.Persistence
         public SimulationSpeed currentSpeed;
         public SimulationSpeed lastNonPausedSpeed;
         public bool isPaused;
+        /// <summary>
+        /// Campaign C (DEF-045, additive): the active time settings the save
+        /// was made under (day length, tick interval, speed multipliers,
+        /// per-frame caps). Old saves omit this field and read hasSettings
+        /// false, so a load keeps the current settings. Newer readers
+        /// ignore unknown fields; older readers ignore this one.
+        /// </summary>
+        public TimeSettingsSnapshot settings = new();
     }
 
     [Serializable]

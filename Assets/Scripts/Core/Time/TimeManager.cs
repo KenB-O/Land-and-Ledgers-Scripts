@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using LandLedgers.Persistence;
 using UnityEngine;
 
@@ -276,7 +277,13 @@ namespace LandLedgers.Time
                 shortTickRemainder = shortTickRemainder,
                 currentSpeed = currentSpeed,
                 lastNonPausedSpeed = lastNonPausedSpeed,
-                isPaused = isPaused
+                isPaused = isPaused,
+                // Campaign C (DEF-045): records the active time settings so
+                // a Continue restores them instead of reinterpreting the
+                // saved clock state under whatever the scene asset holds.
+                settings = this.settings != null
+                    ? TimeSettingsSnapshot.Capture(this.settings)
+                    : new TimeSettingsSnapshot()
             };
         }
 
@@ -285,6 +292,24 @@ namespace LandLedgers.Time
             if (dto == null)
             {
                 return;
+            }
+
+            // Campaign C (DEF-045): restores the time settings the save was
+            // made under, before the clock state below is restored, so the
+            // saved accumulators are interpreted under the settings they
+            // were accrued under. Old saves carry hasSettings false and
+            // keep the current settings. The live settings asset is
+            // mutated in memory only; in a build that never reaches disk
+            // and the asset file itself is untouched.
+            if (dto.settings != null && dto.settings.hasSettings && settings != null)
+            {
+                List<string> differingSettings = dto.settings.ApplyTo(settings);
+                if (differingSettings.Count > 0)
+                {
+                    Debug.LogWarning(
+                        $"Campaign C (DEF-045): save was made under different time settings; restored the saved values for: {string.Join(", ", differingSettings)}. Current settings were overwritten in memory for this session.",
+                        this);
+                }
             }
 
             if (settings != null)

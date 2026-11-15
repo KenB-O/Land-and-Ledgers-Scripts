@@ -3058,7 +3058,11 @@ namespace LandLedgers.FirstLedger
         {
             const string itemId = "store_horse_feed_sack";
             const string categoryId = "animal_feed";
-            const string supplierId = "millbrook_grain_co";
+            // Part B maintenance (2026-11-15): the opening feed terms are
+            // single-sourced on StoreHorseFeedReorder, which reorders on
+            // these same terms; changing them there changes both the
+            // opening order below and every standing reorder.
+            const string supplierId = StoreHorseFeedReorder.MillbrookSupplierId;
             var diagnostics = new List<string>();
             string itemRefusal = review2D3SaveState.RegisterRuntimeItem(
                 new HouseholdItemDefinition(itemId, "Horse Feed", "sack", categoryId, 1, false), diagnostics);
@@ -3075,7 +3079,7 @@ namespace LandLedgers.FirstLedger
                 FeedItemId = itemId,
                 DisplayName = "Horse Feed",
                 UnitLabel = "sack",
-                RetailPriceCents = 15,
+                RetailPriceCents = StoreHorseFeedReorder.FeedPriceCentsPerSack,
                 FeedUnitsPerStoreUnitNumerator = 2,
                 FeedUnitsPerStoreUnitDenominator = 1,
             }, diagnostics);
@@ -3100,7 +3104,7 @@ namespace LandLedgers.FirstLedger
                 DisplayName = "Millbrook Grain Co.",
                 TransitDays = 1,
                 InitialBudgetCents = 0,
-                SupplyUnits = new Dictionary<string, int> { [itemId] = 20 },
+                SupplyUnits = new Dictionary<string, int> { [itemId] = StoreHorseFeedReorder.OpeningLotSacks },
             };
             string marketRefusal = market.RegisterCounterparty(counterparty);
             if (marketRefusal != null)
@@ -3172,7 +3176,8 @@ namespace LandLedgers.FirstLedger
                 new Series2BusinessRuntimeCashPort(storeBusiness.RuntimeState));
             int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
             NamedSkuOrder order = procurement.PlaceOrder(
-                itemId, 20, 15, 0, supplierId, dayIndex, NamedSkuPaymentMode.CashOnArrival, null);
+                itemId, StoreHorseFeedReorder.OpeningLotSacks, StoreHorseFeedReorder.FeedPriceCentsPerSack,
+                0, supplierId, dayIndex, NamedSkuPaymentMode.CashOnArrival, null);
             if (order == null)
             {
                 Debug.LogError("[FeedSupply] General Store feed purchase was refused; no feed stock was created. " +

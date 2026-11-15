@@ -113,6 +113,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             ? Math.Max(0, row.OrderPriceCents) : 0;
         public bool HasOrder(string requestId) => FindLot(BusinessId + ":" + (requestId ?? string.Empty).Trim()) != null;
 
+        /// <summary>Flour path, preserved for existing callers: orders bakery_flour_sack.</summary>
         public string TryPlaceOrder(
             string requestId,
             string buyerBusinessId,
@@ -122,50 +123,78 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             int dayIndex,
             out OffMapAidCargoLot lot)
         {
+            return TryPlaceOrderForItem(requestId, "bakery_flour_sack", buyerBusinessId, buyerName,
+                packageUnits, buyerCash, dayIndex, out lot);
+        }
+
+        /// <summary>
+        /// Part B maintenance (2026-11-15): the aid runtime is a generic
+        /// authored-table authority, not a flour-only one. The old body
+        /// hardcoded bakery_flour_sack, so no Timberline fuel row, feed
+        /// row, or any other authored row could ever be ordered through
+        /// it — a Timberline definition would be refused for having no
+        /// flour row. This method orders any row the definition authors,
+        /// at that row's own price and conversions; no price or
+        /// conversion is invented here. BakeryUnits is the row's own
+        /// figure and is 0 for rows that carry none (e.g. fuel); only
+        /// the flour path treats it as bakery stock.
+        /// </summary>
+        public string TryPlaceOrderForItem(
+            string requestId,
+            string itemId,
+            string buyerBusinessId,
+            string buyerName,
+            int packageUnits,
+            IBusinessCashPort buyerCash,
+            int dayIndex,
+            out OffMapAidCargoLot lot)
+        {
             lot = null;
-            if (definition == null) return "Millbrook aid order refused: no authored supplier table is loaded.";
+            string supplierName = string.IsNullOrWhiteSpace(DisplayName) ? BusinessId : DisplayName;
+            if (definition == null) return supplierName + " aid order refused: no authored supplier table is loaded.";
             string definitionProblem = definition.ValidateDefinition();
-            if (definitionProblem != null) return "Millbrook aid order refused: " + definitionProblem;
-            if (string.IsNullOrWhiteSpace(requestId) || string.IsNullOrWhiteSpace(buyerBusinessId)
+            if (definitionProblem != null) return supplierName + " aid order refused: " + definitionProblem;
+            if (string.IsNullOrWhiteSpace(requestId) || string.IsNullOrWhiteSpace(itemId)
+                || string.IsNullOrWhiteSpace(buyerBusinessId)
                 || packageUnits <= 0 || buyerCash == null)
-                return "Millbrook aid order refused: request id, buyer, positive quantity, and buyer cash authority are required.";
+                return supplierName + " aid order refused: request id, item, buyer, positive quantity, and buyer cash authority are required.";
 
             string orderId = BusinessId + ":" + requestId.Trim();
             OffMapAidCargoLot existing = FindLot(orderId);
             if (existing != null)
-                return "Millbrook aid order refused: request already exists as " + orderId + "; no second debit was made.";
+                return supplierName + " aid order refused: request already exists as " + orderId + "; no second debit was made.";
 
-            if (!rows.TryGetValue("bakery_flour_sack", out OffMapAidInventoryRow flour))
-                return "Millbrook aid order refused: table has no bakery_flour_sack package definition.";
-            if (flour.OrderPriceCents <= 0 || flour.InventoryUnitsPerOrderUnit <= 0 || flour.BakeryUnitsPerOrderUnit <= 0)
-                return "Millbrook aid order refused: flour package price or unit conversion is not configured.";
-            long poundsRequired = (long)flour.InventoryUnitsPerOrderUnit * packageUnits;
-            long totalPrice = (long)flour.OrderPriceCents * packageUnits;
+            if (!rows.TryGetValue(itemId, out OffMapAidInventoryRow row))
+                return supplierName + " aid order refused: table has no " + itemId + " package definition.";
+            if (row.OrderPriceCents <= 0 || row.InventoryUnitsPerOrderUnit <= 0)
+                return supplierName + " aid order refused: package price or unit conversion is not configured for " + itemId + ".";
+            long poundsRequired = (long)row.InventoryUnitsPerOrderUnit * packageUnits;
+            long totalPrice = (long)row.OrderPriceCents * packageUnits;
             if (poundsRequired > int.MaxValue || totalPrice > int.MaxValue)
-                return "Millbrook aid order refused: requested amount exceeds supported accounting units.";
-            int available = GetInventoryUnits(flour.ItemId);
+                return supplierName + " aid order refused: requested amount exceeds supported accounting units.";
+            int available = GetInventoryUnits(row.ItemId);
             if (available < poundsRequired)
-                return $"Millbrook aid order refused: Millbrook has {available} {flour.InventoryUnit}; order requires {(int)poundsRequired} {flour.InventoryUnit}.";
+                return $"{supplierName} aid order refused: {supplierName} has {available} {row.InventoryUnit}; order requires {(int)poundsRequired} {row.InventoryUnit}.";
             if ((long)cashCents + totalPrice > int.MaxValue)
-                return "Millbrook aid order refused: supplier cash ledger would exceed its supported balance.";
+                return supplierName + " aid order refused: supplier cash ledger would exceed its supported balance.";
 
-            string debitProblem = buyerCash.TryDebit((int)totalPrice, "Millbrook flour order " + orderId);
-            if (debitProblem != null) return "Millbrook aid order refused: buyer payment failed: " + debitProblem;
+            string debitProblem = buyerCash.TryDebit((int)totalPrice, supplierName + " " + row.ItemId + " order " + orderId);
+            if (debitProblem != null) return supplierName + " aid order refused: buyer payment failed: " + debitProblem;
 
-            inventory[flour.ItemId] = available - (int)poundsRequired;
+            inventory[row.ItemId] = available - (int)poundsRequired;
             cashCents += (int)totalPrice;
             lot = new OffMapAidCargoLot
             {
                 LotId = "aidlot-" + orderId,
                 OrderId = orderId,
-                SkuId = flour.ItemId,
+                SkuId = row.ItemId,
                 SupplierBusinessId = BusinessId,
                 BuyerBusinessId = buyerBusinessId,
-                OrderUnit = flour.OrderUnit,
+                OrderUnit = row.OrderUnit,
                 PackageUnits = packageUnits,
                 InventoryUnits = (int)poundsRequired,
-                InventoryUnit = flour.InventoryUnit,
-                BakeryUnits = checked(flour.BakeryUnitsPerOrderUnit * packageUnits),
+                InventoryUnit = row.InventoryUnit,
+                BakeryUnits = checked(row.BakeryUnitsPerOrderUnit * packageUnits),
                 TotalCostCents = (int)totalPrice,
                 CreatedDayIndex = Math.Max(0, dayIndex),
             };
@@ -176,7 +205,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             // order day, in sacks (the order unit).
             lot.PerishableCondition = new PerishableLotState(
                 new LotKey(CustodyTransferLog.MillbrookAuthority(BusinessId), lot.LotId),
-                "bakery_flour_sack",
+                row.ItemId,
                 packageUnits,
                 Math.Max(0, dayIndex))
                 .WithSource(orderId, BusinessId, "supplier:" + BusinessId)
@@ -201,7 +230,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             if (CustodyLog != null)
             {
                 CustodyLog.Record(new CustodyTransferRecord(
-                    Math.Max(0, dayIndex), flour.ItemId, packageUnits,
+                    Math.Max(0, dayIndex), row.ItemId, packageUnits,
                     LotKey.Empty,
                     new LotKey(CustodyTransferLog.MillbrookAuthority(BusinessId), lot.LotId),
                     CustodyTransferLog.SupplierCustodian(BusinessId),
@@ -238,14 +267,15 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         /// <summary>Marks the purchased lot as leaving supplier custody; repeat same shipment is idempotent.</summary>
         public string CommitFreightPickup(string lotId, string shipmentId, int packageUnits)
         {
+            string supplierName = string.IsNullOrWhiteSpace(DisplayName) ? BusinessId : DisplayName;
             OffMapAidCargoLot lot = FindLotById(lotId);
-            if (lot == null) return "Millbrook freight pickup refused: unknown aid lot.";
+            if (lot == null) return supplierName + " freight pickup refused: unknown aid lot.";
             if (string.IsNullOrWhiteSpace(shipmentId) || packageUnits != lot.PackageUnits)
-                return "Millbrook freight pickup refused: shipment id or complete lot quantity does not match.";
+                return supplierName + " freight pickup refused: shipment id or complete lot quantity does not match.";
             if (lot.SourceCommitted)
                 return string.Equals(lot.ShipmentId, shipmentId, StringComparison.Ordinal)
-                    ? null : "Millbrook freight pickup refused: lot is already committed to another shipment.";
-            if (lot.Received) return "Millbrook freight pickup refused: lot was already received.";
+                    ? null : supplierName + " freight pickup refused: lot is already committed to another shipment.";
+            if (lot.Received) return supplierName + " freight pickup refused: lot was already received.";
             lot.ShipmentId = shipmentId;
             lot.SourceCommitted = true;
             return null;
@@ -254,9 +284,23 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         /// <summary>Credits the purchased lot to its named destination once, preserving its identity and bakery-unit conversion.</summary>
         public string ReceiveAtBakery(string lotId, string shipmentId, string destinationBusinessId, out int bakeryUnits)
         {
+            return ReceiveAtDestination(lotId, shipmentId, destinationBusinessId, out bakeryUnits);
+        }
+
+        /// <summary>
+        /// Part B maintenance (2026-11-15): the generic receipt behind
+        /// ReceiveAtBakery. A fuel or feed lot credits to its destination
+        /// the same way a flour lot credits to the bakery; the
+        /// out value is the lot's own row figure (0 for rows that carry
+        /// no bakery-unit conversion). ReceiveAtBakery stays as the
+        /// flour-path wrapper so existing callers are untouched.
+        /// </summary>
+        public string ReceiveAtDestination(string lotId, string shipmentId, string destinationBusinessId, out int bakeryUnits)
+        {
             bakeryUnits = 0;
+            string supplierName = string.IsNullOrWhiteSpace(DisplayName) ? BusinessId : DisplayName;
             OffMapAidCargoLot lot = FindLotById(lotId);
-            if (lot == null) return "Millbrook cargo receipt refused: unknown aid lot.";
+            if (lot == null) return supplierName + " cargo receipt refused: unknown aid lot.";
             if (lot.Received)
             {
                 if (string.Equals(lot.ShipmentId, shipmentId, StringComparison.Ordinal)
@@ -265,11 +309,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     bakeryUnits = lot.BakeryUnits;
                     return null;
                 }
-                return "Millbrook cargo receipt refused: lot was already received by a different shipment or destination.";
+                return supplierName + " cargo receipt refused: lot was already received by a different shipment or destination.";
             }
             if (!lot.SourceCommitted || !string.Equals(lot.ShipmentId, shipmentId, StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(destinationBusinessId))
-                return "Millbrook cargo receipt refused: source pickup, shipment identity, or destination does not match.";
+                return supplierName + " cargo receipt refused: source pickup, shipment identity, or destination does not match.";
             lot.DestinationBusinessId = destinationBusinessId;
             lot.Received = true;
             bakeryUnits = lot.BakeryUnits;
@@ -312,8 +356,21 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             var seenLotIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (OffMapAidCargoLot lot in dto.Lots ?? new List<OffMapAidCargoLot>())
             {
+                // Part B maintenance (2026-11-15): a lot's BakeryUnits is
+                // its row's own figure, and rows without a bakery-unit
+                // conversion (e.g. fuel) legitimately carry 0. The old
+                // blanket BakeryUnits > 0 check would refuse any such
+                // lot on load. A lot is still invalid when its bakery
+                // units are negative, or when its row carries a positive
+                // conversion and the lot's figure does not match it.
+                bool bakeryUnitsValid = lot != null && lot.BakeryUnits >= 0;
+                if (lot != null && rows.TryGetValue(lot.SkuId ?? string.Empty, out OffMapAidInventoryRow lotRow)
+                    && lotRow.BakeryUnitsPerOrderUnit > 0)
+                {
+                    bakeryUnitsValid = lot.BakeryUnits == checked(lotRow.BakeryUnitsPerOrderUnit * lot.PackageUnits);
+                }
                 if (lot == null || string.IsNullOrWhiteSpace(lot.LotId) || !seenLotIds.Add(lot.LotId)
-                    || lot.PackageUnits <= 0 || lot.InventoryUnits <= 0 || lot.BakeryUnits <= 0
+                    || lot.PackageUnits <= 0 || lot.InventoryUnits <= 0 || !bakeryUnitsValid
                     || (lot.Received && (!lot.SourceCommitted || string.IsNullOrWhiteSpace(lot.ShipmentId)
                         || string.IsNullOrWhiteSpace(lot.DestinationBusinessId))))
                     return "Off-map aid save refused: cargo lot identity or custody state is invalid.";

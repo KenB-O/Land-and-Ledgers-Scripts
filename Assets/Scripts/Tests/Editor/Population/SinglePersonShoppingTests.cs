@@ -1807,18 +1807,22 @@ namespace LandLedgers.EditorTests.Population
         {
             // Slice 6 S6-2 (M3): two employed adults (H-C), Tomas + Anna,
             // both 240-min shifts 480-720. Both work tasks start; one
-            // member shops post-shift — the shopper per the policy
-            // preference order (adult woman first,
-            // ShopperAssignmentPolicy.ChooseShopperWithWindowSearch,
-            // PersonScheduleTracker.cs:671+; the existing staggered tests
-            // already pin Anna/P2 as shopper), so Anna (P2) shops, trip
-            // departs 720, window [720,815]; purchase settles 70c; no trip
-            // overlaps either Work reservation; next-day meal from the
-            // purchased lot; exact cash and inventory conservation; lot
-            // with purchase provenance + receipt id; reserve credited then
-            // decremented by the meal.
+            // member shops post-shift — QA-15/OD-2 availability-first
+            // (Nov 15, 2026): both are equally available at 720
+            // (identical shifts, equal availability scores, equal travel
+            // from home), so the first member in member order shops
+            // (Tomas, P1), trip departs 720, window [720,815]; purchase
+            // settles 70c; no trip overlaps either Work reservation;
+            // next-day meal from the purchased lot; exact cash and
+            // inventory conservation; lot with purchase provenance +
+            // receipt id; reserve credited then decremented by the meal.
+            // (Under the superseded woman-first rule this pinned Anna/P2;
+            // the harness batch test
+            // CampaignBShopperAvailabilityTests.
+            // ExecuteBatch_DualEmployedIdenticalShifts_PostShiftShopperIsFirstInMemberOrder
+            // proves Tomas/P1 under the new rule.)
             TwoAdultPurchaseToMeal_Acceptance(
-                tomasMinutes: 240, annaMinutes: 240, expectedShopper: 2,
+                tomasMinutes: 240, annaMinutes: 240, expectedShopper: 1,
                 expectedDepart: 720, expectedEnd: 815, expectedStarted: 2);
         }
 
@@ -1896,7 +1900,7 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsNotNull(batch, "a plan must be created for the open bread need");
             Assert.IsTrue(batch.TripExecuted, "the trip must execute: " + batch.FailureReason);
             Assert.AreEqual(expectedShopper, batch.ShopperPersonId,
-                "the shopper must be the policy-preferred member (adult woman first)");
+                "the shopper must be the availability-first member (lowest availability score, then shortest travel, then first in member order)");
 
             // (2) The right person shops, in a window that does not
             // overlap the shopper's own Work reservation (per-member
@@ -2529,23 +2533,19 @@ namespace LandLedgers.EditorTests.Population
         [Test]
         public void RemoteShopper_LocationConsistent_NoTripFromHome()
         {
-            // Slice 4 test 6 (rev1 section 5b): location-consistency pin.
-            // Two-adult household, member 0 (Tomas) at home, member 1 (Anna,
-            // the shopper, woman-first) with scheduleState = AtWork and a
-            // remote workplace (forest-camp, 18 mi from the store). The
-            // pre-check, estimate, and legs must all resolve the workplace:
-            // 18 mi at the fixture's 20 min/mi = 360 min one way, a 735-min
-            // trip — budget (600) and store hours both refuse it — with NO
-            // leg planned from home. The trip must fail honestly on the
-            // workplace travel minutes: the corrected search exits early
-            // with "No shopping window: the 735-min trip cannot fit ..."
-            // (last feasible departure 345 < 480), so the reason names the
-            // 735-min workplace trip, not the 95-min home trip and not a
-            // leg-assignment failure. PROBE: fails at HEAD (the estimate
-            // uses member-0 home, 95 min, so the search finds a window and
-            // the trip fails late at leg assignment: "Cannot assign T2: P2
-            // has 225 of 600 daily work minutes remaining; the task needs
-            // 360").
+            // Slice 4 test 6 (rev1 section 5b): location-consistency pin,
+            // rewritten by QA-15/OD-2 (Nov 15, 2026). Two-adult household,
+            // member 0 (Tomas) at home and free, member 1 (Anna) with
+            // scheduleState = AtWork at a remote workplace (forest-camp,
+            // 18 mi from the store). Under the superseded woman-first rule
+            // Anna was the shopper and the trip failed honestly on her
+            // 735-min workplace trip; under availability-first Tomas shops
+            // — he is free and nearer — and the trip executes from home,
+            // HIS actual location: the 95-min home trip, window [480,575].
+            // No leg departs from the forest camp and Anna never moves.
+            // The honest 735-min failure now lives in
+            // RemoteShopper_HomeMemberUnavailable_NoTripNamesWorkplaceTrip,
+            // where Tomas is unavailable and Anna is the only candidate.
             Fixture f = Fixture.CreatePair();
             f.AddRemoteWorkplace();
             PersonState anna = f.Population.GetPerson(2);
@@ -2558,6 +2558,65 @@ namespace LandLedgers.EditorTests.Population
                 new List<WorkTask>(), new List<int>(), new List<int>(),
                 out int started, new List<string>());
             Assert.AreEqual(0, started, "no work is assigned in this location probe");
+
+            Assert.IsNotNull(batch, "a plan must be created for the open bread need");
+            Assert.IsTrue(batch.TripExecuted,
+                "the free home member shops and the trip executes: " + batch.FailureReason);
+            Assert.AreEqual(1, batch.ShopperPersonId,
+                "Tomas (free, at home) shops; Anna is remote and is never chosen");
+            Assert.AreEqual(0, f.OpenNeedCount(HouseholdItemCatalog.BreadId), "the need must be fulfilled by the trip");
+            Assert.AreEqual(10000 - 70, f.Balance(), "buyer debit must equal 14 loaves x the 5c price");
+            PersonActivityReservation shopping = f.FindReservation(1, PersonActivityKind.Shopping);
+            Assert.IsNotNull(shopping, "the trip must have held a shopping reservation");
+            Assert.AreEqual(480, shopping.StartMinuteOfDay, "the trip departs at 480 from home");
+            Assert.AreEqual(575, shopping.EndMinuteOfDay, "the 95-min home trip ends at 575");
+            Assert.AreEqual(0, f.ShoppingReservationCount(2), "no shopping reservation may be held for Anna");
+            var hops = new List<string>();
+            var annaHops = new List<string>();
+            foreach (LocationHop hop in f.Transitions)
+            {
+                if (hop.PersonId == 1) hops.Add(hop.LocationId);
+                if (hop.PersonId == 2) annaHops.Add(hop.LocationId);
+            }
+            Assert.AreEqual(2, hops.Count, "Tomas must move exactly twice: to the store, then home");
+            Assert.AreEqual("store", hops[0], "first move is home -> store");
+            Assert.AreEqual("home", hops[1], "second move is store -> home");
+            Assert.AreEqual(0, annaHops.Count, "Anna must not travel from the forest camp");
+            foreach (LocationHop hop in f.Transitions)
+            {
+                Assert.IsTrue(hop.LocationId != "forest-camp", "no leg departs from the forest camp");
+            }
+        }
+
+        [Test]
+        public void RemoteShopper_HomeMemberUnavailable_NoTripNamesWorkplaceTrip()
+        {
+            // QA-15/OD-2 (Nov 15, 2026): the honest-failure half of the
+            // RemoteShopper pin. Same remote workplace as
+            // RemoteShopper_LocationConsistent_NoTripFromHome, but Tomas
+            // (home) works a full-coverage 600-min shift, so Anna at the
+            // forest camp is the only candidate. The trip is priced from
+            // HER actual location: 18 mi at the fixture's 20 min/mi =
+            // 360 min one way, a 735-min trip — budget (600) and store
+            // hours both refuse it — with NO leg planned from home. The
+            // corrected search exits early with "No shopping window: the
+            // 735-min trip cannot fit ..." (last feasible departure 345
+            // < 480), so the reason names the 735-min workplace trip, not
+            // the 95-min home trip and not a leg-assignment failure. The
+            // need stays open for a later day (defer and retry).
+            Fixture f = Fixture.CreatePair();
+            f.AddRemoteWorkplace();
+            PersonState anna = f.Population.GetPerson(2);
+            Assert.IsNotNull(anna, "Anna must exist");
+            anna.scheduleState = PopulationScheduleState.AtWork;
+            anna.workplaceBuildingId = 900;
+            f.Fund(10000);
+
+            WorkTask work1 = f.CreateWorkTask(1, 600);
+            HouseholdShoppingLoop.BatchShoppingResult batch = f.DriveProductionDay(
+                new List<WorkTask> { work1 }, new List<int> { 1 }, new List<int> { 600 },
+                out int started, new List<string>());
+            Assert.AreEqual(1, started, "Tomas's work task must start");
 
             Assert.IsNotNull(batch, "a plan must be created for the open bread need");
             Assert.IsTrue(!batch.TripExecuted,

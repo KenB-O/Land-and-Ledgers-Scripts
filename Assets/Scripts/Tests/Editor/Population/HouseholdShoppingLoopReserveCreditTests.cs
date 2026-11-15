@@ -542,7 +542,9 @@ namespace LandLedgers.EditorTests.Population
             // Plan 08 Slice 2 (Q03, AUD-266): REWRITE of the Slice 0
             // ChooseShopper_ReturnsOffMapMember. With the authority
             // passed, the policy skips the off-map preferred shopper P1
-            // (adult woman) and falls back to the on-map adult P2.
+            // (first in member order, equally available — QA-15/OD-2:
+            // availability-first, never sex) and falls back to the
+            // on-map adult P2.
             var population = new PopulationState();
             population.people.Add(new PersonState
             {

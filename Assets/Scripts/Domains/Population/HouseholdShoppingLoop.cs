@@ -625,13 +625,18 @@ namespace LandLedgers.Population
 
             // ---- Step 2: a real member becomes responsible (Person time is
             // authoritative — the shopper's window is estimated from real routes). ----
+            // QA-15/OD-2: availability-first selection — the chooser weighs
+            // each candidate's reservations and work-time budget, and breaks
+            // availability ties by one-way travel from the candidate's
+            // actual location (never sex, never an assumed home position).
             int estimateMinutes = EstimateTripMinutes(homeLocation, knownOffering, options);
             string shopperReason = null;
             int shopperId = options.ShopperPersonIdOverride >= 0
                 ? options.ShopperPersonIdOverride
                 : ShopperAssignmentPolicy.ChooseShopper(
                     population, memberIds, dayIndex, options.DepartureMinuteOfDay, estimateMinutes,
-                    scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys);
+                    scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys,
+                    OneWayMinutesToNearestSupplier(knownOffering, options));
 
             if (shopperId < 0)
             {
@@ -652,6 +657,51 @@ namespace LandLedgers.Population
                 {
                     return Fail(result, need, -1, dayIndex,
                         $"Shopper override rejected: {overrideProblem}", diag, options);
+                }
+            }
+
+            // QA-15/OD-2 (Plan 05 Slice 4 pattern, single-need path): the
+            // estimate above was priced from member-0's location, not the
+            // chosen shopper's. When the shopper resolves elsewhere,
+            // re-price the trip from the shopper's actual location and
+            // re-run the choice with the corrected trip — one round only.
+            // If the corrected trip fits no budget, fail honestly naming
+            // the corrected trip; never plan legs from the assumed home
+            // position. (The override path above names its shopper
+            // explicitly and skips this correction.)
+            if (options.ShopperPersonIdOverride < 0)
+            {
+                string shopperLocation = ResolvePersonLocation(shopperId, options);
+                if (!string.Equals(shopperLocation, homeLocation, StringComparison.OrdinalIgnoreCase))
+                {
+                    int correctedEstimate = EstimateTripMinutes(shopperLocation, knownOffering, options);
+                    if (correctedEstimate != estimateMinutes)
+                    {
+                        string correctedReason = null;
+                        int correctedShopper = ShopperAssignmentPolicy.ChooseShopper(
+                            population, memberIds, dayIndex, options.DepartureMinuteOfDay, correctedEstimate,
+                            scheduleTracker, budgets, personEntityId, out correctedReason, offMapJourneys,
+                            OneWayMinutesToNearestSupplier(knownOffering, options));
+                        if (correctedShopper < 0)
+                        {
+                            return Fail(result, need, -1, dayIndex,
+                                $"Unavailable shopper: {correctedReason ?? "nobody can shop today."} Need stays open.", diag, options);
+                        }
+
+                        if (correctedShopper != shopperId)
+                        {
+                            diag.Add($"Day {dayIndex}: P{correctedShopper} shops instead of P{shopperId} " +
+                                $"(location-corrected choice; trip ~{correctedEstimate} min from the shopper's location).");
+                        }
+
+                        shopperId = correctedShopper;
+                        estimateMinutes = correctedEstimate;
+                        shopper = population.GetPerson(shopperId);
+                        if (shopper == null)
+                        {
+                            return Fail(result, need, -1, dayIndex, $"P{shopperId} is not a known person.", diag, options);
+                        }
+                    }
                 }
             }
 
@@ -1241,6 +1291,11 @@ namespace LandLedgers.Population
                 JourneyRoute winnerRoute = journeys.FindRoute(homeLocation, winner.LocationId, TravelMode.Foot);
                 int oneWayMinutes = winnerRoute.Found ? Math.Max(1, winnerRoute.TotalMinutes) : 1;
                 var winnerItemSupplier = winner as IItemResolvingSupplier;
+                // QA-15/OD-2: availability-first selection — the chooser
+                // weighs each candidate's reservations and work-time
+                // budget, and breaks availability ties by one-way travel
+                // from the candidate's actual location to the winner
+                // (never sex, never an assumed home position).
                 shopperId = ShopperAssignmentPolicy.ChooseShopperWithWindowSearch(
                     population, memberIds, dayIndex, requestedDeparture, estimateMinutes,
                     oneWayMinutes, options.InStoreMinutes,
@@ -1248,7 +1303,7 @@ namespace LandLedgers.Population
                         ? null
                         : winnerItemSupplier.CheckTradingCapability(dayIndex, arrival),
                     scheduleTracker, budgets, personEntityId, out foundDeparture, out shopperReason,
-                    offMapJourneys);
+                    offMapJourneys, OneWayMinutesToSupplier(winner, options));
             }
 
             if (shopperId < 0)
@@ -1329,7 +1384,7 @@ namespace LandLedgers.Population
                             ? null
                             : correctedWinnerSupplier.CheckTradingCapability(dayIndex, arrival),
                         scheduleTracker, budgets, personEntityId, out correctedDeparture, out correctedReason,
-                        offMapJourneys);
+                        offMapJourneys, OneWayMinutesToSupplier(winner, options));
                     if (correctedShopper < 0)
                     {
                         batch.FailureReason = $"Unavailable shopper: {correctedReason ?? "nobody can shop today."} Needs stay open.";
@@ -2030,6 +2085,76 @@ namespace LandLedgers.Population
 
         // ---------- Pass IV: real-time trip phases (ShoppingTripDriver) ----------
 
+        /// <summary>QA-15/OD-2: the departure search for PlanTrip,
+        /// extracted so the location-correction round can re-run it with a
+        /// corrected estimate without duplicating the loop. Steps
+        /// departures forward from <paramref name="requestedDeparture"/>
+        /// (15-minute steps, never past store close / sleep); at each
+        /// departure the availability-first chooser picks the shopper and
+        /// the candidate is evaluated from THAT shopper's actual location.
+        /// Existing work, sleep, job-seeking and other commitments are
+        /// never preempted here. Returns false (with the chooser's reason)
+        /// when no departure yields a shopper with a viable candidate —
+        /// including when the trip itself cannot fit between the requested
+        /// departure and close/sleep, in which case the reason names the
+        /// trip length and the last feasible departure (the window-search
+        /// wording). The caller's options.DepartureMinuteOfDay is restored
+        /// to the requested baseline on every exit.</summary>
+        private bool SearchTripDeparture(
+            HouseholdPurchasingNeed need, int dayIndex, ShoppingLoopOptions options,
+            List<int> memberIds, List<IGoodsSupplier> knownOffering, int estimateMinutes,
+            int requestedDeparture, ShoppingTripResult result, List<string> diag,
+            out int shopperId, out int selectedDeparture, out ShoppingCandidate chosen, out string shopperReason)
+        {
+            shopperId = -1;
+            selectedDeparture = requestedDeparture;
+            chosen = null;
+            shopperReason = null;
+
+            // The physical-trip path previously attempted a single
+            // 08:00 reservation. Search later feasible windows using the
+            // same person-time authority instead of rejecting a real
+            // household need against one occupied slot.
+            int latestDeparture = Math.Min(17 * 60, 18 * 60 - Math.Max(1, estimateMinutes));
+            if (Math.Max(0, requestedDeparture) > latestDeparture)
+            {
+                shopperReason = $"No shopping window: the {Math.Max(1, estimateMinutes)}-min trip cannot fit between " +
+                    $"departure {Math.Max(0, requestedDeparture)} and close/sleep (last feasible departure {latestDeparture}).";
+                options.DepartureMinuteOfDay = requestedDeparture;
+                return false;
+            }
+
+            for (int departure = Math.Max(0, requestedDeparture); departure <= latestDeparture; departure += 15)
+            {
+                int candidateShopper = ShopperAssignmentPolicy.ChooseShopper(
+                    population, memberIds, dayIndex, departure, estimateMinutes,
+                    scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys,
+                    OneWayMinutesToNearestSupplier(knownOffering, options));
+                if (candidateShopper < 0)
+                {
+                    continue;
+                }
+
+                options.DepartureMinuteOfDay = departure;
+                string candidateHome = ResolvePersonLocation(candidateShopper, options);
+                ShoppingCandidate candidate = EvaluateCandidates(
+                    result, need, candidateShopper, candidateHome, knownOffering, dayIndex, options, diag);
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                shopperId = candidateShopper;
+                selectedDeparture = departure;
+                chosen = candidate;
+                options.DepartureMinuteOfDay = requestedDeparture;
+                return true;
+            }
+
+            options.DepartureMinuteOfDay = requestedDeparture;
+            return false;
+        }
+
         /// <summary>
         /// Pass IV: plans a shopping trip through real time WITHOUT executing it.
         /// Runs steps 1–5 of the 17-step chain: need validation, legitimately-known
@@ -2106,38 +2231,68 @@ namespace LandLedgers.Population
             ShoppingCandidate chosen = null;
             if (shopperId < 0)
             {
-                // The physical-trip path previously attempted a single
-                // 08:00 reservation. Search later feasible windows using the
-                // same person-time authority instead of rejecting a real
-                // household need against one occupied slot. Existing work,
-                // sleep, job-seeking and other commitments are never
-                // preempted here.
-                int latestDeparture = Math.Min(17 * 60, 18 * 60 - Math.Max(1, estimateMinutes));
-                for (int departure = Math.Max(0, requestedDeparture); departure <= latestDeparture; departure += 15)
+                // QA-15/OD-2: availability-first selection — the chooser
+                // weighs each candidate's reservations and work-time
+                // budget, and breaks availability ties by one-way travel
+                // from the candidate's actual location (never sex, never
+                // an assumed home position).
+                if (!SearchTripDeparture(
+                    need, dayIndex, options, memberIds, knownOffering, estimateMinutes, requestedDeparture,
+                    result, diag, out shopperId, out selectedDeparture, out chosen, out shopperReason))
                 {
-                    int candidateShopper = ShopperAssignmentPolicy.ChooseShopper(
-                        population, memberIds, dayIndex, departure, estimateMinutes,
-                        scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys);
-                    if (candidateShopper < 0)
-                    {
-                        continue;
-                    }
-
-                    options.DepartureMinuteOfDay = departure;
-                    string candidateHome = ResolvePersonLocation(candidateShopper, options);
-                    ShoppingCandidate candidate = EvaluateCandidates(
-                        result, need, candidateShopper, candidateHome, knownOffering, dayIndex, options, diag);
-                    if (candidate == null)
-                    {
-                        continue;
-                    }
-
-                    shopperId = candidateShopper;
-                    selectedDeparture = departure;
-                    chosen = candidate;
-                    break;
+                    return FailPlan(trip, need, -1,
+                        $"Unavailable shopper or trip window: {shopperReason ?? "no legitimate seller and free household window were available today."} Need stays open.", diag);
                 }
-                options.DepartureMinuteOfDay = requestedDeparture;
+
+                // QA-15/OD-2 (Plan 05 Slice 4 pattern, live path): the
+                // estimate above was priced from member-0's location, not
+                // the chosen shopper's. When the shopper resolves
+                // elsewhere, re-price the trip from the shopper's actual
+                // location and re-run the search with the corrected trip —
+                // one round only. If the corrected trip fits no window or
+                // budget, fail honestly naming the corrected trip; never
+                // plan legs from the assumed home position. The corrected
+                // search records into a scratch result/diag so a supplier
+                // rejected in both rounds is not listed twice in the
+                // trip's diagnostic record; the corrected choice itself is
+                // recorded in the diag line below.
+                string shopperLocation = ResolvePersonLocation(shopperId, options);
+                if (!string.Equals(shopperLocation, homeLocation, StringComparison.OrdinalIgnoreCase))
+                {
+                    int correctedEstimate = EstimateTripMinutes(shopperLocation, knownOffering, options);
+                    if (correctedEstimate != estimateMinutes)
+                    {
+                        var scratchResult = new ShoppingTripResult
+                        {
+                            NeedSequence = need.NeedSequence,
+                            HouseholdId = need.HouseholdId,
+                            ItemId = need.ItemId,
+                        };
+                        var scratchDiag = new List<string>();
+                        int correctedShopper;
+                        int correctedDeparture;
+                        ShoppingCandidate correctedChosen;
+                        string correctedReason;
+                        if (!SearchTripDeparture(
+                            need, dayIndex, options, memberIds, knownOffering, correctedEstimate, requestedDeparture,
+                            scratchResult, scratchDiag, out correctedShopper, out correctedDeparture, out correctedChosen, out correctedReason))
+                        {
+                            return FailPlan(trip, need, -1,
+                                $"Unavailable shopper or trip window: {correctedReason ?? "no legitimate seller and free household window were available today."} Need stays open.", diag);
+                        }
+
+                        if (correctedShopper != shopperId || correctedDeparture != selectedDeparture)
+                        {
+                            diag.Add($"Day {dayIndex}: P{correctedShopper} departs at {correctedDeparture} " +
+                                $"(location-corrected search; trip ~{correctedEstimate} min from the shopper's location).");
+                        }
+
+                        shopperId = correctedShopper;
+                        selectedDeparture = correctedDeparture;
+                        chosen = correctedChosen;
+                        estimateMinutes = correctedEstimate;
+                    }
+                }
             }
             if (shopperId < 0)
             {
@@ -3638,6 +3793,47 @@ namespace LandLedgers.Population
         private static int GetPlannedMinutes(WorkTask task)
         {
             return task != null ? Math.Max(1, task.PlannedMinutes) : 0;
+        }
+
+        /// <summary>QA-15/OD-2: per-candidate one-way travel minutes from
+        /// each candidate's actual location (ResolvePersonLocation) to the
+        /// nearest supplier in <paramref name="suppliers"/>. A candidate
+        /// with no route to any supplier reports int.MaxValue — travel
+        /// never overrides availability, it only breaks ties between
+        /// equally available adults, and a routeless candidate sorts last
+        /// on travel. The delegate is a pure route lookup; it moves no
+        /// person and reserves nothing.</summary>
+        private Func<int, int> OneWayMinutesToNearestSupplier(List<IGoodsSupplier> suppliers, ShoppingLoopOptions options)
+        {
+            return personId =>
+            {
+                string origin = ResolvePersonLocation(personId, options);
+                int best = int.MaxValue;
+                if (suppliers != null)
+                {
+                    foreach (IGoodsSupplier supplier in suppliers)
+                    {
+                        if (supplier == null) continue;
+                        JourneyRoute route = journeys.FindRoute(origin, supplier.LocationId, TravelMode.Foot);
+                        if (route.Found) best = Math.Min(best, Math.Max(1, route.TotalMinutes));
+                    }
+                }
+                return best;
+            };
+        }
+
+        /// <summary>QA-15/OD-2: per-candidate one-way travel minutes from
+        /// each candidate's actual location to one supplier (the batch
+        /// winner). A candidate with no route reports int.MaxValue.</summary>
+        private Func<int, int> OneWayMinutesToSupplier(IGoodsSupplier supplier, ShoppingLoopOptions options)
+        {
+            return personId =>
+            {
+                if (supplier == null) return int.MaxValue;
+                string origin = ResolvePersonLocation(personId, options);
+                JourneyRoute route = journeys.FindRoute(origin, supplier.LocationId, TravelMode.Foot);
+                return route.Found ? Math.Max(1, route.TotalMinutes) : int.MaxValue;
+            };
         }
 
         private string ResolvePersonLocation(int personId, ShoppingLoopOptions options)

@@ -1870,6 +1870,29 @@ namespace LandLedgers.Orchestration.Systems
             hub.RegisterSawmillToYardTransferDriver(driver);
         }
 
+        // CAMPAIGN-B (DEF-042): resolve the general-store business a shopping
+        // trip names, so the Plan 16 queue/clerk resolvers address the store
+        // the shopping loop actually uses. The manager's own (player) store
+        // first; otherwise any GeneralStore business in the shared runtime
+        // (the dev NPC store). Any other id — another supplier, an unknown
+        // id, an empty id — returns null so the caller keeps today's null /
+        // -1 behaviour. A null shared runtime degrades to the player store
+        // only (the pre-B60 bootstrap path, where shopping can run before
+        // the runtime is assigned).
+        private BusinessInstanceState ResolveGeneralStoreBusiness(
+            LandLedgers.FirstLedger.GeneralStoreRuntimeManager manager, string businessId)
+        {
+            if (manager == null || string.IsNullOrWhiteSpace(businessId)) return null;
+            if (manager.CurrentBusiness != null
+                && string.Equals(manager.CurrentBusiness.InstanceId, businessId, StringComparison.Ordinal))
+                return manager.CurrentBusiness;
+            if (sharedBusinessRuntime != null
+                && sharedBusinessRuntime.TryFindByInstanceId(businessId, out BusinessInstanceState found)
+                && found != null && found.BusinessType == BusinessType.GeneralStore)
+                return found;
+            return null;
+        }
+
         private void BuildHouseholdShoppingLoop()
         {
             // Local public-store awareness is independent of whether the
@@ -1932,33 +1955,45 @@ namespace LandLedgers.Orchestration.Systems
             // Plan 16: General Store employee service. The loop resolves the
             // manager-bound store's live queue and a filled clerk by supplier
             // business id; any other supplier resolves null / -1 and behaves
-            // exactly as today. The manager business id is
-            // CurrentBusiness.InstanceId falling back to "general-store" —
-            // the same string the trading port reports as StoreBusinessId
-            // (GeneralStoreTradingPort.cs:49) and the supplier adapter
-            // exposes as SupplierBusinessId
-            // (GeneralStoreSupplierAdapter.cs:144), so a live store trip's
-            // SupplierBusinessId matches it. The FindAnyObjectByType call is
-            // the existing production pattern (SimulationDrivers.cs:1192,
+            // exactly as today.
+            // CAMPAIGN-B (DEF-042): the id matched here must be the store the
+            // shopping loop actually uses. In dev/editor builds the registered
+            // supplier is the NPC store port (FirstLedgerSliceBootstrapper
+            // registers BuildHouseholdTradingPort(developmentNpcStore)), whose
+            // id is "general_store_001"-style — while the manager's
+            // CurrentBusiness is the player store ("player_general_store").
+            // Matching only the player id left every dev trip with a null
+            // queue and clerk -1, so Slice 17's settle gate, Slice 18b's
+            // balk, and Slice 19's serialization never engaged and sales
+            // settled unserved. Resolve through ResolveGeneralStoreBusiness:
+            // the player store, or any GeneralStore business in the shared
+            // runtime (the dev NPC store). The queue is the manager's single
+            // live line, labelled for the store served; the clerk is read
+            // from that store's own runtime state, whose owner-occupied
+            // "owner:N" clerk slot now parses
+            // (GeneralStoreRuntimeManager.TryGetServiceClerkPersonId). The
+            // "general-store" fallback id keeps today's queue behaviour for
+            // a pre-formation port. The FindAnyObjectByType call is the
+            // existing production pattern (SimulationDrivers.cs:1192,
             // :4288, :5352).
             householdShoppingLoop.ResolveCustomerQueue = businessId =>
             {
                 var manager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
                 if (manager == null) return null;
-                string managerBusinessId = manager.CurrentBusiness != null
-                    ? manager.CurrentBusiness.InstanceId
-                    : "general-store";
-                return string.Equals(managerBusinessId, businessId, StringComparison.Ordinal) ? manager.CustomerQueue : null;
+                BusinessInstanceState store = ResolveGeneralStoreBusiness(manager, businessId);
+                if (store != null) return manager.CustomerQueueForBusiness(store);
+                if (string.Equals(businessId, "general-store", StringComparison.Ordinal)) return manager.CustomerQueue;
+                return null;
             };
             householdShoppingLoop.ResolveServiceClerkPersonId = businessId =>
             {
                 var manager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
                 if (manager == null) return -1;
-                string managerBusinessId = manager.CurrentBusiness != null
-                    ? manager.CurrentBusiness.InstanceId
-                    : "general-store";
-                if (!string.Equals(managerBusinessId, businessId, StringComparison.Ordinal)) return -1;
-                return manager.TryGetServiceClerkPersonId(out int clerkPersonId) ? clerkPersonId : -1;
+                BusinessInstanceState store = ResolveGeneralStoreBusiness(manager, businessId);
+                if (store == null) return -1;
+                if (ReferenceEquals(store, manager.CurrentBusiness))
+                    return manager.TryGetServiceClerkPersonId(out int clerkPersonId) ? clerkPersonId : -1;
+                return manager.TryGetServiceClerkPersonId(store.RuntimeState, out int npcClerkPersonId) ? npcClerkPersonId : -1;
             };
 
             // Pass 9 person-hand persistence shares the same live authority

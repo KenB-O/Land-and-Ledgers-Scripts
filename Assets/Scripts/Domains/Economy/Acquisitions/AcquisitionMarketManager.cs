@@ -1929,23 +1929,40 @@ namespace LandLedgers.Economy
             }
             else
             {
-                int effectiveCutCapacity = Mathf.Min(sawmill.WeeklyCutCapacityLogs, availableLabor);
-                cutLogs = sawmill.CutStandingTimberToLogs(effectiveCutCapacity);
-
-                int logsByStorage = sawmill.LumberPerLog > 0
-                    ? sawmill.LumberStorageRoomUnits / sawmill.LumberPerLog
-                    : 0;
-                int logsReadyToProcess = Mathf.Min(
+                // CAMPAIGN-B (DEF-044): plan the week's cut/saw from pre-cut
+                // state and check the hardware gate BEFORE cutting. The old
+                // order cut standing timber first and only then discovered
+                // sawing was blocked, so every week it converted 10 units of
+                // a finite resource into staged logs that have no consumer in
+                // the local path (only ProcessLogsToLumber reads LogStockUnits)
+                // while lumber output stayed zero. No capacity, price, or gate
+                // rule changes here: a blocked week now preserves the standing
+                // timber instead of piling up unusable logs.
+                LocalSawmillWeekPlan weekPlan = LocalSawmillWeekPlanner.Plan(
+                    sawmill.StandingTimberUnits,
                     sawmill.LogStockUnits,
+                    sawmill.WeeklyCutCapacityLogs,
                     sawmill.WeeklySawCapacityLogs,
-                    availableLabor,
-                    logsByStorage);
+                    sawmill.LumberPerLog,
+                    sawmill.LumberStorageRoomUnits,
+                    availableLabor);
+                int logsByStorage = weekPlan.LogsByStorage;
+                int logsReadyToProcess = weekPlan.LogsToProcess;
 
                 if (logsReadyToProcess > 0)
                 {
                     int maintenanceUnits = sawmill.HardwareMaintenanceUnitsPerWeek;
                     if (TryConsumeSawmillMaintenanceHardware(maintenanceUnits, out string hardwareSource, out string hardwareBlockReason))
                     {
+                        cutLogs = sawmill.CutStandingTimberToLogs(weekPlan.CutLogs);
+                        // Recompute from live post-cut stock exactly as before;
+                        // it equals the plan's LogsToProcess when the cut lands
+                        // as planned.
+                        logsReadyToProcess = Mathf.Min(
+                            sawmill.LogStockUnits,
+                            sawmill.WeeklySawCapacityLogs,
+                            availableLabor,
+                            logsByStorage);
                         processedLogs = sawmill.ProcessLogsToLumber(logsReadyToProcess, out producedLumber);
                         if (maintenanceUnits > 0 && !string.IsNullOrWhiteSpace(hardwareSource))
                         {

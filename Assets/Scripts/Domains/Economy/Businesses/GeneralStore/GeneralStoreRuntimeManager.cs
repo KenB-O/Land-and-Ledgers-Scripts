@@ -403,8 +403,22 @@ namespace LandLedgers.FirstLedger
         /// manager-bound store; created lazily on first use. Merchant ids are
         /// refreshed from the business served on every access (see
         /// CustomerQueueForBusiness) so a queue created before the business
-        /// forms does not keep stale ids. Save/load persists this single
-        /// queue via Series2Pass9Save (Slice 19).</summary>
+        /// forms does not keep stale ids. CAMPAIGN-B (DEF-042): the queue
+        /// instance is shared — one general-store supplier is registered per
+        /// run, so one waiting line serves whichever store the shopping loop
+        /// actually uses (the player store, or the dev NPC store). Save/load
+        /// of the waiting line lives in the Pass 9 slot (Series2Pass9Save):
+        /// the DTO carries each entry's remaining and initial patience
+        /// minutes, and the live queue is bound into the Pass 9 save state at
+        /// load (FirstLedgerSliceBootstrapper.EnsurePass9SaveOwnerForRestore)
+        /// and at loop build (SimulationDrivers.BuildHouseholdShoppingLoop) —
+        /// Campaign C (DEF-073). Restore is clear-then-load into this
+        /// instance; the shopping driver resolves this same instance, so a
+        /// restored entry and its trip line up, and Rebind re-arms the
+        /// patience-tick watermark at the restored clock so decay resumes
+        /// instead of skipping or pausing. E-20 merge (Campaign B package 12):
+        /// B's DEF-042 getter refactor and C's DEF-073 Pass 9 bindings were
+        /// a comment-only collision on this text; this comment carries both.</summary>
         public CustomerQueue CustomerQueue
         {
             get { return CustomerQueueForBusiness(currentBusiness); }

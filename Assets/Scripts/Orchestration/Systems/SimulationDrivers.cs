@@ -224,6 +224,12 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField, Tooltip("CLN-1 hub owning the authorities. Found automatically if empty.")]
         private SimulationSystemsHub hub;
 
+        // CAMPAIGN-B (Agent B, 2026-11-15): delegated vacancy hiring service.
+        // Session-only state (once-only diagnostic suppression); efforts,
+        // inquiries, employments, and slot fills persist through their own
+        // authorities. Not serialized.
+        private DelegatedHiringService delegatedHiringService;
+
         [SerializeField, Tooltip("Found automatically if empty.")]
         private TimeManager timeManager;
 
@@ -3318,6 +3324,11 @@ namespace LandLedgers.Orchestration.Systems
             // layoff knowledge routes into real job applications.
             DriveSocialDay(absoluteDayIndex);
             DriveAutonomousLabor(absoluteDayIndex);
+            // CAMPAIGN-B (Agent B, 2026-11-15): delegated vacancy hiring.
+            // Runs after DriveTravelAndComms accrued today's inquiries and
+            // after the manager cycle, so a hire can use an inquiry from
+            // today. Player-owned businesses are reported, never auto-hired.
+            DriveDelegatedHiring(absoluteDayIndex);
 
             // Priority 4 Slice 4 (plan §5 Slice 4 item 2): the daily
             // task-duration evaluation, once per day, placed at the end of
@@ -8371,6 +8382,256 @@ namespace LandLedgers.Orchestration.Systems
             {
                 Debug.LogWarning("[SimulationDrivers] autonomous labor: " + string.Join(" | ", diagnostics));
             }
+        }
+
+        /// <summary>
+        /// CAMPAIGN-B (Agent B, 2026-11-15): delegated vacancy hiring, daily.
+        /// For each business with a vacant REQUIRED worker slot, resolves the
+        /// hiring actor — a Staffing delegate first, else the NPC owner — and
+        /// runs DelegatedHiringService, which posts a WordOfMouth service-role
+        /// effort when none is open and hires the earliest open inquiry at
+        /// the slot's authored baseline wage. Player-owned businesses without
+        /// a Staffing delegate are reported, never auto-hired (Canon §6.3).
+        /// Slot fills and person updates are applied in ApplyDelegatedHire.
+        /// This is the first production caller of
+        /// RecruitmentService.HireFromInquiry.
+        /// </summary>
+        private void DriveDelegatedHiring(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null || populationManager == null ||
+                populationManager.State == null)
+            {
+                return;
+            }
+
+            delegatedHiringService ??= new DelegatedHiringService();
+            var diagnostics = new List<string>();
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null || string.IsNullOrWhiteSpace(business.InstanceId) ||
+                    business.RuntimeState == null || business.RuntimeState.WorkerSlots == null)
+                {
+                    continue;
+                }
+
+                var needs = new List<HiringSlotNeed>();
+                bool anyVacantRequired = false;
+                foreach (WorkerSlotState slot in business.RuntimeState.WorkerSlots)
+                {
+                    if (slot == null)
+                    {
+                        continue;
+                    }
+
+                    needs.Add(new HiringSlotNeed
+                    {
+                        BusinessInstanceId = business.InstanceId,
+                        SlotId = slot.SlotId,
+                        SlotDisplayName = slot.SlotDisplayName,
+                        WeeklyWageCents = slot.WeeklyWageCents,
+                        RequiredForOpening = slot.RequiredForOpening,
+                        IsFilled = slot.IsFilled,
+                    });
+                    if (slot.RequiredForOpening && !slot.IsFilled)
+                    {
+                        anyVacantRequired = true;
+                    }
+                }
+                if (!anyVacantRequired)
+                {
+                    continue;
+                }
+
+                EmploymentRelationshipRegistry registry =
+                    business.RuntimeState.EmploymentRegistry ?? hub.Employments;
+                BusinessOwnerIdentity owner = business.Owner;
+                bool isPlayerOwned = owner != null && owner.OwnerKind == BusinessOwnerKind.Player;
+                int actingPersonId = -1;
+                var basis = HiringAuthorityBasis.None;
+
+                // A Staffing delegate acts first when one exists. Dormant in
+                // production today — GrantAuthority has no production callers —
+                // but the check is real and activates if grants ever exist.
+                var actorCandidates = new List<int>();
+                if (registry != null)
+                {
+                    foreach (EmploymentRelationship rel in registry.GetActiveByEmployer(business.InstanceId))
+                    {
+                        if (rel != null && rel.EmployeePersonId >= 0 && !actorCandidates.Contains(rel.EmployeePersonId))
+                        {
+                            actorCandidates.Add(rel.EmployeePersonId);
+                        }
+                    }
+                }
+                if (owner != null && owner.OwnerKind == BusinessOwnerKind.Npc && owner.PersonId >= 0 &&
+                    !actorCandidates.Contains(owner.PersonId))
+                {
+                    actorCandidates.Add(owner.PersonId);
+                }
+                foreach (int candidateId in actorCandidates)
+                {
+                    DelegatedAuthority authority = hub.Delegation.GetActiveAuthority(
+                        business.InstanceId, candidateId, absoluteDayIndex);
+                    if (authority != null && (authority.Scopes & DelegationScope.Staffing) != 0)
+                    {
+                        actingPersonId = candidateId;
+                        basis = HiringAuthorityBasis.StaffingDelegate;
+                        break;
+                    }
+                }
+
+                // No delegate: the NPC owner acts for their own business (the
+                // same owner-authority rule the hub's offer predicate uses,
+                // and the G-06 NPC-owner auto-resolution pattern).
+                if (basis == HiringAuthorityBasis.None && owner != null &&
+                    owner.OwnerKind == BusinessOwnerKind.Npc && owner.PersonId >= 0)
+                {
+                    actingPersonId = owner.PersonId;
+                    basis = HiringAuthorityBasis.NpcOwner;
+                }
+
+                BusinessInstanceState capturedBusiness = business;
+                EmploymentRelationshipRegistry capturedRegistry = registry;
+                delegatedHiringService.DriveBusinessDay(
+                    business.InstanceId, isPlayerOwned, actingPersonId, basis, needs,
+                    hub.Recruiting, registry,
+                    personId => IsHireableCandidateForDelegatedHire(personId, capturedRegistry),
+                    personId => populationManager.State.GetPerson(personId)?.DisplayName ?? string.Empty,
+                    hire => ApplyDelegatedHire(capturedBusiness, hire),
+                    absoluteDayIndex,
+                    absoluteDayIndex ^ StableBusinessRuntimeId(business.InstanceId),
+                    diagnostics);
+            }
+
+            if (diagnostics.Count > 0)
+            {
+                Debug.LogWarning("[SimulationDrivers] delegated hiring: " + string.Join(" | ", diagnostics));
+            }
+        }
+
+        /// <summary>
+        /// CAMPAIGN-B (Agent B, 2026-11-15): hireability re-check at hire time —
+        /// a real, living adult with labor access, not currently employed, and
+        /// not already assigned to any business worker slot. Mirrors the
+        /// eligibility RecruitmentService enforces when an inquiry is created.
+        /// </summary>
+        private bool IsHireableCandidateForDelegatedHire(int personId, EmploymentRelationshipRegistry registry)
+        {
+            if (populationManager?.State == null)
+            {
+                return false;
+            }
+
+            PersonState person = populationManager.State.GetPerson(personId);
+            if (person == null || person.deathDayIndex >= 0)
+            {
+                return false;
+            }
+
+            if (person.ageBand != AgeBand.Adult18Plus)
+            {
+                return false;
+            }
+
+            if (person.laborAccessLevel == LaborAccessLevel.None)
+            {
+                return false;
+            }
+
+            if (registry != null && registry.GetActiveByEmployee(personId).Count > 0)
+            {
+                return false;
+            }
+
+            if (hub.Employments != null && !ReferenceEquals(hub.Employments, registry) &&
+                hub.Employments.GetActiveByEmployee(personId).Count > 0)
+            {
+                return false;
+            }
+
+            return !IsPersonAssignedToAnyWorkerSlot(personId);
+        }
+
+        /// <summary>
+        /// CAMPAIGN-B (Agent B, 2026-11-15): true when the person already fills
+        /// a worker slot at any business (owner-operator ids are "owner:…"
+        /// strings and never match a person id).
+        /// </summary>
+        private bool IsPersonAssignedToAnyWorkerSlot(int personId)
+        {
+            if (sharedBusinessRuntime == null)
+            {
+                return false;
+            }
+
+            string workerId = personId.ToString();
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business?.RuntimeState?.WorkerSlots == null)
+                {
+                    continue;
+                }
+
+                foreach (WorkerSlotState slot in business.RuntimeState.WorkerSlots)
+                {
+                    if (slot != null && string.Equals(slot.AssignedWorkerId, workerId, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// CAMPAIGN-B (Agent B, 2026-11-15): applies a completed delegated hire
+        /// — fills the slot and updates the person's record, mirroring the
+        /// generic parts of GeneralStoreRuntimeManager.AssignPersonToStoreSlot.
+        /// professionId is intentionally left untouched: the generic path does
+        /// not mint a profession id (the store's own opening path sets
+        /// "general_store_&lt;slot&gt;"). Payroll follows automatically:
+        /// EnsureEmploymentRecordsFromSlots projects the slot (first-wins, so
+        /// the HireFromInquiry relationship stands) and SettleWeeklyPayroll
+        /// pays from the registry.
+        /// </summary>
+        private void ApplyDelegatedHire(BusinessInstanceState business, DelegatedHireResult hire)
+        {
+            if (business?.RuntimeState?.WorkerSlots == null || hire == null)
+            {
+                return;
+            }
+
+            WorkerSlotState slot = null;
+            foreach (WorkerSlotState candidate in business.RuntimeState.WorkerSlots)
+            {
+                if (candidate != null && string.Equals(candidate.SlotId, hire.SlotId, StringComparison.Ordinal))
+                {
+                    slot = candidate;
+                    break;
+                }
+            }
+            if (slot == null || slot.IsFilled)
+            {
+                return;
+            }
+
+            slot.Assign(hire.PersonId.ToString(), hire.PersonDisplayName, hire.WeeklyWageCents);
+            PersonState person = populationManager?.State?.GetPerson(hire.PersonId);
+            if (person == null)
+            {
+                return;
+            }
+
+            person.workplaceBuildingId = business.AssignedBuildingId;
+            person.professionName = slot.SlotDisplayName;
+            person.wage = new WageSnapshot
+            {
+                weeklyWage = Mathf.CeilToInt(hire.WeeklyWageCents / 100f),
+                stabilityPercent = 75, // same literal the store opening path uses
+                currencyId = "dollars",
+            };
+            person.RecordVisibleWorkerRole(slot.SlotDisplayName, hire.WeeklyWageCents);
         }
 
         /// <summary>

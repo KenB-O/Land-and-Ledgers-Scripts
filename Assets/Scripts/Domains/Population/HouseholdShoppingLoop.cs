@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Freight;
+using LandLedgers.Economy.FreightFuel;
 using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Storage;
@@ -2758,6 +2759,20 @@ namespace LandLedgers.Population
                     return $"INCONSISTENCY: goods are in custody ({batch.BatchId}) but the household lot was rejected: {lotRejection}";
                 }
 
+                // CAMPAIGN-B (DEF-019): bought fuel must reach the reserve
+                // the heating evaluator reads. The live receipt paths book
+                // lots only, so credit the fuel reserve 1:1 (the legacy
+                // EmbodiedPurchaseExecutor precedent) for fuel items,
+                // exactly once per receipt. Non-fuel items are untouched;
+                // a missing reserve refuses loudly via the link's
+                // diagnostic and never invents one.
+                if (unitsReceived > 0
+                    && string.Equals(need.ItemId, HouseholdItemCatalog.FuelWoodId, StringComparison.OrdinalIgnoreCase))
+                {
+                    Series2HouseholdFuelReserveLink.CreditReserve(
+                        population.GetHousehold(need.HouseholdId), unitsReceived, 1, dayIndex, diag);
+                }
+
                 batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
                 custodyBatches.Remove(batch);
                 // Priority V1: the deposited lot's identity, resolved
@@ -2833,6 +2848,20 @@ namespace LandLedgers.Population
             if (lotRejection != null)
             {
                 return $"INCONSISTENCY: delivery {batch.BatchId} arrived but the household lot was rejected: {lotRejection}";
+            }
+
+            // CAMPAIGN-B (DEF-019): bought fuel must reach the reserve
+            // the heating evaluator reads. The live receipt paths book
+            // lots only, so credit the fuel reserve 1:1 (the legacy
+            // EmbodiedPurchaseExecutor precedent) for fuel items,
+            // exactly once per receipt. Non-fuel items are untouched;
+            // a missing reserve refuses loudly via the link's
+            // diagnostic and never invents one.
+            if (unitsReceived > 0
+                && string.Equals(need.ItemId, HouseholdItemCatalog.FuelWoodId, StringComparison.OrdinalIgnoreCase))
+            {
+                Series2HouseholdFuelReserveLink.CreditReserve(
+                    population.GetHousehold(need.HouseholdId), unitsReceived, 1, dayIndex, diag);
             }
 
             batch.Custody = GoodsCustodyState.ReceivedAtHousehold;

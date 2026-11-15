@@ -3767,27 +3767,30 @@ namespace LandLedgers.Orchestration.Systems
             string vehicleJourneyId,
             string originLocationId)
         {
-            if (string.IsNullOrWhiteSpace(vehicleId) || operatorPersonId < 0
-                || string.IsNullOrWhiteSpace(vehicleJourneyId)
-                || string.IsNullOrWhiteSpace(originLocationId))
-                return false;
-
             OffMapJourneyRecord vehicleJourney = OffMapJourneys.FindActiveByVehicle(vehicleId);
             OffMapJourneyRecord personJourney = OffMapJourneys.FindActiveByPerson(operatorPersonId);
-            if (vehicleJourney == null || personJourney == null
-                || !string.Equals(vehicleJourney.JourneyId, vehicleJourneyId, StringComparison.Ordinal)
-                || vehicleJourney.TravelerKind != OffMapTravelerKind.Vehicle
-                || personJourney.TravelerKind != OffMapTravelerKind.Person
-                || personJourney.PersonId != operatorPersonId
-                || !vehicleJourney.RequiresPhysicalArrivalConfirmation
-                || !personJourney.RequiresPhysicalArrivalConfirmation
-                || !vehicleJourney.PhysicalDestinationArrivalConfirmed
-                || !personJourney.PhysicalDestinationArrivalConfirmed
-                || !string.Equals(vehicleJourney.OriginLocationId, originLocationId, StringComparison.Ordinal)
-                || !string.Equals(personJourney.OriginLocationId, originLocationId, StringComparison.Ordinal)
-                || !string.Equals(vehicleJourney.DestinationLocationId, personJourney.DestinationLocationId, StringComparison.Ordinal)
-                || !string.Equals(vehicleJourney.GatewayLocationId, personJourney.GatewayLocationId, StringComparison.Ordinal))
+
+            // Campaign C (DEF-048): the pre-check below used to return false
+            // silently, so every refusal looked identical in the Console and
+            // the cause (missing journey, mismatched id, unconfirmed
+            // destination, ...) was invisible. Name the first failing check
+            // loudly, once, at the refusal — the controller calls this once
+            // per arrival attempt, so one line per refused arrival, never
+            // per tick. No retry is added: every cause named here is
+            // permanent once the return leg has started (see
+            // OriginArrivalRefusalReason), and the disposition after a
+            // refusal is Check 10 question 5, an owner decision. The
+            // destination-side method is deliberately untouched: its retry
+            // loop calls it every tick, so per-call logging there would spam.
+            string refusal = OriginArrivalRefusalReason.Describe(
+                vehicleId, operatorPersonId, vehicleJourneyId, originLocationId,
+                ToOriginArrivalJourneyState(vehicleJourney),
+                ToOriginArrivalJourneyState(personJourney));
+            if (refusal != null)
+            {
+                Debug.LogWarning(refusal, this);
                 return false;
+            }
 
             var diag = new List<string>();
             bool vehicleConfirmed = vehicleJourney.PhysicalOriginArrivalConfirmed
@@ -3803,6 +3806,27 @@ namespace LandLedgers.Orchestration.Systems
             SyncOffMapJourneysToSaveState();
             Debug.Log($"[OffMapJourney] Physical freight return confirmed: vehicle journey '{vehicleJourney.JourneyId}', operator journey '{personJourney.JourneyId}', vehicle '{vehicleId}', Ethan P{operatorPersonId}, origin '{originLocationId}'.", this);
             return true;
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-048): snapshots one journey record into the
+        /// pure refusal-reason helper's state. Null record maps to a null
+        /// snapshot (the helper names the missing journey). The traveler
+        /// kind is carried as its enum name so the helper stays free of
+        /// the journey-authority type and its Unity dependencies.
+        /// </summary>
+        private static OriginArrivalRefusalReason.JourneyState? ToOriginArrivalJourneyState(OffMapJourneyRecord record)
+        {
+            if (record == null) return null;
+            return new OriginArrivalRefusalReason.JourneyState(
+                record.JourneyId,
+                record.TravelerKind.ToString(),
+                record.PersonId,
+                record.RequiresPhysicalArrivalConfirmation,
+                record.PhysicalDestinationArrivalConfirmed,
+                record.OriginLocationId,
+                record.DestinationLocationId,
+                record.GatewayLocationId);
         }
 
         /// <summary>
@@ -4017,6 +4041,14 @@ namespace LandLedgers.Orchestration.Systems
             OpeningTransportPresentationController presentation =
                 FindAnyObjectByType<OpeningTransportPresentationController>();
             if (presentation == null) return;
+            // Campaign C (DEF-048): the movement controller, when present,
+            // remembers which journeys already had their origin arrival
+            // refused at the town return point. On a fresh-scene Continue
+            // there is no transport group at all, so this stays null and
+            // the generic line below is used — the refusal cannot be
+            // distinguished there, and is not guessed at.
+            CoupledTransportMovementController movement =
+                FindAnyObjectByType<CoupledTransportMovementController>();
 
             foreach (OffMapJourneyRecord journey in OffMapJourneys.AllJourneys())
             {
@@ -4047,8 +4079,29 @@ namespace LandLedgers.Orchestration.Systems
 
                 if (!presentation.BeginCoupledPhysicalReturn(shipment, journey, operatorPersonId))
                 {
-                    LogRefusalDayKeyed("physical-return-start:" + journey.JourneyId, absoluteDayIndex,
-                        $"[OffMapJourney] Loaded freight journey '{journey.JourneyId}' is waiting to begin its physical return: the assigned team, route, or current physical position did not validate.");
+                    // Campaign C (DEF-048): the generic line below used to
+                    // fire for every failed return start, including the
+                    // case where the team ALREADY came home and its origin
+                    // arrival was refused — a state in which "waiting to
+                    // begin its physical return" is false and the return
+                    // can never start (BeginCoupledPhysicalReturn requires
+                    // the team within 8 m of the supplier destination).
+                    // That stranded haul logged the misleading line every
+                    // day forever. Distinguish it: the refusal reason is in
+                    // the [CoupledTransport] / [OffMapJourney] warning
+                    // logged at the arrival, and no re-drive path exists —
+                    // the disposition is Check 10 question 5, an owner
+                    // decision, so this line names the state and stops there.
+                    if (movement != null && movement.HasRefusedOriginArrival(journey.JourneyId))
+                    {
+                        LogRefusalDayKeyed("physical-return-refused:" + journey.JourneyId, absoluteDayIndex,
+                            $"[OffMapJourney] Loaded freight journey '{journey.JourneyId}' cannot begin its physical return: the team already returned and its origin arrival was refused at the town return point (see the [CoupledTransport] warning for that journey); no re-drive path exists, and the haul stays active and unsettled until the owner decides the disposition (Check 10 question 5).");
+                    }
+                    else
+                    {
+                        LogRefusalDayKeyed("physical-return-start:" + journey.JourneyId, absoluteDayIndex,
+                            $"[OffMapJourney] Loaded freight journey '{journey.JourneyId}' is waiting to begin its physical return: the assigned team, route, or current physical position did not validate.");
+                    }
                 }
             }
         }

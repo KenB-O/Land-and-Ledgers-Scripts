@@ -87,6 +87,19 @@ namespace LandLedgers.Economy.Transport
         private string physicalDestinationBusinessId = string.Empty;
         private string physicalVehicleId = string.Empty;
         private string physicalOriginLocationId = string.Empty;
+
+        // Campaign C (DEF-048): journey ids whose physical origin arrival
+        // was refused at the town return point. Runtime-only, never
+        // serialized: the leg dies on refusal, so without this record the
+        // daily return driver (SimulationDrivers.DrivePhysicalFreightReturns)
+        // cannot tell a team that already came home from one still waiting
+        // at the supplier to begin its return, and logs the misleading
+        // "waiting to begin" line forever. The disposition after a refusal
+        // (retry the leg, re-drive the return, or declare the haul failed)
+        // is Check 10 question 5, an owner decision — this record only
+        // names the state so the log can. Journey ids are never reused, so
+        // a recorded refusal stays true for the life of the session.
+        [NonSerialized] private readonly HashSet<string> refusedOriginJourneyIds = new HashSet<string>();
         private bool regionalReturnToTownPath;
         private HorseWorldView horseView;
         private WagonWorldView wagonView;
@@ -95,6 +108,19 @@ namespace LandLedgers.Economy.Transport
 
         public bool IsLegActive => legActive || regionalLegActive;
         public string PhysicalJourneyId => physicalJourneyId;
+
+        /// <summary>
+        /// Campaign C (DEF-048): true when this controller already refused
+        /// the physical origin arrival for the given journey at the town
+        /// return point. The team is home and the leg is dead; the journey
+        /// and shipment stay active/unsettled until the owner decides the
+        /// disposition (Check 10 question 5). False for a blank id and for
+        /// any journey never refused here.
+        /// </summary>
+        public bool HasRefusedOriginArrival(string journeyId)
+        {
+            return !string.IsNullOrWhiteSpace(journeyId) && refusedOriginJourneyIds.Contains(journeyId);
+        }
 
         /// <summary>
         /// Starts walking the given path. Refuses (log + false, stays put)
@@ -523,6 +549,14 @@ namespace LandLedgers.Economy.Transport
                     {
                         legActive = false;
                         SetDriving(false);
+                        // Campaign C (DEF-048): record the refusal so the
+                        // daily return driver can distinguish this state
+                        // (team already home, arrival refused, no re-drive
+                        // path) from a return still waiting to begin. The
+                        // leg still dies here, exactly as before — this
+                        // record changes no movement or journey state.
+                        if (!string.IsNullOrWhiteSpace(physicalJourneyId))
+                            refusedOriginJourneyIds.Add(physicalJourneyId);
                         Debug.LogWarning($"[CoupledTransport] Reached the town return point for {legLabel}, but journey authority refused physical origin confirmation; freight remains active and unsettled.", this);
                         return;
                     }

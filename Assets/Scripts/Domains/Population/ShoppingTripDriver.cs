@@ -270,6 +270,53 @@ namespace LandLedgers.Population
                 || serviceTaskIdStringToTripId.ContainsKey(task.TaskId.ToString()));
 
         /// <summary>
+        /// Campaign C (DEF-049): true when a live trip (active, or in paid-return
+        /// recovery) still holds this task id as a leg or service task. Leg tasks
+        /// complete mid-trip while the trip is still live, and RehydrateAfterLoad
+        /// aborts a trip whose leg/service id fails to resolve — so the daily
+        /// terminal-task prune must never remove a task this method flags.
+        /// Completed trips leave both lists, so their ids stop being flagged the
+        /// moment the trip ends.
+        /// </summary>
+        public bool IsTaskReferencedByLiveTrip(EntityId taskId)
+        {
+            if (!taskId.IsValid)
+            {
+                return false;
+            }
+
+            foreach (PlannedShoppingTrip trip in activeTrips)
+            {
+                if (trip == null)
+                {
+                    continue;
+                }
+
+                if (trip.OutboundTaskId == taskId || trip.InStoreTaskId == taskId
+                    || trip.ReturnTaskId == taskId || trip.ServiceTaskId == taskId)
+                {
+                    return true;
+                }
+            }
+
+            foreach (PlannedShoppingTrip trip in returnRecoveries)
+            {
+                if (trip == null)
+                {
+                    continue;
+                }
+
+                if (trip.OutboundTaskId == taskId || trip.InStoreTaskId == taskId
+                    || trip.ReturnTaskId == taskId || trip.ServiceTaskId == taskId)
+                {
+                    return true;
+                }
+            }
+
+            return serviceTaskIdStringToTripId.ContainsKey(taskId.ToString());
+        }
+
+        /// <summary>
         /// Day boundary: plans a real-time trip for every open need of the
         /// household that does not already have an active trip. Needs nobody
         /// can serve stay open and are reported loudly by the loop.

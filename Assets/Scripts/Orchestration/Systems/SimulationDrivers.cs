@@ -2026,6 +2026,18 @@ namespace LandLedgers.Orchestration.Systems
                         ? timeManager.Settings.ShortTickIntervalGameSeconds : 900f);
             }
 
+            // Campaign C (DEF-049): the daily terminal-task prune must never remove
+            // a task a live shopping trip still references (rehydrate requires every
+            // leg/service id to resolve, and leg tasks complete mid-trip). The driver
+            // owns the live-trip lists, so it answers the predicate; the authority
+            // only calls it. Re-installing on every build is idempotent, and the
+            // lambda reads the field at call time, so a rebuilt driver is picked up.
+            if (hub != null && hub.Tasks != null)
+            {
+                hub.Tasks.IsTaskExternallyReferenced = taskId =>
+                    shoppingTripDriver != null && shoppingTripDriver.IsTaskReferencedByLiveTrip(taskId);
+            }
+
         }
 
         /// <summary>
@@ -3365,6 +3377,33 @@ namespace LandLedgers.Orchestration.Systems
             // DriveDailyNeeds mid-drive, so no placement after the shopping
             // drive can precede it.
             hub.DurationDiagnostics?.Evaluate(timeManager.AbsoluteGameSeconds, absoluteDayIndex);
+
+            // Campaign C (DEF-049): prune terminal tasks nothing reads anymore, once
+            // per day, after every daily drive has run — so the day's completions are
+            // all recorded first. Bounded by the retention floor and the live-trip /
+            // prerequisite guards in TaskAuthority.PruneTerminalTasks; saves then grow
+            // with live state, not with total tasks ever created.
+            DriveTaskPruning(absoluteDayIndex);
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-049): daily terminal-task prune (see
+        /// TaskAuthority.PruneTerminalTasks). Runs last in the day drive; the
+        /// retention floor keeps same-day reads safe regardless of drive order.
+        /// </summary>
+        private void DriveTaskPruning(int absoluteDayIndex)
+        {
+            if (hub?.Tasks == null)
+            {
+                return;
+            }
+
+            int pruned = hub.Tasks.PruneTerminalTasks(absoluteDayIndex);
+            if (pruned > 0)
+            {
+                Debug.Log("[TaskAuthority] DEF-049 prune day " + absoluteDayIndex + ": removed "
+                    + pruned + " terminal task(s).", this);
+            }
         }
 
         private void DriveMillbrookAidTable(int absoluteDayIndex)

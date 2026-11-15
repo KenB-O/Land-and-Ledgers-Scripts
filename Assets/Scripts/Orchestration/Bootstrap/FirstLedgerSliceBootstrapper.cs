@@ -2127,6 +2127,19 @@ namespace LandLedgers.FirstLedger
                 pass9.PersonHands = systemsHub.PersonHands;
                 pass9.HandheldContainers = systemsHub.HandheldContainers;
             }
+            // Campaign C (DEF-073): bind the live store queue so the Pass 9
+            // restore repopulates it — patience included. Without this the
+            // section is never captured or restored: Series2Pass9SaveState.
+            // CustomerQueue stays null, every save writes an empty queue
+            // section, and every waiting customer is dropped on load (their
+            // restored trip then waits with no queue entry and can never
+            // balk). The manager owns the live queue; restore is
+            // clear-then-load into it. Runs in the pre-restore window, so
+            // this binding lands before the Pass XL restore consumes the
+            // state below.
+            var storeManager = FindAnyObjectByType<GeneralStoreRuntimeManager>();
+            if (storeManager != null)
+                pass9.CustomerQueue = storeManager.CustomerQueue;
             // Reuse, never replace: Restore is clear-then-load into the live
             // holders, and the drivers cache references to them.
             if (pass9.FreightDriver == null)

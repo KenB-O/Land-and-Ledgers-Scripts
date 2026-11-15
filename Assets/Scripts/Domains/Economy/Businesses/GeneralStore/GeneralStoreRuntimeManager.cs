@@ -403,10 +403,14 @@ namespace LandLedgers.FirstLedger
         /// manager-bound store; created lazily on first use. Merchant ids are
         /// refreshed from the bound business on every access so a queue created
         /// before the business forms does not keep stale ids. Save/load of the
-        /// waiting line is NOT here: the single save slot is Agent 2's A10
-        /// Pass 9 slot (Series2Pass9Save), which is not on this branch yet —
-        /// see Plan 16 section 2. Until it lands, the live queue is lost on
-        /// save/load, exactly as today (no live queue exists today).</summary>
+        /// waiting line lives in the Pass 9 slot (Series2Pass9Save): the DTO
+        /// carries each entry's remaining and initial patience minutes, and
+        /// the live queue is bound into the Pass 9 save state at load
+        /// (FirstLedgerSliceBootstrapper.EnsurePass9SaveOwnerForRestore) and
+        /// at loop build (SimulationDrivers.BuildHouseholdShoppingLoop) —
+        /// Campaign C (DEF-073). Restore is clear-then-load into this
+        /// instance; the shopping driver resolves this same instance, so a
+        /// restored entry and its trip line up.</summary>
         public CustomerQueue CustomerQueue
         {
             get

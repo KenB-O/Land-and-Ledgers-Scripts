@@ -1971,6 +1971,16 @@ namespace LandLedgers.Orchestration.Systems
                 personHandSave.Series2Pass9State ??= new Series2Pass9SaveState();
                 personHandSave.Series2Pass9State.PersonHands = hub.PersonHands;
                 personHandSave.Series2Pass9State.HandheldContainers = hub.HandheldContainers;
+                // Campaign C (DEF-073): bind the live store queue into the
+                // Pass 9 save state so saves capture the waiting line
+                // (patience included). Same instance the shopping driver
+                // resolves; restore is clear-then-load into it. New Game
+                // sessions never run EnsurePass9SaveOwnerForRestore, so
+                // without this the first save would still write an empty
+                // queue section.
+                var storeManager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+                if (storeManager != null)
+                    personHandSave.Series2Pass9State.CustomerQueue = storeManager.CustomerQueue;
             }
 
             // Physical hands P4/P5: seed the hub-owned hand authority from
@@ -2310,6 +2320,15 @@ namespace LandLedgers.Orchestration.Systems
 
             // Slice 25: rehydrate shopping trips restored by the hub save.
             ApplyRestoredShoppingTrips();
+
+            // Campaign C (DEF-073): re-arm the queue patience tick at the
+            // restored clock, so a restored waiting customer's remaining
+            // patience decays from the restored time instead of pausing
+            // (in-session load, reused driver) or skipping the first
+            // short-tick interval (fresh scene). No-op on a New Game: the
+            // clock is at the scenario start and the queue is empty.
+            if (shoppingTripDriver != null && timeManager != null)
+                shoppingTripDriver.RearmQueueTickWatermark(timeManager.AbsoluteGameSeconds);
 
             // Campaign C (DEF-047): resume a wagon leg restored by the hub
             // save. Runs only while a restored leg is pending, so New Game

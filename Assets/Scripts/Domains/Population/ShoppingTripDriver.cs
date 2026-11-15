@@ -496,6 +496,25 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
+        /// Campaign C (DEF-073): re-arm the queue patience tick at the
+        /// restored clock after a load, so decay resumes from the restored
+        /// time. The watermark is live-only: on a fresh scene it starts at
+        /// -1 and the first post-load tick sets it with no decay (up to one
+        /// short-tick interval, 15 game-min, skipped), and on an in-session
+        /// load the driver is reused so the watermark stays ahead of the
+        /// rewound clock and decay pauses until the clock replays past it.
+        /// The patience values themselves are restored from the queue DTO;
+        /// this only re-arms the decay clock. Called from
+        /// SimulationDrivers.Rebind after the driver is (re)created; on a
+        /// New Game the clock is at the scenario start so the re-arm is a
+        /// no-op.
+        /// </summary>
+        public void RearmQueueTickWatermark(float restoredGameSeconds)
+        {
+            lastQueueTickGameSeconds = restoredGameSeconds;
+        }
+
+        /// <summary>
         /// Handles one due event for a trip leg (TaskCompletionDue) or an
         /// arranged delivery (JourneyStageDue). Records real worked minutes on
         /// each finished leg — travel and shopping occupy real budgeted time.

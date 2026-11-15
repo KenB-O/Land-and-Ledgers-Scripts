@@ -235,7 +235,7 @@ MonoBehaviour:
   openingBakeryFuelUnits: 0
   openingBakeryFlourPounds: 0
   openingBakeryNotionsUnits: 0
-  fuelDealerIntakeUnitsPerBakeryUnit: 0
+  fuelDealerIntakeUnitsPerBakeryUnit: 4
   openingHorseId: A0
   openingWagonId: opening-freight-wagon
   enableMortality: 1

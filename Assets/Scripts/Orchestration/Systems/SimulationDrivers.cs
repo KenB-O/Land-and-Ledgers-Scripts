@@ -534,7 +534,7 @@ namespace LandLedgers.Orchestration.Systems
                     Debug.Log($"[FuelDealerSupplier] Registered existing business '{business.RuntimeDisplayName}' " +
                         $"(id='{businessId}', owner='{business.Owner.DisplayName}', building={business.AssignedBuildingId}) " +
                         $"at '{adapter.LocationId}'; configured fuel_wood price={priceCents}c/bundle, " +
-                        $"yard intake={adapter.IntakeFuelWoodUnits} sourced unit(s), household-bundle conversion unset, " +
+                        $"yard intake={adapter.IntakeFuelWoodUnits} sourced unit(s), household-bundle conversion={FuelConversionRates.IntakeUnitsPerHouseholdBundle} intake units/bundle (Decision 1), " +
                         $"saleable bundles={adapter.ItemStockUnits(HouseholdItemCatalog.FuelWoodId)}.", this);
                 }
             }
@@ -552,8 +552,11 @@ namespace LandLedgers.Orchestration.Systems
         /// by custody, so the bakery's paid-source builder (when D-F2
         /// lands) sees the day's stock. First mill and first dealer only
         /// (C2 rule); a second mill or dealer warns and gets nothing.
-        /// Custody only: never pays the mill (D-F3 open), never creates a
-        /// lot, never touches a wagon or a shipment, never reads a price.
+        /// Custody AND payment: the dealer pays the mill 1c per intake unit
+        /// (D-F3, decided by owner Decision 1, Nov 15, 2026) for the lots
+        /// transferred. If the dealer cannot pay, the transfer is refused
+        /// and nothing moves — no fuel without a legitimate purchase.
+        /// Never creates a lot, never touches a wagon or a shipment.
         /// Loud refusal (diagnostic + once-per-piece warning) when any
         /// piece is absent — the transfer never silently no-ops. Called
         /// from OnDayChanged immediately before
@@ -636,9 +639,66 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // D-F3 (Decision 1): the transfer is a purchase — the dealer pays
+            // the mill 1c per intake unit. Affordability is checked BEFORE
+            // any custody moves, from the mill's held byproduct units; the
+            // payment then settles on the actual before/after intake delta,
+            // never on an estimate, so a lot that failed to transfer is
+            // never paid for. A transfer with no formed mill business has
+            // no mill cash to credit, so it is refused loudly rather than
+            // moving fuel unpaid.
+            IBusinessCashPort dealerCash = dealerBusiness.RuntimeState != null
+                ? new Series2BusinessRuntimeCashPort(dealerBusiness.RuntimeState)
+                : null;
+            IBusinessCashPort millCash = millBusiness?.RuntimeState != null
+                ? new Series2BusinessRuntimeCashPort(millBusiness.RuntimeState)
+                : null;
+
+            int heldIntakeUnits = 0;
+            if (mill.ByproductStock != null)
+            {
+                foreach (LandLedgers.Economy.Businesses.Sawmill.SlabOffcutFuelLot lot in mill.ByproductStock)
+                    heldIntakeUnits += Math.Max(0, lot == null ? 0 : lot.FuelWoodUnits);
+            }
+
+            long heldPriceCents = FuelConversionRates.ByproductPriceCents(heldIntakeUnits);
+            if (heldPriceCents > 0)
+            {
+                if (dealerCash == null || millCash == null)
+                {
+                    LogSawmillTransferWarningOnce("no-cash-port",
+                        $"Sawmill byproduct transfer refused: {heldIntakeUnits}u of byproduct held ({heldPriceCents}c at 1c/u, D-F3) but the "
+                        + (dealerCash == null ? "dealer" : "mill")
+                        + " has no cash authority; no fuel moved unpaid.");
+                    return;
+                }
+
+                if (dealerCash.BalanceCents < heldPriceCents)
+                {
+                    LogSawmillTransferWarningOnce("dealer-cannot-pay",
+                        $"Sawmill byproduct transfer refused: dealer '{dealerBusiness.InstanceId}' holds {dealerCash.BalanceCents}c but owes {heldPriceCents}c for {heldIntakeUnits}u of byproduct at 1c/u (D-F3); no fuel moved unpaid.");
+                    return;
+                }
+            }
+
             var diag = new List<string>();
+            int intakeBefore = pass9.FuelIntake.TotalFuelWoodUnitsFor(dealerBusiness.InstanceId);
             int transferred = mill.TransferByproductsToFuelDealer(dealerBusiness.InstanceId, pass9.FuelIntake, diag);
-            Debug.Log($"[SawmillTransfer] Day {dayIndex}: transferred {transferred} byproduct lot(s) from mill '{mill.BusinessInstanceId}' to FuelDealer '{dealerBusiness.InstanceId}' by custody ({string.Join("; ", diag)}).", this);
+            int intakeAfter = pass9.FuelIntake.TotalFuelWoodUnitsFor(dealerBusiness.InstanceId);
+            int settledUnits = Math.Max(0, intakeAfter - intakeBefore);
+            FuelDealerByproductSettlement.SettlementResult settlement =
+                FuelDealerByproductSettlement.Settle(settledUnits, dealerCash, millCash, diag);
+            if (!settlement.Settled)
+            {
+                // Unreachable in practice: the pre-check above guarantees the
+                // dealer can pay the held price, and the settled price is on
+                // a delta no larger than the held quantity. If it ever fires,
+                // the custody already moved, so the books must be reconciled
+                // — never silently re-paid.
+                Debug.LogWarning($"[SawmillTransfer] Day {dayIndex}: byproduct settlement failed after custody moved: {settlement.Refusal}", this);
+            }
+
+            Debug.Log($"[SawmillTransfer] Day {dayIndex}: transferred {transferred} byproduct lot(s) from mill '{mill.BusinessInstanceId}' to FuelDealer '{dealerBusiness.InstanceId}' by custody; paid {settlement.PriceCents}c for {settlement.IntakeUnits}u @ 1c/u (D-F3) ({string.Join("; ", diag)}).", this);
         }
 
         /// <summary>
@@ -9790,7 +9850,14 @@ namespace LandLedgers.Orchestration.Systems
 
             BusinessInstanceState dealerBusiness = dealerBusinessWithStock ?? firstPricedDealer;
             if (dealerBusiness == null || bakeryBusiness == null) return null;
-            long pricePerBakeryUnit = (long)dealerUnitPrice * intakeUnitsPerBakeryUnit;
+            // Decision 1 (Nov 15, 2026): the configured fuel_wood price is per
+            // household BUNDLE (28c), and one bundle is 10 intake units — so
+            // the price per bakery unit is bundlePrice x 4 / 10, NOT
+            // bundlePrice x 4. The old formula treated the bundle price as a
+            // per-intake-unit price and overcharged the bakery 10x (112c
+            // instead of 11c per bakery unit).
+            long pricePerBakeryUnit = FuelConversionRates.PriceCentsPerBakeryFuelUnit(
+                dealerUnitPrice, intakeUnitsPerBakeryUnit);
             if (pricePerBakeryUnit <= 0 || pricePerBakeryUnit > int.MaxValue) return null;
 
             return new LandLedgers.Orchestration.Player.Series2PaidDealerBakeryFuelSource(

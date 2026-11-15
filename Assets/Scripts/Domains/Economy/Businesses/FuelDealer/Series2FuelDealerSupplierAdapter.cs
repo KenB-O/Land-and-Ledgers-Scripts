@@ -11,12 +11,11 @@
 //
 // Item identity: households buy household item "fuel_wood"
 // (HouseholdItemCatalog.FuelWoodId). Intake lots hold fuel-wood units.
-// The conversion between intake units and household bundles is a
-// caller parameter (FuelUnitsPerHouseholdUnit, default 1), NOT a
-// decided game rate: the bundle-to-reserve conversion is still an
-// open Pass 8 decision, and this adapter must not silently fix it.
-// With the default, 1 intake unit = 1 household fuel_wood unit, and
-// every test in this pass uses that default and says so.
+// The conversion between intake units and household bundles is DECIDED
+// by owner Decision 1 (Nov 15, 2026): one household bundle = 10 intake
+// units. Production applies that factor in TryCreateForBusiness; the
+// property default stays 1 as a test convenience (direct-construction
+// tests rely on it), and production must never use the default.
 //
 // Pricing: the dealer price per household unit is caller-supplied
 // (a Pass 3 margin price in production, a test parameter in tests),
@@ -79,7 +78,7 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
         /// <summary>Dealer price per household fuel_wood unit, caller-supplied, never canon.</summary>
         public int PricePerHouseholdUnitCents { get; set; }
 
-        /// <summary>Intake units per household unit. Default 1; the bundle conversion is a Pass 8 decision.</summary>
+        /// <summary>Intake units per household unit. Default 1 is a test convenience (direct-construction tests rely on it); production applies the decided factor in TryCreateForBusiness (owner Decision 1: 10 intake units per household bundle).</summary>
         public int FuelUnitsPerHouseholdUnit { get; set; } = 1;
 
         /// <summary>Trade credit offered by this dealer. Off by default; a caller limit is required to use it.</summary>
@@ -159,10 +158,11 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
                 business.RuntimeDisplayName,
                 $"building:{business.AssignedBuildingId}",
                 configuredPricePerBundleCents);
-            // The intake quantity-to-household-bundle factor remains an
-            // explicit configuration decision. Do not apply this adapter's
-            // legacy convenience default to live gameplay.
-            adapter.FuelUnitsPerHouseholdUnit = 0;
+            // D-F1 (DECIDED, owner Decision 1, Nov 15, 2026): one household
+            // retail bundle is 10 intake units. Production applies the
+            // decided factor here; the property's default of 1 is a test
+            // convenience only and must never reach live gameplay.
+            adapter.FuelUnitsPerHouseholdUnit = FuelConversionRates.IntakeUnitsPerHouseholdBundle;
             return true;
         }
 

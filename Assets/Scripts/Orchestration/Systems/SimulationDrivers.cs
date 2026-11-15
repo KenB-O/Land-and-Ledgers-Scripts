@@ -3429,10 +3429,21 @@ namespace LandLedgers.Orchestration.Systems
             DriveTaskPruning(absoluteDayIndex);
         }
 
+        // Campaign C (DEF-049 follow-on, E-06): sticky flag for the
+        // once-only loud error when DriveTaskPruning runs with no
+        // live-trip predicate installed. Runtime-only, never serialized.
+        private bool taskPruneMissingPredicateWarningLogged;
+
         /// <summary>
         /// Campaign C (DEF-049): daily terminal-task prune (see
         /// TaskAuthority.PruneTerminalTasks). Runs last in the day drive; the
         /// retention floor keeps same-day reads safe regardless of drive order.
+        /// Campaign C (DEF-049 follow-on, E-06): the live-trip predicate is
+        /// installed only when hub.Tasks exists at build time, and
+        /// PruneTerminalTasks silently skips the guard when it is null — so
+        /// a prune with no predicate installed would delete live-trip leg
+        /// tasks unguarded. Refuse to prune and fail loudly instead (DEF-023
+        /// pattern: one error, then silent until a prune actually runs).
         /// </summary>
         private void DriveTaskPruning(int absoluteDayIndex)
         {
@@ -3441,6 +3452,20 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            if (hub.Tasks.IsTaskExternallyReferenced == null)
+            {
+                if (!taskPruneMissingPredicateWarningLogged)
+                {
+                    taskPruneMissingPredicateWarningLogged = true;
+                    Debug.LogError("[TaskAuthority] DEF-049 prune refused on day " + absoluteDayIndex
+                        + ": no live-trip external-reference predicate installed — terminal tasks kept. "
+                        + "A load that skips the predicate install must not prune unguarded.", this);
+                }
+
+                return;
+            }
+
+            taskPruneMissingPredicateWarningLogged = false;
             int pruned = hub.Tasks.PruneTerminalTasks(absoluteDayIndex);
             if (pruned > 0)
             {

@@ -13,6 +13,17 @@ namespace LandLedgers.Time
         [SerializeField]
         private SimulationTimeSettings settings;
 
+        // Campaign C (DEF-045 follow-on): the authored settings asset the
+        // scene references. Runtime-only, never serialized: a load clones it
+        // into a runtime copy and applies the snapshot to the copy, so the
+        // asset is never mutated (mutating it in memory marks it dirty in
+        // the Editor, and a project save would persist the restored values).
+        // A New Game restores the authored asset, so a Continue followed by
+        // a New Game in the same session does not inherit the restored
+        // values. Invariant: settings is a runtime copy only when
+        // authoredSettings is non-null (LoadFromSaveDto captures it first).
+        private SimulationTimeSettings authoredSettings;
+
         [Header("Runtime State")]
         [SerializeField]
         private SimulationSpeed currentSpeed = SimulationSpeed.Speed1x;
@@ -249,6 +260,16 @@ namespace LandLedgers.Time
                 return false;
             }
 
+            // Campaign C (DEF-045 follow-on): a New Game starts on the
+            // authored settings, not on values restored by an earlier
+            // Continue in this session (LoadFromSaveDto replaces settings
+            // with a runtime copy; authoredSettings is non-null exactly
+            // when a copy exists, per the invariant on the field).
+            if (authoredSettings != null)
+            {
+                settings = authoredSettings;
+            }
+
             settings.Sanitize();
             calendarDayOffset = settings.Anchor.ToAbsoluteDay(year, month, day);
             absoluteDayIndex = 0;
@@ -298,16 +319,31 @@ namespace LandLedgers.Time
             // made under, before the clock state below is restored, so the
             // saved accumulators are interpreted under the settings they
             // were accrued under. Old saves carry hasSettings false and
-            // keep the current settings. The live settings asset is
-            // mutated in memory only; in a build that never reaches disk
-            // and the asset file itself is untouched.
+            // keep the current settings. Campaign C (DEF-045 follow-on):
+            // the snapshot is applied to a runtime copy of the authored
+            // asset, never to the asset itself — mutating the asset in
+            // memory marks it dirty in the Editor, and a New Game in the
+            // same session after a Continue would otherwise inherit the
+            // restored values. The copy follows the TownWorldController
+            // runtime-settings precedent (Instantiate + "(Runtime Time
+            // Copy)" name + HideFlags.DontSave). A second load in the same
+            // session clones from the authored asset again, so each load
+            // starts from authored defaults.
             if (dto.settings != null && dto.settings.hasSettings && settings != null)
             {
+                if (authoredSettings == null)
+                {
+                    authoredSettings = settings;
+                }
+
+                settings = Instantiate(authoredSettings);
+                settings.name = authoredSettings.name + " (Runtime Time Copy)";
+                settings.hideFlags = HideFlags.DontSave;
                 List<string> differingSettings = dto.settings.ApplyTo(settings);
                 if (differingSettings.Count > 0)
                 {
                     Debug.LogWarning(
-                        $"Campaign C (DEF-045): save was made under different time settings; restored the saved values for: {string.Join(", ", differingSettings)}. Current settings were overwritten in memory for this session.",
+                        $"Campaign C (DEF-045): save was made under different time settings; restored the saved values for: {string.Join(", ", differingSettings)}. Restored values apply to a runtime copy for this session; the authored asset is untouched.",
                         this);
                 }
             }

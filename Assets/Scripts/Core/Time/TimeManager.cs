@@ -85,6 +85,13 @@ namespace LandLedgers.Time
         private double shortTickRemainder;
         public double PendingGameSeconds => pendingGameSeconds;
         public float LastAchievedGameSecondsPerRealSecond { get; private set; }
+
+        // Campaign C (DEF-061): day-keyed warning state for the achieved-speed
+        // readout. Runtime-only, deliberately NOT serialized: the warning is
+        // diagnostic, and the value it guards (pendingGameSeconds) is already
+        // persisted in the save DTO, so a Continue re-warns once for the
+        // restored day if the queue is still past the threshold.
+        private int lastAchievedSpeedWarningDayIndex = -1;
         private bool initialized;
         private bool shortTickCapHitThisFrame;
         private bool dispatchingShortTick;
@@ -154,6 +161,38 @@ namespace LandLedgers.Time
         public float CurrentGameSecondsPerRealSecond => settings != null
             ? ResolveSpeedMultiplier(currentSpeed) * settings.GameSecondsPerDay / Mathf.Max(1f, settings.realSecondsPerGameDayAt1x)
             : currentSpeed == SimulationSpeed.Paused ? 0f : currentSpeed == SimulationSpeed.RealTime ? 1f : ResolveSpeedMultiplier(currentSpeed);
+
+        /// <summary>
+        /// Campaign C (DEF-061): the pending-queue warning threshold, in
+        /// game-seconds — one full game day (see AchievedSpeedDiagnostics).
+        /// Falls back to 86,400 when no settings are assigned.
+        /// </summary>
+        public float AchievedSpeedWarningThresholdGameSeconds => settings != null
+            ? AchievedSpeedDiagnostics.WarningThresholdGameSeconds(settings.GameSecondsPerDay)
+            : 86400f;
+
+        /// <summary>
+        /// Campaign C (DEF-061): the achieved-speed readout — requested vs
+        /// achieved game-seconds per real second, pending game-seconds (and
+        /// days), and the selected speed. Diagnostic/summary surface only;
+        /// it changes no clock behaviour. The catch-up policy (what to do
+        /// when the clock falls behind) is Check 9 Q6, owner question (t),
+        /// and is deliberately NOT decided here.
+        /// </summary>
+        public string DescribeAchievedSpeed()
+        {
+            if (settings == null)
+            {
+                return "achieved-speed: no settings assigned.";
+            }
+
+            return AchievedSpeedDiagnostics.FormatAchievedSpeedLine(
+                CurrentGameSecondsPerRealSecond,
+                LastAchievedGameSecondsPerRealSecond,
+                pendingGameSeconds,
+                settings.GameSecondsPerDay,
+                currentSpeed.ToString());
+        }
         public int CollapsedDayRolloversLastFrame => collapsedDayRolloversLastFrame;
         public int CappedDayRolloverFrames => cappedDayRolloverFrames;
         public int CompressedShortTicksLastFrame => compressedShortTicksLastFrame;
@@ -465,6 +504,13 @@ namespace LandLedgers.Time
             float gameDeltaSeconds = realDeltaSeconds * speedMultiplier * (settings.GameSecondsPerDay / settings.realSecondsPerGameDayAt1x);
             gameDeltaSeconds = QueueAndAdvanceGameSeconds(gameDeltaSeconds);
             LastAchievedGameSecondsPerRealSecond = gameDeltaSeconds / realDeltaSeconds;
+            // Campaign C (DEF-061): readout slice only — surface the achieved
+            // speed and warn once per day while the pending queue stays past
+            // one full game day. No catch-up policy is applied here (Check 9
+            // Q6, owner question (t)). Paused frames never warn: while
+            // paused no new time is requested and the queue is not growing,
+            // so warning there would repeat stale state.
+            TickAchievedSpeedWarning();
             PublishSimulationTimeAdvanced(realDeltaSeconds, gameDeltaSeconds);
             VisualFrameUpdated?.Invoke(new SimulationFrameContext(
                 currentDate, currentSpeed, speedMultiplier, realDeltaSeconds,
@@ -481,6 +527,35 @@ namespace LandLedgers.Time
                 Mathf.Max(0f, gameDeltaSeconds),
                 timeOfDay01,
                 gameSecondsIntoDay));
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-061): once per absolute day, while the pending
+        /// queue holds more than one full game day of unprocessed time, log
+        /// the achieved-speed readout as a warning. Diagnostic only — the
+        /// clock keeps falling behind silently by current design until the
+        /// catch-up policy (Check 9 Q6, owner question (t)) is decided.
+        /// </summary>
+        private void TickAchievedSpeedWarning()
+        {
+            if (settings == null)
+            {
+                return;
+            }
+
+            if (!AchievedSpeedDiagnostics.ShouldWarnAchievedSpeedLag(
+                absoluteDayIndex,
+                lastAchievedSpeedWarningDayIndex,
+                pendingGameSeconds,
+                settings.GameSecondsPerDay))
+            {
+                return;
+            }
+
+            lastAchievedSpeedWarningDayIndex = absoluteDayIndex;
+            Debug.LogWarning(
+                $"Campaign C (DEF-061): {DescribeAchievedSpeed()} — the clock is more than one full game day behind the requested speed. No catch-up policy exists (Check 9 Q6, owner question (t)); the clock falls behind silently by current design.",
+                this);
         }
 
         private float ResolveSpeedMultiplier(SimulationSpeed speed)

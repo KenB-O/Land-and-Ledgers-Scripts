@@ -10757,19 +10757,26 @@ namespace LandLedgers.Orchestration.Systems
             // post-load tick. Two ways it can still be pending here: Rebind ran
             // and skipped it (authorities missing — recorded loudly in
             // ApplyRestoredShoppingTrips), or Rebind never ran after this load
-            // at all (DEF-065 dev-hotkey path: SaveLoadManager loads the slot
-            // directly and never calls Rebind). Retry once here, before any due
-            // pops or backstop scheduling; if the retry still cannot run, fail
-            // loudly and shield this first tick's backstop only — the backstop
-            // is idempotent and re-runs every tick, so skipping it once is
-            // harmless, while running it with empty driver maps would
-            // re-schedule the leg dues and lose the MAP-ONLY service due.
-            // Later ticks run the backstop normally: the skip is already logged,
-            // and holding the backstop off forever would stall every other
-            // task's dues. This guard does NOT fix DEF-065 — on that path
-            // Rebind's other work (supplier adapters, diagnostics, task
-            // definitions) is still skipped; it only keeps the shopping trips
-            // from being silently corrupted on the first tick.
+            // at all. Campaign C (DEF-065, corrected): the dev-hotkey path is
+            // NOT a no-Rebind path — every load funnels through
+            // SaveLoadManager.LoadSlotAtPath, which calls
+            // bootstrapper.MarkRestoredFromSave, which calls Rebind, so the
+            // hotkey path rebinds like Continue. A never-ran Rebind here
+            // means no bootstrapper was found at load time (SaveLoadManager
+            // logs that loudly now), a load bypassed LoadSlotAtPath, or
+            // Rebind ran before the restored trips were registered. Retry
+            // once here, before any due pops or backstop scheduling; if the
+            // retry still cannot run, fail loudly and shield this first
+            // tick's backstop only — the backstop is idempotent and re-runs
+            // every tick, so skipping it once is harmless, while running it
+            // with empty driver maps would re-schedule the leg dues and lose
+            // the MAP-ONLY service due. Later ticks run the backstop
+            // normally: the skip is already logged, and holding the
+            // backstop off forever would stall every other task's dues.
+            // This guard keeps the shopping trips from being silently
+            // corrupted on the first tick; it does not replace Rebind's
+            // other restore work (supplier adapters, diagnostics, task
+            // definitions), which runs in Rebind itself.
             bool skippedAtRebind = shoppingRehydrateGuard.SkippedAfterLoad;
             bool rehydratePendingAtTick = skippedAtRebind
                 || (shoppingTripDriver != null && shoppingTripDriver.NeedsRehydrateAfterLoad);
@@ -10778,7 +10785,7 @@ namespace LandLedgers.Orchestration.Systems
                 ApplyRestoredShoppingTrips();
                 if (!skippedAtRebind && !shoppingRehydrateGuard.SkippedAfterLoad)
                 {
-                    Debug.LogWarning("[SimulationDrivers] Restored shopping trips rehydrated late on the first post-load tick — Rebind did not run after this load (see DEF-065). The trips are intact; Rebind's other restore work is still missing.", this);
+                    Debug.LogWarning("[SimulationDrivers] Restored shopping trips rehydrated late on the first post-load tick — Rebind did not run after this load, or ran before the restored trips were registered (see DEF-065). The trips are intact; if Rebind never ran, its other restore work (supplier adapters, diagnostics, task definitions) is still missing.", this);
                 }
             }
             bool shieldBackstopThisTick = shoppingRehydrateGuard.TakeFirstTickGuard();

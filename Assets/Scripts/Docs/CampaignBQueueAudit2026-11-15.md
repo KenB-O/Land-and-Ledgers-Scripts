@@ -1,11 +1,17 @@
 # Agent B — Package 10 checkpoint (B-lane queue audit)
 
 - **Branch:** `muse/campaign-b-economy-2026-11-15`
-- **Commit:** `6228bc0da5b242fcdf19851c0531d874198d5e96`
+- **Commit:** `4c3d98e71f19a255867068780f11c2c59468d60b`
 - **Parent:** `cc19849d` (DEF-006 MakeOffer half, package 9)
 - **Base:** `4ee829a9` (maintenance pass)
-- **Files changed (repo):** 1 file, documentation only — `agent-b-checkpoint-10.md`
-  (this file). **Zero production files changed. Zero test files changed.**
+- **Files changed (repo):** 2 files, documentation only —
+  `Assets/Scripts/Docs/CampaignBQueueAudit2026-11-15.md` and its `.meta`.
+  **Zero production files changed. Zero test files changed.**
+- **Correction (package 11, E checkpoint 19):** header previously recorded the
+  superseded pre-amend SHA `6228bc0d` (not an ancestor, not in the B log, not
+  on the remote — the amend changed the hash, so the file could not record its
+  own amended SHA) and the pre-copy file list; corrected here to the actual
+  amended commit and the actual 2 files.
 - **Harness:** no run — nothing executable changed. Prior suites stand at 102 tests
   (9+6+12+7+9+13+16+14+16) from package 9.
 

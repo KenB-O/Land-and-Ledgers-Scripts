@@ -528,17 +528,24 @@ namespace LandLedgers.Economy.BreadDrivers
 
             // Per-batch economics, logged whenever a batch is planned today:
             // the TRUE cost — flour + notions — vs wholesale revenue, margin
-            // visible, never hidden. Plan 10 E5 (reporting only): the old
-            // flour-only line understated the loss by the notions cost (58c
-            // vs 48c = -10c); the true cost is 68c vs 48c = -20c/batch. No
-            // price, cost, quantity, or decision changes here — the margin
-            // investigation itself (B4) stays separate work. When the
-            // notions registration is absent (unwired notions) the line
-            // states the notions cost as unknown rather than 0, labels the
-            // flour-only figure as such, and prints no margin; a
-            // zero/negative notions price is treated as unknown, never as
-            // free notions. The missing B2B flour price term is recorded
-            // in Plan 02 §5.
+            // visible, never hidden. Live figures (verified Nov 15, 2026,
+            // B-14): wholesale revenue is 24 loaves x the live account
+            // price (4c/loaf per the scenario-authored wholesale account,
+            // so 96c/batch); flour is 2 sacks per 12-lb batch at the live
+            // store price per 10 lb sack (authored band 28c-45c, so
+            // 56c-90c); notions are 1 unit x 10c = 10c/batch. True cost
+            // is 66c-100c/batch, so the margin runs +30c to -4c/batch as
+            // the live store flour price moves across its band. The old
+            // Plan 10 E5 figures (68c vs 48c = -20c/batch, at the old
+            // 2c/loaf wholesale price) are superseded and must not be
+            // quoted. No price, cost, quantity, or decision changes
+            // here — the margin investigation itself (B4) stays separate
+            // work. When the notions registration is absent (unwired
+            // notions) the line states the notions cost as unknown
+            // rather than 0, labels the flour-only figure as such, and
+            // prints no margin; a zero/negative notions price is treated
+            // as unknown, never as free notions. The missing B2B flour
+            // price term is recorded in Plan 02 §5.
             //
             // Plan 11 M1 (reporting only): the cost above is a
             // STANDALONE-BATCH standard cost — it charges two full sacks

@@ -37,8 +37,11 @@ namespace LandLedgers.EditorTests.Economy
     /// delegate person, the scopes, the purchase limit, and the skill gate.
     /// That is an owner decision, not a code fix. This package therefore
     /// fixes what is mechanically fixable — the wrong Canon citation
-    /// (F7-15: code cites "Canon CE1-13.2"; the verified v3.0 source is
-    /// Canon XXXI Part V §§5.2/9.1) — and pins the inert state with tests
+    /// (F7-15: code cites "Canon CE1-13.2"; the verified source is
+    /// Canon XXXI Part IX §§9.1-9.6 + §5.2 — B-7 corrected it to
+    /// Part V §§5.2/9.1, and the v3.2 intake (Nov 15, 2026) corrected
+    /// the part label to Part IX, verified against the v3.2 Canon text;
+    /// B-14 applies the re-label) — and pins the inert state with tests
     /// that fail loudly if it ever changes without an explicit decision.
     ///
     /// The package-1 hiring service agrees with the apparatus: its
@@ -317,11 +320,17 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void CanonCitation_CorrectedToPartV()
+        public void CanonCitation_CorrectedToPartIX()
         {
             // F7-15: the code cited "Canon CE1-13.2" for the three modes;
-            // §13.2 covers other topics. The verified v3.0 source is
-            // Canon XXXI Part V §§5.2/9.1 (this package corrects it).
+            // §13.2 covers other topics. B-7 corrected it to Part V
+            // §§5.2/9.1; the v3.2 intake (Nov 15, 2026) corrected the
+            // part label: the delegation doctrine is Canon XXXI Part IX
+            // §§9.1-9.6 + §5.2 (§9.1 is in Part IX; §5.2 is in Part V),
+            // verified directly against the v3.2 Canon text. B-14 applies
+            // the re-label (the one remaining "Part V §5.2" citation, on
+            // the Objective field, is correct as-is — §5.2 is in Part V —
+            // and is not part of this assertion).
             foreach (string path in new[] { StandingInstructionPath, ManagerBrainPath })
             {
                 string source = ReadRepoFile(path);
@@ -329,8 +338,10 @@ namespace LandLedgers.EditorTests.Economy
                     path + " still cites 13.2 for the delegation doctrine.");
                 Assert.IsFalse(source.Contains("CE1-13.2"),
                     path + " still cites CE1-13.2 for the delegation doctrine.");
-                Assert.IsTrue(source.Contains("Part V"),
-                    path + " does not cite Part V for the delegation doctrine.");
+                Assert.IsFalse(source.Contains("Part V §§5.2/9.1"),
+                    path + " still cites Part V §§5.2/9.1 for the delegation doctrine.");
+                Assert.IsTrue(source.Contains("Part IX"),
+                    path + " does not cite Part IX for the delegation doctrine.");
             }
         }
 

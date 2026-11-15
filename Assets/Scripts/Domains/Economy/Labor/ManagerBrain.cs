@@ -1,5 +1,5 @@
 // Worker D: Autonomous Labor, Phase G - autonomous management.
-// Canon XXXI Part V §§5.2/9.1 delegation model: the manager acts ONLY within delegated
+// Canon XXXI Part IX §§9.1-9.6 + §5.2 delegation model: the manager acts ONLY within delegated
 // scopes and standing-instruction bounds. The manager is an ORDINARY PERSON
 // (every decision notes its time cost); there is no perfect foresight
 // (evidence cites observed conditions only); poor decisions are possible

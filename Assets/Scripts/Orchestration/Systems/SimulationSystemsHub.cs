@@ -183,6 +183,14 @@ namespace LandLedgers.Orchestration.Systems
         // register holds no equipment — the gate still refuses loudly.
         private Dictionary<string, BusinessEquipmentRegister> equipmentRegisters;
 
+        // B0 (Agent B, expanded campaign 2026-11-16): hub-owned
+        // per-household furnishing registers, keyed by household id
+        // (the int id from HouseholdState / HouseholdLedger). The
+        // registers are the live holders; the Pass 9 save seam persists
+        // them and the bootstrap re-registers restored ones after a
+        // load. A household with no register holds no furniture.
+        private Dictionary<int, HouseholdFurnishingRegister> householdFurnishingRegisters;
+
         // C2: one live lumber yard runtime per LumberYard business,
         // mirroring the per-business equipment registers above. The Pass 9
         // save seam persists the first yard only (single holder field);
@@ -246,6 +254,31 @@ namespace LandLedgers.Orchestration.Systems
             if (register == null || string.IsNullOrWhiteSpace(register.BusinessInstanceId)) return;
             equipmentRegisters ??= new Dictionary<string, BusinessEquipmentRegister>(StringComparer.Ordinal);
             equipmentRegisters[register.BusinessInstanceId] = register;
+        }
+
+        /// <summary>B0: the furnishing register for one household, created on first use (empty).</summary>
+        public HouseholdFurnishingRegister FurnishingRegisterFor(int householdId)
+        {
+            householdFurnishingRegisters ??= new Dictionary<int, HouseholdFurnishingRegister>();
+            if (!householdFurnishingRegisters.TryGetValue(householdId, out HouseholdFurnishingRegister register) || register == null)
+            {
+                register = new HouseholdFurnishingRegister { HouseholdId = householdId };
+                householdFurnishingRegisters[householdId] = register;
+            }
+            return register;
+        }
+
+        /// <summary>
+        /// B0: adopts a register (e.g. one restored from the Pass 9 save
+        /// seam) as the hub's live holder for its household. Replaces by
+        /// household id, never merges — the save data is authoritative,
+        /// and re-registering the same register is idempotent.
+        /// </summary>
+        public void RegisterHouseholdFurnishings(HouseholdFurnishingRegister register)
+        {
+            if (register == null) return;
+            householdFurnishingRegisters ??= new Dictionary<int, HouseholdFurnishingRegister>();
+            householdFurnishingRegisters[register.HouseholdId] = register;
         }
 
         /// <summary>

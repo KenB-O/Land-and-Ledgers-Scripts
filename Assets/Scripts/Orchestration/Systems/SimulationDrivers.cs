@@ -367,6 +367,8 @@ namespace LandLedgers.Orchestration.Systems
         private EmbodiedPurchaseExecutor purchaseExecutor;
         /// <summary>DEF-067: diagnostics-only food-charge reconciliation (in-memory, never saved). Constructed once in DriveDailyNeeds.</summary>
         private HouseholdFoodChargeReconciliation foodChargeReconciliation;
+        private readonly HouseholdFoodChargeReconciliationReporter foodChargeReconciliationReporter =
+            new HouseholdFoodChargeReconciliationReporter();
         private HouseholdMembershipRegistry householdMemberships;
         private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
         private readonly Dictionary<string, LaborDemandReport> latestDemandByBusiness =
@@ -3729,6 +3731,17 @@ namespace LandLedgers.Orchestration.Systems
 
             int absoluteDayIndex = timeManager.CurrentAbsoluteDayIndex;
 
+            // DEF-067: publish yesterday's completed household charges at
+            // the day boundary. The daily-needs drive below starts today's
+            // shopping; physical purchase/receipt events settle later, so
+            // a same-day summary there is an incomplete snapshot.
+            foodChargeReconciliation ??= new HouseholdFoodChargeReconciliation();
+            if (foodChargeReconciliationReporter.TryCreateCompletedDayLine(
+                    foodChargeReconciliation, absoluteDayIndex - 1, out string completedFoodChargeLine))
+            {
+                Debug.Log(completedFoodChargeLine, this);
+            }
+
             DriveMillbrookAidTable(absoluteDayIndex);
 
             // Pass XI WS1 start contract: the day change drives dated
@@ -6109,12 +6122,6 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             DriveEmbodiedShopping(absoluteDayIndex, diag);
-            // DEF-067: one compact daily charge-reconciliation line (legacy
-            // vs Phase C per household-day, with OVERLAP / MULTI-ITEM flags).
-            // Emitted every day, even all-zero, so a missing line never looks
-            // like a logging cutoff. The recorder is constructed above in
-            // this drive, so it is non-null here.
-            diag.Add(foodChargeReconciliation.SummarizeDayLine(absoluteDayIndex));
             DriveHouseholdAutonomy(absoluteDayIndex, diag);
             PublishHouseholdShoppingSummariesAndTraces(absoluteDayIndex, diag);
             if (diag.Count > 0)

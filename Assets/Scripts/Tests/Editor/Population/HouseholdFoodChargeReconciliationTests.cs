@@ -246,6 +246,27 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(2, c.PerWant.Count);
         }
 
+        [Test]
+        public void Reporter_PublishesCompletedDayAfterSettlements_AndIncludesZeroDaysOnce()
+        {
+            var recorder = new HouseholdFoodChargeReconciliation();
+            var reporter = new HouseholdFoodChargeReconciliationReporter();
+
+            // A day is summarized at the next day boundary, after its
+            // physical shopping settlements have been recorded.
+            Assert.IsTrue(reporter.TryCreateCompletedDayLine(recorder, 2, out string emptyDay));
+            StringAssert.Contains("day 2: no food charges recorded", emptyDay);
+            Assert.IsFalse(reporter.TryCreateCompletedDayLine(recorder, 2, out _),
+                "One completed day should not be published repeatedly.");
+
+            recorder.RecordPhaseC(7, 3, HouseholdItemCatalog.BreadId,
+                6, 30, 0, 30, 12, "General Store", "cash");
+            Assert.IsTrue(reporter.TryCreateCompletedDayLine(recorder, 3, out string settledDay));
+            StringAssert.Contains("H7 legacy=0u/0c phaseC=6u/30c", settledDay);
+            Assert.IsFalse(settledDay.Contains("OVERLAP"), settledDay);
+            Assert.IsFalse(settledDay.Contains("MULTI-ITEM"), settledDay);
+        }
+
         // ---------- T8: null recorder changes nothing ----------
 
         [Test]

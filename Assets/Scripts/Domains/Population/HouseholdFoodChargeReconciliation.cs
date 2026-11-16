@@ -289,4 +289,36 @@ namespace LandLedgers.Population
             return $"[FoodEconomy] charge reconciliation day {dayIndex}: " + string.Join("; ", parts) + flagText;
         }
     }
+
+    /// <summary>
+    /// Emits a day's food-charge reconciliation only after that simulated
+    /// day has completed. Physical shopping settles during the day, after
+    /// the daily needs drive starts, so logging the current day's summary
+    /// from that drive produces a misleading early snapshot.
+    /// </summary>
+    public sealed class HouseholdFoodChargeReconciliationReporter
+    {
+        private int lastPublishedDayIndex = -1;
+
+        public bool TryCreateCompletedDayLine(
+            HouseholdFoodChargeReconciliation reconciliation,
+            int completedDayIndex,
+            out string line)
+        {
+            line = null;
+            if (reconciliation == null || completedDayIndex < 0)
+            {
+                return false;
+            }
+
+            if (completedDayIndex == lastPublishedDayIndex)
+            {
+                return false;
+            }
+
+            line = reconciliation.SummarizeDayLine(completedDayIndex);
+            lastPublishedDayIndex = completedDayIndex;
+            return true;
+        }
+    }
 }

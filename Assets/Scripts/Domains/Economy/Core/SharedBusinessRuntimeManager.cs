@@ -8300,18 +8300,14 @@ namespace LandLedgers.Economy
                 : 0f;
             float effectiveMarkup = Mathf.Max(1f, categoryMarkup + policyMarginAdjustment);
 
-            // DEF-013 (Decision 9): the category price responds to live
-            // stock through the authored supply/demand hook. Same stock
-            // source as CalculateLocalMarketCapture01: the category stock
-            // state, falling back to the business-wide stock health. No
-            // business means no signal and the price is unchanged.
-            float supplyDemandPressure = 0f;
-            if (business != null && business.RuntimeState != null)
-            {
-                CategoryStockState stock = business.RuntimeState.GetCategoryStock(categoryId);
-                float stockHealth01 = stock != null ? stock.StockHealth01 : business.RuntimeState.StockHealth01;
-                supplyDemandPressure = RetailPricingDefinition.ResolveSupplyDemandPressure01(stockHealth01);
-            }
+            // DEF-013 (Decision 9), follow-up: the category price responds
+            // to live stock through the authored supply/demand hook. One
+            // resolution authority, shared with the retail shelf prices:
+            // the category stock state, falling back to the business-wide
+            // stock health. No business means no signal and the price is
+            // unchanged.
+            float supplyDemandPressure = RetailPricingDefinition.ResolveCategorySupplyDemandPressure01(
+                business != null ? business.RuntimeState : null, categoryId);
 
             int total = 0;
             int count = 0;

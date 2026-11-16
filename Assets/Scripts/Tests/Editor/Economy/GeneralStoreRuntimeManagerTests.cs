@@ -1,9 +1,11 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using LandLedgers.Economy;
 using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using NUnit.Framework;
+using UnityEditor;
 using UnityEngine;
 
 namespace LandLedgers.EditorTests.Economy
@@ -156,6 +158,162 @@ namespace LandLedgers.EditorTests.Economy
             {
                 Object.DestroyImmediate(root);
             }
+        }
+
+        [Test]
+        public void ShelfPrice_Flour_RisesWhenStockIsLow_AndFallsWhenStockIsFull()
+        {
+            // DEF-013 follow-up (Decision 9): the retail shelf price uses
+            // the same supply/demand pressure as the transfer price.
+            // Authored flour: landed 20c, sensitivity 0.35, band [28, 45],
+            // staple_food markup 1.45 (no current business is set, so the
+            // policy margin adjustment is 0). Empty stock (pressure +1)
+            // prices 39c, half stock (pressure 0) 29c, full stock
+            // (pressure -1) 28c (band floor). Bread is deliberately not
+            // used: its price is pinned at the 5c floor across the whole
+            // pressure range.
+            GeneralStoreBusinessDefinition definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(DefinitionPath);
+            Assert.NotNull(definition, "Authored General Store definition missing");
+            GameObject root = new("GeneralStoreRuntimeManager_ShelfPriceFlour");
+            try
+            {
+                GeneralStoreRuntimeManager manager = NewManager(root);
+                BusinessInstanceState business = BusinessInstanceState.Create(
+                    "shelf-price-flour", definition, 60, BusinessOwnerIdentity.Npc(1, "Test owner", "Test"));
+                SetStore(manager, definition, business.RuntimeState);
+                CategoryStockState stock = business.RuntimeState.GetCategoryStock("staple_food");
+                Assert.NotNull(stock, "staple_food stock state missing");
+                Assert.Greater(stock.TargetStockUnits, 10, "staple_food target too small for a half-stock pin");
+
+                stock.SetCurrentStockForTests(0);
+                Assert.AreEqual(39, manager.GetItemSellingPriceCents("flour"));
+                Assert.AreEqual(OracleFlourPrice(definition, stock), manager.GetItemSellingPriceCents("flour"));
+
+                stock.SetCurrentStockForTests(stock.TargetStockUnits / 2);
+                Assert.AreEqual(29, manager.GetItemSellingPriceCents("flour"));
+                Assert.AreEqual(OracleFlourPrice(definition, stock), manager.GetItemSellingPriceCents("flour"));
+
+                stock.SetCurrentStockForTests(stock.TargetStockUnits);
+                Assert.AreEqual(28, manager.GetItemSellingPriceCents("flour"));
+                Assert.AreEqual(OracleFlourPrice(definition, stock), manager.GetItemSellingPriceCents("flour"));
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void ShelfPrice_CategoryAverage_MovesWithStock()
+        {
+            // The category-average shelf price equals the oracle average
+            // (each item priced at the resolved pressure with the 1.45
+            // category markup) at empty, half, and full stock, and falls
+            // strictly as stock rises. If the manager still passed 0f,
+            // all three levels would equal the half-stock average.
+            GeneralStoreBusinessDefinition definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(DefinitionPath);
+            Assert.NotNull(definition, "Authored General Store definition missing");
+            GameObject root = new("GeneralStoreRuntimeManager_ShelfPriceAverage");
+            try
+            {
+                GeneralStoreRuntimeManager manager = NewManager(root);
+                BusinessInstanceState business = BusinessInstanceState.Create(
+                    "shelf-price-average", definition, 60, BusinessOwnerIdentity.Npc(1, "Test owner", "Test"));
+                SetStore(manager, definition, business.RuntimeState);
+                CategoryStockState stock = business.RuntimeState.GetCategoryStock("staple_food");
+                Assert.NotNull(stock, "staple_food stock state missing");
+
+                stock.SetCurrentStockForTests(0);
+                int emptyAverage = manager.GetAverageCategorySellingPriceCents("staple_food");
+                Assert.AreEqual(OracleStapleFoodAverage(definition, stock), emptyAverage);
+
+                stock.SetCurrentStockForTests(stock.TargetStockUnits / 2);
+                int halfAverage = manager.GetAverageCategorySellingPriceCents("staple_food");
+                Assert.AreEqual(OracleStapleFoodAverage(definition, stock), halfAverage);
+
+                stock.SetCurrentStockForTests(stock.TargetStockUnits);
+                int fullAverage = manager.GetAverageCategorySellingPriceCents("staple_food");
+                Assert.AreEqual(OracleStapleFoodAverage(definition, stock), fullAverage);
+
+                Assert.IsTrue(emptyAverage > halfAverage, $"empty {emptyAverage} should exceed half {halfAverage}");
+                Assert.IsTrue(halfAverage > fullAverage, $"half {halfAverage} should exceed full {fullAverage}");
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void ShelfPrice_UnboundManager_ReturnsNoPressurePrice()
+        {
+            // A manager asked for a price before it is bound to a runtime
+            // keeps today's behaviour exactly: the flour price is the
+            // no-pressure price.
+            GeneralStoreBusinessDefinition definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(DefinitionPath);
+            Assert.NotNull(definition, "Authored General Store definition missing");
+            GameObject root = new("GeneralStoreRuntimeManager_ShelfPriceUnbound");
+            try
+            {
+                GeneralStoreRuntimeManager manager = NewManager(root);
+                FieldInfo definitionField = typeof(GeneralStoreRuntimeManager).GetField(
+                    "storeDefinition", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.NotNull(definitionField, "GeneralStoreRuntimeManager.storeDefinition field missing");
+                definitionField.SetValue(manager, definition);
+                Assert.AreEqual(29, manager.GetItemSellingPriceCents("flour"));
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        private const string DefinitionPath = "Assets/Core/Economy/GeneralStoreBusinessDefinition.asset";
+
+        private static void SetStore(GeneralStoreRuntimeManager manager, GeneralStoreBusinessDefinition definition, BusinessRuntimeState state)
+        {
+            FieldInfo definitionField = typeof(GeneralStoreRuntimeManager).GetField(
+                "storeDefinition", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(definitionField, "GeneralStoreRuntimeManager.storeDefinition field missing");
+            definitionField.SetValue(manager, definition);
+            FieldInfo stateField = typeof(GeneralStoreRuntimeManager).GetField(
+                "runtimeState", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(stateField, "GeneralStoreRuntimeManager.runtimeState field missing");
+            stateField.SetValue(manager, state);
+        }
+
+        private static int OracleFlourPrice(GeneralStoreBusinessDefinition definition, CategoryStockState stock)
+        {
+            foreach (ItemDefinition item in definition.Items)
+            {
+                if (item != null && string.Equals(item.ItemId, "flour", StringComparison.OrdinalIgnoreCase))
+                {
+                    float pressure = RetailPricingDefinition.ResolveSupplyDemandPressure01(stock.StockHealth01);
+                    return Mathf.Max(5, item.Pricing.GetCostPlusPriceCents(1.45f, pressure));
+                }
+            }
+
+            Assert.Fail("Authored flour item missing from the General Store definition.");
+            return 0;
+        }
+
+        private static int OracleStapleFoodAverage(GeneralStoreBusinessDefinition definition, CategoryStockState stock)
+        {
+            float pressure = RetailPricingDefinition.ResolveSupplyDemandPressure01(stock.StockHealth01);
+            int total = 0;
+            int count = 0;
+            foreach (ItemDefinition item in definition.Items)
+            {
+                if (item == null || !string.Equals(item.CategoryId, "staple_food", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                total += item.Pricing.GetCostPlusPriceCents(1.45f, pressure);
+                count++;
+            }
+
+            return count == 0 ? 5 : Mathf.Max(5, total / count);
         }
 
         private static GeneralStoreRuntimeManager NewManager(GameObject root)

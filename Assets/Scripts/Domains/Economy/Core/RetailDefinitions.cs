@@ -81,6 +81,27 @@ namespace LandLedgers.Economy
             return Mathf.Clamp(1f - 2f * stockHealth01, -1f, 1f);
         }
 
+        /// <summary>
+        /// DEF-013 follow-up (Decision 9): resolves the supply/demand
+        /// pressure for one retail category from live runtime stock — the
+        /// category's own stock health when it has a stock state, else the
+        /// business-wide stock health (same source as the DEF-013
+        /// transfer-price path). A null runtime means no signal and the
+        /// price is unchanged (0f); a null or empty category falls back to
+        /// the business-wide health.
+        /// </summary>
+        public static float ResolveCategorySupplyDemandPressure01(BusinessRuntimeState runtime, string categoryId)
+        {
+            if (runtime == null)
+            {
+                return 0f;
+            }
+
+            CategoryStockState stock = runtime.GetCategoryStock(categoryId);
+            float stockHealth01 = stock != null ? stock.StockHealth01 : runtime.StockHealth01;
+            return ResolveSupplyDemandPressure01(stockHealth01);
+        }
+
         public int GetDisplayPriceCents(float categoryMarkupMultiplier = 1f, float supplyDemandPressure = 0f)
         {
             float markup = markupMultiplier <= 0f ? 1f : markupMultiplier;

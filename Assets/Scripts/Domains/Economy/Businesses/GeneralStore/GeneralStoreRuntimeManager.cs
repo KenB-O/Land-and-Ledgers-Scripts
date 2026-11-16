@@ -849,7 +849,8 @@ namespace LandLedgers.FirstLedger
             return false;
         }
 
-        /// <summary>Uses the authored item's cost-plus retail policy and category markup.</summary>
+        /// <summary>Uses the authored item's cost-plus retail policy and category markup, with the
+        /// DEF-013 follow-up (Decision 9) supply/demand pressure from live category stock.</summary>
         public int GetItemSellingPriceCents(string itemId)
         {
             if (storeDefinition == null || string.IsNullOrWhiteSpace(itemId)) return 0;
@@ -858,7 +859,9 @@ namespace LandLedgers.FirstLedger
             {
                 ItemDefinition item = items[i];
                 if (item == null || !string.Equals(item.ItemId, itemId, StringComparison.OrdinalIgnoreCase)) continue;
-                int price = item.Pricing.GetCostPlusPriceCents(GetCategoryMarkupMultiplier(item.CategoryId), 0f);
+                int price = item.Pricing.GetCostPlusPriceCents(
+                    GetCategoryMarkupMultiplier(item.CategoryId),
+                    RetailPricingDefinition.ResolveCategorySupplyDemandPressure01(runtimeState, item.CategoryId));
                 return Mathf.Max(minimumCategoryUnitPriceCents, price);
             }
             return 0;
@@ -5368,6 +5371,13 @@ namespace LandLedgers.FirstLedger
                 return minimumCategoryUnitPriceCents;
             }
 
+            // DEF-013 follow-up (Decision 9): the category average shelf
+            // price responds to live category stock through the same
+            // pressure the transfer price uses. Resolved once per call so
+            // the band warning below evaluates the same price charged.
+            float supplyDemandPressure =
+                RetailPricingDefinition.ResolveCategorySupplyDemandPressure01(runtimeState, categoryId);
+
             int total = 0;
             int count = 0;
             ReadOnlySpan<ItemDefinition> items = storeDefinition.Items;
@@ -5380,8 +5390,8 @@ namespace LandLedgers.FirstLedger
                 }
 
                 float categoryMarkupMultiplier = GetCategoryMarkupMultiplier(categoryId);
-                total += item.Pricing.GetCostPlusPriceCents(categoryMarkupMultiplier, 0f);
-                if (item.Pricing.IsMarginCompressedByBand(categoryMarkupMultiplier, 0f)
+                total += item.Pricing.GetCostPlusPriceCents(categoryMarkupMultiplier, supplyDemandPressure);
+                if (item.Pricing.IsMarginCompressedByBand(categoryMarkupMultiplier, supplyDemandPressure)
                     && loggedMarginCompressionCategoryIds.Add(categoryId))
                 {
                     Debug.LogWarning($"[General Store][Pricing] {GetCategoryDisplayName(categoryId)} price is capped by its local market band; intended cost-plus margin is compressed.", this);

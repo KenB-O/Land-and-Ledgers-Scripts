@@ -929,8 +929,39 @@ namespace LandLedgers.Orchestration.Systems
         /// SimulationDrivers (see BuildHouseholdShoppingLoop). The hub
         /// never constructs the driver; it only holds the reference for
         /// save/load, exactly like ShoppingLoop.
+        ///
+        /// Campaign C (DEF-028): the driver is attached by
+        /// BuildHouseholdShoppingLoop, which runs after the hub load on a
+        /// fresh-scene Continue — so the hub load cannot assume the
+        /// driver is present. A trip list that arrives while no driver
+        /// is attached is HELD in pendingShoppingTrips, not dropped, and
+        /// the attach drains it into the driver (LoadFromSaveDto,
+        /// clear-then-load; the driver is freshly constructed by the
+        /// same BuildHouseholdShoppingLoop call, so it holds no live
+        /// trips the drain could wipe). The drain runs before
+        /// SimulationDrivers.Rebind rehydrates, so a deferred trip is
+        /// rehydrated exactly like a directly loaded one.
         /// </summary>
-        public ShoppingTripDriver ShoppingTripDriver { get; set; }
+        private ShoppingTripDriver shoppingTripDriver;
+        private List<PlannedShoppingTripSaveDto> pendingShoppingTrips;
+
+        /// <summary>Campaign C (DEF-028): trips held for a driver that has not attached yet; 0 when none are pending.</summary>
+        public int PendingShoppingTripCount => pendingShoppingTrips != null ? pendingShoppingTrips.Count : 0;
+
+        public ShoppingTripDriver ShoppingTripDriver
+        {
+            get => shoppingTripDriver;
+            set
+            {
+                shoppingTripDriver = value;
+                if (shoppingTripDriver != null && pendingShoppingTrips != null && pendingShoppingTrips.Count > 0)
+                {
+                    List<PlannedShoppingTripSaveDto> deferred = pendingShoppingTrips;
+                    pendingShoppingTrips = null;
+                    shoppingTripDriver.LoadFromSaveDto(deferred);
+                }
+            }
+        }
 
         /// <summary>
         /// Pass III Worker C: hub-owned housing-search registry used by the
@@ -1492,7 +1523,13 @@ namespace LandLedgers.Orchestration.Systems
             }
             else if (dto.shoppingTrips != null && dto.shoppingTrips.Count > 0)
             {
-                diagnostics.Add("ShoppingTripDriver: save holds " + dto.shoppingTrips.Count + " shopping trips but no driver is attached to the hub — trips dropped.");
+                // Campaign C (DEF-028): defer, do not drop. On a
+                // fresh-scene Continue no BuildHouseholdShoppingLoop call
+                // has run yet, so the driver is never attached at hub-load
+                // time; the attach (BuildHouseholdShoppingLoop) drains
+                // these into the driver before Rebind rehydrates.
+                pendingShoppingTrips = new List<PlannedShoppingTripSaveDto>(dto.shoppingTrips);
+                diagnostics.Add("ShoppingTripDriver: save holds " + dto.shoppingTrips.Count + " shopping trips but no driver is attached to the hub yet — trips held pending the driver attach (DEF-028), not dropped.");
             }
             // Pass IV Worker 2: reservations restore before draft holds (draft
             // holds reference authority keys); capacity registrations restore in

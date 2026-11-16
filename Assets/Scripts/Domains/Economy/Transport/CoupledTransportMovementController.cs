@@ -50,6 +50,7 @@ using System.Collections.Generic;
 using System;
 using LandLedgers.FirstLedger;
 using LandLedgers.Orchestration.Systems;
+using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.World;
 using UnityEngine;
@@ -86,14 +87,47 @@ namespace LandLedgers.Economy.Transport
         private string physicalDestinationBusinessId = string.Empty;
         private string physicalVehicleId = string.Empty;
         private string physicalOriginLocationId = string.Empty;
+
+        // Campaign C (DEF-048): journey ids whose physical origin arrival
+        // was refused at the town return point. Runtime-only, never
+        // serialized: the leg dies on refusal, so without this record the
+        // daily return driver (SimulationDrivers.DrivePhysicalFreightReturns)
+        // cannot tell a team that already came home from one still waiting
+        // at the supplier to begin its return, and logs the misleading
+        // "waiting to begin" line forever. The disposition after a refusal
+        // (retry the leg, re-drive the return, or declare the haul failed)
+        // is Check 10 question 5, an owner decision — this record only
+        // names the state so the log can. Journey ids are never reused, so
+        // a recorded refusal stays true for the life of the session.
+        [NonSerialized] private readonly HashSet<string> refusedOriginJourneyIds = new HashSet<string>();
         private bool regionalReturnToTownPath;
         private HorseWorldView horseView;
         private WagonWorldView wagonView;
         private LandLedgers.Time.TimeManager subscribedTimeManager;
         private Vector3 authoritativeHorsePosition;
 
+        // Campaign C (DEF-030): the SimulationDrivers reference, resolved
+        // once at bind time and held, instead of a per-arrival scene
+        // lookup. Runtime-only, never serialized: the controller is
+        // attached at runtime and the cache is re-resolved on every leg
+        // bind. A null cache re-resolves on demand (see ResolveDrivers).
+        [NonSerialized] private SimulationDrivers cachedDrivers;
+
         public bool IsLegActive => legActive || regionalLegActive;
         public string PhysicalJourneyId => physicalJourneyId;
+
+        /// <summary>
+        /// Campaign C (DEF-048): true when this controller already refused
+        /// the physical origin arrival for the given journey at the town
+        /// return point. The team is home and the leg is dead; the journey
+        /// and shipment stay active/unsettled until the owner decides the
+        /// disposition (Check 10 question 5). False for a blank id and for
+        /// any journey never refused here.
+        /// </summary>
+        public bool HasRefusedOriginArrival(string journeyId)
+        {
+            return !string.IsNullOrWhiteSpace(journeyId) && refusedOriginJourneyIds.Contains(journeyId);
+        }
 
         /// <summary>
         /// Starts walking the given path. Refuses (log + false, stays put)
@@ -183,6 +217,9 @@ namespace LandLedgers.Economy.Transport
             regionalLegActive = false;
             distanceTravelledMetres = 0f;
             lastHeading = Quaternion.identity;
+            // Campaign C (DEF-030): resolve the drivers reference once at
+            // bind time; the arrival sites use the cache.
+            ResolveDrivers();
             legActive = true;
             SetDriving(true);
             Debug.Log($"[CoupledTransport] {this.legLabel} started: {path.Count} waypoints from {path[0]} to {path[path.Count - 1]} at {wagonSpeedMetresPerSecond} m/s.", this);
@@ -195,6 +232,232 @@ namespace LandLedgers.Economy.Transport
             legActive = false;
             regionalLegActive = false;
             SetDriving(false);
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-047): snapshots the in-flight leg for the save,
+        /// or null when no leg is active. The snapshot is the complete resume
+        /// state: path, travelled distance, movement parameters, driver and
+        /// journey identities, and the regional timer. The regional
+        /// destination Transform is NOT captured — the persisted regional
+        /// target position is authoritative instead.
+        /// </summary>
+        public WagonLegSaveDto CaptureLegSaveDto()
+        {
+            if (!legActive && !regionalLegActive) return null;
+            var dto = new WagonLegSaveDto
+            {
+                isActive = true,
+                isRegional = regionalLegActive,
+                regionalReturnToTownPath = regionalReturnToTownPath,
+                distanceTravelledMetres = distanceTravelledMetres,
+                cellSizeMetres = cellSizeMetres,
+                gridOriginX = gridOrigin.x,
+                gridOriginY = gridOrigin.y,
+                gridOriginZ = gridOrigin.z,
+                wagonSpeedMetresPerSecond = wagonSpeedMetresPerSecond,
+                pairSeparationMetres = pairSeparationMetres,
+                turnSpeedDegreesPerSecond = turnSpeedDegreesPerSecond,
+                ethanPersonId = ethanPersonId,
+                legLabel = legLabel,
+                hideOnArrival = hideOnArrival,
+                regionalTargetX = regionalTargetPosition.x,
+                regionalTargetY = regionalTargetPosition.y,
+                regionalTargetZ = regionalTargetPosition.z,
+                regionalTravelElapsedSeconds = regionalTravelElapsedSeconds,
+                regionalTravelDurationSeconds = regionalTravelDurationSeconds,
+                physicalJourneyId = physicalJourneyId,
+                physicalDestinationLocationId = physicalDestinationLocationId,
+                physicalDestinationBusinessId = physicalDestinationBusinessId,
+                physicalVehicleId = physicalVehicleId,
+                physicalOriginLocationId = physicalOriginLocationId,
+            };
+            if (path != null)
+            {
+                foreach (GridCoord cell in path)
+                    dto.path.Add(new GridCoordSaveDto { x = cell.x, z = cell.z });
+            }
+            return dto;
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-047): re-enters a leg from a persisted snapshot.
+        /// Mirrors StartLeg's refusals (degenerate path, invalid parameters,
+        /// unresolved driver, unavailable clock, missing horse/wagon views)
+        /// and additionally refuses when a leg is already active — a restore
+        /// must never overwrite a live leg, including one that survived an
+        /// in-session load untouched. A resumed grid leg is placed at its
+        /// persisted distance (clamped to the path); a resumed regional leg
+        /// restores its timer and stays hidden beyond the boundary until it
+        /// completes. The rider is boarded by the caller
+        /// (OpeningTransportPresentationController.ResumeCoupledLeg) before
+        /// this runs. Returns false with a warning when the snapshot cannot
+        /// resume; the wagon then stays where it stands, exactly as before
+        /// this fix.
+        /// </summary>
+        public bool RestoreLeg(WagonLegSaveDto dto)
+        {
+            if (dto == null || !dto.isActive)
+                return false;
+            if (IsLegActive)
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to resume leg '{dto.legLabel}': a leg is already active.", this);
+                return false;
+            }
+            if (!WagonLegRestoreRules.IsRestorable(dto.isActive, dto.path != null ? dto.path.Count : 0,
+                    dto.cellSizeMetres, dto.wagonSpeedMetresPerSecond, dto.pairSeparationMetres, dto.ethanPersonId))
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to resume leg '{dto.legLabel}': the saved leg is unusable (path cells={dto.path?.Count ?? 0}, cellSize={dto.cellSizeMetres}, wagonSpeed={dto.wagonSpeedMetresPerSecond}, separation={dto.pairSeparationMetres}, driver={dto.ethanPersonId}).", this);
+                return false;
+            }
+
+            var restoredPath = new List<GridCoord>(dto.path.Count);
+            foreach (GridCoordSaveDto cell in dto.path)
+                restoredPath.Add(new GridCoord(cell.x, cell.z));
+
+            PopulationPathingDirector restoredDirector = FindAnyObjectByType<PopulationPathingDirector>();
+            if (restoredDirector == null)
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to resume leg '{dto.legLabel}': the population pathing director is unresolved.", this);
+                return false;
+            }
+            if (!SubscribeToSimulationClock())
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to resume leg '{dto.legLabel}': the authoritative simulation clock is unavailable.", this);
+                return false;
+            }
+            HorseWorldView restoredHorseView = GetComponentInChildren<HorseWorldView>();
+            WagonWorldView restoredWagonView = GetComponentInChildren<WagonWorldView>();
+            if (restoredHorseView == null || restoredWagonView == null)
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to resume leg '{dto.legLabel}': horse or wagon view is not under the transport group.", this);
+                return false;
+            }
+
+            if (!CoupledTransportProgress.TryTotalLength(restoredPath, dto.cellSizeMetres,
+                    new Vector3(dto.gridOriginX, dto.gridOriginY, dto.gridOriginZ), out float totalLengthMetres))
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to resume leg '{dto.legLabel}': the saved path has zero length.", this);
+                return false;
+            }
+
+            path = restoredPath;
+            cellSizeMetres = dto.cellSizeMetres;
+            gridOrigin = new Vector3(dto.gridOriginX, dto.gridOriginY, dto.gridOriginZ);
+            groundTerrains = Terrain.activeTerrains;
+            wagonSpeedMetresPerSecond = dto.wagonSpeedMetresPerSecond;
+            pairSeparationMetres = dto.pairSeparationMetres;
+            turnSpeedDegreesPerSecond = Mathf.Max(1f, dto.turnSpeedDegreesPerSecond);
+            director = restoredDirector;
+            ethanPersonId = dto.ethanPersonId;
+            legLabel = string.IsNullOrWhiteSpace(dto.legLabel) ? "coupled leg" : dto.legLabel;
+            hideOnArrival = dto.hideOnArrival;
+            physicalJourneyId = dto.physicalJourneyId ?? string.Empty;
+            physicalDestinationLocationId = dto.physicalDestinationLocationId ?? string.Empty;
+            physicalDestinationBusinessId = dto.physicalDestinationBusinessId ?? string.Empty;
+            physicalVehicleId = dto.physicalVehicleId ?? string.Empty;
+            physicalOriginLocationId = dto.physicalOriginLocationId ?? string.Empty;
+            regionalReturnToTownPath = dto.regionalReturnToTownPath;
+            regionalTargetPosition = new Vector3(dto.regionalTargetX, dto.regionalTargetY, dto.regionalTargetZ);
+            regionalTravelElapsedSeconds = WagonLegRestoreRules.ClampRegionalElapsed(dto.regionalTravelElapsedSeconds, dto.regionalTravelDurationSeconds);
+            regionalTravelDurationSeconds = Mathf.Max(0f, dto.regionalTravelDurationSeconds);
+            horseView = restoredHorseView;
+            wagonView = restoredWagonView;
+            authoritativeHorsePosition = horseView.transform.position;
+            lastHeading = Quaternion.identity;
+
+            // Campaign C (DEF-030): resolve the drivers reference once at
+            // bind time; the arrival sites use the cache.
+            ResolveDrivers();
+
+            if (dto.isRegional)
+            {
+                regionalLegActive = true;
+                legActive = false;
+                distanceTravelledMetres = WagonLegRestoreRules.ClampDistanceTravelled(dto.distanceTravelledMetres, totalLengthMetres);
+                SetRegionalPresentationVisible(false);
+                SetDriving(true);
+                Debug.Log($"[CoupledTransport] {legLabel} resumed as a regional leg: {regionalTravelElapsedSeconds:0.0}s of {regionalTravelDurationSeconds:0.0}s elapsed toward {FormatWorld(regionalTargetPosition)}.", this);
+                return true;
+            }
+
+            distanceTravelledMetres = WagonLegRestoreRules.ClampDistanceTravelled(dto.distanceTravelledMetres, totalLengthMetres);
+            regionalLegActive = false;
+            if (!PlaceTeamAtDistance(distanceTravelledMetres, 0f, out _, emitMovementSegment: false))
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to resume leg '{legLabel}': the team could not be placed at the saved distance.", this);
+                return false;
+            }
+            legActive = true;
+            SetDriving(true);
+            Debug.Log($"[CoupledTransport] {legLabel} resumed: {restoredPath.Count} waypoints, {distanceTravelledMetres:0.0}m of {totalLengthMetres:0.0}m travelled.", this);
+            return true;
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-047): places the horse/wagon pair at a travelled
+        /// distance along the active path — the shared placement step of
+        /// AdvanceSimulationTime and of RestoreLeg. Returns false (no
+        /// movement) when the path cannot be sampled. A restore passes 0 for
+        /// the time delta (heading is recorded, views are not rotated yet —
+        /// the next tick turns them) and false for the movement segment (a
+        /// restore repositions the team; it must not report a teleport as
+        /// measured travel).
+        /// </summary>
+        private bool PlaceTeamAtDistance(float distanceMetres, float simulationDeltaSeconds, out float remainingMetres, bool emitMovementSegment)
+        {
+            remainingMetres = 0f;
+            if (!CoupledTransportProgress.TryAdvance(path, distanceMetres, cellSizeMetres, gridOrigin,
+                    out int segmentIndex, out Vector3 horsePosition, out Vector3 heading, out remainingMetres))
+            {
+                return false;
+            }
+
+            Vector3 wagonMovementStart = wagonView != null ? wagonView.transform.position : Vector3.zero;
+
+            // Move the group by the world delta that lands the horse on the
+            // path position; the group is a neutral root (world-zero, never
+            // rotated), so the horse keeps its S6 placement relative to it
+            // while the pair advances as one.
+            horsePosition = GroundPosition(horsePosition);
+            authoritativeHorsePosition = horsePosition;
+            if (horseView != null)
+                transform.position += horsePosition - horseView.transform.position;
+
+            // The wagon trails ALONG THE PATH (not rigidly behind the
+            // horse's current facing), so it follows the road around
+            // corners instead of cutting them.
+            if (wagonView != null && CoupledTransportProgress.TrailingPosition(path, distanceMetres, pairSeparationMetres,
+                    cellSizeMetres, gridOrigin, out Vector3 wagonPosition))
+            {
+                wagonView.transform.position = GroundPosition(wagonPosition);
+            }
+            Vector3 wagonMovementEnd = wagonView != null ? wagonView.transform.position : Vector3.zero;
+            if (emitMovementSegment && wagonView != null && (wagonMovementEnd - wagonMovementStart).sqrMagnitude > 0.0001f)
+                ActualWagonMovementSegment?.Invoke(wagonMovementStart, wagonMovementEnd);
+
+            // Face both views to the path heading (AgentMover.TickMove
+            // pattern: RotateTowards at the authored turn rate). The
+            // wagon's length runs along its local +X, so its facing is
+            // LookRotation(heading) turned -90° about Y; the horse's baked
+            // Y90 is composed on top, exactly as Present does
+            // (horseFacing = facing * Y90).
+            if (heading.sqrMagnitude > 1e-6f)
+            {
+                // Slice R3: keep the last non-zero heading as the
+                // dismount facing — Ethan stands facing the direction
+                // the team travelled when the return leg ends.
+                lastHeading = Quaternion.LookRotation(heading, Vector3.up);
+                Quaternion wagonFacing = lastHeading * Quaternion.Euler(0f, -90f, 0f);
+                Quaternion horseFacing = wagonFacing * Quaternion.Euler(0f, 90f, 0f);
+                float turnDegrees = turnSpeedDegreesPerSecond * simulationDeltaSeconds;
+                if (wagonView != null)
+                    wagonView.transform.rotation = Quaternion.RotateTowards(wagonView.transform.rotation, wagonFacing, turnDegrees);
+                if (horseView != null)
+                    horseView.transform.rotation = Quaternion.RotateTowards(horseView.transform.rotation, horseFacing, turnDegrees);
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -254,6 +517,9 @@ namespace LandLedgers.Economy.Transport
             SetRegionalPresentationVisible(false);
             distanceTravelledMetres = 0f;
             lastHeading = Quaternion.identity;
+            // Campaign C (DEF-030): resolve the drivers reference once at
+            // bind time; the arrival sites use the cache.
+            ResolveDrivers();
             regionalLegActive = true;
             SetDriving(true);
             Debug.Log($"[CoupledTransport] {legLabel} started from {FormatWorld(horseView.transform.position)} toward the authored town gateway and return route.", this);
@@ -278,56 +544,11 @@ namespace LandLedgers.Economy.Transport
 
             distanceTravelledMetres += wagonSpeedMetresPerSecond * simulationDeltaSeconds;
 
-            if (!CoupledTransportProgress.TryAdvance(path, distanceTravelledMetres, cellSizeMetres, gridOrigin,
-                    out int segmentIndex, out Vector3 horsePosition, out Vector3 heading, out float remainingMetres))
+            if (!PlaceTeamAtDistance(distanceTravelledMetres, simulationDeltaSeconds, out float remainingMetres, emitMovementSegment: true))
             {
                 Debug.LogWarning($"[CoupledTransport] {legLabel}: path sampling failed mid-leg; stopping where the team stands.", this);
                 StopLeg();
                 return;
-            }
-
-            Vector3 wagonMovementStart = wagonView != null ? wagonView.transform.position : Vector3.zero;
-
-            // Move the group by the world delta that lands the horse on the
-            // path position; the group is a neutral root (world-zero, never
-            // rotated), so the horse keeps its S6 placement relative to it
-            // while the pair advances as one.
-            horsePosition = GroundPosition(horsePosition);
-            authoritativeHorsePosition = horsePosition;
-            if (horseView != null)
-                transform.position += horsePosition - horseView.transform.position;
-
-            // The wagon trails ALONG THE PATH (not rigidly behind the
-            // horse's current facing), so it follows the road around
-            // corners instead of cutting them.
-            if (wagonView != null && CoupledTransportProgress.TrailingPosition(path, distanceTravelledMetres, pairSeparationMetres,
-                    cellSizeMetres, gridOrigin, out Vector3 wagonPosition))
-            {
-                wagonView.transform.position = GroundPosition(wagonPosition);
-            }
-            Vector3 wagonMovementEnd = wagonView != null ? wagonView.transform.position : Vector3.zero;
-            if (wagonView != null && (wagonMovementEnd - wagonMovementStart).sqrMagnitude > 0.0001f)
-                ActualWagonMovementSegment?.Invoke(wagonMovementStart, wagonMovementEnd);
-
-            // Face both views to the path heading (AgentMover.TickMove
-            // pattern: RotateTowards at the authored turn rate). The
-            // wagon's length runs along its local +X, so its facing is
-            // LookRotation(heading) turned -90° about Y; the horse's baked
-            // Y90 is composed on top, exactly as Present does
-            // (horseFacing = facing * Y90).
-            if (heading.sqrMagnitude > 1e-6f)
-            {
-                // Slice R3: keep the last non-zero heading as the
-                // dismount facing — Ethan stands facing the direction
-                // the team travelled when the return leg ends.
-                lastHeading = Quaternion.LookRotation(heading, Vector3.up);
-                Quaternion wagonFacing = lastHeading * Quaternion.Euler(0f, -90f, 0f);
-                Quaternion horseFacing = wagonFacing * Quaternion.Euler(0f, 90f, 0f);
-                float turnDegrees = turnSpeedDegreesPerSecond * simulationDeltaSeconds;
-                if (wagonView != null)
-                    wagonView.transform.rotation = Quaternion.RotateTowards(wagonView.transform.rotation, wagonFacing, turnDegrees);
-                if (horseView != null)
-                    horseView.transform.rotation = Quaternion.RotateTowards(horseView.transform.rotation, horseFacing, turnDegrees);
             }
 
             // R1 (Objective 22): no escort. Ethan rides the wagon,
@@ -339,12 +560,20 @@ namespace LandLedgers.Economy.Transport
                 GridCoord arrival = path[path.Count - 1];
                 if (!hideOnArrival && !string.IsNullOrWhiteSpace(physicalOriginLocationId))
                 {
-                    SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+                    SimulationDrivers drivers = ResolveDrivers();
                     if (drivers == null || !drivers.ConfirmPhysicalFreightOriginArrival(
                             physicalVehicleId, ethanPersonId, physicalJourneyId, physicalOriginLocationId))
                     {
                         legActive = false;
                         SetDriving(false);
+                        // Campaign C (DEF-048): record the refusal so the
+                        // daily return driver can distinguish this state
+                        // (team already home, arrival refused, no re-drive
+                        // path) from a return still waiting to begin. The
+                        // leg still dies here, exactly as before — this
+                        // record changes no movement or journey state.
+                        if (!string.IsNullOrWhiteSpace(physicalJourneyId))
+                            refusedOriginJourneyIds.Add(physicalJourneyId);
                         Debug.LogWarning($"[CoupledTransport] Reached the town return point for {legLabel}, but journey authority refused physical origin confirmation; freight remains active and unsettled.", this);
                         return;
                     }
@@ -367,9 +596,15 @@ namespace LandLedgers.Economy.Transport
                             / wagonSpeedMetresPerSecond;
                         SetRegionalPresentationVisible(false);
                         float remainingRegionalMetres = Vector3.Distance(authoritativeHorsePosition, regionalTarget);
+                        // Campaign C (DEF-031): the line describes the
+                        // presentation handoff — the team continues beyond
+                        // the boundary, hidden, while the regional leg runs
+                        // on simulation time — not a missing completion
+                        // mechanism. The regional leg completes on the
+                        // timer and confirms arrival itself.
                         Debug.Log($"[CoupledTransport] continuing physically beyond the town boundary for {legLabel}: " +
                             $"horse={FormatWorld(authoritativeHorsePosition)}, destination={FormatWorld(regionalTarget)}, " +
-                            $"remaining={remainingRegionalMetres:0.0}m; regional destination trigger required.", this);
+                            $"remaining={remainingRegionalMetres:0.0}m; regional leg continues on simulation time (presentation hidden beyond the boundary).", this);
                     }
                     else
                     {
@@ -406,6 +641,23 @@ namespace LandLedgers.Economy.Transport
             // TimeManager reports the game-time increment it actually
             // processed. Do not rescale wall-clock frame time here.
             AdvanceSimulationTime(context.GameDeltaSeconds);
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-030): returns the cached SimulationDrivers,
+        /// resolving it once by scene lookup when the cache is empty. The
+        /// scene holds exactly one drivers object, so the cached instance
+        /// is the one a fresh lookup would return. A null cache re-resolves
+        /// on demand, so a drivers object that appears after bind time is
+        /// still found at arrival, exactly as the old per-arrival lookup
+        /// would have found it; a destroyed cached reference reads as null
+        /// and re-resolves the same way.
+        /// </summary>
+        private SimulationDrivers ResolveDrivers()
+        {
+            if (cachedDrivers == null)
+                cachedDrivers = FindAnyObjectByType<SimulationDrivers>();
+            return cachedDrivers;
         }
 
         private bool SubscribeToSimulationClock()
@@ -494,7 +746,7 @@ namespace LandLedgers.Economy.Transport
                 || !string.Equals(businessId, physicalDestinationBusinessId, System.StringComparison.Ordinal))
                 return false;
 
-            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            SimulationDrivers drivers = ResolveDrivers();
             if (drivers == null || !drivers.ConfirmPhysicalFreightDestinationArrival(
                     physicalVehicleId, ethanPersonId, physicalJourneyId, locationId))
             {

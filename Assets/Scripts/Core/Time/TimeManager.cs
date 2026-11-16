@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using LandLedgers.Persistence;
 using UnityEngine;
 
@@ -11,6 +12,17 @@ namespace LandLedgers.Time
         [Header("Settings")]
         [SerializeField]
         private SimulationTimeSettings settings;
+
+        // Campaign C (DEF-045 follow-on): the authored settings asset the
+        // scene references. Runtime-only, never serialized: a load clones it
+        // into a runtime copy and applies the snapshot to the copy, so the
+        // asset is never mutated (mutating it in memory marks it dirty in
+        // the Editor, and a project save would persist the restored values).
+        // A New Game restores the authored asset, so a Continue followed by
+        // a New Game in the same session does not inherit the restored
+        // values. Invariant: settings is a runtime copy only when
+        // authoredSettings is non-null (LoadFromSaveDto captures it first).
+        private SimulationTimeSettings authoredSettings;
 
         [Header("Runtime State")]
         [SerializeField]
@@ -73,6 +85,13 @@ namespace LandLedgers.Time
         private double shortTickRemainder;
         public double PendingGameSeconds => pendingGameSeconds;
         public float LastAchievedGameSecondsPerRealSecond { get; private set; }
+
+        // Campaign C (DEF-061): day-keyed warning state for the achieved-speed
+        // readout. Runtime-only, deliberately NOT serialized: the warning is
+        // diagnostic, and the value it guards (pendingGameSeconds) is already
+        // persisted in the save DTO, so a Continue re-warns once for the
+        // restored day if the queue is still past the threshold.
+        private int lastAchievedSpeedWarningDayIndex = -1;
         private bool initialized;
         private bool shortTickCapHitThisFrame;
         private bool dispatchingShortTick;
@@ -142,6 +161,38 @@ namespace LandLedgers.Time
         public float CurrentGameSecondsPerRealSecond => settings != null
             ? ResolveSpeedMultiplier(currentSpeed) * settings.GameSecondsPerDay / Mathf.Max(1f, settings.realSecondsPerGameDayAt1x)
             : currentSpeed == SimulationSpeed.Paused ? 0f : currentSpeed == SimulationSpeed.RealTime ? 1f : ResolveSpeedMultiplier(currentSpeed);
+
+        /// <summary>
+        /// Campaign C (DEF-061): the pending-queue warning threshold, in
+        /// game-seconds — one full game day (see AchievedSpeedDiagnostics).
+        /// Falls back to 86,400 when no settings are assigned.
+        /// </summary>
+        public float AchievedSpeedWarningThresholdGameSeconds => settings != null
+            ? AchievedSpeedDiagnostics.WarningThresholdGameSeconds(settings.GameSecondsPerDay)
+            : 86400f;
+
+        /// <summary>
+        /// Campaign C (DEF-061): the achieved-speed readout — requested vs
+        /// achieved game-seconds per real second, pending game-seconds (and
+        /// days), and the selected speed. Diagnostic/summary surface only;
+        /// it changes no clock behaviour. The catch-up policy (what to do
+        /// when the clock falls behind) is Check 9 Q6, owner question (t),
+        /// and is deliberately NOT decided here.
+        /// </summary>
+        public string DescribeAchievedSpeed()
+        {
+            if (settings == null)
+            {
+                return "achieved-speed: no settings assigned.";
+            }
+
+            return AchievedSpeedDiagnostics.FormatAchievedSpeedLine(
+                CurrentGameSecondsPerRealSecond,
+                LastAchievedGameSecondsPerRealSecond,
+                pendingGameSeconds,
+                settings.GameSecondsPerDay,
+                currentSpeed.ToString());
+        }
         public int CollapsedDayRolloversLastFrame => collapsedDayRolloversLastFrame;
         public int CappedDayRolloverFrames => cappedDayRolloverFrames;
         public int CompressedShortTicksLastFrame => compressedShortTicksLastFrame;
@@ -248,6 +299,16 @@ namespace LandLedgers.Time
                 return false;
             }
 
+            // Campaign C (DEF-045 follow-on): a New Game starts on the
+            // authored settings, not on values restored by an earlier
+            // Continue in this session (LoadFromSaveDto replaces settings
+            // with a runtime copy; authoredSettings is non-null exactly
+            // when a copy exists, per the invariant on the field).
+            if (authoredSettings != null)
+            {
+                settings = authoredSettings;
+            }
+
             settings.Sanitize();
             calendarDayOffset = settings.Anchor.ToAbsoluteDay(year, month, day);
             absoluteDayIndex = 0;
@@ -276,7 +337,13 @@ namespace LandLedgers.Time
                 shortTickRemainder = shortTickRemainder,
                 currentSpeed = currentSpeed,
                 lastNonPausedSpeed = lastNonPausedSpeed,
-                isPaused = isPaused
+                isPaused = isPaused,
+                // Campaign C (DEF-045): records the active time settings so
+                // a Continue restores them instead of reinterpreting the
+                // saved clock state under whatever the scene asset holds.
+                settings = this.settings != null
+                    ? TimeSettingsSnapshot.Capture(this.settings)
+                    : new TimeSettingsSnapshot()
             };
         }
 
@@ -285,6 +352,39 @@ namespace LandLedgers.Time
             if (dto == null)
             {
                 return;
+            }
+
+            // Campaign C (DEF-045): restores the time settings the save was
+            // made under, before the clock state below is restored, so the
+            // saved accumulators are interpreted under the settings they
+            // were accrued under. Old saves carry hasSettings false and
+            // keep the current settings. Campaign C (DEF-045 follow-on):
+            // the snapshot is applied to a runtime copy of the authored
+            // asset, never to the asset itself — mutating the asset in
+            // memory marks it dirty in the Editor, and a New Game in the
+            // same session after a Continue would otherwise inherit the
+            // restored values. The copy follows the TownWorldController
+            // runtime-settings precedent (Instantiate + "(Runtime Time
+            // Copy)" name + HideFlags.DontSave). A second load in the same
+            // session clones from the authored asset again, so each load
+            // starts from authored defaults.
+            if (dto.settings != null && dto.settings.hasSettings && settings != null)
+            {
+                if (authoredSettings == null)
+                {
+                    authoredSettings = settings;
+                }
+
+                settings = Instantiate(authoredSettings);
+                settings.name = authoredSettings.name + " (Runtime Time Copy)";
+                settings.hideFlags = HideFlags.DontSave;
+                List<string> differingSettings = dto.settings.ApplyTo(settings);
+                if (differingSettings.Count > 0)
+                {
+                    Debug.LogWarning(
+                        $"Campaign C (DEF-045): save was made under different time settings; restored the saved values for: {string.Join(", ", differingSettings)}. Restored values apply to a runtime copy for this session; the authored asset is untouched.",
+                        this);
+                }
             }
 
             if (settings != null)
@@ -404,6 +504,13 @@ namespace LandLedgers.Time
             float gameDeltaSeconds = realDeltaSeconds * speedMultiplier * (settings.GameSecondsPerDay / settings.realSecondsPerGameDayAt1x);
             gameDeltaSeconds = QueueAndAdvanceGameSeconds(gameDeltaSeconds);
             LastAchievedGameSecondsPerRealSecond = gameDeltaSeconds / realDeltaSeconds;
+            // Campaign C (DEF-061): readout slice only — surface the achieved
+            // speed and warn once per day while the pending queue stays past
+            // one full game day. No catch-up policy is applied here (Check 9
+            // Q6, owner question (t)). Paused frames never warn: while
+            // paused no new time is requested and the queue is not growing,
+            // so warning there would repeat stale state.
+            TickAchievedSpeedWarning();
             PublishSimulationTimeAdvanced(realDeltaSeconds, gameDeltaSeconds);
             VisualFrameUpdated?.Invoke(new SimulationFrameContext(
                 currentDate, currentSpeed, speedMultiplier, realDeltaSeconds,
@@ -420,6 +527,35 @@ namespace LandLedgers.Time
                 Mathf.Max(0f, gameDeltaSeconds),
                 timeOfDay01,
                 gameSecondsIntoDay));
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-061): once per absolute day, while the pending
+        /// queue holds more than one full game day of unprocessed time, log
+        /// the achieved-speed readout as a warning. Diagnostic only — the
+        /// clock keeps falling behind silently by current design until the
+        /// catch-up policy (Check 9 Q6, owner question (t)) is decided.
+        /// </summary>
+        private void TickAchievedSpeedWarning()
+        {
+            if (settings == null)
+            {
+                return;
+            }
+
+            if (!AchievedSpeedDiagnostics.ShouldWarnAchievedSpeedLag(
+                absoluteDayIndex,
+                lastAchievedSpeedWarningDayIndex,
+                pendingGameSeconds,
+                settings.GameSecondsPerDay))
+            {
+                return;
+            }
+
+            lastAchievedSpeedWarningDayIndex = absoluteDayIndex;
+            Debug.LogWarning(
+                $"Campaign C (DEF-061): {DescribeAchievedSpeed()} — the clock is more than one full game day behind the requested speed. No catch-up policy exists (Check 9 Q6, owner question (t)); the clock falls behind silently by current design.",
+                this);
         }
 
         private float ResolveSpeedMultiplier(SimulationSpeed speed)
@@ -455,14 +591,22 @@ namespace LandLedgers.Time
             }
 
             settings.Sanitize();
-            // Pass V P0-1: the clock starts on the scenario start date derived
-            // from the Gregorian anchor (default 1892-03-01). absoluteDayIndex
-            // remains the persisted truth; the start is an anchor offset now.
-            calendarDayOffset = 0;
+            // Campaign C (DEF-012): the scenario start is the sole clock
+            // authority. Route it through the calendarDayOffset mechanism
+            // exactly as StartNewScenarioAtDate does: the campaign day index
+            // starts at zero and the offset carries the anchor-relative
+            // distance to the start (default 1870-01-01, offset -3712), so a
+            // pre-anchor start is no longer floored to the anchor date.
+            // The old shape (offset 0, absoluteDayIndex set to the
+            // anchor-relative start) disagreed with StartNewScenarioAtDate
+            // and, through the old Mathf.Max(0, ...) clamp in
+            // GetScenarioStartAbsoluteDayIndex, turned the math epoch into
+            // a floor for any pre-anchor start.
+            calendarDayOffset = settings.GetScenarioStartAbsoluteDayIndex();
             pendingGameSeconds = 0d;
             gameSecondsRemainder = 0d;
             shortTickRemainder = 0d;
-            absoluteDayIndex = settings.GetScenarioStartAbsoluteDayIndex();
+            absoluteDayIndex = 0;
             currentDate = BuildTimelineDate();
             ApplyTimeOfDay(settings.startingTimeOfDay01 * settings.GameSecondsPerDay);
             ResetShortTickStateForCurrentTimeOfDay();

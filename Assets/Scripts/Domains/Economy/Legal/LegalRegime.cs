@@ -108,15 +108,21 @@ namespace LandLedgers.Economy.Legal
     ///   can require spousal participation.
     ///
     /// The epoch (which calendar date day index 0 means) is configuration,
-    /// not a constant: Canon §2.1B fixes the opening at "spring 1880"; the
-    /// default anchors day 0 to April 1, 1880.
+    /// not a constant: it is aligned to the calendar anchor (1880-03-01) so
+    /// regime day indices agree with the simulation clock's absolute frame.
+    /// The epoch is a coordinate origin, not an opening date: the opening is
+    /// scenario data (Canon Rev XXV §1.1). The old April 1, 1880 epoch left
+    /// a latent 31-day skew against the clock frame, with no conversion
+    /// between the two.
     /// </summary>
     [Serializable]
     public sealed class LegalRegime
     {
-        // Epoch: day index 0 == this calendar date (Canon §2.1B: spring 1880 opening).
+        // Epoch: day index 0 == this calendar date. Aligned to the calendar
+        // anchor (1880-03-01); the epoch is a coordinate origin, not an
+        // opening date (the opening is scenario data, Canon Rev XXV §1.1).
         public int EpochYear = 1880;
-        public int EpochMonth = 4;
+        public int EpochMonth = 3;
         public int EpochDay = 1;
 
         private readonly List<string> diagnostics = new List<string>();
@@ -237,7 +243,7 @@ namespace LandLedgers.Economy.Legal
 
         #region Interest / usury
 
-        /// <summary>Canon §1.6B: seven-percent legal/default rate at the 1880 opening.</summary>
+        /// <summary>Canon §1.6B: seven-percent legal/default rate, stated "at the spring 1880 opening". Canon states no 1870 rate and no dated research in the repo gives one, so no 1870 rate is invented here (open research question, Canon §9.1); the constant applies at every date.</summary>
         public int DefaultLegalRatePercent => 7;
 
         /// <summary>

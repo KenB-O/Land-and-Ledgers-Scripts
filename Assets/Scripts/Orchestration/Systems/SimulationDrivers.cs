@@ -373,6 +373,13 @@ namespace LandLedgers.Orchestration.Systems
         private HouseholdShoppingLoop householdShoppingLoop;
         private ShoppingTripDriver shoppingTripDriver;
 
+        // Campaign C (DEF-023): sticky record of a shopping-trip rehydration
+        // skipped at Rebind because the hub or TimeManager was not available
+        // yet. Read by ApplyRestoredShoppingTrips (records the skip loudly)
+        // and OnShortTick (one late retry, then a one-tick backstop shield).
+        // Runtime-only, never serialized; see ShoppingRehydrateGuard.
+        private readonly ShoppingRehydrateGuard shoppingRehydrateGuard = new ShoppingRehydrateGuard();
+
         // Plan 07 (Slice 07): cached staged-bakery driver, rebuilt when
         // the Pass 9 state's chain instance changes (covers restore).
         private StagedBakeryChainDriver stagedBakeryDriver;
@@ -2171,6 +2178,16 @@ namespace LandLedgers.Orchestration.Systems
                 personHandSave.Series2Pass9State ??= new Series2Pass9SaveState();
                 personHandSave.Series2Pass9State.PersonHands = hub.PersonHands;
                 personHandSave.Series2Pass9State.HandheldContainers = hub.HandheldContainers;
+                // Campaign C (DEF-073): bind the live store queue into the
+                // Pass 9 save state so saves capture the waiting line
+                // (patience included). Same instance the shopping driver
+                // resolves; restore is clear-then-load into it. New Game
+                // sessions never run EnsurePass9SaveOwnerForRestore, so
+                // without this the first save would still write an empty
+                // queue section.
+                var storeManager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+                if (storeManager != null)
+                    personHandSave.Series2Pass9State.CustomerQueue = storeManager.CustomerQueue;
             }
 
             // Physical hands P4/P5: seed the hub-owned hand authority from
@@ -2205,10 +2222,6 @@ namespace LandLedgers.Orchestration.Systems
             // save; a loop attached after the hub load leaves the custody
             // section unrestored for that load.
             hub.ShoppingLoop = householdShoppingLoop;
-            // Slice 25: attach the driver beside the loop, same shape —
-            // the hub only holds the reference for save/load.
-            hub.ShoppingTripDriver = shoppingTripDriver;
-
             // Physical shopping is driven through the existing phased loop.
             // The transaction driver may settle only after the visible person
             // has reached the seller building and may deposit only after the
@@ -2224,6 +2237,27 @@ namespace LandLedgers.Orchestration.Systems
                     CancelShoppingPhysicalRoute,
                     timeManager != null && timeManager.Settings != null
                         ? timeManager.Settings.ShortTickIntervalGameSeconds : 900f);
+            }
+
+            // Slice 25: attach the driver beside the loop, same shape —
+            // the hub only holds the reference for save/load. The attach
+            // MUST run after the creation above: attaching first hands
+            // the hub a null driver on the first build, and the hub load
+            // that follows drops any saved trips (DEF-028). Attaching
+            // the live driver also drains any trips the hub held pending
+            // from the load (see SimulationSystemsHub.ShoppingTripDriver).
+            hub.ShoppingTripDriver = shoppingTripDriver;
+
+            // Campaign C (DEF-049): the daily terminal-task prune must never remove
+            // a task a live shopping trip still references (rehydrate requires every
+            // leg/service id to resolve, and leg tasks complete mid-trip). The driver
+            // owns the live-trip lists, so it answers the predicate; the authority
+            // only calls it. Re-installing on every build is idempotent, and the
+            // lambda reads the field at call time, so a rebuilt driver is picked up.
+            if (hub != null && hub.Tasks != null)
+            {
+                hub.Tasks.IsTaskExternallyReferenced = taskId =>
+                    shoppingTripDriver != null && shoppingTripDriver.IsTaskReferencedByLiveTrip(taskId);
             }
 
         }
@@ -2498,6 +2532,20 @@ namespace LandLedgers.Orchestration.Systems
 
             // Slice 25: rehydrate shopping trips restored by the hub save.
             ApplyRestoredShoppingTrips();
+
+            // Campaign C (DEF-073): re-arm the queue patience tick at the
+            // restored clock, so a restored waiting customer's remaining
+            // patience decays from the restored time instead of pausing
+            // (in-session load, reused driver) or skipping the first
+            // short-tick interval (fresh scene). No-op on a New Game: the
+            // clock is at the scenario start and the queue is empty.
+            if (shoppingTripDriver != null && timeManager != null)
+                shoppingTripDriver.RearmQueueTickWatermark(timeManager.AbsoluteGameSeconds);
+
+            // Campaign C (DEF-047): resume a wagon leg restored by the hub
+            // save. Runs only while a restored leg is pending, so New Game
+            // rebinds and loads without a leg are no-ops.
+            ApplyRestoredWagonLeg();
         }
 
         /// <summary>
@@ -2515,8 +2563,33 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public void ApplyRestoredShoppingTrips()
         {
-            if (shoppingTripDriver == null || !shoppingTripDriver.NeedsRehydrateAfterLoad) return;
-            if (hub == null || timeManager == null) return;
+            if (shoppingTripDriver == null || !shoppingTripDriver.NeedsRehydrateAfterLoad)
+            {
+                // Campaign C (DEF-023): no pending restored trips — a New Game
+                // rebind, a second rebind, or a load with no trips. Any earlier
+                // skip is no longer pending.
+                shoppingRehydrateGuard.RecordCleared();
+                return;
+            }
+            if (hub == null || timeManager == null)
+            {
+                // Campaign C (DEF-023): FAIL LOUDLY instead of silently dropping
+                // the pending trips. Rebind is the only production caller, so a
+                // skip here leaves NeedsRehydrateAfterLoad set: the driver's
+                // leg/service maps stay empty, and the per-tick backstop
+                // (SyncTaskCompletionDueEvents) will re-schedule the leg dues
+                // while the MAP-ONLY service due is never re-registered. The
+                // guard in OnShortTick attempts one late apply and shields the
+                // first tick; this error names the exact loss. Logged only when
+                // the skip is newly armed, so a late retry on every tick cannot
+                // spam the Console.
+                int pending = shoppingTripDriver.ActiveTrips != null ? shoppingTripDriver.ActiveTrips.Count : 0;
+                if (shoppingRehydrateGuard.RecordSkipped(pending))
+                {
+                    Debug.LogError("[SimulationDrivers] ApplyRestoredShoppingTrips SKIPPED: " + pending + " restored shopping trip(s) are pending rehydration but " + (hub == null ? "SimulationSystemsHub" : "TimeManager") + " is not available. No retry exists after Rebind — the trips stay unrehydrated until the missing authority is restored. See DEF-023.", this);
+                }
+                return;
+            }
             var diag = new List<string>();
             shoppingTripDriver.RehydrateAfterLoad(
                 hub.Tasks,
@@ -2528,6 +2601,46 @@ namespace LandLedgers.Orchestration.Systems
             foreach (string message in diag)
             {
                 if (!string.IsNullOrWhiteSpace(message)) Debug.Log("[ShoppingTrips] " + message, this);
+            }
+            // Campaign C (DEF-023): rehydration ran — clear any earlier skip.
+            shoppingRehydrateGuard.RecordCleared();
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-047): resumes the wagon leg restored by the hub
+        /// save, exactly once per load. Runs only while the logistics
+        /// runtime reports a pending restored leg, so New Game rebinds and
+        /// loads without a leg are no-ops. Unlike shopping-trip rehydration
+        /// there is no per-tick backstop that would silently re-schedule a
+        /// skipped leg, so a refused resume fails LOUDLY once (warning
+        /// naming the leg) and is not retried: the wagon stays where it
+        /// stands, exactly as before this fix. The leg is consumed either
+        /// way, so a second Rebind cannot resume it twice.
+        /// MUST run before the first post-load tick, like
+        /// ApplyRestoredShoppingTrips: the daily freight drives start new
+        /// legs from journey events and must not overwrite a leg that is
+        /// about to resume.
+        /// </summary>
+        public void ApplyRestoredWagonLeg()
+        {
+            LogisticsRuntimeManager logisticsRuntime = FindAnyObjectByType<LogisticsRuntimeManager>();
+            WagonLegSaveDto restoredLeg = logisticsRuntime != null ? logisticsRuntime.RestoredWagonLeg : null;
+            if (restoredLeg == null || !restoredLeg.isActive)
+            {
+                logisticsRuntime?.ClearRestoredWagonLeg();
+                return;
+            }
+            OpeningTransportPresentationController transportPresentation =
+                FindAnyObjectByType<OpeningTransportPresentationController>();
+            logisticsRuntime.ClearRestoredWagonLeg();
+            if (transportPresentation == null)
+            {
+                Debug.LogWarning($"[CoupledTransport] ApplyRestoredWagonLeg SKIPPED: leg '{restoredLeg.legLabel}' (journey '{restoredLeg.physicalJourneyId}') was restored from the save, but no opening transport presentation exists in this scene — the wagon team was never presented (Present runs on New Game, not on Continue), so the leg cannot resume. The wagon stays absent and the shipment keeps its saved state. See DEF-047.", this);
+                return;
+            }
+            if (!transportPresentation.ResumeCoupledLeg(restoredLeg))
+            {
+                Debug.LogWarning($"[CoupledTransport] ApplyRestoredWagonLeg FAILED: leg '{restoredLeg.legLabel}' (journey '{restoredLeg.physicalJourneyId}') was restored from the save but the resume was refused (see the [CoupledTransport] refusal above); the wagon stays where it stands and the shipment keeps its saved state. See DEF-047.", this);
             }
         }
 
@@ -2698,6 +2811,29 @@ namespace LandLedgers.Orchestration.Systems
             // worker commitments truthful (WaitingOnPassiveProcess releases the worker;
             // ResumeTask re-commits).
             hub.Tasks.SetWorkTimeBudgetStore(hub.WorkTimeBudgets);
+
+            // Campaign C (DEF-062): install the hub's due-event scheduler on the
+            // hub's TaskAuthority, so CancelTask / CompleteTask / InterruptTask
+            // cancel the task's pending due events via ReleaseTaskResources
+            // instead of leaving stale dues that fire and no-op silently.
+            // The cancel code already existed (TaskAuthorityLifecycle:339-341);
+            // only this installation was missing — SetDueEventScheduler had
+            // zero production callers. The hub owns both instances and the
+            // restore is in-place (SimulationSystemsHub:1388, :1481), so one
+            // install here survives save/load.
+            hub.Tasks.SetDueEventScheduler(hub.DueEvents);
+
+            // Campaign C (DEF-074): install the hub's unified reservation
+            // authority on the hub's TaskAuthority, so CancelTask /
+            // CompleteTask / InterruptTask release the task's reservations
+            // via ReleaseTaskResources instead of leaving them held.
+            // The release code already existed
+            // (TaskAuthorityLifecycle:340-341); only this installation was
+            // missing — SetReservationAuthority had zero production
+            // callers. The hub owns both instances and the restore is
+            // in-place (SimulationSystemsHub:1400, :1501), so one install
+            // here survives save/load.
+            hub.Tasks.SetReservationAuthority(hub.ReservationAuthority);
 
             // Priority 4 Slice 4: install the task-duration diagnostic on
             // the hub's TaskAuthority, clocked by the authoritative
@@ -3543,6 +3679,58 @@ namespace LandLedgers.Orchestration.Systems
             // DriveDailyNeeds mid-drive, so no placement after the shopping
             // drive can precede it.
             hub.DurationDiagnostics?.Evaluate(timeManager.AbsoluteGameSeconds, absoluteDayIndex);
+
+            // Campaign C (DEF-049): prune terminal tasks nothing reads anymore, once
+            // per day, after every daily drive has run — so the day's completions are
+            // all recorded first. Bounded by the retention floor and the live-trip /
+            // prerequisite guards in TaskAuthority.PruneTerminalTasks; saves then grow
+            // with live state, not with total tasks ever created.
+            DriveTaskPruning(absoluteDayIndex);
+        }
+
+        // Campaign C (DEF-049 follow-on, E-06): sticky flag for the
+        // once-only loud error when DriveTaskPruning runs with no
+        // live-trip predicate installed. Runtime-only, never serialized.
+        private bool taskPruneMissingPredicateWarningLogged;
+
+        /// <summary>
+        /// Campaign C (DEF-049): daily terminal-task prune (see
+        /// TaskAuthority.PruneTerminalTasks). Runs last in the day drive; the
+        /// retention floor keeps same-day reads safe regardless of drive order.
+        /// Campaign C (DEF-049 follow-on, E-06): the live-trip predicate is
+        /// installed only when hub.Tasks exists at build time, and
+        /// PruneTerminalTasks silently skips the guard when it is null — so
+        /// a prune with no predicate installed would delete live-trip leg
+        /// tasks unguarded. Refuse to prune and fail loudly instead (DEF-023
+        /// pattern: one error, then silent until a prune actually runs).
+        /// </summary>
+        private void DriveTaskPruning(int absoluteDayIndex)
+        {
+            if (hub?.Tasks == null)
+            {
+                return;
+            }
+
+            if (hub.Tasks.IsTaskExternallyReferenced == null)
+            {
+                if (!taskPruneMissingPredicateWarningLogged)
+                {
+                    taskPruneMissingPredicateWarningLogged = true;
+                    Debug.LogError("[TaskAuthority] DEF-049 prune refused on day " + absoluteDayIndex
+                        + ": no live-trip external-reference predicate installed — terminal tasks kept. "
+                        + "A load that skips the predicate install must not prune unguarded.", this);
+                }
+
+                return;
+            }
+
+            taskPruneMissingPredicateWarningLogged = false;
+            int pruned = hub.Tasks.PruneTerminalTasks(absoluteDayIndex);
+            if (pruned > 0)
+            {
+                Debug.Log("[TaskAuthority] DEF-049 prune day " + absoluteDayIndex + ": removed "
+                    + pruned + " terminal task(s).", this);
+            }
         }
 
         private void DriveMillbrookAidTable(int absoluteDayIndex)
@@ -3603,9 +3791,11 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         /// <summary>
         /// Pass V drive-by: daily domestic labor. Each household's
-        /// need-driven tasks (meals for members at home, fuel in cold season,
-        /// animal care when the household owns animals, baseline chores) are
-        /// planned by DomesticLaborDriver and scheduled on real person time.
+        /// need-driven tasks (meals for members at home, fuel when the
+        /// household burns fuel and has fuel on hand, animal care when the
+        /// household owns animals, cleaning once accumulated household use
+        /// reaches the threshold) are planned by DomesticLaborDriver and
+        /// scheduled on real person time.
         /// </summary>
         private void DriveDomesticLaborDay(int absoluteDayIndex)
         {
@@ -3627,6 +3817,10 @@ namespace LandLedgers.Orchestration.Systems
                 if (household == null) continue;
                 List<int> members = householdMemberships.GetActiveMembers(household.id);
                 if (members.Count == 0) continue;
+                // Campaign C-24 (DEF-010, Decision 6): record today's household
+                // use before planning, so the cleaning need reads the
+                // accumulated state including today.
+                hub.DomesticLaborDriver.AccumulateCleaningUse(household.id, members.Count, absoluteDayIndex);
                 var inputs = new DomesticLaborDriver.DomesticDayInputs
                 {
                     HouseholdId = household.id,
@@ -3639,20 +3833,33 @@ namespace LandLedgers.Orchestration.Systems
                     IsWindowUnavailable = (personId, startMinute, durationMinutes) =>
                         pathingDirector != null && pathingDirector.IsCommittedToScheduledWorkWindow(
                             personId, absoluteDayIndex, startMinute, durationMinutes),
-                    // DailyNeedsService currently serves/consumes meals from
-                    // actual received lots, but no production authority reports
-                    // an unmet cooking requirement or supported recipe here.
-                    // Do not schedule a stove task merely because residents
-                    // exist; the existing daily meal accounting remains intact.
-                    MealsAtHomeCount = 0,
-                    // A month/season flag is not evidence that a household hearth
-                    // needs fuel handling. No installed-equipment/burn-state
-                    // authority is currently wired to this driver.
-                    FuelHandlingNeeded = false,
-                    // No household cleanliness state currently supplies this
-                    // need. Ordinary cleaning remains optional and unscheduled
-                    // until a real need source exists.
-                    CleaningNeeded = false,
+                    // Campaign C-24 (DEF-010, Decision 6): the cooking need is
+                    // measured from the meal authority's own served-meal
+                    // records for today (meals eaten at home), not assumed
+                    // from residents existing. DriveDailyNeeds runs before
+                    // this drive in the same OnDayChanged, so today's records
+                    // are already written. A household whose larder is empty
+                    // serves no meals at home and gets no meal-prep task —
+                    // the shortfall is a shopping need, not a cooking task.
+                    // Planning the task credits family labour only; it serves
+                    // no meal and changes no meal count (DEF-015 untouched).
+                    MealsAtHomeCount = DomesticNeedAuthorities.MealsAtHomeToday(
+                        hub.MealLog, household.id, absoluteDayIndex),
+                    // Campaign C-24 (DEF-010, Decision 6): fuel handling is
+                    // needed when the household burns fuel today (the heating
+                    // authority's own forecast: season, members, stove and
+                    // heat-retention tiers) and has fuel on hand to handle.
+                    // No fuel on hand means nothing to handle — the shortfall
+                    // is a procurement need. The fuel itself is still consumed
+                    // only by HouseholdReserveEvaluator (DEF-019 untouched).
+                    FuelHandlingNeeded = DomesticNeedAuthorities.FuelHandlingNeeded(
+                        household, absoluteDayIndex),
+                    // Campaign C-24 (DEF-010, Decision 6): cleaning comes from
+                    // the driver's accumulated-use tracker (one unit per
+                    // occupant per day; need at 14 person-days; a completed
+                    // Chores task resets it). No cleanliness state existed
+                    // before this package.
+                    CleaningNeeded = hub.DomesticLaborDriver.CleaningNeeded(household.id),
                     ColdSeason = coldSeason,
                     HasAnimals = HouseholdOwnsAnimals(household.id, members),
                 };
@@ -3838,27 +4045,30 @@ namespace LandLedgers.Orchestration.Systems
             string vehicleJourneyId,
             string originLocationId)
         {
-            if (string.IsNullOrWhiteSpace(vehicleId) || operatorPersonId < 0
-                || string.IsNullOrWhiteSpace(vehicleJourneyId)
-                || string.IsNullOrWhiteSpace(originLocationId))
-                return false;
-
             OffMapJourneyRecord vehicleJourney = OffMapJourneys.FindActiveByVehicle(vehicleId);
             OffMapJourneyRecord personJourney = OffMapJourneys.FindActiveByPerson(operatorPersonId);
-            if (vehicleJourney == null || personJourney == null
-                || !string.Equals(vehicleJourney.JourneyId, vehicleJourneyId, StringComparison.Ordinal)
-                || vehicleJourney.TravelerKind != OffMapTravelerKind.Vehicle
-                || personJourney.TravelerKind != OffMapTravelerKind.Person
-                || personJourney.PersonId != operatorPersonId
-                || !vehicleJourney.RequiresPhysicalArrivalConfirmation
-                || !personJourney.RequiresPhysicalArrivalConfirmation
-                || !vehicleJourney.PhysicalDestinationArrivalConfirmed
-                || !personJourney.PhysicalDestinationArrivalConfirmed
-                || !string.Equals(vehicleJourney.OriginLocationId, originLocationId, StringComparison.Ordinal)
-                || !string.Equals(personJourney.OriginLocationId, originLocationId, StringComparison.Ordinal)
-                || !string.Equals(vehicleJourney.DestinationLocationId, personJourney.DestinationLocationId, StringComparison.Ordinal)
-                || !string.Equals(vehicleJourney.GatewayLocationId, personJourney.GatewayLocationId, StringComparison.Ordinal))
+
+            // Campaign C (DEF-048): the pre-check below used to return false
+            // silently, so every refusal looked identical in the Console and
+            // the cause (missing journey, mismatched id, unconfirmed
+            // destination, ...) was invisible. Name the first failing check
+            // loudly, once, at the refusal — the controller calls this once
+            // per arrival attempt, so one line per refused arrival, never
+            // per tick. No retry is added: every cause named here is
+            // permanent once the return leg has started (see
+            // OriginArrivalRefusalReason), and the disposition after a
+            // refusal is Check 10 question 5, an owner decision. The
+            // destination-side method is deliberately untouched: its retry
+            // loop calls it every tick, so per-call logging there would spam.
+            string refusal = OriginArrivalRefusalReason.Describe(
+                vehicleId, operatorPersonId, vehicleJourneyId, originLocationId,
+                ToOriginArrivalJourneyState(vehicleJourney),
+                ToOriginArrivalJourneyState(personJourney));
+            if (refusal != null)
+            {
+                Debug.LogWarning(refusal, this);
                 return false;
+            }
 
             var diag = new List<string>();
             bool vehicleConfirmed = vehicleJourney.PhysicalOriginArrivalConfirmed
@@ -3874,6 +4084,27 @@ namespace LandLedgers.Orchestration.Systems
             SyncOffMapJourneysToSaveState();
             Debug.Log($"[OffMapJourney] Physical freight return confirmed: vehicle journey '{vehicleJourney.JourneyId}', operator journey '{personJourney.JourneyId}', vehicle '{vehicleId}', Ethan P{operatorPersonId}, origin '{originLocationId}'.", this);
             return true;
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-048): snapshots one journey record into the
+        /// pure refusal-reason helper's state. Null record maps to a null
+        /// snapshot (the helper names the missing journey). The traveler
+        /// kind is carried as its enum name so the helper stays free of
+        /// the journey-authority type and its Unity dependencies.
+        /// </summary>
+        private static OriginArrivalRefusalReason.JourneyState? ToOriginArrivalJourneyState(OffMapJourneyRecord record)
+        {
+            if (record == null) return null;
+            return new OriginArrivalRefusalReason.JourneyState(
+                record.JourneyId,
+                record.TravelerKind.ToString(),
+                record.PersonId,
+                record.RequiresPhysicalArrivalConfirmation,
+                record.PhysicalDestinationArrivalConfirmed,
+                record.OriginLocationId,
+                record.DestinationLocationId,
+                record.GatewayLocationId);
         }
 
         /// <summary>
@@ -4088,6 +4319,14 @@ namespace LandLedgers.Orchestration.Systems
             OpeningTransportPresentationController presentation =
                 FindAnyObjectByType<OpeningTransportPresentationController>();
             if (presentation == null) return;
+            // Campaign C (DEF-048): the movement controller, when present,
+            // remembers which journeys already had their origin arrival
+            // refused at the town return point. On a fresh-scene Continue
+            // there is no transport group at all, so this stays null and
+            // the generic line below is used — the refusal cannot be
+            // distinguished there, and is not guessed at.
+            CoupledTransportMovementController movement =
+                FindAnyObjectByType<CoupledTransportMovementController>();
 
             foreach (OffMapJourneyRecord journey in OffMapJourneys.AllJourneys())
             {
@@ -4118,8 +4357,29 @@ namespace LandLedgers.Orchestration.Systems
 
                 if (!presentation.BeginCoupledPhysicalReturn(shipment, journey, operatorPersonId))
                 {
-                    LogRefusalDayKeyed("physical-return-start:" + journey.JourneyId, absoluteDayIndex,
-                        $"[OffMapJourney] Loaded freight journey '{journey.JourneyId}' is waiting to begin its physical return: the assigned team, route, or current physical position did not validate.");
+                    // Campaign C (DEF-048): the generic line below used to
+                    // fire for every failed return start, including the
+                    // case where the team ALREADY came home and its origin
+                    // arrival was refused — a state in which "waiting to
+                    // begin its physical return" is false and the return
+                    // can never start (BeginCoupledPhysicalReturn requires
+                    // the team within 8 m of the supplier destination).
+                    // That stranded haul logged the misleading line every
+                    // day forever. Distinguish it: the refusal reason is in
+                    // the [CoupledTransport] / [OffMapJourney] warning
+                    // logged at the arrival, and no re-drive path exists —
+                    // the disposition is Check 10 question 5, an owner
+                    // decision, so this line names the state and stops there.
+                    if (movement != null && movement.HasRefusedOriginArrival(journey.JourneyId))
+                    {
+                        LogRefusalDayKeyed("physical-return-refused:" + journey.JourneyId, absoluteDayIndex,
+                            $"[OffMapJourney] Loaded freight journey '{journey.JourneyId}' cannot begin its physical return: the team already returned and its origin arrival was refused at the town return point (see the [CoupledTransport] warning for that journey); no re-drive path exists, and the haul stays active and unsettled until the owner decides the disposition (Check 10 question 5).");
+                    }
+                    else
+                    {
+                        LogRefusalDayKeyed("physical-return-start:" + journey.JourneyId, absoluteDayIndex,
+                            $"[OffMapJourney] Loaded freight journey '{journey.JourneyId}' is waiting to begin its physical return: the assigned team, route, or current physical position did not validate.");
+                    }
                 }
             }
         }
@@ -5039,7 +5299,11 @@ namespace LandLedgers.Orchestration.Systems
                         horse == null ? "A0" : null,
                         wagon == null ? "assigned wagon" : null
                     }.Where(value => value != null));
-                    LogFreightAgreementBlockerOnce("dispatch-prerequisite:" + agreement.AgreementId,
+                    // Campaign C (DEF-050): this stall retries daily but used
+                    // to log once per session, so a held shipment whose task
+                    // was never created went silent after day 1. One line
+                    // per day keeps it visible; the message is unchanged.
+                    LogRefusalDayKeyed("dispatch-prerequisite:" + agreement.AgreementId, dayIndex,
                         $"[FreightDispatch] Accepted agreement '{agreement.AgreementId}' remains prepared; dispatch assignment deferred because {missing} is unresolved.");
                     continue;
                 }
@@ -7580,14 +7844,16 @@ namespace LandLedgers.Orchestration.Systems
             if (hub?.Tasks == null || agreement == null || shipment == null || freight?.Owner == null
                 || horse == null || wagon == null)
             {
-                LogFreightAgreementBlockerOnce("dispatch-context:" + agreement?.AgreementId,
+                // Campaign C (DEF-050): day-keyed, not once-only — see the
+                // note on the prerequisite branch below.
+                LogRefusalDayKeyed("dispatch-context:" + agreement?.AgreementId, dayIndex,
                     "[FreightDispatch] Prepared shipment retained; TaskAuthority, agreement, shipment, Ethan, A0, or wagon is unresolved.");
                 return;
             }
             int operatorId = freight.Owner.PersonId;
             if (operatorId < 0 || operatorId != agreement.AcceptingOperatorPersonId)
             {
-                LogFreightAgreementBlockerOnce("dispatch-operator:" + shipment.ShipmentId,
+                LogRefusalDayKeyed("dispatch-operator:" + shipment.ShipmentId, dayIndex,
                     $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains prepared; B3 operator P{operatorId} does not match accepted operator P{agreement.AcceptingOperatorPersonId}.");
                 return;
             }
@@ -7599,7 +7865,7 @@ namespace LandLedgers.Orchestration.Systems
                 || !string.Equals(shipment.physicalWagonAssetId, wagon.AssetId, StringComparison.Ordinal)
                 || shipment.physicalTransportBound)
             {
-                LogFreightAgreementBlockerOnce("dispatch-state:" + shipment.ShipmentId,
+                LogRefusalDayKeyed("dispatch-state:" + shipment.ShipmentId, dayIndex,
                     $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains prepared; accepted agreement, shipment hold, or status did not match.");
                 return;
             }
@@ -7609,7 +7875,7 @@ namespace LandLedgers.Orchestration.Systems
                 || wagon.OwnerKind != "business" || !string.Equals(wagon.OwnerId, freight.InstanceId, StringComparison.Ordinal)
                 || wagon.HitchingAnimalIds == null || !wagon.HitchingAnimalIds.Contains(horse.AnimalId.ToString()))
             {
-                LogFreightAgreementBlockerOnce("dispatch-team:" + shipment.ShipmentId,
+                LogRefusalDayKeyed("dispatch-team:" + shipment.ShipmentId, dayIndex,
                     $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains prepared; A0/wagon attachment or B3 ownership is invalid.");
                 return;
             }
@@ -7618,9 +7884,41 @@ namespace LandLedgers.Orchestration.Systems
             if (!string.IsNullOrWhiteSpace(agreement.DispatchTaskId))
             {
                 WorkTask recorded = hub.Tasks.FindTaskByIdString(agreement.DispatchTaskId);
-                if (recorded != null && string.Equals(recorded.CustomerRef, taskRef, StringComparison.Ordinal)) return;
-                LogFreightAgreementBlockerOnce("dispatch-task-missing:" + agreement.AgreementId,
-                    $"[FreightDispatch] Shipment '{shipment.ShipmentId}' retains its recorded task ID '{agreement.DispatchTaskId}', but that TaskAuthority record is unavailable; no replacement was created.");
+                if (recorded != null && string.Equals(recorded.CustomerRef, taskRef, StringComparison.Ordinal))
+                {
+                    // Campaign C (DEF-050): a recorded task that is still
+                    // open is the live path — stay silent. A terminal
+                    // recorded task strands the hold: no handler re-creates
+                    // a dispatch task for an already-prepared shipment, so
+                    // name the strand once per day instead of returning
+                    // silently. Terminal day follows the prune's anchor
+                    // (CompletedDayIndex, else CreatedDayIndex).
+                    string strand = DispatchHoldStrandReason.Describe(
+                        new DispatchHoldStrandReason.DispatchHoldTaskState(
+                            shipment.ShipmentId, agreement.AgreementId,
+                            agreement.DispatchTaskId, true, recorded.CustomerRef, taskRef,
+                            recorded.IsOpen, recorded.Status.ToString(), recorded.Outcome.ToString(),
+                            recorded.CompletedDayIndex >= 0 ? recorded.CompletedDayIndex : recorded.CreatedDayIndex,
+                            agreement.AcceptedDayIndex),
+                        dayIndex);
+                    if (strand != null)
+                        LogRefusalDayKeyed("dispatch-hold-stranded:" + shipment.ShipmentId, dayIndex, strand);
+                    return;
+                }
+                // Campaign C (DEF-050): the recorded id resolves to a
+                // different task, or to no TaskAuthority record at all
+                // (pruned 7 days after terminalizing, or lost). Either way
+                // no replacement is created — log once per day instead of
+                // once per session so the stranded hold stays visible.
+                LogRefusalDayKeyed("dispatch-task-missing:" + agreement.AgreementId, dayIndex,
+                    DispatchHoldStrandReason.Describe(
+                        new DispatchHoldStrandReason.DispatchHoldTaskState(
+                            shipment.ShipmentId, agreement.AgreementId,
+                            agreement.DispatchTaskId, recorded != null,
+                            recorded != null ? recorded.CustomerRef : string.Empty, taskRef,
+                            false, string.Empty, string.Empty, dayIndex,
+                            agreement.AcceptedDayIndex),
+                        dayIndex));
                 return;
             }
 
@@ -7632,7 +7930,10 @@ namespace LandLedgers.Orchestration.Systems
                 string recoveryRefusal = FreightProduction.ServiceAgreements.RegisterDispatchTask(
                     agreement.AgreementId, shipment.ShipmentId, existing.TaskId.ToString());
                 if (recoveryRefusal != null)
-                    LogFreightAgreementBlockerOnce("dispatch-link-existing:" + agreement.AgreementId,
+                    // Campaign C (DEF-050): day-keyed, not once-only — an
+                    // unlinked open task is a held shipment that stays
+                    // visible while it waits for its link.
+                    LogRefusalDayKeyed("dispatch-link-existing:" + agreement.AgreementId, dayIndex,
                         $"[FreightDispatch] Existing task '{existing.TaskId}' could not be linked: {recoveryRefusal}");
                 return;
             }
@@ -8304,6 +8605,30 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// CAMPAIGN-C, DEF-025 (owner Decision 11): feeds one no-worker fact into
+        /// the task-duration diagnostics so a task with no viable worker warns on
+        /// the 1/3/7-day ladder. Diagnostic only: it never assigns, hires, or
+        /// changes any task, and it never commissions anything. Null-safe: when
+        /// the diagnostics service is not installed the feed is a no-op (the
+        /// service itself also drops unknown tasks and empty reasons).
+        /// </summary>
+        private void RecordNoWorker(string taskId, string reason, int dayIndex)
+        {
+            if (string.IsNullOrEmpty(taskId) || hub == null)
+            {
+                return;
+            }
+
+            TaskDurationDiagnostics diagnosticsService = hub.DurationDiagnostics;
+            if (diagnosticsService == null)
+            {
+                return;
+            }
+
+            diagnosticsService.RecordNoWorker(taskId, reason, dayIndex);
+        }
+
+        /// <summary>
         /// One business's blanket assignment pass: open Queued tasks and the
         /// AddLaborWorker pool (budget-derived availability) through
         /// WorkScheduler.AssignDailyWork, then ReserveAndAssignTasks
@@ -8364,8 +8689,26 @@ namespace LandLedgers.Orchestration.Systems
                 taskByTextId[task.TaskId.ToString()] = task;
             }
 
-            if (schedulerWork.Count == 0 || workers.Count == 0)
+            if (schedulerWork.Count == 0)
             {
+                return;
+            }
+
+            if (workers.Count == 0)
+            {
+                // CAMPAIGN-C, DEF-025 (owner Decision 11): the business has no
+                // workers at all, so the scheduler is never reached — every Queued
+                // task here is workerless. Feed the no-worker fact into the
+                // task-duration diagnostics so the 1/3/7-day ladder can warn.
+                // Diagnostic only; assignment behaviour is unchanged.
+                foreach (SchedulerOpenWorkItem item in schedulerWork)
+                {
+                    if (item != null)
+                    {
+                        RecordNoWorker(item.TaskId, "unassignable: no workers available", absoluteDayIndex);
+                    }
+                }
+
                 return;
             }
 
@@ -8377,6 +8720,22 @@ namespace LandLedgers.Orchestration.Systems
                     OpenWork = schedulerWork,
                     Workers = workers,
                 }, diagnostics);
+            // CAMPAIGN-C, DEF-025 (owner Decision 11): the scheduler's unassigned
+            // tasks (PersonId -1) are skipped silently by ReserveAndAssignTasks —
+            // feed their unassignable notes into the task-duration diagnostics so
+            // the 1/3/7-day ladder can warn. Diagnostic only; assignment
+            // behaviour is unchanged.
+            if (assignments != null && assignments.Assignments != null)
+            {
+                foreach (WorkAssignment assignment in assignments.Assignments)
+                {
+                    if (assignment != null && assignment.PersonId < 0)
+                    {
+                        RecordNoWorker(assignment.TaskId, assignment.Note, absoluteDayIndex);
+                    }
+                }
+            }
+
             ReserveAndAssignBusinessTasks(assignments, taskByTextId, absoluteDayIndex, diagnostics);
         }
 
@@ -11222,11 +11581,55 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // Campaign C (DEF-023): rehydration must have run before the first
+            // post-load tick. Two ways it can still be pending here: Rebind ran
+            // and skipped it (authorities missing — recorded loudly in
+            // ApplyRestoredShoppingTrips), or Rebind never ran after this load
+            // at all. Campaign C (DEF-065, corrected): the dev-hotkey path is
+            // NOT a no-Rebind path — every load funnels through
+            // SaveLoadManager.LoadSlotAtPath, which calls
+            // bootstrapper.MarkRestoredFromSave, which calls Rebind, so the
+            // hotkey path rebinds like Continue. A never-ran Rebind here
+            // means no bootstrapper was found at load time (SaveLoadManager
+            // logs that loudly now), a load bypassed LoadSlotAtPath, or
+            // Rebind ran before the restored trips were registered. Retry
+            // once here, before any due pops or backstop scheduling; if the
+            // retry still cannot run, fail loudly and shield this first
+            // tick's backstop only — the backstop is idempotent and re-runs
+            // every tick, so skipping it once is harmless, while running it
+            // with empty driver maps would re-schedule the leg dues and lose
+            // the MAP-ONLY service due. Later ticks run the backstop
+            // normally: the skip is already logged, and holding the
+            // backstop off forever would stall every other task's dues.
+            // This guard keeps the shopping trips from being silently
+            // corrupted on the first tick; it does not replace Rebind's
+            // other restore work (supplier adapters, diagnostics, task
+            // definitions), which runs in Rebind itself.
+            bool skippedAtRebind = shoppingRehydrateGuard.SkippedAfterLoad;
+            bool rehydratePendingAtTick = skippedAtRebind
+                || (shoppingTripDriver != null && shoppingTripDriver.NeedsRehydrateAfterLoad);
+            if (rehydratePendingAtTick)
+            {
+                ApplyRestoredShoppingTrips();
+                if (!skippedAtRebind && !shoppingRehydrateGuard.SkippedAfterLoad)
+                {
+                    Debug.LogWarning("[SimulationDrivers] Restored shopping trips rehydrated late on the first post-load tick — Rebind did not run after this load, or ran before the restored trips were registered (see DEF-065). The trips are intact; if Rebind never ran, its other restore work (supplier adapters, diagnostics, task definitions) is still missing.", this);
+                }
+            }
+            bool shieldBackstopThisTick = shoppingRehydrateGuard.TakeFirstTickGuard();
+
             // Pass IV (Worker 1): due events pop in due order BEFORE any further
             // advancement, so accelerated ticks cannot skip task completions,
             // passive completions, or deadlines.
             ProcessDueEvents();
-            SyncTaskCompletionDueEvents();
+            if (shieldBackstopThisTick)
+            {
+                Debug.LogError("[SimulationDrivers] First post-load tick with " + shoppingRehydrateGuard.SkippedTripCount + " restored shopping trip(s) still unrehydrated — skipping the task-due backstop this tick so it cannot re-schedule their leg dues (service dues are MAP-ONLY and would be lost). The trips are diagnosed in ApplyRestoredShoppingTrips. See DEF-023.", this);
+            }
+            else
+            {
+                SyncTaskCompletionDueEvents();
+            }
 
             if (timeManager != null && shoppingTripDriver != null)
             {

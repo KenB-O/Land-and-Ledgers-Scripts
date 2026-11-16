@@ -270,6 +270,53 @@ namespace LandLedgers.Population
                 || serviceTaskIdStringToTripId.ContainsKey(task.TaskId.ToString()));
 
         /// <summary>
+        /// Campaign C (DEF-049): true when a live trip (active, or in paid-return
+        /// recovery) still holds this task id as a leg or service task. Leg tasks
+        /// complete mid-trip while the trip is still live, and RehydrateAfterLoad
+        /// aborts a trip whose leg/service id fails to resolve — so the daily
+        /// terminal-task prune must never remove a task this method flags.
+        /// Completed trips leave both lists, so their ids stop being flagged the
+        /// moment the trip ends.
+        /// </summary>
+        public bool IsTaskReferencedByLiveTrip(EntityId taskId)
+        {
+            if (!taskId.IsValid)
+            {
+                return false;
+            }
+
+            foreach (PlannedShoppingTrip trip in activeTrips)
+            {
+                if (trip == null)
+                {
+                    continue;
+                }
+
+                if (trip.OutboundTaskId == taskId || trip.InStoreTaskId == taskId
+                    || trip.ReturnTaskId == taskId || trip.ServiceTaskId == taskId)
+                {
+                    return true;
+                }
+            }
+
+            foreach (PlannedShoppingTrip trip in returnRecoveries)
+            {
+                if (trip == null)
+                {
+                    continue;
+                }
+
+                if (trip.OutboundTaskId == taskId || trip.InStoreTaskId == taskId
+                    || trip.ReturnTaskId == taskId || trip.ServiceTaskId == taskId)
+                {
+                    return true;
+                }
+            }
+
+            return serviceTaskIdStringToTripId.ContainsKey(taskId.ToString());
+        }
+
+        /// <summary>
         /// Day boundary: plans a real-time trip for every open need of the
         /// household that does not already have an active trip. Needs nobody
         /// can serve stay open and are reported loudly by the loop.
@@ -449,6 +496,25 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
+        /// Campaign C (DEF-073): re-arm the queue patience tick at the
+        /// restored clock after a load, so decay resumes from the restored
+        /// time. The watermark is live-only: on a fresh scene it starts at
+        /// -1 and the first post-load tick sets it with no decay (up to one
+        /// short-tick interval, 15 game-min, skipped), and on an in-session
+        /// load the driver is reused so the watermark stays ahead of the
+        /// rewound clock and decay pauses until the clock replays past it.
+        /// The patience values themselves are restored from the queue DTO;
+        /// this only re-arms the decay clock. Called from
+        /// SimulationDrivers.Rebind after the driver is (re)created; on a
+        /// New Game the clock is at the scenario start so the re-arm is a
+        /// no-op.
+        /// </summary>
+        public void RearmQueueTickWatermark(float restoredGameSeconds)
+        {
+            lastQueueTickGameSeconds = restoredGameSeconds;
+        }
+
+        /// <summary>
         /// Handles one due event for a trip leg (TaskCompletionDue) or an
         /// arranged delivery (JourneyStageDue). Records real worked minutes on
         /// each finished leg — travel and shopping occupy real budgeted time.
@@ -585,6 +651,11 @@ namespace LandLedgers.Population
                     if (trip.State == PlannedShoppingTrip.TripState.Failed)
                     {
                         activeTrips.Remove(trip);
+                        // Campaign C (DEF-022): settlement already ran, so the
+                        // shopper may be holding paid goods — queue the paid
+                        // return recovery instead of stranding the batch in
+                        // loop custody. No-op when nothing was bought.
+                        QueuePaidReturnRecovery(trip);
                         break;
                     }
 
@@ -726,6 +797,11 @@ namespace LandLedgers.Population
             {
                 loop.AbortTrip(trip, inStoreError, dayIndex, diag);
                 activeTrips.Remove(trip);
+                // Campaign C (DEF-022): settlement already ran, so the shopper
+                // is holding paid goods at the store — queue the paid return
+                // recovery instead of stranding the batch in loop custody.
+                // No-op when nothing was bought.
+                QueuePaidReturnRecovery(trip);
                 return false;
             }
 
@@ -1203,6 +1279,14 @@ namespace LandLedgers.Population
                     diag.Add($"ShoppingTripDriver: trip {trip.TripId} household {trip.HouseholdId} need {trip.Need?.NeedSequence} has no registry instance — the receipt will decrement the DTO copy, not the registry need.");
                 }
 
+                // Campaign C (DEF-022): the candidate re-resolves before the
+                // leg check, so a trip that dies on its legs still carries
+                // its supplier — the paid-return recovery needs the store
+                // location, and the supplier-lost check below needs the
+                // rebuilt candidate either way. Sale-time numbers (units,
+                // price) were fixed at planning.
+                trip.Candidate = RebuildCandidate(trip.CandidateDto, supplierByBusinessId);
+
                 var legs = new HouseholdShoppingLoop.PlannedTrip();
                 bool ok = true;
                 if (trip.OutboundTaskId.IsValid)
@@ -1231,9 +1315,6 @@ namespace LandLedgers.Population
                 }
 
                 trip.Legs = legs;
-                // The candidate re-resolves from the supplier directory; the
-                // sale-time numbers (units, price) were fixed at planning.
-                trip.Candidate = RebuildCandidate(trip.CandidateDto, supplierByBusinessId);
                 if (trip.State != PlannedShoppingTrip.TripState.Planned && trip.Candidate == null)
                 {
                     diag.Add($"ShoppingTripDriver: trip {trip.TripId} lost its supplier across save/load — aborted, need stays open.");
@@ -1307,9 +1388,46 @@ namespace LandLedgers.Population
             {
                 loop.AbortTrip(trip, "lost across save/load", dayIndex, diag);
                 activeTrips.Remove(trip);
+                // Campaign C (DEF-022): a load-restored trip has Legs == null
+                // (FromDto never sets it), but TryPlanPaidReturnRecovery
+                // plans the return leg into trip.Legs and refuses a null
+                // container. The old leg tasks are gone; give the dead trip
+                // a fresh container so the recovery can plan new return legs
+                // into it. Nothing here resurrects the old legs.
+                if (trip.Legs == null) trip.Legs = new HouseholdShoppingLoop.PlannedTrip();
+                RecoverStrandedPaidBatch(trip, dayIndex, diag);
             }
 
             NeedsRehydrateAfterLoad = false;
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-022): a trip that died across save/load may hold
+        /// paid goods in loop custody. The holder is usually still at the
+        /// store — queue the physical paid return recovery. When the holder
+        /// is already home, deposit the batch directly through
+        /// ReceiveCarriedBatch (its first production caller); no travel
+        /// needs planning for goods already at the door. A batch that fits
+        /// neither stays in custody with the need open and is diagnosed
+        /// loudly; PlanForHousehold's pending-custody block prevents a
+        /// duplicate purchase for that need. Arranged-delivery batches are
+        /// not handled here — ReceiveCarriedBatch refuses them by design.
+        /// </summary>
+        private void RecoverStrandedPaidBatch(PlannedShoppingTrip trip, int dayIndex, List<string> diag)
+        {
+            if (trip?.Batch == null || trip.Batch.Custody != GoodsCustodyState.InHand) return;
+            if (hasPhysicallyArrived != null
+                && hasPhysicallyArrived(trip.ShopperPersonId, trip.HomeLocationId ?? string.Empty))
+            {
+                string receiptError = loop.ReceiveCarriedBatch(trip.Batch.BatchId, dayIndex, diag);
+                if (receiptError == null) return;
+                diag.Add($"ShoppingTripDriver: trip {trip.TripId} paid batch {trip.Batch.BatchId} could not be received at home after save/load — {receiptError}");
+                return;
+            }
+
+            QueuePaidReturnRecovery(trip);
+            if (returnRecoveries.Contains(trip)) return;
+            diag.Add($"ShoppingTripDriver: trip {trip.TripId} paid batch {trip.Batch.BatchId} stays in custody after save/load — holder P{trip.ShopperPersonId} is neither at the store nor at home; need stays open, no new trip will be planned for it until the batch is received.");
         }
 
         // ---------- DTO mapping ----------

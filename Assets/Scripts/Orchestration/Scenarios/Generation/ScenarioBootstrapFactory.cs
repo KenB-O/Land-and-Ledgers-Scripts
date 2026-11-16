@@ -170,9 +170,13 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
             ScenarioBootstrapComposition composition =
                 ResolveComposition(selection, availablePresets, out ScenarioPreset preset);
 
-            int year = CalendarAnchor.DefaultAnchorYear;
-            int month = CalendarAnchor.DefaultAnchorMonth;
-            int day = CalendarAnchor.DefaultAnchorDay;
+            // Campaign C (DEF-012): the no-preset fallback is the ordinary
+            // opening (1870-01-01, matching First Ledger), stated explicitly
+            // — not the math epoch. The epoch is a calendar origin, not a
+            // scenario start.
+            int year = 1870;
+            int month = 1;
+            int day = 1;
             if (preset != null)
             {
                 StartingWorldConfiguration world = preset.StartingWorld;
@@ -214,14 +218,21 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
 
         /// <summary>
         /// Applies the plan's start day to the session clock via the public
-        /// LoadFromSaveDto seam. Returns true when the clock now reads the
-        /// plan's start day.
+        /// LoadFromSaveDto seam. The plan's start is anchor-relative, so it
+        /// is carried as the clock's calendarDayOffset with the campaign day
+        /// at zero — the same mechanism StartNewScenarioAtDate uses — rather
+        /// than as the campaign day itself: passing the anchor-relative day
+        /// as absoluteDayIndex floored every pre-anchor start to the anchor
+        /// date through LoadFromSaveDto's non-negative guard. Returns true
+        /// when the clock now reads the plan's start day.
         /// </summary>
         public static bool ApplyToTimeManager(ScenarioBootstrapPlan plan, TimeManager timeManager)
         {
             if (plan == null || timeManager == null) return false;
-            timeManager.LoadFromSaveDto(new TimeSaveDto { absoluteDayIndex = plan.StartDayIndex });
-            return timeManager.CurrentAbsoluteDayIndex == plan.StartDayIndex;
+            timeManager.LoadFromSaveDto(new TimeSaveDto { absoluteDayIndex = 0, calendarDayOffset = plan.StartDayIndex });
+            return timeManager.CurrentDate.Year == plan.StartYear
+                && timeManager.CurrentDate.Month == plan.StartMonth
+                && timeManager.CurrentDate.DayOfMonth == plan.StartDay;
         }
 
         private static ScenarioPreset FindPreset(

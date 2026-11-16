@@ -42,10 +42,12 @@ namespace LandLedgers.Orchestration.Systems
     /// </summary>
     public sealed class AutonomousSocietyDriver
     {
-        // Gregorian anchor: absoluteDayIndex 0 = 1880-03-01 (matches the P0-1 plan default).
-        public const int AnchorYear = 1880;
-        public const int AnchorMonth = 3;
-        public const int AnchorDay = 1;
+        // Gregorian anchor: absoluteDayIndex 0 = 1880-03-01. Derived from
+        // CalendarAnchor so the two can never drift apart (the
+        // ScenarioDateUtil precedent). Values unchanged (1880-03-01).
+        public const int AnchorYear = CalendarAnchor.DefaultAnchorYear;
+        public const int AnchorMonth = CalendarAnchor.DefaultAnchorMonth;
+        public const int AnchorDay = CalendarAnchor.DefaultAnchorDay;
         public const int MinutesPerDay = 1440;
         public const int WorkShiftMinutes = 480;
         public const int MaxEventLog = 200;

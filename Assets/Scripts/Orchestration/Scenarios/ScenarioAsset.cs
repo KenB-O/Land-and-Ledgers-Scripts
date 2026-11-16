@@ -106,7 +106,7 @@ namespace LandLedgers.Orchestration.Scenarios
         /// <summary>
         /// P1-1: authored starting-world configuration. Never null: assets
         /// authored before this section existed get a default configuration
-        /// (55-95 residents, 1880-03-01 start) that still validates, so old
+        /// (55-95 residents, 1870-01-01 start) that still validates, so old
         /// assets keep working without silent behavior changes.
         /// </summary>
         public StartingWorldConfiguration StartingWorld

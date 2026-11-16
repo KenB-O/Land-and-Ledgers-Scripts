@@ -32,8 +32,8 @@ namespace LandLedgers.Population
             PopulationGenerationSettings settings,
             IReadOnlyList<NewcomerSettlementBoardingOption> boardingHouseOptions = null,
             KinshipRegistry kinship = null,
-            int startYear = 1892,
-            int startMonth = 3,
+            int startYear = 1870,
+            int startMonth = 1,
             int startDay = 1)
         {
             PopulationState state = new();

@@ -577,7 +577,24 @@ namespace LandLedgers.Persistence
 
             SavePostRestoreConsistencyReport postRestoreReport = TryBuildPostRestoreConsistencyReport(save);
             RecordPersistenceDiagnostics(saveFormatVersion, normalizationReport, resolver, integrityReport, restoreDependencyReport, postRestoreReport);
-            bootstrapper?.MarkRestoredFromSave(BuildPersistenceStatusSummary());
+            // Campaign C (DEF-065): this hook is the single funnel through
+            // which EVERY load path reaches SimulationDrivers.Rebind.
+            // LoadDefaultSlot funnels through LoadSlotAtPath, so the
+            // Continue path, the dev-hotkey path (Update, F9) and the
+            // context-menu path all rebind via MarkRestoredFromSave.
+            // Check 9 F-03 claimed the hotkey path never rebinds; it missed
+            // this call (it grepped for .Rebind() call sites and found only
+            // the bootstrapper, without tracing that this method invokes the
+            // bootstrapper hook on every successful load). The only way
+            // Rebind's restore work (supplier adapters, diagnostics, task
+            // definitions, shopping-trip rehydration) is skipped on a load
+            // is a missing bootstrapper — fail loudly instead of skipping
+            // silently, mirroring the Pass 9 (:445) and sawmill (:573)
+            // guards above.
+            if (bootstrapper == null)
+                Debug.LogWarning("[SaveLoad] Rebind restore step skipped: no FirstLedgerSliceBootstrapper found; SimulationDrivers.Rebind (supplier adapters, diagnostics, task definitions, shopping-trip rehydration) will not run after this load. See DEF-065.", this);
+            else
+                bootstrapper.MarkRestoredFromSave(BuildPersistenceStatusSummary());
 
             string sourceLabel = loadedFromBackup ? "backup slot" : "default slot";
             string legacyPrefix = saveFormatVersion < CurrentFormatVersion

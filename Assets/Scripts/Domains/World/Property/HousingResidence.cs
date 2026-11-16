@@ -257,12 +257,19 @@ namespace LandLedgers.World.Property
         /// Sums the sleeping capacity of every space the household's members
         /// currently occupy and compares it to the composition requirement.
         /// Persons with NO current occupancy are listed as uncovered.
+        /// B1: when a sleeping-place registry is supplied, ProvidedSleepingPlaces
+        /// comes from the registry's installed beds instead — the registry
+        /// is the ONE sleeping-place authority, and a household sleeping on
+        /// the floor is housed but unsuitably housed. A registry for a
+        /// different household is ignored (with a diagnostic) and the space
+        /// capacity stands. Without a registry, evaluation is exactly as before.
         /// </summary>
         public HouseholdShelterSuitability Evaluate(
             int householdId,
             IReadOnlyList<PersonState> members,
             HousingAuthority housing,
-            List<string> diag)
+            List<string> diag,
+            SleepingPlaceRegistry sleepingPlaces = null)
         {
             diag = diag ?? diagnostics;
             var verdict = new HouseholdShelterSuitability { HouseholdId = householdId };
@@ -303,10 +310,25 @@ namespace LandLedgers.World.Property
                     verdict.SpaceIdsEvaluated.Add(spaceId);
                 }
             }
+            if (sleepingPlaces != null)
+            {
+                if (sleepingPlaces.HouseholdId != householdId)
+                {
+                    diag.Add($"HouseholdShelterSuitabilityEvaluator: sleeping-place registry is for H{sleepingPlaces.HouseholdId}, not H{householdId} — installed-bed count ignored, space capacity stands.");
+                }
+                else
+                {
+                    provided = sleepingPlaces.InstalledBedPlaceCount();
+                }
+            }
             verdict.ProvidedSleepingPlaces = provided;
             verdict.Summary = verdict.IsSuitable
                 ? $"H{householdId}: {provided} sleeping places for {verdict.Composition.RequiredSleepingPlaces} required — suitably housed."
                 : $"H{householdId}: {provided} sleeping places for {verdict.Composition.RequiredSleepingPlaces} required — SHORT by {verdict.GapPlaces} (a vacant bunk does not house a family).";
+            if (sleepingPlaces != null && sleepingPlaces.HouseholdId == householdId)
+            {
+                verdict.Summary += " (installed beds)";
+            }
             diag.Add(verdict.Summary);
             return verdict;
         }

@@ -262,7 +262,23 @@ namespace LandLedgers.EditorTests.Integration
             "ScenarioPropertyGrant", "ScenarioSeedPropertyGrant", "SecurityInterestRecord", "SeizedCollateralRecord",
             "SellerFinanceDecision", "SellerFinanceDecisionInput", "SellerFinanceDecisionService", "SellerFinanceNegotiationEvent",
             "SellerFinancePolicy", "SettledWeekMarker", "ShelfUnitsEntry", "ShoppingDiagnosticEvent",
-            "ShoppingTripDriver", "SimpleDueEventScheduler", "SimpleDueEventSchedulerSaveDto", "SkillTaskDurationEstimator",
+            "ShoppingTripDriver", "SimpleDueEventScheduler", "SimpleDueEventSchedulerSaveDto",
+            // B1 (Agent B, expanded campaign 2026-11-16): the sleeping-place
+            // records of SleepingPlaceRegistry.cs. They are data carriers of
+            // the wired sleeping feature — constructed and consumed inside
+            // SleepingPlaceRegistry and read by DailyActivityPlanner
+            // (ReserveSleep records the place id and rest quality on the
+            // sleep activities). The registry itself escapes the scan
+            // because HouseholdShelterSuitabilityEvaluator.Evaluate
+            // (Domains/World/Property, outside the owning directory) takes
+            // it; its records have no reference outside Domains/Population
+            // yet, so they are classified feature-internal here, the same
+            // precedent as the construction cluster and
+            // HouseholdShelterSuitability. When Agent G wires the sleep
+            // driver (SimulationDrivers), the records gain production
+            // callers outside the directory and should leave the baseline.
+            "SleepingPlace", "SleepingPlaceReservation",
+            "SkillTaskDurationEstimator",
             "SmithingRecipe", "SocietyReconciliation", "StageLaborBaseline", "StagedBakeryBatch",
             "StagedBakeryBatchSaveDto", "StandingInstruction", "StandingInstructionRegister", "StandingInstructionSaveDto",
             "StartingWorldConfiguration", "StockProvenanceRecord", "StoreCategoryOffer", "StoreTradingHours",

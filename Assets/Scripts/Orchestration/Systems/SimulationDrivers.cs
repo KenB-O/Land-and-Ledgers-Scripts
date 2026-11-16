@@ -2164,7 +2164,12 @@ namespace LandLedgers.Orchestration.Systems
             {
                 AcquisitionMarketManager market = FindAnyObjectByType<AcquisitionMarketManager>();
                 if (market != null && market.Titles != null)
-                    npcConstructionParcelAuthority = new TitleConstructionParcelAuthority(market.Titles);
+                    // D-2: pass the hub housing authority so the parcel
+                    // vacancy gate runs in production (a parcel with a
+                    // registered building refuses). Source-reviewed only:
+                    // SimulationDrivers.cs is harness-excluded, so Unity
+                    // compilation proof is owed from Codex.
+                    npcConstructionParcelAuthority = new TitleConstructionParcelAuthority(market.Titles, hub.Housing);
             }
             if (npcConstructionParcelAuthority != null)
             {

@@ -497,6 +497,193 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         // ----------------------------------------------------------------
+        // Parcel vacancy gate (D-2)
+        // ----------------------------------------------------------------
+
+        private TitleAuthority TitlesHoldingParcel9()
+        {
+            var titles = new TitleAuthority();
+            var tdiag = new List<string>();
+            Assert.IsNotNull(titles.RegisterParcel("parcel-9", "lot", 1f,
+                "household:7", TitleBasis.Grant, 0, tdiag), string.Join("; ", tdiag));
+            return titles;
+        }
+
+        private static void RegisterHouse(HousingAuthority housing, string buildingId, string parcelId)
+        {
+            var hdiag = new List<string>();
+            Assert.IsNotNull(housing.RegisterBuilding(buildingId, parcelId, "house", 0, "test", hdiag),
+                string.Join("; ", hdiag));
+        }
+
+        [Test]
+        public void ParcelVacancy_VacantParcel_Authorizes()
+        {
+            TitleAuthority titles = TitlesHoldingParcel9();
+            var housing = new HousingAuthority();
+            var authority = new TitleConstructionParcelAuthority(titles, housing);
+            var diag = new List<string>();
+
+            Assert.IsNull(authority.AuthorizeBuild(7, "parcel-9", 10, diag),
+                "a held vacant parcel authorizes: " + string.Join("; ", diag));
+            Assert.IsTrue(string.Join("; ", diag).Contains("holds parcel 'parcel-9'"),
+                "the authorization is recorded: " + string.Join("; ", diag));
+        }
+
+        [Test]
+        public void ParcelVacancy_OccupiedParcel_RefusesAndNamesBuilding()
+        {
+            TitleAuthority titles = TitlesHoldingParcel9();
+            var housing = new HousingAuthority();
+            RegisterHouse(housing, "bld-old", "parcel-9");
+            var authority = new TitleConstructionParcelAuthority(titles, housing);
+            var diag = new List<string>();
+
+            string refusal = authority.AuthorizeBuild(7, "parcel-9", 10, diag);
+
+            Assert.IsNotNull(refusal, "a parcel with a registered building refuses");
+            Assert.IsTrue(refusal.Contains("already has a registered building")
+                && refusal.Contains("bld-old"),
+                "the refusal names the gate and the building on the parcel: " + refusal);
+        }
+
+        [Test]
+        public void ParcelVacancy_BuildingOnOtherParcel_DoesNotBlock()
+        {
+            TitleAuthority titles = TitlesHoldingParcel9();
+            var housing = new HousingAuthority();
+            RegisterHouse(housing, "bld-neighbour", "parcel-8");
+            var authority = new TitleConstructionParcelAuthority(titles, housing);
+
+            Assert.IsNull(authority.AuthorizeBuild(7, "parcel-9", 10, new List<string>()),
+                "a building on another parcel is not this parcel's business");
+        }
+
+        [Test]
+        public void ParcelVacancy_TitleRefusalComesFirst()
+        {
+            TitleAuthority titles = TitlesHoldingParcel9();
+            var housing = new HousingAuthority();
+            RegisterHouse(housing, "bld-old", "parcel-9");
+            var authority = new TitleConstructionParcelAuthority(titles, housing);
+
+            string wrongHolder = authority.AuthorizeBuild(8, "parcel-9", 10, new List<string>());
+            Assert.IsTrue(wrongHolder != null && wrongHolder.Contains("held by"),
+                "a parcel held by someone else refuses on title, before vacancy: " + wrongHolder);
+            string unknown = authority.AuthorizeBuild(7, "parcel-unknown", 10, new List<string>());
+            Assert.IsTrue(unknown != null && unknown.Contains("not registered"),
+                "an unregistered parcel refuses on title: " + unknown);
+        }
+
+        [Test]
+        public void ParcelVacancy_NoHousingAuthority_TitleOnlyCheckRecorded()
+        {
+            TitleAuthority titles = TitlesHoldingParcel9();
+            var authority = new TitleConstructionParcelAuthority(titles);
+            var diag = new List<string>();
+
+            Assert.IsNull(authority.AuthorizeBuild(7, "parcel-9", 10, diag),
+                "without a housing authority the title-only check still authorizes: " + string.Join("; ", diag));
+            Assert.IsTrue(string.Join("; ", diag).Contains("vacancy not checked"),
+                "the skipped vacancy check is recorded, never silent: " + string.Join("; ", diag));
+        }
+
+        [Test]
+        public void ParcelVacancy_BuildingsForParcel_ListsOnlyThatParcel()
+        {
+            var housing = new HousingAuthority();
+            RegisterHouse(housing, "bld-one", "parcel-9");
+            RegisterHouse(housing, "bld-two", "parcel-9");
+            RegisterHouse(housing, "bld-other", "parcel-8");
+
+            List<Building> onNine = housing.BuildingsForParcel("parcel-9");
+            Assert.AreEqual(2, onNine.Count, "only the parcel's own buildings are listed");
+            Assert.AreEqual("bld-one", onNine[0].BuildingId, "registration order is kept");
+            Assert.AreEqual("bld-two", onNine[1].BuildingId);
+            Assert.AreEqual(1, housing.BuildingsForParcel("parcel-8").Count);
+            Assert.AreEqual(0, housing.BuildingsForParcel("parcel-empty").Count);
+            Assert.AreEqual(0, housing.BuildingsForParcel(null).Count);
+            Assert.AreEqual(0, housing.BuildingsForParcel("").Count);
+        }
+
+        [Test]
+        public void Commission_OccupiedParcel_Refused()
+        {
+            var c = new Fixture();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var driver = c.NewDriver();
+            TitleAuthority titles = TitlesHoldingParcel9();
+            RegisterHouse(c.Housing, "bld-old", "parcel-9");
+            var authority = new TitleConstructionParcelAuthority(titles, c.Housing);
+
+            ConstructionProject project = driver.Commission(
+                c.CabinRequest(NpcConstructionReason.Overcrowding), authority, 10, c.Diag);
+
+            Assert.IsNull(project, string.Join("; ", c.Diag));
+            Assert.AreEqual(0, c.Projects.Count, "no project is created on an occupied parcel");
+            string diag = string.Join("; ", c.Diag);
+            Assert.IsTrue(diag.Contains("already has a registered building")
+                && diag.Contains("bld-old"),
+                "the commission refusal names the occupied parcel and its building: " + diag);
+        }
+
+        [Test]
+        public void Commission_VacantParcel_Commissions()
+        {
+            var c = new Fixture();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var driver = c.NewDriver();
+            TitleAuthority titles = TitlesHoldingParcel9();
+            RegisterHouse(c.Housing, "bld-neighbour", "parcel-8");
+            var authority = new TitleConstructionParcelAuthority(titles, c.Housing);
+
+            ConstructionProject project = driver.Commission(
+                c.CabinRequest(NpcConstructionReason.Overcrowding), authority, 10, c.Diag);
+
+            Assert.IsNotNull(project, "a held vacant parcel commissions: " + string.Join("; ", c.Diag));
+        }
+
+        [Test]
+        public void CommissionPending_OccupiedParcel_StaysQueued()
+        {
+            var c = new Fixture();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var driver = c.NewDriver();
+            TitleAuthority titles = TitlesHoldingParcel9();
+            RegisterHouse(c.Housing, "bld-old", "parcel-9");
+            var authority = new TitleConstructionParcelAuthority(titles, c.Housing);
+            driver.PendingRequests.Add(c.CabinRequest(NpcConstructionReason.Overcrowding));
+
+            driver.CommissionPending(authority, 10, c.Diag);
+
+            Assert.AreEqual(1, driver.PendingRequests.Count,
+                "a refused request stays queued and retries — it is not dropped silently");
+            Assert.AreEqual(0, c.Projects.Count);
+            Assert.IsTrue(string.Join("; ", c.Diag).Contains("already has a registered building"),
+                "the refusal is recorded: " + string.Join("; ", c.Diag));
+        }
+
+        [Test]
+        public void CreateProject_OccupiedParcel_Refused()
+        {
+            var c = new Fixture();
+            c.RegisterCabin();
+            TitleAuthority titles = TitlesHoldingParcel9();
+            RegisterHouse(c.Housing, "bld-old", "parcel-9");
+            var authority = new TitleConstructionParcelAuthority(titles, c.Housing);
+
+            ConstructionProject project = c.Executor.CreateProject(
+                c.Catalog, 7, "cabin-a", "parcel-9", authority, 10, c.Diag);
+
+            Assert.IsNull(project, string.Join("; ", c.Diag));
+            Assert.IsTrue(string.Join("; ", c.Diag).Contains("already has a registered building"),
+                "the executor's parcel gate refuses the same way: " + string.Join("; ", c.Diag));
+        }
+
+        // ----------------------------------------------------------------
         // Save / load
         // ----------------------------------------------------------------
 

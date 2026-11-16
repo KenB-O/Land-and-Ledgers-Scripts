@@ -32,15 +32,35 @@ namespace LandLedgers.Economy
     /// Production parcel gate backed by the existing title chain. This only
     /// authorizes a household that currently holds the named parcel; leases
     /// and easements need their own explicit authority before they can grant
-    /// construction rights.
+    /// construction rights. D-2: when a housing authority is supplied, the
+    /// gate also refuses a parcel that already has a registered building on
+    /// it (a second house never starts on an occupied parcel) — the parcel
+    /// must be both held and vacant. Leases and easements remain a separate
+    /// missing authority (owner decision Q6): holding a lease or easement
+    /// grants no build rights through this gate, and a leaseholder is not
+    /// the title holder, so the title check refuses first.
     /// </summary>
     public sealed class TitleConstructionParcelAuthority : IConstructionParcelAuthority
     {
         private readonly TitleAuthority titles;
+        private readonly HousingAuthority housing;
 
         public TitleConstructionParcelAuthority(TitleAuthority titles)
+            : this(titles, null)
+        {
+        }
+
+        /// <summary>
+        /// D-2: the production constructor. With a housing authority the
+        /// vacancy gate runs; without one (tests and fixtures that only
+        /// need the title check) the vacancy check is skipped and the skip
+        /// is recorded in diagnostics — a missing housing authority never
+        /// newly blocks a commission, the D-1 missing-wagon precedent.
+        /// </summary>
+        public TitleConstructionParcelAuthority(TitleAuthority titles, HousingAuthority housing)
         {
             this.titles = titles;
+            this.housing = housing;
         }
 
         public string AuthorizeBuild(int householdId, string parcelId, int dayIndex, List<string> diagnostics)
@@ -53,6 +73,20 @@ namespace LandLedgers.Economy
             string expected = "household:" + householdId;
             if (!string.Equals(holder, expected, StringComparison.Ordinal))
                 return $"parcel '{parcelId}' is held by '{holder}', not '{expected}'.";
+            if (housing != null)
+            {
+                List<Building> existing = housing.BuildingsForParcel(parcelId);
+                if (existing != null && existing.Count > 0)
+                {
+                    string first = existing[0] != null ? existing[0].BuildingId : string.Empty;
+                    string more = existing.Count > 1 ? $" and {existing.Count - 1} more" : string.Empty;
+                    return $"parcel '{parcelId}' already has a registered building ('{first}'{more}) — build on a vacant parcel.";
+                }
+            }
+            else
+            {
+                diagnostics?.Add($"TitleConstructionParcelAuthority: no housing authority supplied — parcel vacancy not checked for parcel '{parcelId}'.");
+            }
             diagnostics?.Add($"TitleConstructionParcelAuthority: H{householdId} holds parcel '{parcelId}' and may commission construction.");
             return null;
         }

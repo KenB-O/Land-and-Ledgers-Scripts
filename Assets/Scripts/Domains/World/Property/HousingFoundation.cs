@@ -686,6 +686,28 @@ namespace LandLedgers.World.Property
         }
 
         /// <summary>
+        /// D-2 (additive read): every registered building on one parcel, in
+        /// registration order. The parcel vacancy gate reads this; a parcel
+        /// with any registered building is not vacant. Closure does not
+        /// remove a building from the register (CloseBuilding ends
+        /// occupancies, agreements and assignments but keeps the structure
+        /// on record — there is no demolition system), so a closed building
+        /// still holds its parcel until one exists.
+        /// </summary>
+        public List<Building> BuildingsForParcel(string parcelId)
+        {
+            var result = new List<Building>();
+            if (string.IsNullOrWhiteSpace(parcelId)) return result;
+            foreach (Building building in buildings.Values)
+            {
+                if (building != null
+                    && string.Equals(building.ParcelId, parcelId, StringComparison.Ordinal))
+                    result.Add(building);
+            }
+            return result;
+        }
+
+        /// <summary>
         /// Pass III Worker B (additive): attaches rent/board payment terms to
         /// an existing property agreement. The agreement stays the legal
         /// record; the terms only add the payment schedule that the tenancy

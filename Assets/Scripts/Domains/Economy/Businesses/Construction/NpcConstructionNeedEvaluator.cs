@@ -13,7 +13,10 @@ namespace LandLedgers.Economy
     /// and household formation (a household sharing its home building with
     /// another) — and queues ONE explicit request per household, only when
     /// the household holds a parcel and can fund the cheapest adequate
-    /// design whose packages all fit the single-trip bound. It never builds
+    /// design whose packages are shippable by multi-trip freight at the
+    /// single-trip bound (D-1: the wagon must be able to carry the cargo
+    /// at all — the trip count is recorded, never a refusal by itself).
+    /// It never builds
     /// anything: every queued request still passes the driver's full
     /// commission gates, is funded from real cash, and is built from real
     /// materials and real labour. Business expansion, replacement,

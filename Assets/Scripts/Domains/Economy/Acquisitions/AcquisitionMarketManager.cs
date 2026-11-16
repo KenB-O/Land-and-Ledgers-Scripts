@@ -1825,6 +1825,189 @@ namespace LandLedgers.Economy
             return TryQueueResolvedShellConstruction(plotId, definition, businessType, out message);
         }
 
+        // D-16 (F-D11-3): queue entry for the store panel's HOUSEHOLD UPGRADE
+        // action. Resolves the upgrade definition and its target through the
+        // same resolver the instant wrapper used, so the queued upgrade is
+        // exactly the one the player picked, on the building the player picked.
+        // The queue's start leg (TryStartQueuedConstructionProject) re-builds
+        // the quote at start and spends + consumes inputs then, and the
+        // completion leg (TryCompleteQueuedHouseholdUpgrade) applies the
+        // upgrade — both already handled HouseholdUpgrade before this slice;
+        // only the entry point was missing. No queue mechanics change here.
+        //
+        // Duration is a D-16 PROPOSED DEFAULT for the owner to correct: no
+        // authored duration exists for a household upgrade anywhere in the
+        // tree (no UpgradeWeeks / WeeksForUpgrade; the only weeks authority,
+        // GetTypicalBuildWeeksForDefinition, returns SHELL-build weeks for a
+        // BuildingDefinition, which would mislabel a shell duration as an
+        // upgrade duration). 1 week is the queue's minimum unit (the state
+        // default, and WeeksRemaining clamps to at least 1), and an upgrade is
+        // interior work on an existing building, smaller than a new shell
+        // (authored shell ranges 1-2 / 2-4 weeks).
+        public bool TryQueueHouseholdUpgrade(int homeBuildingId, int optionIndex, out string message)
+        {
+            message = string.Empty;
+            EnsureMarket();
+            if (!TryGetHouseholdUpgradeDefinition(optionIndex, out HouseholdUpgradeDefinition definition) || definition == null)
+            {
+                message = "No household upgrade is selected.";
+                return false;
+            }
+
+            if (!TryResolveHouseholdUpgradeTarget(homeBuildingId, definition.Kind, out HouseholdState household, out PlacedBuilding building, out message))
+            {
+                return false;
+            }
+
+            if (HasActiveHouseholdUpgradeProject(homeBuildingId, definition.Kind))
+            {
+                message = $"A {definition.DisplayName} upgrade is already queued for Building {homeBuildingId:000}.";
+                return false;
+            }
+
+            // Cost planning only: the start leg re-validates inputs and funding
+            // at start, exactly as the shell queue path does — a quote that
+            // cannot proceed today is queued, not refused.
+            ConstructionInputQuote quote = BuildHouseholdUpgradeQuote(definition, homeBuildingId);
+            int weeksRequired = 1;
+            ConstructionProjectState project = new()
+            {
+                projectId = GenerateConstructionProjectId(),
+                projectKind = ConstructionProjectKind.HouseholdUpgrade,
+                progressState = ConstructionProjectProgressState.Queued,
+                title = definition.DisplayName,
+                plotId = -1,
+                buildingId = homeBuildingId,
+                householdUpgradeKind = (int)definition.Kind,
+                queuedWeekKey = GetCurrentWeekKey(),
+                weeksRequired = weeksRequired,
+                estimatedCashCostCents = quote.CashCostCents,
+                plannedLumberUnits = GetQuoteUnits(quote, ConstructionResourceKind.Lumber),
+                plannedNailsUnits = GetQuoteUnits(quote, ConstructionResourceKind.Nails),
+                plannedLaborUnits = GetQuoteUnits(quote, ConstructionResourceKind.Labor),
+                statusText = BuildQueuedConstructionStatusText(quote, building != null ? building.definition : null, weeksRequired, $"Queued {definition.DisplayName} for {household.householdName} at Building {homeBuildingId:000}.")
+            };
+
+            activeConstructionProjects.Add(project);
+            lastConstructionQueueSummary = BuildConstructionQueueSummary();
+            marketStatus = $"Queued {definition.DisplayName} for {household.householdName}.";
+            message = project.statusText;
+            return true;
+        }
+
+        // D-16 (F-D11-3): queue entry for the store panel's BUSINESS ACTIVATION
+        // action (fitting out an owned shell as a business). Resolves the
+        // activation candidate through the same resolver the instant wrapper
+        // used, so the queued fit-out is exactly the business the player
+        // picked, in the shell the player picked. The queue's start leg
+        // re-builds the fit-out quote at start and spends + consumes inputs
+        // then, and the completion leg (TryCompleteQueuedBusinessFitOut)
+        // starts the business — both already handled BusinessFitOut before
+        // this slice; only the entry point was missing. No queue mechanics
+        // change here.
+        //
+        // Duration is a D-16 PROPOSED DEFAULT for the owner to correct, on
+        // the same grounds as the upgrade above: no authored duration exists
+        // for a business fit-out anywhere in the tree, and a fit-out is
+        // interior work on an existing shell, smaller than a new shell
+        // (authored shell ranges 1-2 / 2-4 weeks). 1 week, the queue's
+        // minimum unit.
+        public bool TryQueueStartBusinessFromOwnedShell(int buildingId, int optionIndex, out string message)
+        {
+            message = string.Empty;
+            EnsureMarket();
+            if (!TryGetBusinessActivationCandidate(buildingId, optionIndex, out BusinessActivationCandidateState candidate) || candidate == null)
+            {
+                message = "No business activation candidate is selected.";
+                return false;
+            }
+
+            if (!candidate.eligible)
+            {
+                message = string.IsNullOrWhiteSpace(candidate.reason)
+                    ? $"{candidate.displayName} cannot start at this site."
+                    : candidate.reason;
+                return false;
+            }
+
+            PlacedBuilding building = GetBuilding(buildingId);
+            if (building == null)
+            {
+                message = $"Building {buildingId:000} is no longer available.";
+                return false;
+            }
+
+            if (HasActiveBusinessFitOutProject(buildingId))
+            {
+                message = $"A business fit-out is already queued for Building {buildingId:000}.";
+                return false;
+            }
+
+            // Cost planning only: the start leg re-validates inputs and funding
+            // at start, exactly as the shell queue path does.
+            ConstructionInputQuote quote = BuildBusinessFitOutQuote(candidate, building);
+            int weeksRequired = 1;
+            ConstructionProjectState project = new()
+            {
+                projectId = GenerateConstructionProjectId(),
+                projectKind = ConstructionProjectKind.BusinessFitOut,
+                progressState = ConstructionProjectProgressState.Queued,
+                title = $"{candidate.displayName} fit-out",
+                plotId = -1,
+                buildingId = buildingId,
+                hasBusinessIntent = true,
+                businessIntent = candidate.businessType,
+                queuedWeekKey = GetCurrentWeekKey(),
+                weeksRequired = weeksRequired,
+                estimatedCashCostCents = quote.CashCostCents,
+                plannedLumberUnits = GetQuoteUnits(quote, ConstructionResourceKind.Lumber),
+                plannedNailsUnits = GetQuoteUnits(quote, ConstructionResourceKind.Nails),
+                plannedLaborUnits = GetQuoteUnits(quote, ConstructionResourceKind.Labor),
+                statusText = BuildQueuedConstructionStatusText(quote, building.definition, weeksRequired, $"Queued {candidate.displayName} fit-out at Building {buildingId:000}.")
+            };
+
+            activeConstructionProjects.Add(project);
+            lastConstructionQueueSummary = BuildConstructionQueueSummary();
+            marketStatus = $"Queued {candidate.displayName} fit-out at Building {buildingId:000}.";
+            message = project.statusText;
+            return true;
+        }
+
+        private bool HasActiveHouseholdUpgradeProject(int buildingId, HouseholdUpgradeKind kind)
+        {
+            for (int i = 0; i < activeConstructionProjects.Count; i++)
+            {
+                ConstructionProjectState project = activeConstructionProjects[i];
+                if (project != null
+                    && project.IsActive
+                    && project.projectKind == ConstructionProjectKind.HouseholdUpgrade
+                    && project.buildingId == buildingId
+                    && project.householdUpgradeKind == (int)kind)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool HasActiveBusinessFitOutProject(int buildingId)
+        {
+            for (int i = 0; i < activeConstructionProjects.Count; i++)
+            {
+                ConstructionProjectState project = activeConstructionProjects[i];
+                if (project != null
+                    && project.IsActive
+                    && project.projectKind == ConstructionProjectKind.BusinessFitOut
+                    && project.buildingId == buildingId)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         public bool ResolveWeeklyConstructionQueue(out string summary)
         {
             AutoWire();
@@ -4664,6 +4847,10 @@ namespace LandLedgers.Economy
             return true;
         }
 
+        // D-16 (F-D11-3): UNCALLED IN PRODUCTION. The live player path is the
+        // queue (TryQueueHouseholdUpgrade); the store panel routes the upgrade
+        // action through it. Retained because ConstructionInputSupportTests
+        // calls this method directly.
         public bool TryBuildHouseholdUpgrade(
             int homeBuildingId,
             int optionIndex,
@@ -5063,6 +5250,10 @@ namespace LandLedgers.Economy
             return candidate != null;
         }
 
+        // D-16 (F-D11-3): UNCALLED IN PRODUCTION. The live player path is the
+        // queue (TryQueueStartBusinessFromOwnedShell); the store panel routes
+        // the business activation action through it. Retained because
+        // ConstructionInputSupportTests calls this method directly.
         public bool TryStartBusinessFromOwnedShell(int buildingId, int optionIndex, out BusinessInstanceState business, out string message)
         {
             EnsureMarket();

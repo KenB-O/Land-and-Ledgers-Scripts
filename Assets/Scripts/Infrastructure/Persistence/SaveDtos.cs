@@ -1388,6 +1388,18 @@ namespace LandLedgers.Persistence
         public int completedDiligenceMask;
         public LandLedgers.Economy.AcquisitionClosingFailureCause closingFailureCause = LandLedgers.Economy.AcquisitionClosingFailureCause.None;
         public string closingFailureSummary = string.Empty;
+        /// <summary>
+        /// D-6: the itemized contents contract agreed at TentativeAgreement
+        /// (B6 PropertyContentsSelection). Null = no contents terms. Appended
+        /// at the end of the DTO so saves from before contents terms existed
+        /// keep loading (null selection = a no-contents deal). Clear-then-load
+        /// and idempotent like the rest of the DTO; a load never resurrects
+        /// a transferred item under the old owner — the transfer itself is
+        /// D-7's close leg, this field only carries the agreed terms.
+        /// Not mirrored in the harness shim: the shim carries no
+        /// AcquisitionDealSaveDto at all (verified 2026-11-16).
+        /// </summary>
+        public PropertyContentsSelection contents;
     }
 
     [Serializable]

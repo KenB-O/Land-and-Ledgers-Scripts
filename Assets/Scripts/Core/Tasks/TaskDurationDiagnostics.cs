@@ -1841,6 +1841,22 @@ namespace LandLedgers.Tasks
                     break;
                 case "CancelTask":
                 case "MarkReworkRequired":
+                    // CAMPAIGN-C, DEF-075: bound the terminal span at the
+                    // terminal transition. CompleteTask sets CompletedSeconds;
+                    // these two did not, so a cancelled (or rework-required)
+                    // task's span ran to nowSeconds and post-termination days
+                    // accrued as uncovered, warning as a completed-overrun
+                    // with reason "none recorded". Set only when unset: a
+                    // Failed task already carries the completion bound from
+                    // CompleteTask, and rework must not extend it (Failed ->
+                    // ReworkRequired is the only outbound transition from a
+                    // terminal state; terminal states otherwise have none).
+                    if (record.CompletedSeconds < 0f)
+                    {
+                        record.CompletedSeconds = now;
+                        record.CompletedDay = day;
+                    }
+
                     record.Outcome = task.Outcome;
                     break;
                 case "MarkWaitingOnDependency":

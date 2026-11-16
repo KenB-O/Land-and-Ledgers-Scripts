@@ -85,7 +85,7 @@ MonoBehaviour:
     age: 27
     ageIsProvisionalCalibration: 1
     isFemale: 0
-    occupation: Unemployed; seeking work
+    occupation: Sawmill hand
     homeBuildingOrdinal: 4
   - key: silas
     firstName: Silas
@@ -95,6 +95,36 @@ MonoBehaviour:
     isFemale: 0
     occupation: Sawmill hand
     homeBuildingOrdinal: 5
+  # C-8 (expanded campaign 2026-11-16): Enzo Kwint runs the sawmill with
+  # his wife Emma; Josh Saunders labours for Enzo. Owner-directed names
+  # (Kennedy 2026-11-16). Ages are provisional calibrations (flagged 1),
+  # the owner corrects them. Josh boards with the Kwints (his employer) as
+  # a provisional lodging arrangement; D-10/D-11 owns his permanent
+  # residence. Emma Kwint is a distinct person from Emma Baldwin-Ooms.
+  - key: enzo
+    firstName: Enzo
+    lastName: Kwint
+    age: 40
+    ageIsProvisionalCalibration: 1
+    isFemale: 0
+    occupation: Sawmill owner/operator
+    homeBuildingOrdinal: 6
+  - key: emma-kwint
+    firstName: Emma
+    lastName: Kwint
+    age: 34
+    ageIsProvisionalCalibration: 1
+    isFemale: 1
+    occupation: Unspecified
+    homeBuildingOrdinal: 6
+  - key: josh
+    firstName: Josh
+    lastName: Saunders
+    age: 26
+    ageIsProvisionalCalibration: 1
+    isFemale: 0
+    occupation: Sawmill labourer
+    homeBuildingOrdinal: 6
   households:
   - key: base-household:0
     displayName: Baldwin-Ooms Household
@@ -142,6 +172,17 @@ MonoBehaviour:
     - silas
     homeBuildingOrdinal: 5
     openingCashCents: 0
+  # C-8: the Kwints' household. Josh Saunders boards here (his employer);
+  # D-10/D-11 owns his permanent residence.
+  - key: enzo-emma
+    displayName: Kwint Household
+    surname: Kwint
+    memberPersonKeys:
+    - enzo
+    - emma-kwint
+    - josh
+    homeBuildingOrdinal: 6
+    openingCashCents: 0
   relationships:
   - firstPersonKey: base:0
     secondPersonKey: base:1
@@ -157,6 +198,10 @@ MonoBehaviour:
     relationship: 1
   - firstPersonKey: ethan
     secondPersonKey: tia
+    relationship: 0
+  # C-8: Enzo and Emma Kwint, spouses.
+  - firstPersonKey: enzo
+    secondPersonKey: emma-kwint
     relationship: 0
   businesses:
   - key: general-store
@@ -205,7 +250,7 @@ MonoBehaviour:
       chargeRoundTrip: 1
   - key: sawmill
     operationId: sawmill
-    ownerPersonKey: shane
+    ownerPersonKey: enzo
     businessId: 
     premisesId: 
     premisesRequired: 1
@@ -250,6 +295,10 @@ MonoBehaviour:
   - anchorPersonKey: shane
     targetCashCents: 40000
   - anchorPersonKey: silas
+    targetCashCents: 40000
+  # C-8: the Kwint household's cash target (anchor: Enzo). Josh boards
+  # here and carries no separate household target.
+  - anchorPersonKey: enzo
     targetCashCents: 40000
   openingInventory:
   - businessKey: general-store
@@ -327,6 +376,18 @@ MonoBehaviour:
   - businessKey: sawmill
     personKey: silas
     role: logger
+    weeklyWageCents: 750
+  # C-8: Shane stays on as a sawmill hand (logger) under the new owner
+  # Enzo — the bought-out owner staying on as a hand is the real-life
+  # default; Kennedy can correct it. Josh labours for Enzo. Wages follow
+  # the miller precedent (Silas, 750c/week) as a provisional calibration.
+  - businessKey: sawmill
+    personKey: shane
+    role: logger
+    weeklyWageCents: 750
+  - businessKey: sawmill
+    personKey: josh
+    role: labourer
     weeklyWageCents: 750
   openingSpareBlades:
   - businessKey: sawmill

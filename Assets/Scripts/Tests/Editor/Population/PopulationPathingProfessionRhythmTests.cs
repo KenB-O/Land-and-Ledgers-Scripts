@@ -79,6 +79,140 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(expected, resolver.Invoke(null, new object[] { activityId, anchor }));
         }
 
+        [TestCase(true, true, false, 7, 3, true)]
+        [TestCase(true, false, true, 7, 3, true)]
+        [TestCase(true, true, false, 3, 3, false)]
+        [TestCase(false, true, false, 7, 3, false)]
+        [TestCase(true, false, false, 7, 3, false)]
+        public void ExplicitTaskRouteCannotReplaceAnotherActiveOwnedRoute(bool routeActive,
+            bool taskDirected, bool scheduled, int activeDestination, int requestedDestination,
+            bool expectedToPreserve)
+        {
+            Assert.AreEqual(expectedToPreserve,
+                PopulationPathingDirector.ShouldPreserveActiveTaskRoute(routeActive, taskDirected,
+                    scheduled, activeDestination, requestedDestination));
+        }
+
+        [Test]
+        public void FailedFreightRouteStartKeepsTheActualOriginForRetry()
+        {
+            var resident = new PersonState
+            {
+                id = 7,
+                homeBuildingId = 4,
+                currentDestinationBuildingId = 4,
+                scheduleState = PopulationScheduleState.AtHome
+            };
+
+            bool started = PopulationPathingDirector.TryStartFreightRoute(resident, 1,
+                () => resident.currentDestinationBuildingId == 1);
+            Assert.IsFalse(started);
+            Assert.AreEqual(4, resident.currentDestinationBuildingId,
+                "A failed receiving route must not overwrite the origin used by the next path attempt.");
+            Assert.AreEqual(PopulationScheduleState.AtHome, resident.scheduleState);
+
+            started = PopulationPathingDirector.TryStartFreightRoute(resident, 1,
+                () => resident.currentDestinationBuildingId == 4);
+            Assert.IsTrue(started);
+            Assert.AreEqual(1, resident.currentDestinationBuildingId);
+            Assert.AreEqual(PopulationScheduleState.AtWork, resident.scheduleState);
+        }
+
+        [Test]
+        public void FreightReceivingClaimPreservesArrivedCarrierUntilHandoffConsumesIt()
+        {
+            GameObject owner = new("Freight route ownership test");
+            GameObject actor = new("Freight carrier");
+            try
+            {
+                var director = owner.AddComponent<PopulationPathingDirector>();
+                var mover = actor.AddComponent<AgentMover>();
+                mover.ShowAtCurrentLocation();
+                var person = new PersonState { id = 42, homeBuildingId = -1, currentDestinationBuildingId = 7 };
+                var managedType = typeof(PopulationPathingDirector).GetNestedType("ManagedPersonAgent", BindingFlags.NonPublic);
+                var managed = System.Activator.CreateInstance(managedType, person, mover, default(BuildingAnchor));
+                managedType.GetField("freightReceivingTargetBuildingId").SetValue(managed, 7);
+                var agents = (System.Collections.IList)typeof(PopulationPathingDirector)
+                    .GetField("agents", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(director);
+                agents.Add(managed);
+
+                int targetQueries = 0;
+                var send = typeof(PopulationPathingDirector).GetMethod("SendRouteForState", BindingFlags.NonPublic | BindingFlags.Instance,
+                    null, new[] { typeof(PopulationScheduleState), typeof(System.Predicate<PersonState>), typeof(System.Func<PersonState, int>) }, null);
+                send.Invoke(director, new object[] { PopulationScheduleState.ReturningHome, null,
+                    new System.Func<PersonState, int>(_ => { targetQueries++; return -1; }) });
+                Assert.AreEqual(0, targetQueries,
+                    "A schedule must not replace the carrier's arrived receiving position before FreightShipmentService checks it.");
+                Assert.IsTrue(mover.IsArrivedVisible);
+
+                director.ReleaseFreightReceivingRoute(42, 7);
+                Assert.AreEqual(-1, managedType.GetField("freightReceivingTargetBuildingId").GetValue(managed));
+                Assert.IsFalse(PopulationPathingDirector.ShouldPreserveFreightReceivingRoute(-1, false, true));
+                Assert.IsTrue(PopulationPathingDirector.ShouldPreserveFreightReceivingRoute(7, false, true));
+                Assert.IsTrue(PopulationPathingDirector.ShouldPreserveFreightReceivingRoute(7, true, false));
+                Assert.IsFalse(PopulationPathingDirector.ShouldPreserveFreightReceivingRoute(7, false, false),
+                    "An ended failed route must not keep a carrier permanently reserved.");
+                LogAssert.Expect(LogType.Warning,
+                    new System.Text.RegularExpressions.Regex("PopulationPathingDirector blocked a scheduled population route"));
+                send.Invoke(director, new object[] { PopulationScheduleState.ReturningHome, null,
+                    new System.Func<PersonState, int>(_ => { targetQueries++; return -1; }) });
+                Assert.AreEqual(1, targetQueries,
+                    "After FreightShipmentService releases the claim, normal schedule routing may resume.");
+            }
+            finally { Object.DestroyImmediate(actor); Object.DestroyImmediate(owner); }
+        }
+
+        [Test]
+        public void FreightDoorFallbackRetainsProgressReasonAndClearsItOnlyOnArrival()
+        {
+            Assert.AreEqual("Carrying: route to B3/receiving; remaining=12m.",
+                PopulationPathingDirector.ResolveFreightDoorRouteReason(false,
+                    "Carrying: route to B3/receiving; remaining=12m."));
+            Assert.AreEqual("Carrying: handler is physically travelling to the receiving point.",
+                PopulationPathingDirector.ResolveFreightDoorRouteReason(false, string.Empty));
+            Assert.AreEqual(string.Empty,
+                PopulationPathingDirector.ResolveFreightDoorRouteReason(true,
+                    "Carrying: route to B3/receiving; remaining=12m."));
+        }
+
+        [Test]
+        public void FreightExteriorStationInsideBuildingFootprintUsesDoorwayFallback()
+        {
+            GameObject worldObject = new("Freight receiving world");
+            GameObject pathingObject = new("Freight receiving pathing");
+            PathingSettings settings = ScriptableObject.CreateInstance<PathingSettings>();
+            try
+            {
+                TownWorldController world = worldObject.AddComponent<TownWorldController>();
+                TownGrid grid = new(5, 5, 2f, Vector3.zero);
+                typeof(TownWorldController).GetField("grid", BindingFlags.NonPublic | BindingFlags.Instance)
+                    .SetValue(world, grid);
+                PathingManager pathing = pathingObject.AddComponent<PathingManager>();
+                pathing.Configure(world, settings);
+
+                Vector3 station = new(3f, 0f, 3f);
+                GridCoord stationCell = grid.WorldToCoord(station);
+                TownCell walkable = TownCell.CreateDefault();
+                walkable.terrainZone = TerrainZone.Buildable;
+                grid.SetCell(stationCell, walkable);
+                Assert.IsFalse(PopulationPathingDirector.ShouldUseAuthoredDoorForBlockedExteriorActivity(
+                    grid, pathing, station), "A valid exterior station should keep its direct physical route.");
+
+                TownCell footprint = walkable;
+                footprint.occupancy = CellOccupancy.Building;
+                footprint.buildingId = 1;
+                grid.SetCell(stationCell, footprint);
+                Assert.IsTrue(PopulationPathingDirector.ShouldUseAuthoredDoorForBlockedExteriorActivity(
+                    grid, pathing, station), "An exterior station inside a blocked building footprint must use the authored doorway.");
+            }
+            finally
+            {
+                Object.DestroyImmediate(settings);
+                Object.DestroyImmediate(pathingObject);
+                Object.DestroyImmediate(worldObject);
+            }
+        }
+
         [Test]
         public void PopulationPathingWaitsForTheMatchingGeneratedWorldGrid()
         {

@@ -344,6 +344,53 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void PlannedBatchFlourAlreadyInCustody_IsNotPurchasedAgain()
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 0, 0, 1);
+            SeedStoreFlour(s, 1);
+            BookAccount(s, 24, 1, 2, 2);
+
+            List<string> planned = s.ProductionDriver.PlanBatches(
+                BakeryBreadCatalog.BreadLoafId, 1, 2, s.Diag);
+            Assert.IsNotNull(planned);
+            BakeryDoughBatch batch = null;
+            foreach (BakeryDoughBatch candidate in s.Bakery.Batches)
+                if (candidate != null && candidate.BatchId == planned[0]) batch = candidate;
+            Assert.IsNotNull(batch, "planned batch exists in the bakery authority");
+            batch.Stage = BakeryBatchStage.Prepped;
+            batch.FlourInCustody.Add(new BakeryFlourDispenseLine
+            {
+                LotId = s.Ids.Allocate(EntityKind.Lot),
+                FlourName = BakeryBreadCatalog.FlourItemId,
+                UnitsTaken = BakeryBreadCatalog.BreadFlourPerBatch,
+                ProvenanceChain = "test-owned batch custody",
+            });
+            batch.NotionsUsed.Add(new BakeryFlourDispenseLine
+            {
+                LotId = s.Ids.Allocate(EntityKind.Lot),
+                FlourName = BakeryBreadCatalog.NotionsItemId,
+                UnitsTaken = BakeryBreadCatalog.StandardNotionsPerBatch,
+                ProvenanceChain = "test-owned batch custody",
+            });
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
+
+            Assert.AreEqual(0, result.FlourSacksPurchased,
+                "flour dispensed into this active batch is already its input, not a second procurement need");
+            Assert.AreEqual(0, result.FlourNeedPoundsRemaining,
+                "no unmet flour need remains for the batch");
+            Assert.AreEqual(0, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "no duplicate flour is credited to the bakery bin");
+            Assert.AreEqual(1, s.StoreRuntime.GetRetailItemStockUnits(
+                BakeryFlourLocalPurchase.FlourItemId, BakeryFlourLocalPurchase.FlourCategoryId),
+                "the store's real sack remains unsold");
+            Assert.AreEqual(2048, s.BakeryRuntime.CurrentCashCents,
+                "only the legitimate 24-loaf wholesale receipt settles; no flour payment occurs");
+        }
+
+        [Test]
         public void MissingAccount_NamesTheBlocker_PlansNothing()
         {
             Slice s = NewSlice();

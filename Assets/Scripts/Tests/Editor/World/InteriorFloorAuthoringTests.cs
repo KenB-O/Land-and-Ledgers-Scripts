@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using LandAndLedgers.Buildings;
 using LandLedgers.Pathing;
 using LandLedgers.World;
 using NUnit.Framework;
@@ -107,7 +108,7 @@ namespace LandLedgers.Editor.World
                 GetInteriorFloors(authority).Add(floor);
 
                 Assert.IsFalse(authority.TryEvaluateInteriorLocalPoint(Vector3.zero, 2, null, out string sharedReason));
-                StringAssert.Contains("No walkable area", sharedReason);
+                StringAssert.Contains("No readable floor mesh or walkable area", sharedReason);
                 Assert.IsTrue(authority.TryEvaluateInteriorLocalPoint(Vector3.zero, 2, "space-workshop-2", out string spaceReason), spaceReason);
             }
             finally
@@ -311,6 +312,240 @@ namespace LandLedgers.Editor.World
                 StringAssert.Contains("Cabinet", blockedReason);
             }
             finally { Object.DestroyImmediate(building); }
+        }
+
+        [Test]
+        public void PlacedEquipmentBlocksItsPhysicalFloorFootprintAndInteriorRoutesAroundIt()
+        {
+            GameObject building = new("Placed equipment route test");
+            try
+            {
+                BuildingFootprintAuthority authority = building.AddComponent<BuildingFootprintAuthority>();
+                InteriorFloorAuthoring ground = new() { floorIndex = 0, floorHeightLocal = 0f };
+                ground.walkableAreas.Add(Rectangle("Ground", -3f, -3f, 3f, 3f));
+                GetInteriorFloors(authority).Add(ground);
+                InteriorFloorAuthoring upper = new() { floorIndex = 1, floorHeightLocal = 3f };
+                upper.walkableAreas.Add(Rectangle("Upper", -3f, -3f, 3f, 3f));
+                GetInteriorFloors(authority).Add(upper);
+
+                GameObject shelf = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                shelf.name = "Test Shelf";
+                shelf.transform.SetParent(building.transform, false);
+                shelf.transform.localPosition = Vector3.zero;
+                shelf.transform.localScale = new Vector3(1.2f, 1f, 0.8f);
+                BuildingEquipmentPlacement placement = shelf.AddComponent<BuildingEquipmentPlacement>();
+                placement.Configure("shelf-placement-stable", "furniture.shelf", "Shelf", 0);
+
+                Assert.IsFalse(authority.TryEvaluateInteriorLocalPoint(Vector3.zero, 0, null, out string blocked));
+                StringAssert.Contains("Shelf", blocked);
+                Assert.IsTrue(authority.TryEvaluateInteriorLocalPoint(new Vector3(1.2f, 0f, 0f), 0, null, out string clear), clear);
+                Assert.IsTrue(authority.TryEvaluateInteriorLocalPoint(new Vector3(0f, 3f, 0f), 1, null, out string upperClear), upperClear,
+                    "A ground-floor shelf must not block an upper floor.");
+
+                Assert.IsTrue(authority.TryBuildInteriorPath(new Vector3(-2f, 0f, 0f), new Vector3(2f, 0f, 0f), 0, null,
+                    out List<Vector3> route, out string routeReason), routeReason);
+                Assert.That(route.Count, Is.GreaterThan(3), "The interior route should go around the shelf.");
+                foreach (Vector3 point in route.Skip(1))
+                    Assert.IsTrue(authority.TryEvaluateInteriorWorldPoint(point, 0, null, out string pointReason), pointReason);
+
+                shelf.transform.localPosition = new Vector3(1f, 0f, 1.2f);
+                typeof(BuildingEquipmentPlacement).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(placement, null);
+                Assert.IsTrue(authority.TryEvaluateInteriorLocalPoint(Vector3.zero, 0, null, out string cleared), cleared,
+                    "Moving the shelf must immediately clear its previous navigation obstruction.");
+                Assert.IsFalse(authority.TryEvaluateInteriorLocalPoint(new Vector3(1f, 0f, 1.2f), 0, null, out string movedBlock));
+                StringAssert.Contains("Shelf", movedBlock);
+                Object.DestroyImmediate(shelf);
+                Assert.IsTrue(authority.TryEvaluateInteriorLocalPoint(new Vector3(1f, 0f, 1.2f), 0, null, out string removed), removed,
+                    "Removing equipment must release its obstruction without redrawing floor polygons.");
+            }
+            finally { Object.DestroyImmediate(building); }
+        }
+
+        [Test]
+        public void FloorMeshTrianglesDeriveAnIrregularWalkableSurfaceWithoutManualPolygon()
+        {
+            GameObject building = new("Mesh-derived interior floor test");
+            Mesh floorMesh = new();
+            try
+            {
+                BuildingFootprintAuthority authority = building.AddComponent<BuildingFootprintAuthority>();
+                InteriorFloorAuthoring floor = new()
+                {
+                    displayName = "Ground Floor",
+                    floorIndex = 0,
+                    floorHeightLocal = 0f,
+                    deriveWalkableFromFloorGeometry = true,
+                    floorGeometryHeightTolerance = 0.08f
+                };
+                GetInteriorFloors(authority).Add(floor);
+
+                GameObject floorObject = new("Irregular floor mesh");
+                floorObject.transform.SetParent(building.transform, false);
+                MeshFilter filter = floorObject.AddComponent<MeshFilter>();
+                floorMesh.vertices = new[]
+                {
+                    new Vector3(-2f, 0f, -2f), new Vector3(2f, 0f, -2f),
+                    new Vector3(2f, 0f, 0f), new Vector3(0f, 0f, 0f),
+                    new Vector3(0f, 0f, 2f), new Vector3(-2f, 0f, 2f)
+                };
+                floorMesh.triangles = new[] { 0, 3, 1, 1, 3, 2, 0, 5, 3, 3, 5, 4 };
+                floorMesh.RecalculateBounds();
+                filter.sharedMesh = floorMesh;
+
+                Assert.IsTrue(authority.TryEvaluateInteriorLocalPoint(new Vector3(-1f, 0f, 1f), 0, null, out string insideReason), insideReason);
+                Assert.IsTrue(authority.TryEvaluateInteriorLocalPoint(new Vector3(1f, 0f, -1f), 0, null, out insideReason), insideReason);
+                Assert.IsFalse(authority.TryEvaluateInteriorLocalPoint(new Vector3(1f, 0f, 1f), 0, null, out string outsideReason));
+                StringAssert.Contains("discovered floor mesh", outsideReason);
+                Assert.IsTrue(authority.TryBuildInteriorPath(new Vector3(-1f, 0f, -1f), new Vector3(-1f, 0f, 1f), 0, null,
+                    out List<Vector3> route, out string routeReason), routeReason);
+                Assert.That(route.Count, Is.GreaterThan(1));
+            }
+            finally
+            {
+                Object.DestroyImmediate(building);
+                Object.DestroyImmediate(floorMesh);
+            }
+        }
+
+        [Test]
+        public void MovingPlacedFloorModuleRefreshesDerivedWalkabilityAndFloorColliderIsNotAWall()
+        {
+            GameObject building = new("Modular floor refresh test");
+            GameObject floorObject = new("Placed modular floor");
+            Mesh mesh = new();
+            try
+            {
+                BuildingFootprintAuthority authority = building.AddComponent<BuildingFootprintAuthority>();
+                GetInteriorFloors(authority).Add(new InteriorFloorAuthoring
+                {
+                    floorIndex = 0,
+                    floorHeightLocal = 0f,
+                    deriveWalkableFromFloorGeometry = true,
+                    floorGeometryHeightTolerance = 0.08f
+                });
+
+                floorObject.transform.SetParent(building.transform, false);
+                MeshFilter filter = floorObject.AddComponent<MeshFilter>();
+                mesh.vertices = new[]
+                {
+                    new Vector3(-1f, 0f, -1f), new Vector3(1f, 0f, -1f), new Vector3(1f, 0f, 0f),
+                    new Vector3(0f, 0f, 0f), new Vector3(0f, 0f, 1f), new Vector3(-1f, 0f, 1f)
+                };
+                mesh.triangles = new[] { 0, 3, 1, 1, 3, 2, 0, 5, 3, 3, 5, 4 };
+                mesh.RecalculateBounds();
+                filter.sharedMesh = mesh;
+                MeshCollider collider = floorObject.AddComponent<MeshCollider>();
+                collider.sharedMesh = mesh;
+                LLModularBuildingPlacement modulePlacement = floorObject.AddComponent<LLModularBuildingPlacement>();
+
+                Assert.IsTrue(authority.TryEvaluateInteriorLocalPoint(new Vector3(-0.5f, 0f, 0.5f), 0, null, out string beforeReason), beforeReason);
+                Assert.IsFalse(authority.TryEvaluateInteriorLocalPoint(new Vector3(0.5f, 0f, 0.5f), 0, null, out _),
+                    "The L-shaped cutout is non-walkable.");
+                Assert.IsTrue(authority.TryEvaluateInteriorLocalPoint(new Vector3(0.5f, 0f, -0.5f), 0, null, out string floorColliderReason), floorColliderReason,
+                    "A floor mesh collider must not be misclassified as a wall obstruction.");
+
+                floorObject.transform.localPosition = new Vector3(10f, 0f, 0f);
+                typeof(LLModularBuildingPlacement).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(modulePlacement, null);
+
+                Assert.IsFalse(authority.TryEvaluateInteriorLocalPoint(new Vector3(-0.5f, 0f, 0.5f), 0, null, out _),
+                    "The old cached floor location must be invalidated after the module moves.");
+                Assert.IsTrue(authority.TryEvaluateInteriorLocalPoint(new Vector3(9.5f, 0f, 0.5f), 0, null, out string afterReason), afterReason);
+            }
+            finally
+            {
+                Object.DestroyImmediate(building);
+                Object.DestroyImmediate(floorObject);
+                Object.DestroyImmediate(mesh);
+            }
+        }
+
+        [Test]
+        public void InteriorRoutesRespectWallCollidersAndRemainConnectedThroughAnAuthoredOpening()
+        {
+            GameObject building = new("Interior wall routing test");
+            try
+            {
+                BuildingFootprintAuthority authority = building.AddComponent<BuildingFootprintAuthority>();
+                InteriorFloorAuthoring floor = new()
+                {
+                    floorIndex = 0,
+                    floorHeightLocal = 0f,
+                    deriveWalkableFromFloorGeometry = true
+                };
+                floor.walkableAreas.Add(Rectangle("Room", -2f, -2f, 2f, 2f));
+                GetInteriorFloors(authority).Add(floor);
+
+                AddWallSegment(building.transform, "West wall", new Vector3(0f, 0.8f, -1.15f), new Vector3(0.2f, 1.6f, 1.7f));
+                AddWallSegment(building.transform, "East wall", new Vector3(0f, 0.8f, 1.15f), new Vector3(0.2f, 1.6f, 1.7f));
+
+                Assert.IsFalse(authority.TryEvaluateInteriorLocalPoint(new Vector3(0f, 0f, 1.15f), 0, null, out string wallReason));
+                StringAssert.Contains("collider", wallReason);
+                Assert.IsTrue(authority.TryBuildInteriorPath(new Vector3(-1.2f, 0f, 0f), new Vector3(1.2f, 0f, 0f), 0, null,
+                    out List<Vector3> route, out string routeReason), routeReason);
+                foreach (Vector3 point in route.Skip(1))
+                {
+                    bool walkable = authority.TryEvaluateInteriorWorldPoint(point, 0, null, out string pointReason);
+                    Assert.IsTrue(walkable, pointReason);
+                }
+            }
+            finally { Object.DestroyImmediate(building); }
+        }
+
+        private static void AddWallSegment(Transform building, string label, Vector3 localCenter, Vector3 size)
+        {
+            GameObject wall = new(label);
+            wall.transform.SetParent(building, false);
+            wall.transform.localPosition = localCenter;
+            BoxCollider collider = wall.AddComponent<BoxCollider>();
+            collider.size = size;
+        }
+
+        [Test]
+        public void EquipmentPlacementKeepsStableIdentityAndBuildingLocalTransform()
+        {
+            GameObject building = new("Equipment placement record test");
+            GameObject fixture = new("Shelf instance");
+            try
+            {
+                building.transform.SetPositionAndRotation(new Vector3(12f, 2f, -7f), Quaternion.Euler(0f, 90f, 0f));
+                BuildingFootprintAuthority authority = building.AddComponent<BuildingFootprintAuthority>();
+                fixture.transform.SetParent(building.transform, false);
+                fixture.transform.localPosition = new Vector3(3.2f, 0.8f, -1f);
+                fixture.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+                BuildingEquipmentPlacement placement = fixture.AddComponent<BuildingEquipmentPlacement>();
+                placement.Configure("stable-placement-01", "furniture.shelf", "Shelf", 0);
+
+                Assert.IsTrue(placement.TryGetBuildingLocalPlacement(out Vector3 localPosition, out Quaternion localRotation,
+                    out BuildingFootprintAuthority owner), "The placement should resolve its containing building.");
+                Assert.AreSame(authority, owner);
+                Assert.AreEqual("stable-placement-01", placement.PlacementId);
+                Assert.AreEqual("furniture.shelf", placement.DefinitionId);
+                Assert.AreEqual(0, placement.FloorIndex);
+                Assert.That(Vector3.Distance(new Vector3(3.2f, 0.8f, -1f), localPosition), Is.LessThan(0.001f));
+                Assert.That(Quaternion.Angle(Quaternion.Euler(0f, 180f, 0f), localRotation), Is.LessThan(0.01f));
+            }
+            finally { Object.DestroyImmediate(building); Object.DestroyImmediate(fixture); }
+        }
+
+        [Test]
+        public void GeneralBusinessDoesNotRequireLegacyServiceAnchorButKeepsDropOffExpectation()
+        {
+            BuildingDefinition definition = ScriptableObject.CreateInstance<BuildingDefinition>();
+            try
+            {
+                typeof(BuildingDefinition).GetField("workplaceEligible", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .SetValue(definition, true);
+                Assert.AreEqual(BuildingAnchorExpectation.Required,
+                    definition.GetAnchorExpectation(AnchorType.FrontDoor));
+                Assert.AreEqual(BuildingAnchorExpectation.Optional,
+                    definition.GetAnchorExpectation(AnchorType.Service));
+                Assert.IsFalse(definition.ShouldValidateAnchor(AnchorType.Service));
+                Assert.AreEqual(BuildingAnchorExpectation.Preferred,
+                    definition.GetAnchorExpectation(AnchorType.DropOff));
+            }
+            finally { Object.DestroyImmediate(definition); }
         }
 
         [Test]

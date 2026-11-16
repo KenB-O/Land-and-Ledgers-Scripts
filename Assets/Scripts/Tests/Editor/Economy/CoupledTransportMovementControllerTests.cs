@@ -73,6 +73,62 @@ namespace LandLedgers.EditorTests.Economy
             }
         }
 
+        [Test]
+        public void ActiveRegionalReturn_IsRecognizedForItsJourneyAndDriverOnly()
+        {
+            var host = new GameObject(nameof(ActiveRegionalReturn_IsRecognizedForItsJourneyAndDriverOnly));
+            try
+            {
+                CoupledTransportMovementController controller = host.AddComponent<CoupledTransportMovementController>();
+                SetPrivate(controller, "regionalLegActive", true);
+                SetPrivate(controller, "regionalReturnToTownPath", true);
+                SetPrivate(controller, "physicalJourneyId", "freight-return-17");
+                SetPrivate(controller, "ethanPersonId", 7);
+
+                Assert.IsTrue(controller.IsPhysicalReturnFor("freight-return-17", 7),
+                    "A daily retry must recognize the same active physical return after the wagon has left the supplier.");
+                Assert.IsFalse(controller.IsPhysicalReturnFor("freight-return-18", 7));
+                Assert.IsFalse(controller.IsPhysicalReturnFor("freight-return-17", 8));
+
+                SetPrivate(controller, "regionalReturnToTownPath", false);
+                Assert.IsFalse(controller.IsPhysicalReturnFor("freight-return-17", 7),
+                    "An outbound or unrelated leg must not be mistaken for a return leg.");
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
+        public void PresentationRecognizesActivePhysicalJourneyAndDriverForReturnDiagnostics()
+        {
+            var group = new GameObject("Active freight transport");
+            var presentationHost = new GameObject("Freight presentation");
+            try
+            {
+                CoupledTransportMovementController controller = group.AddComponent<CoupledTransportMovementController>();
+                SetPrivate(controller, "regionalLegActive", true);
+                SetPrivate(controller, "regionalReturnToTownPath", true);
+                SetPrivate(controller, "physicalJourneyId", "freight-return-17");
+                SetPrivate(controller, "ethanPersonId", 7);
+
+                OpeningTransportPresentationController presentation =
+                    presentationHost.AddComponent<OpeningTransportPresentationController>();
+                SetPrivate(presentation, "transportGroup", group.transform);
+
+                Assert.IsTrue(presentation.IsPhysicalJourneyMoving("freight-return-17"));
+                Assert.IsFalse(presentation.IsPhysicalJourneyMoving("different-journey"));
+                Assert.IsTrue(presentation.IsDriverOnPhysicalJourney(7));
+                Assert.IsFalse(presentation.IsDriverOnPhysicalJourney(8));
+            }
+            finally
+            {
+                Object.DestroyImmediate(presentationHost);
+                Object.DestroyImmediate(group);
+            }
+        }
+
         [TestCase(1f, 3)]
         [TestCase(10f, 2)]
         [TestCase(500f, 1)]

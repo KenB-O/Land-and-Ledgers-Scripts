@@ -297,6 +297,11 @@ namespace LandLedgers.EditorTests.Economy
         {
             PersonState ethan = population.State.GetPerson(EthanId);
             Assert.IsNotNull(ethan);
+            // Keep the precondition explicit. Population load reconciliation
+            // may normalize an initial ReturningHome state to its home; this
+            // handler test needs Ethan to begin away so it can prove the
+            // completed travel changes his authoritative journey location.
+            ethan.currentDestinationBuildingId = OriginBuildingId;
             Assert.AreEqual(OriginBuildingId, ethan.currentDestinationBuildingId);
 
             WorkTask travel = hub.Tasks.CreateTaskWithPlannedMinutes(JourneyTravel.TravelTaskId,

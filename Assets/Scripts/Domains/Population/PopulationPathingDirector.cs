@@ -15,6 +15,9 @@ namespace LandLedgers.FirstLedger
     public sealed class PopulationPathingDirector : MonoBehaviour
     {
         private const string AgentRootName = "PopulationAgentsRoot";
+        private const float MaleReferenceHeightMetres = 1.71f;
+        private const float FemaleReferenceHeightMetres = 1.59f;
+        private const float FallbackSelectionHeightMetres = 1.8f;
 
         private enum AgentRouteMode
         {
@@ -910,6 +913,14 @@ namespace LandLedgers.FirstLedger
                     continue;
                 }
 
+                if (ShouldPreserveFreightReceivingRoute(managed.freightReceivingTargetBuildingId,
+                        managed.mover != null && managed.mover.IsRouteActive,
+                        managed.mover != null && managed.mover.IsArrivedVisible))
+                    continue;
+
+                if (managed.freightReceivingTargetBuildingId >= 0)
+                    managed.freightReceivingTargetBuildingId = -1;
+
                 if ((managed.routeMode == AgentRouteMode.TaskDirected && managed.mover != null && managed.mover.IsRouteActive)
                     || (ShoppingTripOwnsPerson != null && ShoppingTripOwnsPerson(managed.person.id)))
                     continue;
@@ -961,6 +972,21 @@ namespace LandLedgers.FirstLedger
                     refusal = "Resident is currently aboard a wagon.";
                     return false;
                 }
+                // A route already owned by another task is not ours to
+                // retarget.  Its task authority must observe arrival or
+                // cancel it before this task can claim a different route.
+                // This is especially important for freight receiving: a
+                // later business-feed trip must not replace the carrier's
+                // active journey to the receiving premises.
+                if (managed.mover != null && managed.mover.IsRouteActive
+                    && ShouldPreserveActiveTaskRoute(true,
+                        managed.routeMode == AgentRouteMode.TaskDirected,
+                        managed.routeMode == AgentRouteMode.Scheduled,
+                        managed.person.currentDestinationBuildingId, targetBuildingId))
+                {
+                    refusal = $"Resident already has an active task or scheduled route to building {managed.person.currentDestinationBuildingId}; it must arrive or be released before routing to building {targetBuildingId}.";
+                    return false;
+                }
                 if (managed.person.currentDestinationBuildingId == targetBuildingId
                     && managed.mover != null && (managed.mover.IsArrivedVisible || managed.mover.IsRouteActive))
                 {
@@ -982,6 +1008,20 @@ namespace LandLedgers.FirstLedger
             }
             refusal = "No managed visible agent is registered for this resident.";
             return false;
+        }
+
+        internal static bool ShouldPreserveActiveTaskRoute(bool routeActive, bool taskDirected,
+            bool scheduled, int activeDestinationBuildingId, int requestedDestinationBuildingId)
+        {
+            return routeActive
+                && activeDestinationBuildingId != requestedDestinationBuildingId
+                && (taskDirected || scheduled);
+        }
+
+        internal static bool ShouldPreserveFreightReceivingRoute(int claimedBuildingId,
+            bool routeActive, bool arrivedVisible)
+        {
+            return claimedBuildingId >= 0 && (routeActive || arrivedVisible);
         }
 
         /// <summary>Confirms the visible actor has completed its route to the requested building.</summary>
@@ -1064,11 +1104,33 @@ namespace LandLedgers.FirstLedger
                 {
                     if (TryCarryFreightToAuthoredDoor(personId, targetBuildingId, building, out arrived, out string doorReason))
                     {
-                        reason = string.Empty;
+                        reason = ResolveFreightDoorRouteReason(arrived, doorReason);
                         return true;
                     }
                     if (!string.IsNullOrEmpty(doorReason)) reason = $"{reason} Doorway fallback: {doorReason}";
                 }
+                return false;
+            }
+
+            if (!activity.RequiresWalkableInterior
+                && ShouldUseAuthoredDoorForBlockedExteriorActivity(
+                    pathingManager.Grid, pathingManager, activity.WorldPosition))
+            {
+                bool hasAuthoredDoor = building.TryGetAnchor(AnchorType.FrontDoor, out BuildingAnchor authoredDoor);
+                if (CanUseAuthoredDoorForFreightReceiving(activityId, hasAuthoredDoor ? authoredDoor : default))
+                {
+                    if (TryCarryFreightToAuthoredDoor(personId, targetBuildingId, building,
+                            out arrived, out string doorReason))
+                    {
+                        reason = arrived ? string.Empty : doorReason;
+                        return true;
+                    }
+                    reason = string.IsNullOrWhiteSpace(doorReason)
+                        ? "The exterior receiving point is blocked and its authored doorway route could not start."
+                        : doorReason;
+                    return false;
+                }
+                reason = $"Receiving activity '{activityId}' is not an interior station, but its world point is outside the navigable exterior and no authorized authored front door is available.";
                 return false;
             }
 
@@ -1081,9 +1143,12 @@ namespace LandLedgers.FirstLedger
                 Vector3 actorPosition = mover.transform.position;
                 float distance = Vector2.Distance(new Vector2(actorPosition.x, actorPosition.z),
                     new Vector2(activity.WorldPosition.x, activity.WorldPosition.z));
-                if (!mover.IsRouteActive && mover.IsArrivedVisible && distance <= arrivalRadius)
+                if (!mover.IsRouteActive && mover.IsArrivedVisible
+                    && managed.person.currentDestinationBuildingId == targetBuildingId
+                    && distance <= arrivalRadius)
                 {
                     arrived = true;
+                    managed.freightReceivingTargetBuildingId = -1;
                     mover.SetFreightCargoVisible(true);
                     Vector3 forward = activity.WorldForward;
                     forward.y = 0f;
@@ -1091,11 +1156,44 @@ namespace LandLedgers.FirstLedger
                     return true;
                 }
 
+                if (mover.IsRouteActive)
+                {
+                    if (managed.person.currentDestinationBuildingId == targetBuildingId)
+                    {
+                        // A task-owned route to this same building is valid
+                        // progress toward its activity/door. Keep it owned;
+                        // after exterior arrival the next call can continue
+                        // through the authorized interior route.
+                        managed.routeMode = AgentRouteMode.TaskDirected;
+                        managed.freightReceivingTargetBuildingId = targetBuildingId;
+                        mover.SetFreightCargoVisible(true);
+                        reason = DescribeFreightRouteProgress(mover, targetBuildingId, activityId, activity.WorldPosition);
+                        return true;
+                    }
+                    if (managed.routeMode == AgentRouteMode.AmbientOutbound
+                        || managed.routeMode == AgentRouteMode.AmbientReturning
+                        || managed.routeMode == AgentRouteMode.None)
+                    {
+                        // Ambient presentation has no task or schedule
+                        // reservation to preserve. It may yield to this
+                        // already-authorized receiving activity.
+                        mover.CancelActiveRoute();
+                        managed.routeMode = AgentRouteMode.None;
+                    }
+                    else
+                    {
+                        reason = $"The freight handler is already traveling for {managed.routeMode} to building {managed.person.currentDestinationBuildingId}; receiving will wait for that route to resolve.";
+                        return false;
+                    }
+                }
+
+                // If a previous attempt's route ended without arrival, clear
+                // its ownership before retrying from the actor's actual cell.
+                // The current callback then either starts a fresh route or
+                // returns a concrete refusal.
+                managed.freightReceivingTargetBuildingId = -1;
+
                 mover.SetFreightCargoVisible(true);
-                managed.person.scheduleState = PopulationScheduleState.AtWork;
-                managed.person.currentDestinationBuildingId = targetBuildingId;
-                managed.routeMode = AgentRouteMode.TaskDirected;
-                if (mover.IsRouteActive) return true;
 
                 if (activity.RequiresWalkableInterior)
                 {
@@ -1107,6 +1205,10 @@ namespace LandLedgers.FirstLedger
                             mover.SetFreightCargoVisible(false);
                             return false;
                         }
+                        MarkFreightRouteStarted(managed.person, targetBuildingId, true);
+                        managed.routeMode = AgentRouteMode.TaskDirected;
+                        managed.freightReceivingTargetBuildingId = targetBuildingId;
+                        reason = DescribeFreightRouteProgress(mover, targetBuildingId, activityId, activity.WorldPosition);
                         return true;
                     }
                     if (!authority.TryGetEntrancePair("main-entrance", out BuildingEntrancePairAuthoring entrance, out reason))
@@ -1124,6 +1226,10 @@ namespace LandLedgers.FirstLedger
                             mover.SetFreightCargoVisible(false);
                             return false;
                         }
+                        MarkFreightRouteStarted(managed.person, targetBuildingId, true);
+                        managed.routeMode = AgentRouteMode.TaskDirected;
+                        managed.freightReceivingTargetBuildingId = targetBuildingId;
+                        reason = DescribeFreightRouteProgress(mover, targetBuildingId, activityId, activity.WorldPosition);
                         return true;
                     }
                 }
@@ -1131,18 +1237,32 @@ namespace LandLedgers.FirstLedger
                 {
                     GridCoord start = pathingManager.Grid.WorldToCoord(mover.transform.position);
                     GridCoord target = pathingManager.Grid.WorldToCoord(activity.WorldPosition);
-                    if (mover.BeginGridRoute(start, target)) return true;
+                    if (mover.BeginGridRoute(start, target))
+                    {
+                        MarkFreightRouteStarted(managed.person, targetBuildingId, true);
+                        managed.routeMode = AgentRouteMode.TaskDirected;
+                        managed.freightReceivingTargetBuildingId = targetBuildingId;
+                        reason = DescribeFreightRouteProgress(mover, targetBuildingId, activityId, activity.WorldPosition);
+                        return true;
+                    }
                     reason = "No navigable route reaches the authored receiving point.";
                     mover.SetFreightCargoVisible(false);
                     return false;
                 }
 
-                if (!TrySendAgent(managed, targetBuildingId, PopulationScheduleState.AtWork, out _))
+                if (!TryStartFreightRoute(managed.person, targetBuildingId,
+                        () => TrySendAgent(managed, targetBuildingId, PopulationScheduleState.AtWork, out _)))
                 {
                     reason = "No valid town route reaches the destination building entrance.";
                     mover.SetFreightCargoVisible(false);
                     return false;
                 }
+                // TrySendAgent marks ordinary commute routes as Scheduled.
+                // This route is owned by the active physical receiving task,
+                // so restore task ownership immediately after it starts.
+                managed.routeMode = AgentRouteMode.TaskDirected;
+                managed.freightReceivingTargetBuildingId = targetBuildingId;
+                reason = DescribeFreightRouteProgress(mover, targetBuildingId, activityId, activity.WorldPosition);
                 return true;
             }
             reason = $"No visible managed agent exists for freight handler P{personId}.";
@@ -1177,6 +1297,7 @@ namespace LandLedgers.FirstLedger
                     && managed.person.currentDestinationBuildingId == targetBuildingId)
                 {
                     arrived = true;
+                    managed.freightReceivingTargetBuildingId = -1;
                     mover.SetFreightCargoVisible(true);
                     Vector3 forward = building.runtimeFootprintAuthority.transform.forward;
                     forward.y = 0f;
@@ -1184,25 +1305,35 @@ namespace LandLedgers.FirstLedger
                     return true;
                 }
 
-                if (mover.IsRouteActive
-                    && (managed.routeMode != AgentRouteMode.TaskDirected
-                        || managed.person.currentDestinationBuildingId != targetBuildingId))
-                {
-                    reason = "The freight handler is already traveling for another destination or task.";
-                    return false;
-                }
-
-                mover.SetFreightCargoVisible(true);
                 if (mover.IsRouteActive)
                 {
-                    // Keep the freight driver as the route owner while it waits
-                    // for this legitimate door-to-door journey to finish.
-                    managed.routeMode = AgentRouteMode.TaskDirected;
-                    return true;
+                    if (managed.person.currentDestinationBuildingId == targetBuildingId)
+                    {
+                        // This route already reaches the receiving premises;
+                        // retain it and let the next arrival check continue.
+                        managed.routeMode = AgentRouteMode.TaskDirected;
+                        managed.freightReceivingTargetBuildingId = targetBuildingId;
+                        mover.SetFreightCargoVisible(true);
+                        reason = DescribeFreightRouteProgress(mover, targetBuildingId, "receiving", destination);
+                        return true;
+                    }
+                    if (managed.routeMode == AgentRouteMode.AmbientOutbound
+                        || managed.routeMode == AgentRouteMode.AmbientReturning
+                        || managed.routeMode == AgentRouteMode.None)
+                    {
+                        mover.CancelActiveRoute();
+                        managed.routeMode = AgentRouteMode.None;
+                    }
+                    else
+                    {
+                        reason = $"The freight handler is already traveling for {managed.routeMode} to building {managed.person.currentDestinationBuildingId}; receiving will wait for that route to resolve.";
+                        return false;
+                    }
                 }
 
-                managed.person.scheduleState = PopulationScheduleState.AtWork;
-                managed.person.currentDestinationBuildingId = targetBuildingId;
+                managed.freightReceivingTargetBuildingId = -1;
+
+                mover.SetFreightCargoVisible(true);
                 if (!TrySendAgent(managed, targetBuildingId, PopulationScheduleState.AtWork,
                         out _, out reason))
                 {
@@ -1210,7 +1341,10 @@ namespace LandLedgers.FirstLedger
                     return false;
                 }
 
+                MarkFreightRouteStarted(managed.person, targetBuildingId, true);
                 managed.routeMode = AgentRouteMode.TaskDirected;
+                managed.freightReceivingTargetBuildingId = targetBuildingId;
+                reason = DescribeFreightRouteProgress(mover, targetBuildingId, "receiving", destination);
                 return true;
             }
 
@@ -1218,10 +1352,67 @@ namespace LandLedgers.FirstLedger
             return false;
         }
 
+        internal static bool TryStartFreightRoute(PersonState person, int targetBuildingId,
+            System.Func<bool> routeStarter)
+        {
+            if (person == null || targetBuildingId < 0 || routeStarter == null || !routeStarter()) return false;
+            person.scheduleState = PopulationScheduleState.AtWork;
+            person.currentDestinationBuildingId = targetBuildingId;
+            return true;
+        }
+
+        internal static bool MarkFreightRouteStarted(PersonState person, int targetBuildingId, bool routeStarted)
+        {
+            if (!routeStarted || person == null || targetBuildingId < 0) return false;
+            person.scheduleState = PopulationScheduleState.AtWork;
+            person.currentDestinationBuildingId = targetBuildingId;
+            return true;
+        }
+
+        public void ReleaseFreightReceivingRoute(int personId, int targetBuildingId)
+        {
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent managed = agents[i];
+                if (managed?.person == null || managed.person.id != personId
+                    || managed.freightReceivingTargetBuildingId != targetBuildingId) continue;
+                managed.freightReceivingTargetBuildingId = -1;
+                return;
+            }
+        }
+
+        internal static string ResolveFreightDoorRouteReason(bool arrived, string routeReason)
+        {
+            if (arrived) return string.Empty;
+            return string.IsNullOrWhiteSpace(routeReason)
+                ? "Carrying: handler is physically travelling to the receiving point."
+                : routeReason;
+        }
+
+        private static string DescribeFreightRouteProgress(AgentMover mover, int targetBuildingId,
+            string activityId, Vector3 destination)
+        {
+            if (mover == null) return "Carrying: waiting for a physical receiving route.";
+            string eta = mover.EstimatedRemainingRouteSeconds.HasValue
+                ? mover.EstimatedRemainingRouteSeconds.Value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "s"
+                : "n/a";
+            return $"Carrying: route to B{targetBuildingId}/{activityId}; active={mover.IsRouteActive}, actor={mover.transform.position}, target={destination}, remaining={mover.RemainingWorldRouteDistance:0.0}m, eta={eta}.";
+        }
+
         internal static bool CanUseAuthoredDoorForFreightReceiving(string activityId, BuildingAnchor frontDoor)
         {
             return string.Equals(activityId, "receiving", System.StringComparison.OrdinalIgnoreCase)
                 && frontDoor.fromAuthoredMarker;
+        }
+
+        internal static bool ShouldUseAuthoredDoorForBlockedExteriorActivity(TownGrid grid,
+            PathingManager pathing, Vector3 activityWorldPosition)
+        {
+            if (grid == null || pathing == null) return true;
+            GridCoord coord = grid.WorldToCoord(activityWorldPosition);
+            if (!grid.IsInBounds(coord)) return true;
+            TownCell cell = grid.GetCell(coord);
+            return cell.HasBuilding || !pathing.TryGetMovementCost(coord, out _);
         }
 
         public void HideFreightCargoVisual(int personId)
@@ -2283,9 +2474,12 @@ namespace LandLedgers.FirstLedger
             WorldInspectableTarget inspectable = agentObject.AddComponent<WorldInspectableTarget>();
             inspectable.ConfigurePerson(person.id);
             CapsuleCollider selectionCollider = agentObject.AddComponent<CapsuleCollider>();
-            selectionCollider.center = new Vector3(0f, 0.9f, 0f);
+            float selectionHeight = prefab != null
+                ? (person.isFemale ? FemaleReferenceHeightMetres : MaleReferenceHeightMetres)
+                : FallbackSelectionHeightMetres;
+            selectionCollider.center = new Vector3(0f, selectionHeight * 0.5f, 0f);
             selectionCollider.radius = 0.28f;
-            selectionCollider.height = 1.8f;
+            selectionCollider.height = selectionHeight;
             selectionCollider.isTrigger = true;
 
             GameObject visualObject = prefab != null
@@ -2299,7 +2493,11 @@ namespace LandLedgers.FirstLedger
             }
 
             visualObject.name = "Visual";
-            visualObject.transform.localPosition = Vector3.zero;
+            // Keep an authored vertical visual correction (for example, to align
+            // scaled character feet with the world floor) while keeping each
+            // actor centered on its authoritative X/Z position.
+            Vector3 authoredVisualPosition = visualObject.transform.localPosition;
+            visualObject.transform.localPosition = new Vector3(0f, authoredVisualPosition.y, 0f);
             AgentMover mover = agentObject.GetComponent<AgentMover>();
             if (mover == null)
             {
@@ -2511,6 +2709,9 @@ namespace LandLedgers.FirstLedger
             public readonly AgentMover mover;
             public readonly BuildingAnchor homeAnchor;
             public AgentRouteMode routeMode;
+            // Hold a freight receiver's destination through its arrival check;
+            // scheduled home/work movement may resume after the handoff consumes it.
+            public int freightReceivingTargetBuildingId = -1;
             // Slice R1 (Objective 22): true while the person is boarded
             // on the wagon (set by TryBoardRider, cleared by
             // TryDismountRider). Runtime-only, never serialized —

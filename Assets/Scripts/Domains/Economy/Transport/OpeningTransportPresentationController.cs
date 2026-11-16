@@ -65,6 +65,8 @@ namespace LandLedgers.Economy.Transport
             public Vector3 outward;
             public bool duplicate;
             public bool hasInstalledHitchHardware;
+            public bool roadsideFallback;
+            public GridCoord adjacentRoadCoord;
         }
 
         public void Present(
@@ -488,6 +490,15 @@ namespace LandLedgers.Economy.Transport
                 return false;
             }
 
+            CoupledTransportMovementController controller = ResolveMovementController();
+            if (controller == null) return false;
+            // Daily freight driving retries this call while a valid return is
+            // already in flight. Check route ownership before requiring the
+            // team to remain at the supplier; its position should have moved
+            // away from the supplier as soon as the return began.
+            if (controller.IsLegActive)
+                return controller.IsPhysicalReturnFor(journey.JourneyId, operatorPersonId);
+
             Transform destination = null;
             bool destinationResolved = physicalRegionalTowns != null
                 && physicalRegionalTowns.TryGetDestination(journey.DestinationLocationId, out destination, out _);
@@ -495,11 +506,6 @@ namespace LandLedgers.Economy.Transport
                 || activeHorseView == null || activeWagonView == null || transportGroup == null
                 || Vector3.Distance(activeHorseView.transform.position, destination.position) > 8f)
                 return false;
-
-            CoupledTransportMovementController controller = ResolveMovementController();
-            if (controller == null) return false;
-            if (controller.IsLegActive)
-                return string.Equals(controller.PhysicalJourneyId, journey.JourneyId, System.StringComparison.Ordinal);
             if (!ResolveMovementInputs(shipment, out float cellSize, out Vector3 origin,
                     out float wagonSpeed, out float turnSpeed, out PopulationPathingDirector director, out int ethanId)
                 || ethanId != operatorPersonId)
@@ -513,6 +519,24 @@ namespace LandLedgers.Economy.Transport
             return controller.StartRegionalReturn(reversed, cellSize, origin, wagonSpeed,
                 TransportPairPlacement.PairSeparationMetres, turnSpeed, director, ethanId,
                 journey.JourneyId, journey.OriginLocationId, journey.VehicleId);
+        }
+
+        public bool IsPhysicalJourneyMoving(string journeyId)
+        {
+            CoupledTransportMovementController controller = transportGroup != null
+                ? transportGroup.GetComponent<CoupledTransportMovementController>()
+                : null;
+            return controller != null && controller.IsLegActive
+                && string.Equals(controller.PhysicalJourneyId, journeyId, StringComparison.Ordinal);
+        }
+
+        public bool IsDriverOnPhysicalJourney(int personId)
+        {
+            CoupledTransportMovementController controller = transportGroup != null
+                ? transportGroup.GetComponent<CoupledTransportMovementController>()
+                : null;
+            return controller != null && controller.IsLegActive
+                && controller.OperatorPersonId == personId;
         }
 
         /// <summary>
@@ -753,17 +777,32 @@ namespace LandLedgers.Economy.Transport
                 && businessBuilding != null)
                 building = businessBuilding;
 
-            SharedBusinessRuntimeManager businessAuthority = FindAnyObjectByType<SharedBusinessRuntimeManager>();
-            bool assignmentValid = businessAuthority != null
-                && businessAuthority.IsBusinessAssignmentValid(business);
-            if (!FreightStagingCellSelector.TryValidateCommercialPremises(
-                    business.AssignedBuildingId, building != null ? building.id : -1,
-                    assignmentValid, out string premisesRefusal))
+            int resolvedAssignedBuildingId = building != null ? building.id : -1;
+            int homeBuildingId = operatorPerson != null ? operatorPerson.homeBuildingId : -1;
+            int resolvedHomeBuildingId = -1;
+            if (homeBuildingId >= 0
+                && townWorld.TryGetBuildingById(homeBuildingId, out PlacedBuilding homeBuilding)
+                && homeBuilding != null)
             {
-                refusal = $"Freight Company '{business.InstanceId}' cannot stage its horse and wagon: {premisesRefusal}";
+                resolvedHomeBuildingId = homeBuilding.id;
+            }
+            if (!FreightStagingCellSelector.TrySelectPhysicalStagingBuilding(
+                    business.AssignedBuildingId, resolvedAssignedBuildingId, homeBuildingId,
+                    resolvedHomeBuildingId, out int stagingBuildingId, out string stagingSource,
+                    out string locationRefusal))
+            {
+                refusal = $"Freight Company '{business.InstanceId}' has no physical location for vehicle road-access lookup: {locationRefusal}";
                 return false;
             }
-            stagingLocation = $"Freight Company commercial premises, building {building.id}";
+            if (building == null || building.id != stagingBuildingId)
+            {
+                if (!townWorld.TryGetBuildingById(stagingBuildingId, out building) || building == null)
+                {
+                    refusal = $"physical staging location Building {stagingBuildingId} ({stagingSource}) is no longer active.";
+                    return false;
+                }
+            }
+            stagingLocation = $"physical staging location, building {building.id} ({stagingSource})";
             TownGrid grid = townWorld.Grid;
             if (grid == null)
             {
@@ -857,9 +896,13 @@ namespace LandLedgers.Economy.Transport
             }
 
             List<HitchCandidate> candidates = CollectHitchCandidates(authority, grid);
+            int authoredCandidateCount = candidates.Count;
+            AddNearbyRoadsideGroundCandidates(townWorld, roadAccess,
+                townWorld.Settings != null ? townWorld.Settings.maxBuildableSlopeDegrees : 8f,
+                grid.Width * grid.Depth, candidates);
             if (candidates.Count == 0)
             {
-                refusal = $"building {building.id} has no authored hitch candidates or valid side space.";
+                refusal = $"building {building.id} has no authored hitch candidates or nearby clear roadside ground.";
                 return false;
             }
 
@@ -870,9 +913,16 @@ namespace LandLedgers.Economy.Transport
             string bestLabel = string.Empty;
             GameObject bestAuthoredFixture = null;
             string lastRejection = "no candidate was feasible.";
+            bool foundRoadsideFallback = false;
 
-            foreach (HitchCandidate candidate in candidates)
+            for (int candidateIndex = 0; candidateIndex < candidates.Count; candidateIndex++)
             {
+                HitchCandidate candidate = candidates[candidateIndex];
+                // Roadside candidates are emitted in increasing grid radius.
+                // Once a physically valid fallback is found, later candidates
+                // are farther from the actual staging frontage and cannot
+                // improve the nearest-first recovery choice.
+                if (candidate.roadsideFallback && foundRoadsideFallback) break;
                 if (candidate.duplicate)
                 {
                     RecordHitchCandidate(candidate, false, "duplicate authored position");
@@ -898,6 +948,27 @@ namespace LandLedgers.Economy.Transport
                         assets.HorsePrefab.transform.localScale, horseFacing, pairLateral);
                     horseQuery += pairLateral * (fixtureRadius + horseRadius + 0.12f);
                 }
+                else if (candidate.roadsideFallback)
+                {
+                    // A clear one-cell apron beside a road is not necessarily
+                    // large enough for the whole wagon. Move the pair outward
+                    // just enough that the wagon's actual projected bounds
+                    // clear the road-cell edge, then validate every footprint
+                    // and route normally below.
+                    Vector3 roadCenter = grid.CoordToWorldCenter(candidate.adjacentRoadCoord);
+                    float centerDistanceFromRoad = Vector3.Dot(candidate.position - roadCenter, pairLateral);
+                    float wagonRadius = GetProjectedBoundsRadius(wagonBounds,
+                        assets.WagonPrefab.transform.localScale, candidateFacing, pairLateral);
+                    float setback = FreightStagingCellSelector.RoadsideVehicleSetbackMeters(
+                        centerDistanceFromRoad, grid.CellSizeMeters, wagonRadius, 0.1f);
+                    if (float.IsNaN(setback) || float.IsInfinity(setback))
+                    {
+                        lastRejection = "roadside wagon clearance could not be measured.";
+                        RecordHitchCandidate(candidate, false, lastRejection);
+                        continue;
+                    }
+                    horseQuery += pairLateral * setback;
+                }
                 if (!TrySampleGround(townWorld, horseQuery, out Vector3 horsePosition))
                 {
                     lastRejection = "horse position is outside dry walkable terrain.";
@@ -919,9 +990,9 @@ namespace LandLedgers.Economy.Transport
 
                 string horseReason = string.Empty;
                 string wagonReason = string.Empty;
-                bool horseClear = TryValidateVehicleFootprint(townWorld, plot, building, horsePosition, horseFacing,
+                bool horseClear = TryValidateVehicleFootprint(townWorld, building, horsePosition, horseFacing,
                     assets.HorsePrefab, horseBounds, candidate.source, out horseReason);
-                bool wagonClear = horseClear && TryValidateVehicleFootprint(townWorld, plot, building, wagonPosition, candidateFacing,
+                bool wagonClear = horseClear && TryValidateVehicleFootprint(townWorld, building, wagonPosition, candidateFacing,
                     assets.WagonPrefab, wagonBounds, null, out wagonReason);
                 if (!horseClear || !wagonClear)
                 {
@@ -930,7 +1001,8 @@ namespace LandLedgers.Economy.Transport
                     continue;
                 }
 
-                if (!TryValidateHitchFixtureCell(grid, plot, postPosition, out string fixtureReason))
+                float maximumSlope = townWorld.Settings != null ? townWorld.Settings.maxBuildableSlopeDegrees : 8f;
+                if (!TryValidateHitchFixtureCell(grid, postPosition, maximumSlope, out string fixtureReason))
                 {
                     lastRejection = fixtureReason;
                     RecordHitchCandidate(candidate, false, lastRejection);
@@ -949,7 +1021,7 @@ namespace LandLedgers.Economy.Transport
                     continue;
                 }
 
-                if (!TryValidateWagonApproachCells(grid, plot, wagonBounds, assets.WagonPrefab.transform.localScale,
+                if (!TryValidateWagonApproachCells(grid, wagonBounds, assets.WagonPrefab.transform.localScale, maximumSlope,
                         wagonRoute.Path, out string turnReason))
                 {
                     lastRejection = turnReason;
@@ -959,7 +1031,9 @@ namespace LandLedgers.Economy.Transport
 
                 float routeCost = horseRoute.TotalCost + wagonRoute.TotalCost;
                 RecordHitchCandidate(candidate, true,
-                    $"clear parcel and connected road access; route cost {routeCost}");
+                    $"clear staging ground and connected road access; route cost {routeCost}");
+                if (candidate.roadsideFallback && candidateIndex >= authoredCandidateCount)
+                    foundRoadsideFallback = true;
                 if (routeCost >= bestCost) continue;
                 bestCost = routeCost;
                 bestHorsePosition = horsePosition;
@@ -972,8 +1046,16 @@ namespace LandLedgers.Economy.Transport
             if (float.IsPositiveInfinity(bestCost))
             {
                 string details = string.Empty;
+                const int maxReportedCandidates = 12;
+                int reported = 0;
                 foreach (HitchCandidateDiagnostic candidate in hitchCandidateDiagnostics)
+                {
+                    if (reported >= maxReportedCandidates) break;
                     details += $" {candidate.Label}@{FormatPosition(candidate.Position)}={candidate.Reason};";
+                    reported++;
+                }
+                int omitted = hitchCandidateDiagnostics.Count - reported;
+                if (omitted > 0) details += $" plus {omitted} additional candidates.";
                 refusal = $"no feasible horse-and-wagon hitch side for building {building.id}: {lastRejection} Candidates:{details}";
                 return false;
             }
@@ -1036,6 +1118,35 @@ namespace LandLedgers.Economy.Transport
             return candidates;
         }
 
+        private static void AddNearbyRoadsideGroundCandidates(TownWorldController townWorld,
+            GridCoord roadAccess, float maximumSlopeDegrees, int maxCandidates, List<HitchCandidate> candidates)
+        {
+            TownGrid grid = townWorld != null ? townWorld.Grid : null;
+            if (grid == null || candidates == null || maxCandidates <= 0) return;
+            bool IsClearGround(GridCoord coord)
+            {
+                TownCell cell = grid.GetCell(coord);
+                return FreightStagingCellSelector.IsClearVehicleGroundCellAnywhere(
+                    true, cell.IsRoad, cell.HasBuilding,
+                    cell.blocked || (cell.occupancy & CellOccupancy.Blocked) != 0,
+                    (cell.occupancy & CellOccupancy.Anchor) != 0,
+                    cell.terrainZone != TerrainZone.Unknown && cell.terrainZone != TerrainZone.Blocked,
+                    cell.slopeDegrees, maximumSlopeDegrees, out _);
+            }
+
+            IReadOnlyList<FreightStagingCellSelector.RoadsideGroundCandidate> groundCandidates =
+                FreightStagingCellSelector.CollectNearbyRoadsideGroundCandidates(
+                    grid, roadAccess, maxCandidates, IsClearGround);
+            foreach (FreightStagingCellSelector.RoadsideGroundCandidate roadside in groundCandidates)
+            {
+                Vector3 query = grid.CoordToWorldCenter(roadside.GroundCoord);
+                if (!TrySampleGround(townWorld, query, out Vector3 groundPosition)) continue;
+                Vector3 outward = new(roadside.OutwardStep.x, 0f, roadside.OutwardStep.z);
+                AddCandidate(candidates, $"clear roadside ground {roadside.GroundCoord}", groundPosition, null,
+                    outward.normalized, false, true, roadside.AdjacentRoadCoord);
+            }
+        }
+
         private static bool HasCandidateForSide(BuildingFootprintAuthority authority,
             List<HitchCandidate> candidates, Vector3 sideOutwardLocal)
         {
@@ -1057,7 +1168,8 @@ namespace LandLedgers.Economy.Transport
         }
 
         private static void AddCandidate(List<HitchCandidate> candidates, string label, Vector3 position,
-            Transform source, Vector3 outward, bool hasInstalledHitchHardware = false)
+            Transform source, Vector3 outward, bool hasInstalledHitchHardware = false,
+            bool roadsideFallback = false, GridCoord adjacentRoadCoord = default)
         {
             for (int i = 0; i < candidates.Count; i++)
             {
@@ -1071,7 +1183,9 @@ namespace LandLedgers.Economy.Transport
                     source = source,
                     outward = outward.normalized,
                     duplicate = true,
-                    hasInstalledHitchHardware = hasInstalledHitchHardware
+                    hasInstalledHitchHardware = hasInstalledHitchHardware,
+                    roadsideFallback = roadsideFallback,
+                    adjacentRoadCoord = adjacentRoadCoord
                 });
                 return;
             }
@@ -1081,7 +1195,9 @@ namespace LandLedgers.Economy.Transport
                 position = position,
                 source = source,
                 outward = outward.normalized,
-                hasInstalledHitchHardware = hasInstalledHitchHardware
+                hasInstalledHitchHardware = hasInstalledHitchHardware,
+                roadsideFallback = roadsideFallback,
+                adjacentRoadCoord = adjacentRoadCoord
             });
         }
 
@@ -1186,7 +1302,7 @@ namespace LandLedgers.Economy.Transport
             return hasBounds && bounds.size.sqrMagnitude > 0.0001f;
         }
 
-        private bool TryValidateVehicleFootprint(TownWorldController townWorld, TownPlot plot, PlacedBuilding building,
+        private bool TryValidateVehicleFootprint(TownWorldController townWorld, PlacedBuilding building,
             Vector3 position, Quaternion rotation, GameObject prefab, Bounds localBounds, Transform candidateSource,
             out string reason)
         {
@@ -1197,7 +1313,7 @@ namespace LandLedgers.Economy.Transport
             Vector3 localCenter = Vector3.Scale(localBounds.center, scale);
             Vector3 halfExtents = Vector3.Scale(localBounds.extents, scale);
             Vector3 orientedCenter = position + rotation * localCenter;
-            if (!TryValidateGroundFootprint(townWorld, plot, building, orientedCenter, rotation,
+            if (!TryValidateGroundFootprint(townWorld, orientedCenter, rotation,
                     halfExtents, worldBounds, out reason)) return false;
 
             Vector3 physicsHalfExtents = Vector3.Max(halfExtents * 0.96f, Vector3.one * 0.05f);
@@ -1216,8 +1332,8 @@ namespace LandLedgers.Economy.Transport
             return true;
         }
 
-        private static bool TryValidateGroundFootprint(TownWorldController townWorld, TownPlot plot,
-            PlacedBuilding building, Vector3 orientedCenter, Quaternion rotation, Vector3 halfExtents,
+        private static bool TryValidateGroundFootprint(TownWorldController townWorld,
+            Vector3 orientedCenter, Quaternion rotation, Vector3 halfExtents,
             Bounds footprint, out string reason)
         {
             reason = string.Empty;
@@ -1232,18 +1348,14 @@ namespace LandLedgers.Economy.Transport
                 Vector3 cellCenter = grid.CoordToWorldCenter(coord);
                 if (!OrientedFootprintIntersectsCell(orientedCenter, rotation, halfExtents, cellCenter,
                         grid.CellSizeMeters * 0.5f)) continue;
-                if (!grid.IsInBounds(coord) || !plot.bounds.Contains(coord))
+                if (!grid.IsInBounds(coord))
                 {
-                    reason = "body footprint crosses the parcel boundary.";
+                    reason = "body footprint crosses the town-grid boundary.";
                     return false;
                 }
-                bool inBounds = grid.IsInBounds(coord);
-                TownCell cell = inBounds ? grid.GetCell(coord) : default;
-                if (!FreightStagingCellSelector.IsClearVehicleGroundCell(
-                        inBounds,
-                        plot.bounds.Contains(coord),
-                        cell.plotId,
-                        plot.id,
+                TownCell cell = grid.GetCell(coord);
+                if (!FreightStagingCellSelector.IsClearVehicleGroundCellAnywhere(
+                        true,
                         cell.IsRoad,
                         cell.HasBuilding,
                         cell.blocked || (cell.occupancy & CellOccupancy.Blocked) != 0,
@@ -1279,27 +1391,32 @@ namespace LandLedgers.Economy.Transport
             return true;
         }
 
-        private static bool TryValidateHitchFixtureCell(TownGrid grid, TownPlot plot, Vector3 position, out string reason)
+        private static bool TryValidateHitchFixtureCell(TownGrid grid, Vector3 position,
+            float maximumSlopeDegrees, out string reason)
         {
             GridCoord coord = grid.WorldToCoord(position);
             reason = string.Empty;
-            if (!grid.IsInBounds(coord) || !plot.bounds.Contains(coord))
+            if (!grid.IsInBounds(coord))
             {
-                reason = "required hitch fixture would be outside the parcel.";
+                reason = "required hitch fixture would be outside the town grid.";
                 return false;
             }
             TownCell cell = grid.GetCell(coord);
-            if (cell.plotId != plot.id || cell.blocked || cell.IsRoad || cell.HasBuilding
-                || (cell.occupancy & (CellOccupancy.Blocked | CellOccupancy.Anchor)) != 0)
+            if (!FreightStagingCellSelector.IsClearVehicleGroundCellAnywhere(
+                    true, cell.IsRoad, cell.HasBuilding,
+                    cell.blocked || (cell.occupancy & CellOccupancy.Blocked) != 0,
+                    (cell.occupancy & CellOccupancy.Anchor) != 0,
+                    cell.terrainZone != TerrainZone.Unknown && cell.terrainZone != TerrainZone.Blocked,
+                    cell.slopeDegrees, maximumSlopeDegrees, out string groundRefusal))
             {
-                reason = $"required hitch fixture has no clear parcel cell at {coord}.";
+                reason = $"required hitch fixture has no physically clear ground at {coord}: {groundRefusal}.";
                 return false;
             }
             return true;
         }
 
-        private static bool TryValidateWagonApproachCells(TownGrid grid, TownPlot plot, Bounds wagonBounds,
-            Vector3 prefabScale, IReadOnlyList<GridCoord> route, out string reason)
+        private static bool TryValidateWagonApproachCells(TownGrid grid, Bounds wagonBounds,
+            Vector3 prefabScale, float maximumSlopeDegrees, IReadOnlyList<GridCoord> route, out string reason)
         {
             reason = string.Empty;
             if (route == null || route.Count == 0)
@@ -1330,9 +1447,14 @@ namespace LandLedgers.Economy.Transport
                     }
                     TownCell cell = grid.GetCell(coord);
                     if (cell.IsRoad) continue;
-                    if (!plot.bounds.Contains(coord) || cell.plotId != plot.id || cell.blocked || cell.HasBuilding)
+                    if (!FreightStagingCellSelector.IsClearVehicleGroundCellAnywhere(
+                            true, false, cell.HasBuilding,
+                            cell.blocked || (cell.occupancy & CellOccupancy.Blocked) != 0,
+                            (cell.occupancy & CellOccupancy.Anchor) != 0,
+                            cell.terrainZone != TerrainZone.Unknown && cell.terrainZone != TerrainZone.Blocked,
+                            cell.slopeDegrees, maximumSlopeDegrees, out string groundRefusal))
                     {
-                        reason = $"wagon turning clearance is blocked beside route cell {route[i]} at {coord}.";
+                        reason = $"wagon turning clearance is blocked beside route cell {route[i]} at {coord}: {groundRefusal}.";
                         return false;
                     }
                 }

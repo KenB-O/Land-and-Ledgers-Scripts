@@ -3700,10 +3700,20 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         private void ProcessFreightJourneyReturns(int absoluteDayIndex, List<string> diag)
         {
+            OpeningTransportPresentationController presentation =
+                FindAnyObjectByType<OpeningTransportPresentationController>();
             foreach (OffMapJourneyRecord active in OffMapJourneys.AllJourneys())
             {
                 if (active == null || !active.IsActive || !active.RequiresPhysicalArrivalConfirmation
-                    || active.PhysicalOriginArrivalConfirmed || active.DueReturnDayIndex > absoluteDayIndex) continue;
+                    || active.PhysicalOriginArrivalConfirmed || active.DueReturnDayIndex >= absoluteDayIndex) continue;
+                // Calendar return dates are estimates. Do not warn while the
+                // assigned driver or vehicle is legitimately traversing its
+                // authoritative physical route back to town.
+                bool moving = active.TravelerKind == OffMapTravelerKind.Vehicle
+                    ? presentation != null && presentation.IsPhysicalJourneyMoving(active.JourneyId)
+                    : active.TravelerKind == OffMapTravelerKind.Person
+                      && presentation != null && presentation.IsDriverOnPhysicalJourney(active.PersonId);
+                if (moving) continue;
                 LogRefusalDayKeyed("physical-return:" + active.JourneyId, absoluteDayIndex,
                     $"[OffMapJourney] Journey '{active.JourneyId}' reached its estimated return day but remains active: no physical return-arrival event has been confirmed.");
             }
@@ -3953,21 +3963,57 @@ namespace LandLedgers.Orchestration.Systems
                 return false;
             }
 
-            OpeningTransportPresentationController transportPresentation =
-                FindAnyObjectByType<OpeningTransportPresentationController>();
-            if (transportPresentation == null || !transportPresentation.CanBeginCoupledDeparture(siteLocationId))
-            {
-                LogFreightAgreementBlockerOnce("departure-physical-site:" + shipment.ShipmentId,
-                    $"[OffMapJourney] Departure refused for shipment '{shipment.ShipmentId}': physical destination trigger '{siteLocationId}' or coupled transport presentation is unavailable.");
-                return false;
-            }
-
             // (2) Re-resolve the exit point for the live model.
             if (!RegionalExitPointResolver.TryResolve(Journeys ?? hub.Journeys, "town-center", siteLocationId,
                     out RegionalExitPoint exitPoint, out string exitReason))
             {
                 LogFreightAgreementBlockerOnce("departure-exit:" + shipment.ShipmentId,
                     $"[OffMapJourney] Departure refused for shipment '{shipment.ShipmentId}': exit point unresolved: {exitReason}");
+                return false;
+            }
+
+            // Exit-route planning is a recoverable dependency. A shipment
+            // accepted while a physical carrier location was unavailable
+            // retains its cargo lot and agreement; once location/navigation
+            // is ready, this daily departure path must build the missing route
+            // instead of retrying forever with an empty RoutePlan.
+            if (!FreightStagingCellSelector.HasUsableExitPath(shipment.RoutePlan?.VisiblePath))
+            {
+                LogisticsRuntimeManager logisticsRuntime = FindAnyObjectByType<LogisticsRuntimeManager>();
+                if (logisticsRuntime == null)
+                {
+                    LogRefusalDayKeyed("departure-routeplan:" + shipment.ShipmentId, dayIndex,
+                        $"[OffMapJourney] Shipment '{shipment.ShipmentId}' remains pending: logistics route planner is unavailable.");
+                    return false;
+                }
+                if (!FreightBusinessResolver.TryResolveFreightBusiness(sharedBusinessRuntime?.Businesses,
+                        out BusinessInstanceState carrier))
+                {
+                    LogRefusalDayKeyed("departure-routeplan-carrier:" + shipment.ShipmentId, dayIndex,
+                        $"[OffMapJourney] Shipment '{shipment.ShipmentId}' remains pending: its freight carrier business is unresolved.");
+                    return false;
+                }
+                if (!logisticsRuntime.TryPlanFreightExitRouteForCarrier(carrier, exitPoint,
+                        out LogisticsRoutePlan recoveredPlan, out string routeRefusal,
+                        out GridCoord stagingCell, out string stagingSource))
+                {
+                    LogRefusalDayKeyed("departure-routeplan:" + shipment.ShipmentId, dayIndex,
+                        $"[OffMapJourney] Shipment '{shipment.ShipmentId}' remains pending; exit route could not be planned from the carrier's physical location: {routeRefusal}");
+                    return false;
+                }
+
+                shipment.routePlan = recoveredPlan;
+                exitPoint.GridExitCoord = recoveredPlan.VisibleEnd;
+                exitPoint.HasGridExit = true;
+                Debug.Log($"[FreightAgreement] Recovered exit route for existing shipment '{shipment.ShipmentId}' from physical staging cell {stagingCell} via {stagingSource}; lot custody and payment state unchanged.", this);
+            }
+
+            OpeningTransportPresentationController transportPresentation =
+                FindAnyObjectByType<OpeningTransportPresentationController>();
+            if (transportPresentation == null || !transportPresentation.CanBeginCoupledDeparture(siteLocationId))
+            {
+                LogFreightAgreementBlockerOnce("departure-physical-site:" + shipment.ShipmentId,
+                    $"[OffMapJourney] Departure refused for shipment '{shipment.ShipmentId}': physical destination trigger '{siteLocationId}' or coupled transport presentation is unavailable.");
                 return false;
             }
 
@@ -4561,6 +4607,8 @@ namespace LandLedgers.Orchestration.Systems
         // constructed here, through the production bootstrap path.
         private LandLedgers.Economy.Freight.FreightProductionDriver freightProduction;
         private LandLedgers.Economy.Logistics.FreightShipmentService freightShipmentService;
+        private LandLedgers.Economy.Logistics.FreightShipmentHooks latestFreightHooks;
+        private EntityId latestFreightHandler = EntityId.Invalid;
 
         /// <summary>
         /// Pass IX WS3: the production freight driver (detailed shipments).
@@ -4717,10 +4765,15 @@ namespace LandLedgers.Orchestration.Systems
                 bool routeUsable = pathing.TryCarryFreightToActivity(handlerId.Id,
                     destination.AssignedBuildingId, "receiving", out physicallyReceived, out reason);
                 if (!routeUsable) return false;
+                if (physicallyReceived)
+                    pathing.ReleaseFreightReceivingRoute(handlerId.Id, destination.AssignedBuildingId);
                 shipment.physicalLocationId = physicallyReceived
                     ? "receiving:" + destination.InstanceId
                     : "person:" + handlerId.Id;
-                if (!physicallyReceived) reason = "Carrying: handler is physically travelling to the receiving point.";
+                if (!physicallyReceived && !reason.StartsWith("Carrying:", StringComparison.Ordinal))
+                    reason = string.IsNullOrWhiteSpace(reason)
+                        ? "Carrying: handler is physically travelling to the receiving point."
+                        : "Carrying: " + reason;
                 return true;
             };
             hooks.OnPhysicalReceivingComplete = (shipment, handlerId) =>
@@ -4738,6 +4791,8 @@ namespace LandLedgers.Orchestration.Systems
                     int quantityUnits, out string reason) =>
                     millbrookCustody.ReceiveCargoLot(shipment, quantityUnits, absoluteDayIndex, out reason);
             }
+            latestFreightHooks = hooks;
+            latestFreightHandler = handler;
             RetryPendingFreightShipmentRegistrations(absoluteDayIndex);
             // Slice S9: complete journeys due today before the tick, so a
             // wagon that returns today is home for the same day's tick.
@@ -5565,15 +5620,18 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             GeneralStoreTradingPort storePort = storeManager.BuildHouseholdTradingPort(store, storeFeedRegistry);
-            int storeFeedAvailable = storePort != null && storePort.UsesItemLevelInventory(HorseFeedSku)
-                ? Math.Max(0, storePort.ItemStockUnits(HorseFeedSku)) : 0;
+            Review2StoreFeedItem configuredFeed = storeFeedRegistry?.Find(store.InstanceId);
+            int configuredFeedPrice = configuredFeed != null ? configuredFeed.RetailPriceCents : 0;
+            int storeFeedAvailable = Math.Max(0,
+                store.RuntimeState.GetRetailItemStockUnits(HorseFeedSku, HorseFeedCategory));
+            bool storeHasFeedOffer = storePort != null && storePort.UsesItemLevelInventory(HorseFeedSku);
             int sacksToBuy = BusinessFeedPurchase.PackagesAvailableToPurchase(sacksNeeded, storeFeedAvailable);
-            if (storePort == null || !storePort.UsesItemLevelInventory(HorseFeedSku)
-                || storePort.ItemPricePerUnitCents(HorseFeedSku) <= 0
-                || sacksToBuy <= 0)
+            if (sacksToBuy <= 0 || configuredFeedPrice <= 0 || !storeHasFeedOffer)
             {
-                string refusal = $"B0 cannot offer any of the {sacksNeeded} needed '{HorseFeedSku}' sacks at a positive owner-set price " +
-                    $"(stock={storeFeedAvailable}, price={storePort?.ItemPricePerUnitCents(HorseFeedSku) ?? 0}c); no cash or stock moved.";
+                string refusal = BusinessFeedPurchase.DescribeStoreAvailabilityRefusal(
+                    HorseFeedSku, sacksNeeded, storeFeedAvailable, configuredFeedPrice, storeHasFeedOffer);
+                if (string.IsNullOrWhiteSpace(refusal))
+                    refusal = $"B0 cannot fill the current {sacksNeeded}-sack feed need; no cash or stock moved.";
                 if (!businessFeedLastStockRefusal.TryGetValue(freight.InstanceId, out string priorRefusal)
                     || !string.Equals(priorRefusal, refusal, StringComparison.Ordinal))
                 {
@@ -6516,11 +6574,11 @@ namespace LandLedgers.Orchestration.Systems
                             Debug.LogWarning($"[FreightAgreement] Exit route unplanned for shipment '{stableShipmentId}': logistics runtime unavailable.", this);
                         }
                         // Slice F1: plan via the carrier method, which
-                        // resolves staging from the carrier premises
-                        // anchor -> carrier premises plot (each in-bounds
-                        // and a road cell) and refuses when no valid
-                        // assigned commercial premises exist — the same
-                        // gate the presentation layer applies.
+                        // resolves a physical staging location from the
+                        // carrier's assigned building, then the operator's
+                        // home building, and validates its authored anchor
+                        // or plot frontage as a road cell. No commercial
+                        // premises authorization is required.
                         // NON-GATING, as in S8: a planning failure is
                         // warned, never a registration failure.
                         else if (logisticsRuntime.TryPlanFreightExitRouteForCarrier(
@@ -6618,13 +6676,18 @@ namespace LandLedgers.Orchestration.Systems
                 var manager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
                 GeneralStoreTradingPort port = manager?.BuildHouseholdTradingPort(store, storeFeedRegistry);
                 trip.DayIndex = currentDay;
-                int availableAtCheckout = port != null && port.UsesItemLevelInventory(HorseFeedSku)
-                    ? Math.Max(0, port.ItemStockUnits(HorseFeedSku)) : 0;
+                bool hasFeedOfferAtCheckout = port != null && port.UsesItemLevelInventory(HorseFeedSku);
+                int availableAtCheckout = Math.Max(0,
+                    store.RuntimeState.GetRetailItemStockUnits(HorseFeedSku, HorseFeedCategory));
                 int purchaseSacks = BusinessFeedPurchase.PackagesAvailableToPurchase(trip.Sacks, availableAtCheckout);
-                if (port == null || !port.UsesItemLevelInventory(HorseFeedSku) || purchaseSacks <= 0)
+                if (!hasFeedOfferAtCheckout || purchaseSacks <= 0)
                 {
-                    Debug.LogWarning($"[BusinessFeed] Purchase refused for B3 '{trip.BusinessId}' at B0: requested {trip.Sacks} " +
-                        $"'{HorseFeedSku}' sacks, usable stock={availableAtCheckout}; need remains open.", this);
+                    Review2StoreFeedItem configuredFeed = storeFeedRegistry?.Find(store.InstanceId);
+                    string refusal = BusinessFeedPurchase.DescribeStoreAvailabilityRefusal(
+                        HorseFeedSku, trip.Sacks, availableAtCheckout,
+                        configuredFeed != null ? configuredFeed.RetailPriceCents : 0,
+                        hasFeedOfferAtCheckout);
+                    Debug.LogWarning($"[BusinessFeed] Purchase refused for B3 '{trip.BusinessId}' at B0: {refusal} Need remains open.", this);
                     trip.Batch = null;
                 }
                 else
@@ -7643,7 +7706,9 @@ namespace LandLedgers.Orchestration.Systems
         {
             if (storeFeedProcurement == null || storeFeedProcurementBusiness?.RuntimeState == null) return;
             BusinessRuntimeState storeRuntime = storeFeedProcurementBusiness.RuntimeState;
+            int cashBeforeArrivals = storeRuntime.CurrentCashCents;
             storeFeedProcurement.ReceiveArrivals(absoluteDayIndex, null);
+            int cashAfterArrivals = storeRuntime.CurrentCashCents;
             // ReceiveArrivals settles the purchase and persists its named
             // source lot before this retail-lot transfer. Retry any remaining
             // source lots after a refused destination receipt; already
@@ -7653,7 +7718,6 @@ namespace LandLedgers.Orchestration.Systems
                 if (lot == null || lot.RemainingUnits <= 0) continue;
                 if (!BusinessFeedPurchase.IsHorseFeedSku(lot.SkuId, HorseFeedSku)) continue;
                 int transferUnits = lot.RemainingUnits;
-                int cashBeforeReceipt = storeRuntime.CurrentCashCents;
                 int retailStockBefore = storeRuntime.GetRetailItemStockUnits(lot.SkuId, "animal_feed");
                 PurchasedRetailLotReceipt.Result receipt = PurchasedRetailLotReceipt.Transfer(
                     storeFeedProcurement, storeRuntime, lot, "animal_feed", "sack", absoluteDayIndex);
@@ -7667,7 +7731,8 @@ namespace LandLedgers.Orchestration.Systems
                 }
                 Debug.Log($"[FeedSupply] General Store B0 received {transferUnits} purchased sack(s) of {lot.SkuId} " +
                     $"from external-market supplier lot '{lot.LotId}' (receipt {lot.ReceiptId}, order {lot.OrderId}); " +
-                    $"business paid {lot.TotalCostCents}c on arrival, cash {cashBeforeReceipt}->{storeRuntime.CurrentCashCents}c; " +
+                    $"order cost was {lot.TotalCostCents}c; named-SKU arrival settlement cash " +
+                    $"{cashBeforeArrivals}->{cashAfterArrivals}c across all orders due in this arrival pass; " +
                     $"identified SKU stock {retailStockBefore}->{storeRuntime.GetRetailItemStockUnits(lot.SkuId, "animal_feed")} sack(s). " +
                     $"retailLot='{receipt.RetailLotId}'; source provenance: {lot.Provenance}", this);
                 var storeManager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
@@ -8565,6 +8630,12 @@ namespace LandLedgers.Orchestration.Systems
         private static bool IsDueEventFailureDiagnostic(string message)
         {
             if (string.IsNullOrWhiteSpace(message)) return false;
+            // This is an informational record appended after an authorized
+            // shopping settlement. Its explanation can contain the word
+            // "Unknown" (mass/volume are not authored), but Fits is a
+            // successful capacity verdict, not a due-event failure.
+            if (message.IndexOf("[V1] capacity consulted at settle:", StringComparison.OrdinalIgnoreCase) >= 0)
+                return false;
             return message.IndexOf("failed", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("aborted", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("could not", StringComparison.OrdinalIgnoreCase) >= 0
@@ -9237,15 +9308,15 @@ namespace LandLedgers.Orchestration.Systems
                 Debug.Log("[BakeryProduction] " + string.Join(" | ", diagnostics), this);
         }
 
-        // Plan 07 (Slice 07): staged bakery chain driving. The chain rides
-        // the Pass 9 state exactly like BakeryDriver does; the hub needs no
-        // edit. The day drive begins at most one batch, AFTER the wholesale
-        // planning call, so the staged begin sees post-bake stock. The tick
-        // drive runs after AdvanceAutonomousWork so the two minute-accounting
-        // paths never interleave inside one tick. SimulationDrivers itself
-        // is harness-excluded: these methods are verified by inspection
-        // against the pinned driver behaviour (StagedBakeryChainDriverTests)
-        // and the full-harness gate.
+        // Plan 07 (Slice 07): staged bakery chain state is persisted on the
+        // Pass 9 save state and any already-authorized batch continues through
+        // the tick driver below. The conventional wholesale driver is the
+        // only live bakery demand authority today. It already plans the
+        // account's physical batch; autonomously starting a second staged
+        // batch here consumed another set of inputs without a distinct order,
+        // producing surplus bread and avoidable stale waste. Keep restore and
+        // in-progress execution, but do not create new staged work until a
+        // distinct authorized production order is wired into this boundary.
 
         private Series2Pass9SaveState Pass9State()
         {
@@ -9288,16 +9359,26 @@ namespace LandLedgers.Orchestration.Systems
             if (driver == null) return;
             EntityId bakerId = ResolveStagedBakeryBaker(bakery);
             ApplyRestoredStagedBakeryChain(state, driver, dayIndex, bakerId);
-            if (driver.HasActiveBatch) return;
+            // No distinct staged-production order authority is wired into
+            // the live daily flow. Wholesale demand is already represented
+            // by the conventional driver's planned batch; starting this
+            // separate chain would create unrequested output from another
+            // set of real inputs. Restored/in-progress batches still advance
+            // in DriveStagedBakeryTick.
+            const bool hasDistinctAuthorizedDemand = false;
+            if (!ShouldBeginStagedBakeryBatch(hasDistinctAuthorizedDemand, driver.HasActiveBatch)) return;
+
             var diag = new List<string>();
-            if (!driver.TryBeginBatch(dayIndex, bakerId, diag))
-            {
-                if (diag.Count > 0)
-                    Debug.Log("[BakeryProduction] Day " + dayIndex + ": staged batch not begun — " + string.Join(" | ", diag), this);
-                return;
-            }
+            driver.TryBeginBatch(dayIndex, bakerId, diag);
             if (diag.Count > 0)
                 Debug.Log("[BakeryProduction] Day " + dayIndex + ": " + string.Join(" | ", diag), this);
+        }
+
+        internal static bool ShouldBeginStagedBakeryBatch(
+            bool hasDistinctAuthorizedDemand,
+            bool hasActiveBatch)
+        {
+            return hasDistinctAuthorizedDemand && !hasActiveBatch;
         }
 
         private void DriveStagedBakeryTick(int wholeMinutes, int dayIndex, int minuteOfDay)
@@ -10756,6 +10837,13 @@ namespace LandLedgers.Orchestration.Systems
                     Mathf.FloorToInt(context.TimeOfDay01 * 1440f));
             }
 
+            // A freight arrival may be unable to reserve the carrier's work
+            // window at the day boundary because existing plans still occupy
+            // it. Recheck only already-arrived unload starts after this tick's
+            // task progress has released completed reservations. The freight
+            // driver does not advance transit or unload work on this path.
+            RetryArrivedFreightUnloads(context);
+
             // Accepted freight dispatch is an occupied business activity, not
             // a journey. Start it through the same TaskAuthority and person
             // schedule path after autonomous progress for this tick, so the
@@ -10778,6 +10866,23 @@ namespace LandLedgers.Orchestration.Systems
             {
                 OnScenarioTick?.Invoke();
             }
+        }
+
+        private void RetryArrivedFreightUnloads(SimulationTickContext context)
+        {
+            if (latestFreightHooks == null || !latestFreightHandler.IsValid
+                || FreightProduction == null || hub?.Tasks == null)
+                return;
+
+            latestFreightHooks.DayIndex = context.Date.AbsoluteDayIndex;
+            latestFreightHooks.MinuteOfDay = Mathf.FloorToInt(context.TimeOfDay01 * 1440f);
+            latestFreightHooks.NowGameSeconds = timeManager != null
+                ? timeManager.AbsoluteGameSeconds : latestFreightHooks.NowGameSeconds;
+            var diagnostics = new List<string>();
+            latestFreightHooks.Diagnostics = diagnostics;
+            FreightProduction.RetryArrivedUnloads(latestFreightHooks, latestFreightHandler, diagnostics);
+            if (diagnostics.Count > 0)
+                Debug.Log("[FreightHandlingRetry] " + string.Join(" | ", diagnostics), this);
         }
     }
 

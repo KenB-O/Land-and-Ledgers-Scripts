@@ -32,6 +32,32 @@ public sealed class PurchasedRetailLotReceiptTests
             requestedPackages, sellerPackages));
     }
 
+    [Test]
+    public void BusinessFeedStockout_ReportsFiniteShelfScarcityWithoutLosingConfiguredPrice()
+    {
+        string refusal = BusinessFeedPurchase.DescribeStoreAvailabilityRefusal(
+            "store_horse_feed_sack", 7, 0, 15, false);
+
+        StringAssert.Contains("no identified 'store_horse_feed_sack' stock", refusal);
+        StringAssert.Contains("price remains 15c/package", refusal);
+        StringAssert.DoesNotContain("0c", refusal);
+        StringAssert.DoesNotContain("7", refusal,
+            "The same zero-stock cause should not vary each day as reserve demand grows.");
+    }
+
+    [Test]
+    public void BusinessFeedAvailability_SeparatesUnpricedAndInvalidLiveOffers()
+    {
+        string unpriced = BusinessFeedPurchase.DescribeStoreAvailabilityRefusal(
+            "store_horse_feed_sack", 3, 4, 0, true);
+        string invalidOffer = BusinessFeedPurchase.DescribeStoreAvailabilityRefusal(
+            "store_horse_feed_sack", 3, 4, 15, false);
+
+        StringAssert.Contains("no positive owner-set price", unpriced);
+        StringAssert.Contains("no valid live sale offer", invalidOffer);
+        StringAssert.Contains("4 identified", invalidOffer);
+    }
+
     [TestCase("store_horse_feed_sack", true)]
     [TestCase("bakery-notions", false)]
     [TestCase("", false)]

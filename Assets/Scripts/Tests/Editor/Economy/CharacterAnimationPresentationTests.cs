@@ -98,6 +98,7 @@ namespace LandLedgers.EditorTests.Economy
                 GameObject wagon = (GameObject)PrefabUtility.InstantiatePrefab(AssetDatabase.LoadAssetAtPath<GameObject>(WagonPath), scene);
                 Transform seat = wagon.GetComponent<LandLedgers.Economy.Transport.WagonWorldView>().DriverSeat;
                 GameObject visual = (GameObject)PrefabUtility.InstantiatePrefab(AssetDatabase.LoadAssetAtPath<GameObject>(ManPath), scene);
+                Vector3 authoredVisualPosition = visual.transform.localPosition;
                 visual.transform.SetParent(host.transform, false);
                 AgentMover mover = host.AddComponent<AgentMover>();
                 mover.ConfigureVisualRoot(visual.transform);
@@ -143,7 +144,7 @@ namespace LandLedgers.EditorTests.Economy
                 Call(mover, "LateUpdate");
                 Assert.That(mover.HasPresentationAnimation, Is.False);
                 Assert.That(animator.GetCurrentAnimatorStateInfo(0).shortNameHash, Is.EqualTo(Animator.StringToHash("Locomotion")));
-                Assert.That(visual.transform.localPosition, Is.EqualTo(Vector3.zero));
+                Assert.That(visual.transform.localPosition, Is.EqualTo(authoredVisualPosition));
                 Assert.That(scene.rootCount, Is.EqualTo(2), "No extra person should be created during attachment or release.");
             }
             finally

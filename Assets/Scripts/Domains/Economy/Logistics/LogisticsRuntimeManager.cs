@@ -9,6 +9,7 @@ using LandLedgers.Economy.Transport;
 using LandLedgers.Pathing;
 using LandLedgers.Persistence;
 using LandLedgers.Orchestration.Systems;
+using LandLedgers.Population;
 using LandLedgers.Time;
 using LandLedgers.World;
 using LandLedgers.World.Journeys;
@@ -1484,18 +1485,15 @@ namespace LandLedgers.Economy
 
         /// <summary>
         /// Slice F1 (Objectives 16-17): plan the staging-to-edge grid route
-        /// for a detailed freight shipment. Staging requires valid assigned
-        /// commercial premises, gated by
-        /// FreightStagingCellSelector.TryValidateCommercialPremises,
-        /// mirroring the presentation gate
-        /// (OpeningTransportPresentationController): an operator's home is
-        /// not a substitute for commercial premises. Candidates are the
-        /// carrier building's anchor road-access coord and the carrier
-        /// building plot's roadAccessCell only, each validated in-bounds
+        /// for a detailed freight shipment. Commercial-premises authorization
+        /// is not required. The carrier's real assigned building is preferred;
+        /// the operator's real home building is a location fallback. Candidates
+        /// are that physical building's anchor road-access coord and plot's
+        /// roadAccessCell, each validated in-bounds
         /// AND a road cell by FreightStagingCellSelector. Every candidate
         /// comes from authored building / plot data; no world position is
-        /// invented. On success the staging cell and its source
-        /// ("business-anchor" / "business-plot") are returned so the
+        /// invented. On success the staging cell and its physical-location
+        /// source are returned so the
         /// caller can log them. Planning itself is identical to
         /// TryPlanFreightExitRoute (same GridExitSelector, same
         /// GridCoord-to-GridCoord request, ExtraOffMapCells = 0).
@@ -1534,35 +1532,38 @@ namespace LandLedgers.Economy
                 return false;
             }
 
-            // Staging requires valid assigned commercial premises, mirroring
-            // the presentation gate (OpeningTransportPresentationController).
-            // An operator's home is not a substitute for commercial premises.
             int assignedBuildingId = carrier.AssignedBuildingId;
             int resolvedBuildingId = -1;
             if (townWorld.TryGetBuildingById(assignedBuildingId, out PlacedBuilding assignedBuilding) && assignedBuilding != null)
                 resolvedBuildingId = assignedBuilding.id;
-            bool assignmentValid = sharedBusinessRuntime != null
-                && sharedBusinessRuntime.IsBusinessAssignmentValid(carrier);
-            if (!FreightStagingCellSelector.TryValidateCommercialPremises(
-                    assignedBuildingId, resolvedBuildingId, assignmentValid,
-                    out string premisesRefusal))
+            PopulationManager population = FindAnyObjectByType<PopulationManager>();
+            PersonState owner = population != null && carrier.Owner != null && carrier.Owner.PersonId > 0
+                ? population.State?.GetPerson(carrier.Owner.PersonId)
+                : null;
+            int homeBuildingId = owner != null ? owner.homeBuildingId : -1;
+            int resolvedHomeBuildingId = -1;
+            if (homeBuildingId >= 0 && townWorld.TryGetBuildingById(homeBuildingId, out PlacedBuilding homeBuilding) && homeBuilding != null)
+                resolvedHomeBuildingId = homeBuilding.id;
+            if (!FreightStagingCellSelector.TrySelectPhysicalStagingBuilding(
+                    assignedBuildingId, resolvedBuildingId, homeBuildingId, resolvedHomeBuildingId,
+                    out int stagingBuildingId, out string locationSource, out string locationRefusal))
             {
-                reason = $"TryPlanFreightExitRouteForCarrier: carrier '{carrier.InstanceId}' cannot stage: {premisesRefusal}";
+                reason = $"TryPlanFreightExitRouteForCarrier: carrier '{carrier.InstanceId}' has no physical location for road-access lookup: {locationRefusal}";
                 return false;
             }
 
-            GridCoord? carrierAnchor = TryGetBuildingAnchorCoord(carrier.AssignedBuildingId);
-            GridCoord? carrierPlot = TryGetBuildingPlotCell(carrier.AssignedBuildingId);
+            GridCoord? carrierAnchor = TryGetBuildingAnchorCoord(stagingBuildingId);
+            GridCoord? carrierPlot = TryGetBuildingPlotCell(stagingBuildingId);
             if (!FreightStagingCellSelector.TrySelectStagingCell(
                     carrierAnchor, carrierPlot, IsUsableRoadCell,
                     out GridCoord cell, out string source, out string carrierReason))
             {
-                reason = $"TryPlanFreightExitRouteForCarrier: no staging road cell for carrier '{carrier.InstanceId}' — business candidates: {carrierReason}.";
+                reason = $"TryPlanFreightExitRouteForCarrier: no usable road cell at physical location Building {stagingBuildingId} ({locationSource}) for carrier '{carrier.InstanceId}' — {carrierReason}";
                 return false;
             }
 
             stagingCell = cell;
-            stagingSource = "business-" + source;
+            stagingSource = locationSource + "-" + source;
 
             Debug.Log($"[FreightExit] staging=({stagingCell.x}, {stagingCell.z}) via {stagingSource} for carrier '{carrier.InstanceId}'.", this);
             return TryPlanExitRouteFromStaging(stagingCell, exitPoint, out plan, out reason);

@@ -97,7 +97,8 @@ namespace LandLedgers.EditorTests.Tasks
 
         [TestCase(660, 120, 700, StaleInProgressDecision.UntouchedHealthy)]
         [TestCase(900, 60, 700, StaleInProgressDecision.UntouchedHealthy)]
-        [TestCase(600, 100, 700, StaleInProgressDecision.RescueReDerive)]
+        [TestCase(600, 100, 700, StaleInProgressDecision.UntouchedHealthy)]
+        [TestCase(600, 100, 701, StaleInProgressDecision.RescueReDerive)]
         public void ValidOrFutureWindow_Untouched(
             int start, int duration, int minuteOfDay, StaleInProgressDecision expected)
         {
@@ -110,7 +111,7 @@ namespace LandLedgers.EditorTests.Tasks
             StaleInProgressVerdict verdict = Decide(task, reservations, minuteOfDay);
 
             Assert.AreEqual(expected, verdict.Decision,
-                "a window covering now or later today is healthy; one ending exactly at now has zero overlap with the current tick");
+                "a window ending at the current tick boundary remains available for accrual before next-tick stale recovery");
         }
 
         [TestCase(true)]

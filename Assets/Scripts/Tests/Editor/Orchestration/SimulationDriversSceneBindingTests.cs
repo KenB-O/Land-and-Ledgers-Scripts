@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Reflection;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Orchestration.Systems;
@@ -12,6 +13,41 @@ namespace LandLedgers.EditorTests.Orchestration
 {
     public sealed class SimulationDriversSceneBindingTests
     {
+        [Test]
+        public void DueEventFailureClassifier_DoesNotPromoteSuccessfulCapacityEvidenceToWarning()
+        {
+            const string capacityEvidence = "[V1] capacity consulted at settle: P9 carrying 1u potatoes "
+                + "(live cap 50u) — Fits: On-foot carry is within the live cap. "
+                + "Mass and volume remain Unknown — no authored person mass or volume limit exists.";
+
+            Assert.IsFalse(ClassifyDueEventDiagnostic(capacityEvidence),
+                "A successful Fits result remains informational even if its evidence mentions Unknown limits.");
+            Assert.IsTrue(ClassifyDueEventDiagnostic("Trip aborted: outbound route failed."),
+                "Actual failed transitions must remain warning-worthy.");
+        }
+
+        [Test]
+        public void StagedBakeryBatch_DoesNotStartWithoutDistinctDemandOrAlongsideActiveBatch()
+        {
+            Assert.IsFalse(
+                SimulationDrivers.ShouldBeginStagedBakeryBatch(false, false),
+                "The live wholesale plan is not a second staged order; no distinct demand means no extra 24-loaf batch.");
+            Assert.IsFalse(
+                SimulationDrivers.ShouldBeginStagedBakeryBatch(true, true),
+                "A second staged batch cannot overlap one already in progress.");
+            Assert.IsTrue(
+                SimulationDrivers.ShouldBeginStagedBakeryBatch(true, false),
+                "A future explicitly authorized, distinct staged order may use the existing staged driver.");
+        }
+
+        private static bool ClassifyDueEventDiagnostic(string message)
+        {
+            MethodInfo classifier = typeof(SimulationDrivers).GetMethod(
+                "IsDueEventFailureDiagnostic", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.IsNotNull(classifier, "The due-event diagnostic classifier must remain present.");
+            return (bool)classifier.Invoke(null, new object[] { message });
+        }
+
         private sealed class StorePort : IGeneralStoreTradingPort
         {
             public string StoreBusinessId { get; set; }

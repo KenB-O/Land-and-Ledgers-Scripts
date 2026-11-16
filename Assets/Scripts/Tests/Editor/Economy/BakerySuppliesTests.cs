@@ -787,7 +787,7 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void Flour_OneSackHaulCannotBake_TwoSackReorderDeliversAndBakes()
+        public void Flour_OneSackHaulCannotBake_OneSackRemainderReorderDeliversAndBakes()
         {
             // One Millbrook sack = 10 lb; a batch needs 12 lb. The
             // opening 1-sack lot alone cannot bake; the daily driver must
@@ -817,23 +817,23 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, day1.BatchesPlanned, "day 1 plans the batch");
             Assert.AreEqual(0, day1.FlourSacksPurchased, "no local purchase: the store holds 0 sacks");
             Assert.IsTrue(!string.IsNullOrWhiteSpace(day1.MillbrookReorderLotId),
-                "a 2-sack Millbrook reorder is placed");
+                "the remaining 2 lb shortfall rounds up to one legitimate 10-lb sack");
             Assert.IsTrue(day1.MillbrookReorderLotId.Contains("flour-reorder-d1-n2"),
                 "reorder lot id names the reorder; lot id: " + day1.MillbrookReorderLotId);
-            Assert.AreEqual(2, day1.MillbrookReorderSacks, "the reorder covers 2 sacks / 20 lb");
+            Assert.AreEqual(1, day1.MillbrookReorderSacks, "one 10-lb sack covers the 2-lb shortfall without over-ordering a second sack");
             Assert.AreEqual(0, day1.BatchesBaked, "nothing bakes day 1: no flour on hand");
             Assert.IsTrue(day1.Refusal != null && day1.Refusal.Contains("flour"),
                 "the bake refuses on flour day 1; refusal: " + day1.Refusal);
-            Assert.AreEqual(1856, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 - 48c opening - 96c reorder");
-            Assert.AreEqual(144, supplier.CashCents, "Millbrook +48c opening + 96c reorder");
+            Assert.AreEqual(1904, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 - 48c opening - 48c one-sack reorder");
+            Assert.AreEqual(96, supplier.CashCents, "Millbrook +48c opening + 48c one-sack reorder");
             Assert.AreEqual(2, supplier.Lots.Count, "exactly two Millbrook lots");
             OffMapAidCargoLot reorderLot = null;
             foreach (OffMapAidCargoLot candidate in supplier.Lots)
                 if (candidate != null && string.Equals(candidate.LotId, day1.MillbrookReorderLotId, StringComparison.Ordinal))
                     reorderLot = candidate;
             Assert.IsNotNull(reorderLot, "the reorder lot is in the supplier lots");
-            Assert.AreEqual(2, reorderLot.PackageUnits, "the reorder lot is 2 sacks");
-            Assert.AreEqual(20, reorderLot.InventoryUnits, "the reorder lot is 20 lb");
+            Assert.AreEqual(1, reorderLot.PackageUnits, "the reorder lot is 1 sack");
+            Assert.AreEqual(10, reorderLot.InventoryUnits, "the reorder lot is 10 lb");
             Assert.AreEqual(openingLot.LotId,
                 MillbrookFlourReorder.FindShippableLot(supplier, BakeryInstanceId)?.LotId,
                 "the opening 1-sack lot still ships first with both lots outstanding");
@@ -845,12 +845,12 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(0, afterOneSack.BatchesBaked, "10 lb alone cannot bake a 12 lb batch");
             Assert.IsTrue(afterOneSack.Refusal != null && afterOneSack.Refusal.Contains("flour 10 lb on hand, need 12 lb"),
                 "the bake refuses naming flour 10 vs 12 lb; refusal: " + afterOneSack.Refusal);
-            Assert.AreEqual(1856, s.BakeryRuntime.CurrentCashCents, "no second reorder: the outstanding 2-sack lot covers the 1-sack remainder");
+            Assert.AreEqual(1904, s.BakeryRuntime.CurrentCashCents, "no duplicate reorder: the outstanding 1-sack lot covers the shortfall");
             Assert.AreEqual(2, supplier.Lots.Count, "still exactly two Millbrook lots");
 
-            // After the 2-sack lot lands (bin 30 lb) the batch bakes and transfers.
+            // After the one-sack lot lands (bin 20 lb) the batch bakes and transfers.
             ReceiveMillbrookLot(s, adapter, reorderLot, 1);
-            Assert.AreEqual(30, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 30 lb after both receipts");
+            Assert.AreEqual(20, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 20 lb after both receipts");
             var millbrookBinLots = new List<BakeryFlourLot>();
             foreach (BakeryFlourLot lot in s.Bakery.FlourStock.Lots)
                 if (lot != null && string.Equals(lot.FlourName, BakeryBreadCatalog.FlourItemId, StringComparison.Ordinal))
@@ -862,19 +862,19 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, afterTwoSacks.BatchesBaked, "the batch bakes once both lots land");
             Assert.AreEqual(1, afterTwoSacks.TransfersCompleted, "the transfer completes");
             Assert.AreEqual(24, afterTwoSacks.UnitsStocked, "24 loaves stocked");
-            Assert.AreEqual(1904, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 - 48c opening - 96c reorder + 48c wholesale");
-            Assert.AreEqual(144, supplier.CashCents, "Millbrook cash is unchanged by delivery (+144c total)");
-            Assert.AreEqual(18, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 30 - 12 lb after the bake");
+            Assert.AreEqual(1952, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 - 48c opening - 48c reorder + 48c wholesale");
+            Assert.AreEqual(96, supplier.CashCents, "Millbrook cash is unchanged by delivery (+96c total)");
+            Assert.AreEqual(8, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 20 - 12 lb after the bake");
             // The bake dispenses FIFO: the 10 lb lot is fully consumed and
             // dropped by design ("drop emptied lots so the bin never
-            // carries ghost stock"), so one lot remains — the 2-sack lot.
+            // carries ghost stock"), so one lot remains — the reorder lot.
             var remainingBinLots = new List<BakeryFlourLot>();
             foreach (BakeryFlourLot lot in s.Bakery.FlourStock.Lots)
                 if (lot != null && string.Equals(lot.FlourName, BakeryBreadCatalog.FlourItemId, StringComparison.Ordinal))
                     remainingBinLots.Add(lot);
             Assert.AreEqual(1, remainingBinLots.Count, "one bin flour lot remains after the FIFO bake");
-            Assert.AreEqual(reorderLot.LotId, remainingBinLots[0].ImportOrderId, "the remaining lot is the 2-sack lot");
-            Assert.AreEqual(18, remainingBinLots[0].Units, "the 2-sack lot holds 20 - 2 lb after the bake");
+            Assert.AreEqual(reorderLot.LotId, remainingBinLots[0].ImportOrderId, "the remaining lot is the reorder lot");
+            Assert.AreEqual(8, remainingBinLots[0].Units, "the reorder lot holds 10 - 2 lb after the bake");
         }
 
         [Test]
@@ -1426,8 +1426,8 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void SaveLoad_MidFlourPipeline_ReorderLotSurvives_NoDuplicateOrder()
         {
-            // Plan 04 Slice 6 Test 10: after Test 4's day-1 reorder (2-sack
-            // lot placed, 96c debited), capture the Millbrook supplier DTO
+            // Plan 04 Slice 6 Test 10: after the day-1 one-sack reorder
+            // (10 lb lot placed, 48c debited), capture the Millbrook supplier DTO
             // + bakery save DTO, restore into fresh objects, and prove the
             // lot restores once, a repeat PlaceReorder refuses as
             // already-covered, and the restored lot still ships and delivers
@@ -1448,13 +1448,13 @@ namespace LandLedgers.Editor.Economy
             BakeryWholesaleDailyResult day1 = RunDay(s, null, 1, wireNotions: false, millbrookSupplier: supplier);
             Assert.AreEqual(1, day1.BatchesPlanned, "day 1 plans the batch");
             Assert.IsTrue(!string.IsNullOrWhiteSpace(day1.MillbrookReorderLotId),
-                "a 2-sack Millbrook reorder is placed");
+                "the remaining 2 lb shortfall is covered by one 10-lb sack");
             Assert.IsTrue(day1.MillbrookReorderLotId.Contains("flour-reorder-d1-n2"),
                 "reorder lot id names the reorder; lot id: " + day1.MillbrookReorderLotId);
-            Assert.AreEqual(2, day1.MillbrookReorderSacks, "the reorder covers 2 sacks / 20 lb");
+            Assert.AreEqual(1, day1.MillbrookReorderSacks, "the reorder covers one sack / 10 lb");
             Assert.AreEqual(0, day1.BatchesBaked, "nothing bakes day 1: no flour on hand");
-            Assert.AreEqual(1856, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 - 48c opening - 96c reorder");
-            Assert.AreEqual(144, supplier.CashCents, "Millbrook +48c opening + 96c reorder");
+            Assert.AreEqual(1904, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 - 48c opening - 48c reorder");
+            Assert.AreEqual(96, supplier.CashCents, "Millbrook +48c opening + 48c reorder");
             Assert.AreEqual(2, supplier.Lots.Count, "exactly two Millbrook lots");
             string batchId = s.Bakery.Batches[0].BatchId;
 
@@ -1471,7 +1471,7 @@ namespace LandLedgers.Editor.Economy
             f.StoreRuntime.AddCashCents(5000);
             f.StoreRuntime.EnsureCategoryStock("staple_food", 0, 1000);
             f.BakeryRuntime.BindBusinessIdentity(BakeryInstanceId);
-            f.BakeryRuntime.AddCashCents(1856);
+            f.BakeryRuntime.AddCashCents(1904);
             f.StoreService = new OffMapNamedSkuProcurementService(
                 StoreInstanceId, f.Market, new RuntimeCashPort(f.StoreRuntime));
             f.Procurement = new Series2FlourProcurementDriver(f.StoreService);
@@ -1504,10 +1504,10 @@ namespace LandLedgers.Editor.Economy
             }
             Assert.IsNotNull(restoredOpening, "the opening lot restores with the same id");
             Assert.IsNotNull(restoredReorder, "the reorder lot restores once with the same id");
-            Assert.AreEqual(2, restoredReorder.PackageUnits, "the restored reorder lot is 2 sacks");
-            Assert.AreEqual(20, restoredReorder.InventoryUnits, "the restored reorder lot is 20 lb");
-            Assert.AreEqual(144, restoredSupplier.CashCents, "restored Millbrook cash 144c");
-            Assert.AreEqual(200, restoredSupplier.GetInventoryUnits("bakery_flour_sack"), "restored Millbrook stock 230 - 10 - 20 lb");
+            Assert.AreEqual(1, restoredReorder.PackageUnits, "the restored reorder lot is one sack");
+            Assert.AreEqual(10, restoredReorder.InventoryUnits, "the restored reorder lot is 10 lb");
+            Assert.AreEqual(96, restoredSupplier.CashCents, "restored Millbrook cash 96c");
+            Assert.AreEqual(210, restoredSupplier.GetInventoryUnits("bakery_flour_sack"), "restored Millbrook stock 230 - 10 - 10 lb");
             Assert.AreEqual(1, f.Bakery.Batches.Count, "the same batch restored");
             Assert.AreEqual(batchId, f.Bakery.Batches[0].BatchId, "same batch id restored");
             Assert.AreEqual(BakeryBatchStage.Planned, f.Bakery.Batches[0].Stage, "the batch restores as Planned");
@@ -1523,8 +1523,8 @@ namespace LandLedgers.Editor.Economy
                 "the refusal names the already-covered outstanding lot; refusal: " + repeatRefusal);
             Assert.IsNull(duplicateLot, "no duplicate lot is created");
             Assert.AreEqual(2, restoredSupplier.Lots.Count, "still exactly two Millbrook lots");
-            Assert.AreEqual(1856, f.BakeryRuntime.CurrentCashCents, "no second debit from the refused reorder");
-            Assert.AreEqual(144, restoredSupplier.CashCents, "Millbrook cash unchanged by the refused reorder");
+            Assert.AreEqual(1904, f.BakeryRuntime.CurrentCashCents, "no second debit from the refused reorder");
+            Assert.AreEqual(96, restoredSupplier.CashCents, "Millbrook cash unchanged by the refused reorder");
 
             // The driver re-run on the restored state places no new reorder
             // either (same already-covered refusal inside the driver).
@@ -1535,15 +1535,15 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(2, restoredSupplier.Lots.Count, "still exactly two Millbrook lots after the re-run");
 
             // The restored lots still ship and deliver exactly once: the
-            // opening 1-sack lot first (list order), then the 2-sack
-            // reorder lot; bin 30 lb, no duplicate delivery.
+            // opening 1-sack lot first (list order), then the 1-sack
+            // reorder lot; bin 20 lb, no duplicate delivery.
             Assert.AreEqual(openingLot.LotId,
                 MillbrookFlourReorder.FindShippableLot(restoredSupplier, BakeryInstanceId)?.LotId,
                 "the restored opening 1-sack lot ships first");
             ReceiveMillbrookLot(f, restoredAdapter, restoredOpening, 1);
             Assert.AreEqual(10, f.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 10 lb after the restored 1-sack receipt");
             ReceiveMillbrookLot(f, restoredAdapter, restoredReorder, 1);
-            Assert.AreEqual(30, f.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 30 lb after both restored receipts (no duplicate delivery)");
+            Assert.AreEqual(20, f.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 20 lb after both restored receipts (no duplicate delivery)");
             Assert.AreEqual(2, restoredSupplier.Lots.Count, "still exactly two Millbrook lots after both receipts");
 
             BakeryWholesaleDailyResult afterTwoSacks = RunDay(f, null, 1, wireNotions: false, millbrookSupplier: restoredSupplier);
@@ -1551,9 +1551,9 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, afterTwoSacks.BatchesBaked, "the restored batch bakes once both restored lots land");
             Assert.AreEqual(1, afterTwoSacks.TransfersCompleted, "the transfer completes on the restored state");
             Assert.AreEqual(24, afterTwoSacks.UnitsStocked, "24 loaves stocked");
-            Assert.AreEqual(1904, f.BakeryRuntime.CurrentCashCents, "restored bakery 1,856c + 48c wholesale");
-            Assert.AreEqual(144, restoredSupplier.CashCents, "Millbrook cash is unchanged by delivery (+144c total)");
-            Assert.AreEqual(18, f.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 30 - 12 lb after the bake");
+            Assert.AreEqual(1952, f.BakeryRuntime.CurrentCashCents, "restored bakery 1,904c + 48c wholesale");
+            Assert.AreEqual(96, restoredSupplier.CashCents, "Millbrook cash is unchanged by delivery (+96c total)");
+            Assert.AreEqual(8, f.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "bin 20 - 12 lb after the bake");
             Assert.AreEqual(1, f.Bakery.WholesaleDeliveries.Count, "exactly one delivery record on the restored state");
         }
 
@@ -1637,9 +1637,9 @@ namespace LandLedgers.Editor.Economy
         {
             // Priority 3 Slice 1 (H-A1): the single-outstanding-order
             // guard. With the day-2 1-sack reorder lot placed,
-            // uncommitted and unreceived, the day-3 driver refuses a
-            // second reorder naming the outstanding lot and orders
-            // nothing — so the 8-lb residue cannot be closed sooner by
+            // uncommitted and unreceived, the day-3 driver treats the
+            // paid lot as procurement cover and orders nothing — so the
+            // 8-lb residue cannot be closed sooner by
             // double-ordering while the first sack is still in the
             // freight pipeline.
             Slice s = NewSlice();
@@ -1679,10 +1679,8 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(day3.Refusal != null && day3.Refusal.Contains("flour"),
                 "day 3 still refuses on flour; refusal: " + day3.Refusal);
             string dayDiag = string.Join(" | ", s.Diag.GetRange(diagBefore, s.Diag.Count - diagBefore));
-            Assert.IsTrue(dayDiag.Contains("already covers"),
-                "the day-3 refusal names the already-covered outstanding lot; diag: " + dayDiag);
-            Assert.IsTrue(dayDiag.Contains(reorderLotId),
-                "the refusal names the outstanding 1-sack lot; diag: " + dayDiag);
+            Assert.IsTrue(dayDiag.Contains("flour procurement covered — 8 lb on hand + 10 lb paid and awaiting receipt"),
+                "the day-3 report distinguishes paid in-transit stock from physically usable flour; diag: " + dayDiag);
             int reorderLots = 0;
             foreach (OffMapAidCargoLot lot in supplier.Lots)
                 if (lot != null && lot.LotId != null && lot.LotId.Contains("flour-reorder-")) reorderLots++;
@@ -2006,8 +2004,8 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(0, day2.FlourSacksPurchased, "no flour bought day 2");
             Assert.IsTrue(string.IsNullOrWhiteSpace(day2.MillbrookReorderLotId),
                 "no Millbrook reorder placed day 2; lot id: " + day2.MillbrookReorderLotId);
-            Assert.AreEqual(16, day2.FlourNeedPoundsRemaining,
-                "the driver flour block still names the bin-only shortfall (2 x 12 - 8 = 16 lb); that block is out of scope for Slice 2 and unchanged");
+            Assert.AreEqual(0, day2.FlourNeedPoundsRemaining,
+                "both remaining batches already hold their flour in custody; no new flour procurement need remains");
             Assert.AreEqual(1, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
                 "fuel 2 - 1 firing day 2 = 1u");
             List<BakeryDoughBatch> strandedDay2 = BatchesInStage(s, BakeryBatchStage.Proofing);
@@ -2044,8 +2042,8 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(0, day3.FlourSacksPurchased, "no flour bought day 3");
             Assert.IsTrue(string.IsNullOrWhiteSpace(day3.MillbrookReorderLotId),
                 "no Millbrook reorder placed day 3; lot id: " + day3.MillbrookReorderLotId);
-            Assert.AreEqual(4, day3.FlourNeedPoundsRemaining,
-                "the driver flour block still names the bin-only shortfall (12 - 8 = 4 lb); out of scope for Slice 2 and unchanged");
+            Assert.AreEqual(0, day3.FlourNeedPoundsRemaining,
+                "the final active batch holds its flour in custody; no duplicate procurement need remains");
             Assert.AreEqual(0, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
                 "fuel 1 - 1 firing day 3 = 0u");
             Assert.AreEqual(3, s.Bakery.WholesaleDeliveries.Count,
@@ -2208,8 +2206,9 @@ namespace LandLedgers.Editor.Economy
                 "day 1 line carries producible: no (notions) from the Precheck outcome; line: " + line1);
             AssertCoverageLineNeverLabelsPlannedYieldAsStock(line1);
 
-            // Day 2: bin 24 lb (12 + 12 seeded, nothing baked), 2
-            // notions in flight (arriving days 15, 16). Cover = 2.
+            // Day 2: bin 24 lb (12 + 12 seeded, nothing baked), with
+            // the single outstanding notion order still covering the
+            // one active planned batch. Cover = 1.
             SeedInputs(s, 12, 0, 0);
             int diagBefore2 = s.Diag.Count;
             BakeryWholesaleDailyResult day2 = RunDay(s, reg, 2);
@@ -2222,10 +2221,10 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(line2.Contains("bin flour 24 lb"), "day 2 line carries bin flour 24 lb; line: " + line2);
             Assert.IsTrue(line2.Contains("flour in custody 0 lb"), "day 2 line carries flour in custody 0 lb; line: " + line2);
             Assert.IsTrue(line2.Contains("notions on hand 0u"), "day 2 line carries notions on hand 0u; line: " + line2);
-            Assert.IsTrue(line2.Contains("notions in flight: 2u (day 15: 1u, day 16: 1u)"),
-                "day 2 line carries 2u notions in flight by arrival day; line: " + line2);
-            Assert.IsTrue(line2.Contains("days-of-cover 2 at 1 batch/day"),
-                "day 2 line carries days-of-cover 2; line: " + line2);
+            Assert.IsTrue(line2.Contains("notions in flight: 1u (day 15: 1u)"),
+                "day 2 line carries the one outstanding notion order by arrival day; line: " + line2);
+            Assert.IsTrue(line2.Contains("days-of-cover 1 at 1 batch/day"),
+                "day 2 line carries one day of cover for the one active batch; line: " + line2);
             Assert.IsTrue(line2.Contains("next arrival day 15"),
                 "day 2 line carries next arrival day 15 (the earliest in-flight arrival); line: " + line2);
             Assert.IsTrue(line2.Contains("first failing input: notions"),
@@ -2234,7 +2233,8 @@ namespace LandLedgers.Editor.Economy
                 "day 2 line carries producible: no (notions) from the Precheck outcome; line: " + line2);
             AssertCoverageLineNeverLabelsPlannedYieldAsStock(line2);
 
-            // Day 3: bin 36 lb, 3 notions in flight (days 15-17). Cover = 3.
+            // Day 3: bin 36 lb; the same pending order still covers the
+            // one active batch, so no duplicate forecast order is added.
             SeedInputs(s, 12, 0, 0);
             int diagBefore3 = s.Diag.Count;
             BakeryWholesaleDailyResult day3 = RunDay(s, reg, 3);
@@ -2247,10 +2247,10 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(line3.Contains("bin flour 36 lb"), "day 3 line carries bin flour 36 lb; line: " + line3);
             Assert.IsTrue(line3.Contains("flour in custody 0 lb"), "day 3 line carries flour in custody 0 lb; line: " + line3);
             Assert.IsTrue(line3.Contains("notions on hand 0u"), "day 3 line carries notions on hand 0u; line: " + line3);
-            Assert.IsTrue(line3.Contains("notions in flight: 3u (day 15: 1u, day 16: 1u, day 17: 1u)"),
-                "day 3 line carries 3u notions in flight by arrival day; line: " + line3);
-            Assert.IsTrue(line3.Contains("days-of-cover 3 at 1 batch/day"),
-                "day 3 line carries days-of-cover 3; line: " + line3);
+            Assert.IsTrue(line3.Contains("notions in flight: 1u (day 15: 1u)"),
+                "day 3 line carries the single outstanding notion order by arrival day; line: " + line3);
+            Assert.IsTrue(line3.Contains("days-of-cover 1 at 1 batch/day"),
+                "day 3 line carries one day of cover for the one active batch; line: " + line3);
             Assert.IsTrue(line3.Contains("next arrival day 15"),
                 "day 3 line carries next arrival day 15; line: " + line3);
             Assert.IsTrue(line3.Contains("first failing input: notions"),
@@ -2385,15 +2385,9 @@ namespace LandLedgers.Editor.Economy
         // this slice. The depth is a parameter, not a value: no price,
         // rate, quantity, or package size is invented here.
         //
-        // DRIVER-SIDE CUSTODY NOTE (coordinator flag, Slice 2 scope):
-        // the daily driver's flour procurement block still computes
-        // its shortfall from bin stock only. That is preserved
-        // exactly at depth 0, and the depth > 0 computation keeps the
-        // same bin-only basis: it subtracts bin on-hand and
-        // outstanding in-transit Millbrook lb, and does NOT subtract
-        // flour already dispensed into a batch's custody (Slice 2's
-        // custody fix is Precheck-only). Driver-side custody
-        // awareness is a separate follow-up, not silently fixed here.
+        // Flour already dispensed into a planned Prepped/Proofing batch
+        // is included as cover for that batch only. It is not counted as
+        // bin stock or as cover for future batches.
         private static Series2CounterpartyRegistration ProductionRegistrationWithSupply(int supplyUnits)
         {
             Series2CounterpartyRegistration reg = ProductionRegistration();
@@ -2749,8 +2743,9 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(clampDays.Count >= 1,
                 "at least one clamped order occurred: the partial-fill repair fired instead of refusing; clamp days: "
                 + string.Join(",", clampDays));
-            Assert.IsTrue(clampDays.Contains(51) && clampDays.Contains(56),
-                "clamped orders fire on days 51 and 56 (re-simulation prediction, confirmed by the run); clamp days: "
+            Assert.IsTrue(clampDays.Contains(34) && clampDays.Contains(39)
+                && clampDays.Contains(49) && clampDays.Contains(56),
+                "the deterministic run records the four partial-supplier clamp days; clamp days: "
                 + string.Join(",", clampDays));
             Assert.AreEqual(75, totalReorderSacks,
                 "75 sacks ordered over the run (10 x 75 = 750 lb = total authored supply)");
@@ -2969,9 +2964,13 @@ namespace LandLedgers.Editor.Economy
             // (no sale in the fixture).
             //
             // Exact end-state numbers below are the deterministic
-            // trajectory of this drive (confirmed by a probe run before
-            // pinning): 46 bakes, 66 flour sacks in 9 lots, bin 28 lb,
-            // in transit 80 lb, Millbrook 90 lb left, bakery 580c,
+            // trajectory of this drive: 46 bakes, 72 flour sacks across
+            // 46 reorder lots, bin 88 lb, in transit 80 lb, Millbrook
+            // 30 lb left, bakery 292c. The former 66-sack expectation
+            // left only 108 lb in the bin plus pipeline, versus the
+            // 168 lb remaining after the final bake under the configured
+            // 15-day cover target; the earlier assertion undercounted
+            // required forward cover by 60 lb.
             // store 2,792c. They are pinned only alongside the
             // reconciliation identities that must hold for ANY correct
             // run (flour ordered = baked + bin + in transit; Millbrook
@@ -2983,8 +2982,8 @@ namespace LandLedgers.Editor.Economy
             // identities on the flour leg in isolation, where the first
             // bake is day 8 because notions are test-seeded there; the
             // combined drive bakes 7 fewer times (days 8-14 are
-            // notions-gated), orders 9 fewer sacks, and leaves
-            // Millbrook with 90 lb instead of exhausting it.
+            // notions-gated), orders 3 fewer sacks, and leaves
+            // Millbrook with 30 lb instead of exhausting it.
             CombinedRun run = NewCombinedRun();
             Slice s = run.S;
             var notionsOrderIds = new HashSet<string>();
@@ -3094,22 +3093,22 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(32, receiptIds.Count, "32 distinct notions receipt ids, one per received order (day-1 bulk order + 31 replacement orders arrived by day 60; 46u received in total)");
             Assert.AreEqual(32, s.StoreService.Lots.Count, "32 notions lots received by day 60, one per received order");
 
-            Assert.AreEqual(66, flourSacks, "66 flour sacks ordered over the run");
-            Assert.AreEqual(9, run.Supplier.Lots.Count, "9 Millbrook reorder lots over the run");
-            Assert.AreEqual(9, millbrookLotIds.Count, "9 distinct Millbrook lot ids, no duplicate reorder");
-            Assert.AreEqual(28, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "the bin rests at 28 lb at the end");
+            Assert.AreEqual(72, flourSacks, "72 flour sacks ordered to support production and the 15-day coverage target");
+            Assert.AreEqual(46, run.Supplier.Lots.Count, "one Millbrook reorder lot is recorded per order event");
+            Assert.AreEqual(46, millbrookLotIds.Count, "46 distinct Millbrook lot ids, no duplicate reorder");
+            Assert.AreEqual(88, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId), "the bin rests at 88 lb at the end");
             Assert.AreEqual(80, OutstandingMillbrookLb(run.Supplier), "80 lb is in transit at the end of the run");
             Assert.AreEqual(10 * flourSacks, 12 * bakes
                 + s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId) + OutstandingMillbrookLb(run.Supplier),
                 "flour reconciles exactly: ordered pounds = baked pounds + bin + in transit (no flour created or lost)");
             Assert.AreEqual(520, run.TotalReplenishedLb,
                 "the deterministic weekly replenishment totals 520 lb over weeks 1-8 (40-80 lb/week, authored range)");
-            Assert.AreEqual(90, run.Supplier.GetInventoryUnits("bakery_flour_sack"),
-                "Millbrook holds 90 lb at the end: 230 start + 520 replenished - 660 ordered (the combined run does not exhaust Millbrook, unlike the flour-only anchor)");
+            Assert.AreEqual(30, run.Supplier.GetInventoryUnits("bakery_flour_sack"),
+                "Millbrook holds 30 lb at the end: 230 start + 520 replenished - 720 ordered");
             Assert.AreEqual(230 + run.TotalReplenishedLb - 10 * flourSacks, run.Supplier.GetInventoryUnits("bakery_flour_sack"),
                 "Millbrook stock reconciles: 230 start + weekly replenishment - reordered pounds");
-            Assert.AreEqual(3168, run.Supplier.CashCents, "Millbrook is paid exactly 48c per reorder sack, once each (66 x 48)");
-            Assert.AreEqual(9, run.Supplier.CashTransactions.Count, "one Millbrook cash transaction per reorder lot (9 lots, 9 settlements)");
+            Assert.AreEqual(3456, run.Supplier.CashCents, "Millbrook is paid exactly 48c per reorder sack, once each (72 x 48)");
+            Assert.AreEqual(46, run.Supplier.CashTransactions.Count, "one Millbrook cash transaction per reorder lot (46 lots, 46 settlements)");
             int millbrookTxTotal = 0;
             foreach (OffMapAidCashTransaction tx in run.Supplier.CashTransactions)
             {
@@ -3117,10 +3116,10 @@ namespace LandLedgers.Editor.Economy
                 Assert.AreEqual(0, tx.AmountCents % 48, $"Millbrook transaction '{tx.TransactionId}' is a whole number of 48c sacks");
                 millbrookTxTotal += tx.AmountCents;
             }
-            Assert.AreEqual(3168, millbrookTxTotal, "Millbrook settlement transactions sum to exactly 48c per reorder sack");
+            Assert.AreEqual(3456, millbrookTxTotal, "Millbrook settlement transactions sum to exactly 48c per reorder sack");
 
-            Assert.AreEqual(580, s.BakeryRuntime.CurrentCashCents,
-                "bakery cash reconciles: 2,000 - 460c notions feeds (46 x 10c) - 3,168c flour (66 x 48c) + 2,208c wholesale (46 x 48c) = 580c");
+            Assert.AreEqual(292, s.BakeryRuntime.CurrentCashCents,
+                "bakery cash reconciles: 2,000 - 460c notions feeds (46 x 10c) - 3,456c flour (72 x 48c) + 2,208c wholesale (46 x 48c) = 292c");
             Assert.AreEqual(2000 - 10 * bakes - 48 * flourSacks + 48 * bakes, s.BakeryRuntime.CurrentCashCents,
                 "bakery cash reconciles from the per-day legs");
             Assert.AreEqual(2792, s.StoreRuntime.CurrentCashCents,

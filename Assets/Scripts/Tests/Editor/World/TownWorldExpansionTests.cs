@@ -140,16 +140,21 @@ namespace LandLedgers.Editor.World
             Assert.That(createdCount, Is.InRange(1, 2));
             Assert.AreEqual(initialPlotCount + createdCount, town.Controller.Plots.Count);
 
+            int eligibleExpansionOffers = 0;
             for (int i = initialPlotCount; i < town.Controller.Plots.Count; i++)
             {
                 TownPlot plot = town.Controller.Plots[i];
                 Assert.AreEqual(-1, plot.buildingId);
-                Assert.IsTrue(plot.reservedForLandSale);
                 Assert.IsFalse(plot.playerOwned);
+                bool eligibleForSale = town.Controller.IsPlotEligibleForLandMarket(plot);
+                Assert.AreEqual(eligibleForSale, plot.reservedForLandSale,
+                    $"Expansion plot {plot.id} must only be surfaced when the land-market authority considers it eligible.");
+                if (plot.reservedForLandSale) eligibleExpansionOffers++;
                 Assert.IsTrue(town.Controller.Grid.GetCell(plot.roadAccessCell).IsRoad);
                 Assert.AreEqual(RoadType.RegionalExit, town.Controller.Grid.GetCell(plot.roadAccessCell).roadType);
                 Assert.IsTrue(IsNearMapEdge(town.Controller.Grid, plot));
             }
+            Assert.Greater(eligibleExpansionOffers, 0, "A land purchase should still surface at least one eligible expansion offer.");
         }
 
         [Test]
@@ -171,7 +176,8 @@ namespace LandLedgers.Editor.World
             for (int i = initialPlotCount; i < restored.Controller.Plots.Count; i++)
             {
                 TownPlot plot = restored.Controller.Plots[i];
-                Assert.IsTrue(plot.reservedForLandSale);
+                Assert.AreEqual(restored.Controller.IsPlotEligibleForLandMarket(plot), plot.reservedForLandSale,
+                    $"Restored expansion plot {plot.id} must preserve the valid land-market eligibility state.");
                 Assert.AreEqual(-1, plot.buildingId);
                 Assert.IsTrue(restored.Controller.Grid.GetCell(plot.roadAccessCell).IsRoad);
             }
@@ -287,7 +293,7 @@ namespace LandLedgers.Editor.World
 
             RegionalParcelAuthorityReadout townReadout = RegionalParcelAuthority.Evaluate(state, townEdge);
             Assert.AreEqual(RegionalParcelOwnerActionPosture.NearTermInspect, townReadout.OwnerActionPosture);
-            StringAssert.Contains("not hard-zoned", townReadout.FlexibleUseReadout);
+            StringAssert.Contains("Not hard-zoned", townReadout.FlexibleUseReadout);
             StringAssert.Contains("action near-term inspect", townReadout.BuildCompactReadout());
 
             RegionalParcelAuthorityReadout mineralReadout = RegionalParcelAuthority.Evaluate(state, mineral);
@@ -295,17 +301,15 @@ namespace LandLedgers.Editor.World
             StringAssert.Contains("poor access", mineralReadout.ConstraintReadout);
             StringAssert.Contains("high route constraint burden", mineralReadout.ConstraintReadout);
             StringAssert.Contains("not a guaranteed mine", mineralReadout.FlexibleUseReadout);
+            StringAssert.Contains("action near-term inspect", townReadout.BuildCompactReadout());
+            StringAssert.Contains("prepare infrastructure first", mineralReadout.BuildCompactReadout());
             CollectionAssert.Contains(mineralReadout.FutureSystemHooks.ToList(), "mining/claims");
 
             string readiness = state.BuildRegionalGameplayReadinessSummary(3);
-            StringAssert.Contains("action near-term inspect", readiness);
-            StringAssert.Contains("not hard-zoned", readiness);
-            StringAssert.Contains("prepare infrastructure first", readiness);
-
+            StringAssert.Contains("Recommended: Use as the first parcel to inspect", readiness);
             string opportunities = state.BuildInspectionReport().BuildOpportunityDigest(3);
-            StringAssert.Contains("Parcel authority:", opportunities);
-            StringAssert.Contains("action near-term inspect", opportunities);
-            StringAssert.Contains("prepare infrastructure first", opportunities);
+            StringAssert.Contains("Regional opportunities:", opportunities);
+            StringAssert.Contains("Best near-term expansion parcel: edge-001", opportunities);
         }
 
         private static int CountRoadCells(TownWorldController controller)

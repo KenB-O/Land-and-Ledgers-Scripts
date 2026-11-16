@@ -58,6 +58,8 @@ namespace LandLedgers.Economy.Freight
             new Dictionary<string, BusinessRuntimeState>(StringComparer.Ordinal);
         private readonly Dictionary<string, DispatchPlan> dispatchPlans =
             new Dictionary<string, DispatchPlan>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> lastHandlingRefusalByKey =
+            new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly FreightServiceAgreementBook serviceAgreements = new FreightServiceAgreementBook();
 
         public FreightProductionDriver(FreightShipmentService service = null)
@@ -424,7 +426,8 @@ namespace LandLedgers.Economy.Freight
                             if (shipment.loadApplied)
                                 TryDispatch(shipment, hooks, diagnostics);
                             else
-                                service.BeginLoading(shipment, handlerId, hooks, out reason);
+                                ReportHandlingAttempt(shipment, "begin-load",
+                                    service.BeginLoading(shipment, handlerId, hooks, out reason), reason, diagnostics);
                         }
                         break;
                     case LogisticsShipmentStatus.Loading:
@@ -434,7 +437,8 @@ namespace LandLedgers.Economy.Freight
                         }
                         else if (handlerId.IsValid)
                         {
-                            service.WorkLoading(shipment, minutes, hooks, out reason);
+                            ReportHandlingAttempt(shipment, "work-load",
+                                service.WorkLoading(shipment, minutes, hooks, out reason), reason, diagnostics);
                             if (shipment.loadApplied)
                                 TryDispatch(shipment, hooks, diagnostics);
                         }
@@ -444,17 +448,20 @@ namespace LandLedgers.Economy.Freight
                         break;
                     case LogisticsShipmentStatus.Arrived:
                         if (handlerId.IsValid)
-                            service.BeginUnloading(shipment, handlerId, hooks, out reason);
+                            ReportHandlingAttempt(shipment, "begin-unload",
+                                service.BeginUnloading(shipment, handlerId, hooks, out reason), reason, diagnostics);
                         break;
                     case LogisticsShipmentStatus.Unloading:
                         if (handlerId.IsValid)
-                            service.WorkUnloading(shipment, minutes, hooks, out reason);
+                            ReportHandlingAttempt(shipment, "work-unload",
+                                service.WorkUnloading(shipment, minutes, hooks, out reason), reason, diagnostics);
                         break;
                     case LogisticsShipmentStatus.Partial:
                         // A partial remainder may be re-offered to the
                         // recipient; the service refuses when inappropriate.
                         if (handlerId.IsValid && !shipment.deliveryApplied)
-                            service.BeginUnloading(shipment, handlerId, hooks, out reason);
+                            ReportHandlingAttempt(shipment, "begin-unload",
+                                service.BeginUnloading(shipment, handlerId, hooks, out reason), reason, diagnostics);
                         break;
                     case LogisticsShipmentStatus.Delayed:
                         // Slice A1 (QA-02): Delayed is retryable, not terminal.
@@ -529,6 +536,65 @@ namespace LandLedgers.Economy.Freight
                 }
             }
             return advanced;
+        }
+
+        /// <summary>
+        /// Retries only the start of unloading for shipments that have
+        /// physically arrived. Daily planning can initially find the
+        /// handler's schedule fully reserved even though another task
+        /// releases a legitimate window later that same simulated day.
+        /// This method never advances transit or unloading work; it can only
+        /// reserve a real window and create the existing TaskAuthority task.
+        /// </summary>
+        public int RetryArrivedUnloads(FreightShipmentHooks hooks, EntityId handlerId,
+            List<string> diagnostics)
+        {
+            if (!handlerId.IsValid || hooks?.Tasks == null || hooks.Budgets == null)
+                return 0;
+
+            diagnostics ??= new List<string>();
+            int started = 0;
+            foreach (LogisticsShipmentState shipment in AllShipments())
+            {
+                if (shipment == null || shipment.Status != LogisticsShipmentStatus.Arrived
+                    || !FreightShipmentService.IsLiveShipment(shipment))
+                    continue;
+
+                ReportHandlingAttempt(shipment, "begin-unload",
+                    service.BeginUnloading(shipment, handlerId, hooks, out string reason),
+                    reason, diagnostics);
+                if (shipment.Status == LogisticsShipmentStatus.Unloading)
+                    started++;
+            }
+
+            return started;
+        }
+
+        /// <summary>
+        /// Daily freight drives may retry the same blocked handling stage.
+        /// Keep its first actionable refusal visible and repeat only when the
+        /// cause changes; a successful attempt clears the incident key.
+        /// </summary>
+        private void ReportHandlingAttempt(LogisticsShipmentState shipment, string phase,
+            bool succeeded, string reason, List<string> diagnostics)
+        {
+            if (shipment == null) return;
+            string key = shipment.ShipmentId + ":" + phase;
+            if (succeeded)
+            {
+                lastHandlingRefusalByKey.Remove(key);
+                return;
+            }
+
+            string detail = string.IsNullOrWhiteSpace(reason)
+                ? "operation refused without a reason"
+                : reason.Trim();
+            if (lastHandlingRefusalByKey.TryGetValue(key, out string previous)
+                && string.Equals(previous, detail, StringComparison.Ordinal)) return;
+
+            lastHandlingRefusalByKey[key] = detail;
+            diagnostics?.Add($"FreightProductionDriver: shipment '{shipment.ShipmentId}' " +
+                $"handling phase '{phase}' remains {shipment.Status}; cargo stays in its recorded custody. {detail}");
         }
 
         private void TryDispatch(LogisticsShipmentState shipment, FreightShipmentHooks hooks, List<string> diagnostics)

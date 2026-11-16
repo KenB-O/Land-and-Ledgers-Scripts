@@ -13,6 +13,8 @@
 // this file invokes them. What IS harness-tested here is the exact
 // selector seam that wiring calls.
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using LandLedgers.Pathing;
 using LandLedgers.World;
 using NUnit.Framework;
@@ -42,23 +44,37 @@ namespace LandLedgers.EditorTests.World
         }
 
         [Test]
-        public void CommercialPremises_RequiresAssignedValidBusinessSite()
+        public void ExitPathRecovery_RequiresAtLeastOneRealEdge()
         {
-            Assert.IsTrue(FreightStagingCellSelector.TryValidateCommercialPremises(
-                12, 12, true, out string validReason), validReason);
+            Assert.IsFalse(FreightStagingCellSelector.HasUsableExitPath(null));
+            Assert.IsFalse(FreightStagingCellSelector.HasUsableExitPath(Array.Empty<GridCoord>()));
+            Assert.IsFalse(FreightStagingCellSelector.HasUsableExitPath(new[] { new GridCoord(1, 1) }));
+            Assert.IsTrue(FreightStagingCellSelector.HasUsableExitPath(
+                new[] { new GridCoord(1, 1), new GridCoord(2, 1) }));
+        }
+
+        [Test]
+        public void PhysicalStagingLocation_DoesNotRequireCommercialAssignment()
+        {
+            Assert.IsTrue(FreightStagingCellSelector.TrySelectPhysicalStagingBuilding(
+                12, 12, 7, 7, out int selected, out string source, out string validReason), validReason);
             Assert.AreEqual(string.Empty, validReason);
+            Assert.AreEqual(12, selected);
+            Assert.AreEqual("carrier-location", source);
 
-            Assert.IsFalse(FreightStagingCellSelector.TryValidateCommercialPremises(
-                -1, 7, false, out string missingReason));
-            StringAssert.Contains("residential operator property", missingReason);
+            Assert.IsTrue(FreightStagingCellSelector.TrySelectPhysicalStagingBuilding(
+                -1, -1, 7, 7, out selected, out source, out string homeReason), homeReason);
+            Assert.AreEqual(7, selected);
+            Assert.AreEqual("operator-home-location", source);
 
-            Assert.IsFalse(FreightStagingCellSelector.TryValidateCommercialPremises(
-                12, 13, true, out string mismatchReason));
-            StringAssert.Contains("did not resolve", mismatchReason);
+            Assert.IsTrue(FreightStagingCellSelector.TrySelectPhysicalStagingBuilding(
+                12, -1, 7, 7, out selected, out source, out string unresolvedAssignedReason), unresolvedAssignedReason);
+            Assert.AreEqual(7, selected, "an unresolved carrier assignment falls back to the operator's actual home location");
+            Assert.AreEqual("operator-home-location", source);
 
-            Assert.IsFalse(FreightStagingCellSelector.TryValidateCommercialPremises(
-                12, 12, false, out string invalidReason));
-            StringAssert.Contains("not a valid operating site", invalidReason);
+            Assert.IsFalse(FreightStagingCellSelector.TrySelectPhysicalStagingBuilding(
+                -1, -1, -1, -1, out selected, out source, out string missingReason));
+            StringAssert.Contains("No assigned carrier building or operator home", missingReason);
         }
 
         [Test]
@@ -81,6 +97,94 @@ namespace LandLedgers.EditorTests.World
             Assert.IsFalse(FreightStagingCellSelector.IsClearVehicleGroundCell(
                 false, false, -1, 4, false, false, false, false, false, 0f, 8f, out string boundsReason));
             StringAssert.Contains("town grid", boundsReason);
+        }
+
+        [Test]
+        public void VehicleGroundAnywhere_DoesNotRequireParcelButKeepsPhysicalSafetyChecks()
+        {
+            Assert.IsTrue(FreightStagingCellSelector.IsClearVehicleGroundCellAnywhere(
+                true, false, false, false, false, true, 3f, 8f, out string openGroundReason), openGroundReason);
+
+            Assert.IsFalse(FreightStagingCellSelector.IsClearVehicleGroundCellAnywhere(
+                true, true, false, false, false, true, 0f, 8f, out string roadReason));
+            StringAssert.Contains("road", roadReason);
+            Assert.IsFalse(FreightStagingCellSelector.IsClearVehicleGroundCellAnywhere(
+                true, false, true, false, false, true, 0f, 8f, out string buildingReason));
+            StringAssert.Contains("building footprint", buildingReason);
+            Assert.IsFalse(FreightStagingCellSelector.IsClearVehicleGroundCellAnywhere(
+                true, false, false, false, true, true, 0f, 8f, out string anchorReason));
+            StringAssert.Contains("access anchor", anchorReason);
+            Assert.IsFalse(FreightStagingCellSelector.IsClearVehicleGroundCellAnywhere(
+                true, false, false, false, false, false, 0f, 8f, out string terrainReason));
+            StringAssert.Contains("terrain", terrainReason);
+            Assert.IsFalse(FreightStagingCellSelector.IsClearVehicleGroundCellAnywhere(
+                true, false, false, false, false, true, 12f, 8f, out string slopeReason));
+            StringAssert.Contains("steep", slopeReason);
+        }
+
+        [Test]
+        public void RoadsideGroundCandidates_AreNearestFirstBoundedAndParcelIndependent()
+        {
+            TownGrid grid = FreshGrid();
+            SetRoad(grid, 2, 2);
+            GridCoord first = new(3, 2);
+            GridCoord second = new(2, 3);
+            var candidates = FreightStagingCellSelector.CollectNearbyRoadsideGroundCandidates(
+                grid, new GridCoord(2, 2), 8, coord => coord.Equals(first) || coord.Equals(second));
+
+            Assert.AreEqual(2, candidates.Count);
+            Assert.AreEqual(first, candidates[0].GroundCoord);
+            Assert.AreEqual(new GridCoord(2, 2), candidates[0].AdjacentRoadCoord);
+            Assert.AreEqual(new GridCoord(1, 0), candidates[0].OutwardStep);
+            Assert.AreEqual(second, candidates[1].GroundCoord);
+
+            var limited = FreightStagingCellSelector.CollectNearbyRoadsideGroundCandidates(
+                grid, new GridCoord(2, 2), 1, coord => coord.Equals(first) || coord.Equals(second));
+            Assert.AreEqual(1, limited.Count);
+            Assert.AreEqual(first, limited[0].GroundCoord);
+        }
+
+        [Test]
+        public void RoadsideGroundCandidates_RejectGroundWithoutAnAdjacentRoad()
+        {
+            TownGrid grid = FreshGrid();
+            Assert.IsEmpty(FreightStagingCellSelector.CollectNearbyRoadsideGroundCandidates(
+                grid, new GridCoord(2, 2), 4, coord => coord.Equals(new GridCoord(3, 2))));
+        }
+
+        [Test]
+        public void RoadsideVehicleSetback_ClearsProjectedWagonWidthFromRoadCell()
+        {
+            // One adjacent 2 m clear cell provides only a 2 m center offset.
+            // A 1.5 m projected wagon radius therefore needs an extra 0.6 m
+            // to clear the road-cell half-width plus the 0.1 m safety margin.
+            Assert.AreEqual(0.6f,
+                FreightStagingCellSelector.RoadsideVehicleSetbackMeters(2f, 2f, 1.5f, 0.1f), 0.0001f);
+            Assert.AreEqual(0f,
+                FreightStagingCellSelector.RoadsideVehicleSetbackMeters(2f, 2f, 0.7f, 0.1f), 0.0001f);
+            Assert.IsTrue(float.IsPositiveInfinity(
+                FreightStagingCellSelector.RoadsideVehicleSetbackMeters(2f, 0f, 1f)));
+        }
+
+        [Test]
+        public void RoadsideGroundCandidates_CanSearchPastTheFormerFortyEightCandidateLimit()
+        {
+            TownGrid grid = new TownGrid(120, 8, 2f, Vector3.zero);
+            for (int x = 2; x < 112; x += 2) SetRoad(grid, x, 3);
+
+            // The first 48 safe apron cells are intentionally considered
+            // unusable by the caller's physical vehicle check. The selector
+            // can continue farther along the actual road network and expose
+            // later candidates without inventing a location.
+            IReadOnlyList<FreightStagingCellSelector.RoadsideGroundCandidate> candidates =
+                FreightStagingCellSelector.CollectNearbyRoadsideGroundCandidates(
+                    grid, new GridCoord(2, 3), grid.Width * grid.Depth,
+                    coord => coord.z == 2 && coord.x >= 1 && coord.x <= 112);
+
+            Assert.Greater(candidates.Count, 48);
+            Assert.AreEqual(new GridCoord(2, 2), candidates[0].GroundCoord);
+            Assert.IsTrue(candidates.Any(candidate => candidate.GroundCoord.x > 48),
+                "the full finite grid search should retain valid later roadside candidates");
         }
 
         [Test]

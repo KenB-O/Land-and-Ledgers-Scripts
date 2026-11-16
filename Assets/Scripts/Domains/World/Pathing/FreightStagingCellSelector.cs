@@ -12,41 +12,67 @@
 // data supplied by the caller. No Unity types beyond GridCoord are used
 // (no Quaternion), following the S6 TransportPairPlacement rule.
 using System;
+using System.Collections.Generic;
 using LandLedgers.World;
 
 namespace LandLedgers.Pathing
 {
     public static class FreightStagingCellSelector
     {
-        /// <summary>
-        /// Freight may use only premises explicitly assigned to its business and
-        /// accepted by the shared business-site authority. An operator's home is
-        /// not a substitute for commercial premises.
-        /// </summary>
-        public static bool TryValidateCommercialPremises(
-            int assignedBuildingId,
-            int resolvedBuildingId,
-            bool businessAssignmentValid,
-            out string reason)
+        public readonly struct RoadsideGroundCandidate
         {
-            if (assignedBuildingId < 0)
+            public RoadsideGroundCandidate(GridCoord groundCoord, GridCoord adjacentRoadCoord)
             {
-                reason = "No commercial premises are assigned to the freight business; residential operator property is not an authorized staging fallback.";
-                return false;
-            }
-            if (resolvedBuildingId < 0 || assignedBuildingId != resolvedBuildingId)
-            {
-                reason = $"Assigned freight premises Building {assignedBuildingId} did not resolve to the same active building.";
-                return false;
-            }
-            if (!businessAssignmentValid)
-            {
-                reason = $"Assigned Building {assignedBuildingId} is not a valid operating site for this freight business.";
-                return false;
+                GroundCoord = groundCoord;
+                AdjacentRoadCoord = adjacentRoadCoord;
+                OutwardStep = new GridCoord(groundCoord.x - adjacentRoadCoord.x,
+                    groundCoord.z - adjacentRoadCoord.z);
             }
 
-            reason = string.Empty;
-            return true;
+            public GridCoord GroundCoord { get; }
+            public GridCoord AdjacentRoadCoord { get; }
+            public GridCoord OutwardStep { get; }
+        }
+
+        /// <summary>A physical freight exit needs at least one traversable edge.</summary>
+        public static bool HasUsableExitPath(IReadOnlyList<GridCoord> visiblePath)
+        {
+            return visiblePath != null && visiblePath.Count >= 2;
+        }
+
+        /// <summary>
+        /// Selects a real building that can provide a physical road-access
+        /// reference for staging. Commercial ownership/assignment is not a
+        /// freight loading requirement; an operator's home is a valid fallback
+        /// when the carrier has no assigned building.
+        /// </summary>
+        public static bool TrySelectPhysicalStagingBuilding(
+            int assignedBuildingId,
+            int resolvedBuildingId,
+            int operatorHomeBuildingId,
+            int resolvedHomeBuildingId,
+            out int selectedBuildingId,
+            out string source,
+            out string reason)
+        {
+            selectedBuildingId = -1;
+            source = string.Empty;
+            if (assignedBuildingId >= 0 && resolvedBuildingId == assignedBuildingId)
+            {
+                selectedBuildingId = resolvedBuildingId;
+                source = "carrier-location";
+                reason = string.Empty;
+                return true;
+            }
+            if (operatorHomeBuildingId >= 0 && resolvedHomeBuildingId == operatorHomeBuildingId)
+            {
+                selectedBuildingId = resolvedHomeBuildingId;
+                source = "operator-home-location";
+                reason = string.Empty;
+                return true;
+            }
+            reason = "No assigned carrier building or operator home resolves to a physical building location for road-access lookup.";
+            return false;
         }
 
         /// <summary>Rejects any horse or wagon footprint cell outside clear parcel ground.</summary>
@@ -77,6 +103,108 @@ namespace LandLedgers.Pathing
                 return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// Validates physical staging ground without requiring a parcel or building
+        /// authorization. Freight may be staged on any clear, traversable town cell;
+        /// roads remain route surfaces rather than parking footprints.
+        /// </summary>
+        public static bool IsClearVehicleGroundCellAnywhere(
+            bool inBounds,
+            bool isRoad,
+            bool hasBuilding,
+            bool blocked,
+            bool anchor,
+            bool terrainUsable,
+            float slopeDegrees,
+            float maximumSlopeDegrees,
+            out string reason)
+        {
+            if (!inBounds) reason = "outside the town grid";
+            else if (isRoad) reason = "overlaps a road";
+            else if (hasBuilding) reason = "overlaps a building footprint";
+            else if (blocked || anchor) reason = "overlaps blocked ground or an access anchor";
+            else if (!terrainUsable || float.IsNaN(slopeDegrees) || float.IsInfinity(slopeDegrees)
+                || slopeDegrees > maximumSlopeDegrees) reason = "terrain is unknown, blocked, or too steep";
+            else
+            {
+                reason = string.Empty;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Returns the extra outward offset needed to keep a parked vehicle's
+        /// projected footprint clear of the adjacent road cell. Ground
+        /// candidates sit one cell beside the road, which is not sufficient
+        /// for a wagon wider than that clear margin.
+        /// </summary>
+        public static float RoadsideVehicleSetbackMeters(
+            float centerDistanceFromRoadMeters,
+            float roadCellSizeMeters,
+            float projectedVehicleRadiusMeters,
+            float clearanceMarginMeters = 0.1f)
+        {
+            if (!IsFiniteNonNegative(centerDistanceFromRoadMeters)
+                || !IsFinitePositive(roadCellSizeMeters)
+                || !IsFiniteNonNegative(projectedVehicleRadiusMeters)
+                || !IsFiniteNonNegative(clearanceMarginMeters))
+                return float.PositiveInfinity;
+
+            float requiredCenterDistance = roadCellSizeMeters * 0.5f
+                + projectedVehicleRadiusMeters + clearanceMarginMeters;
+            return Math.Max(0f, requiredCenterDistance - centerDistanceFromRoadMeters);
+        }
+
+        private static bool IsFiniteNonNegative(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value) && value >= 0f;
+        }
+
+        private static bool IsFinitePositive(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value) && value > 0f;
+        }
+
+        /// <summary>
+        /// Finds deterministic, nearest-first clear-ground cells beside existing
+        /// roads. The caller supplies physical ground validation; this selector
+        /// does not require a parcel or building permission.
+        /// </summary>
+        public static IReadOnlyList<RoadsideGroundCandidate> CollectNearbyRoadsideGroundCandidates(
+            TownGrid grid, GridCoord originRoad, int maxCandidates, Func<GridCoord, bool> isClearGround)
+        {
+            var results = new List<RoadsideGroundCandidate>();
+            if (grid == null || maxCandidates <= 0 || isClearGround == null || !grid.IsInBounds(originRoad))
+                return results;
+
+            GridCoord[] roadOffsets = { new(0, 1), new(1, 0), new(0, -1), new(-1, 0) };
+            int maximumRadius = Math.Max(grid.Width, grid.Depth);
+            for (int radius = 0; radius <= maximumRadius && results.Count < maxCandidates; radius++)
+            {
+                int minX = Math.Max(0, originRoad.x - radius);
+                int maxX = Math.Min(grid.Width - 1, originRoad.x + radius);
+                int minZ = Math.Max(0, originRoad.z - radius);
+                int maxZ = Math.Min(grid.Depth - 1, originRoad.z + radius);
+                for (int z = minZ; z <= maxZ && results.Count < maxCandidates; z++)
+                for (int x = minX; x <= maxX && results.Count < maxCandidates; x++)
+                {
+                    if (Math.Max(Math.Abs(x - originRoad.x), Math.Abs(z - originRoad.z)) != radius) continue;
+                    GridCoord coord = new(x, z);
+                    if (!isClearGround(coord)) continue;
+
+                    foreach (GridCoord offset in roadOffsets)
+                    {
+                        GridCoord neighbor = coord + offset;
+                        if (!grid.IsInBounds(neighbor) || !grid.GetCell(neighbor).IsRoad) continue;
+                        results.Add(new RoadsideGroundCandidate(coord, neighbor));
+                        break;
+                    }
+                }
+            }
+            return results;
         }
 
         /// <summary>

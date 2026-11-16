@@ -334,12 +334,26 @@ namespace LandLedgers.Economy.Logistics
                     Log(hooks, $"shipment '{shipmentId}': no PersonScheduleTracker wired (Schedules is null) — handling proceeds without a reserved window.");
                 return true;
             }
+            // Daily economic drivers commonly arrive at the preferred 08:00
+            // work slot while another legitimate reservation already owns
+            // those minutes. Refusing that one exact slot on every daily tick
+            // can strand otherwise serviceable freight forever. Search the
+            // same day's real schedule for the next opening; never bypass or
+            // overlap existing reservations.
+            int startMinute = PersonScheduleWindowFinder.FindNextAvailableStartMinute(
+                hooks.Schedules, handlerId.Id, hooks.DayIndex,
+                hooks.MinuteOfDay, plannedMinutes);
+            if (startMinute < 0)
+            {
+                refusal = $"no available work window remains today for {plannedMinutes} minute(s)";
+                return false;
+            }
             refusal = hooks.Schedules.TryReserve(handlerId.Id, PersonActivityKind.Work,
-                hooks.DayIndex, hooks.MinuteOfDay, plannedMinutes, label);
+                hooks.DayIndex, startMinute, plannedMinutes, label);
             if (refusal != null) return false;
             foreach (PersonActivityReservation reservation in hooks.Schedules.ActiveFor(handlerId.Id, hooks.DayIndex))
             {
-                if (reservation.Label == label && reservation.StartMinuteOfDay == hooks.MinuteOfDay)
+                if (reservation.Label == label && reservation.StartMinuteOfDay == startMinute)
                 {
                     reservations[shipmentId] = reservation.ReservationId;
                     break;

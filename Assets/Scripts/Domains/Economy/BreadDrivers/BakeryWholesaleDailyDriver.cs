@@ -278,6 +278,36 @@ namespace LandLedgers.Economy.BreadDrivers
             return total;
         }
 
+        private static int PlannedFlourCustodyLb(BakeryShopRuntime bakery, IReadOnlyCollection<string> plannedBatchIds)
+        {
+            if (bakery?.Batches == null || plannedBatchIds == null || plannedBatchIds.Count == 0) return 0;
+            int total = 0;
+            foreach (BakeryDoughBatch batch in bakery.Batches)
+            {
+                if (batch == null || !batch.IsActive) continue;
+                bool isPlanned = false;
+                foreach (string batchId in plannedBatchIds)
+                    if (string.Equals(batch.BatchId, batchId, StringComparison.Ordinal))
+                    {
+                        isPlanned = true;
+                        break;
+                    }
+                if (!isPlanned) continue;
+                if (batch.Stage != BakeryBatchStage.Prepped && batch.Stage != BakeryBatchStage.Proofing) continue;
+                if (batch.FlourInCustody == null) continue;
+                foreach (BakeryFlourDispenseLine line in batch.FlourInCustody)
+                    if (line != null) total += Math.Max(0, line.UnitsTaken);
+            }
+            return total;
+        }
+
+        private static int PlannedFlourRequirementLb(BakeryShopRuntime bakery, IReadOnlyCollection<string> plannedBatchIds)
+        {
+            if (plannedBatchIds == null || plannedBatchIds.Count == 0) return 0;
+            int held = PlannedFlourCustodyLb(bakery, plannedBatchIds);
+            return Math.Max(0, plannedBatchIds.Count * BakeryBreadCatalog.BreadFlourPerBatch - held);
+        }
+
         public static BakeryWholesaleDailyResult RunDay(BakeryWholesaleDailyInputs inputs, List<string> diag)
         {
             diag = diag ?? new List<string>();
@@ -324,15 +354,14 @@ namespace LandLedgers.Economy.BreadDrivers
             // or fed and the batch remains permanently blocked.
             int batchesToday = inputs.ProductionDriver.PlannedBatchIds.Count;
             int flourOnHandLb = bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId);
-            int needLb = batchesToday * BakeryBreadCatalog.BreadFlourPerBatch - flourOnHandLb;
-            // Priority 3 Slice 4: forward cover. Depth 0 covers today's
+            int todayFlourRequirementLb = PlannedFlourRequirementLb(bakery, inputs.ProductionDriver.PlannedBatchIds);
+            int needLb = todayFlourRequirementLb - flourOnHandLb;
+            // Forward cover: depth 0 covers today's
             // need without buying again for paid pending goods. At depth D > 0
-            // the procurement step seeks (D + 1) x one day's flour need
-            // — today plus D future days — net of bin on-hand and
-            // outstanding in-transit Millbrook lb. The shortfall itself
-            // stays bin-only (Slice 2 scope note): flour already
-            // dispensed into a batch's custody is NOT subtracted here —
-            // driver-side custody awareness is a separate follow-up.
+            // the procurement step seeks today's remaining batch need
+            // plus D future days, net of bin on-hand, flour already held
+            // by those planned batches, and outstanding in-transit lb.
+            // Custody reduces only the requirement of its owning batch.
             // needLb keeps tracking today's shortfall (after the local
             // purchase) for FlourNeedPoundsRemaining and the "still
             // short" diagnostic; orderLb tracks the remaining forward
@@ -341,8 +370,10 @@ namespace LandLedgers.Economy.BreadDrivers
             // Paid flour remains procurement cover after freight commitment, at
             // every depth. Only physically received bin stock can pass Precheck.
             int inTransitFlourLb = OutstandingMillbrookLb(inputs);
-            int forwardTargetLb = (flourDepthDays + 1) * batchesToday * BakeryBreadCatalog.BreadFlourPerBatch;
-            int orderLb = Math.Max(0, forwardTargetLb - flourOnHandLb - inTransitFlourLb);
+            int plannedFlourCustodyLb = PlannedFlourCustodyLb(bakery, inputs.ProductionDriver.PlannedBatchIds);
+            int forwardTargetLb = todayFlourRequirementLb
+                + flourDepthDays * batchesToday * BakeryBreadCatalog.BreadFlourPerBatch;
+            int orderLb = Math.Max(0, forwardTargetLb - flourOnHandLb - plannedFlourCustodyLb - inTransitFlourLb);
             int? flourCostPerBatchCents = null;
             if (batchesToday > 0 && orderLb > 0)
             {
@@ -464,7 +495,7 @@ namespace LandLedgers.Economy.BreadDrivers
 
                 if (flourDepthDays > 0 && needLb > 0 && orderLb <= 0)
                 {
-                    diag.Add($"BakeryWholesaleDailyDriver: no new flour order — the forward target ({forwardTargetLb} lb) is already covered by {flourOnHandLb} lb on hand + {inTransitFlourLb} lb in transit.");
+                    diag.Add($"BakeryWholesaleDailyDriver: no new flour order — the forward target ({forwardTargetLb} lb) is already covered by {flourOnHandLb} lb on hand + {inTransitFlourLb} lb paid and awaiting receipt + {plannedFlourCustodyLb} lb held by planned batches.");
                 }
 
                 if (needLb > 0)
@@ -478,7 +509,7 @@ namespace LandLedgers.Economy.BreadDrivers
             else if (batchesToday > 0)
             {
                 diag.Add(needLb > 0
-                    ? $"BakeryWholesaleDailyDriver: flour procurement covered — {flourOnHandLb} lb on hand + {inTransitFlourLb} lb paid and awaiting receipt cover the {forwardTargetLb} lb target; baking still requires physical receipt."
+                    ? $"BakeryWholesaleDailyDriver: flour procurement covered — {flourOnHandLb} lb on hand + {inTransitFlourLb} lb paid and awaiting receipt + {plannedFlourCustodyLb} lb held by planned batches cover the {forwardTargetLb} lb target; baking still requires physical receipt."
                     : $"BakeryWholesaleDailyDriver: flour sufficient — {flourOnHandLb} lb on hand for {batchesToday} batch(es); no purchase, no comparison.");
                 if (inputs.StoreFlourUnitPriceCents > 0)
                     flourCostPerBatchCents = BakeryFlourSupplierComparison.SacksPerBatch * inputs.StoreFlourUnitPriceCents;

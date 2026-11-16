@@ -3854,6 +3854,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   type: 1
   gizmoRadius: 0.35
+  useAsRoadAccessAnchor: 0
 --- !u!1 &2759859462814424133
 GameObject:
   m_ObjectHideFlags: 0
@@ -7963,7 +7964,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 469.84262, y: 0.2699254, z: 272.23648}
-  m_LocalScale: {x: 0.5, y: 0.5, z: 0.5}
+  m_LocalScale: {x: 0.75, y: 0.75, z: 0.75}
   m_ConstrainProportionsScale: 1
   m_Children:
   - {fileID: 7998291358625015513}
@@ -8226,6 +8227,28 @@ MonoBehaviour:
       enabled: 0
     - businessType: 17
       enabled: 0
+    - businessType: 18
+      enabled: 0
+    - businessType: 19
+      enabled: 0
+    - businessType: 20
+      enabled: 0
+    - businessType: 21
+      enabled: 0
+    - businessType: 22
+      enabled: 0
+    - businessType: 23
+      enabled: 0
+    - businessType: 24
+      enabled: 0
+    - businessType: 25
+      enabled: 0
+    - businessType: 26
+      enabled: 0
+    - businessType: 27
+      enabled: 0
+    - businessType: 255
+      enabled: 0
     includeNestedChildren: 0
     activeRatio: 0.75
     minimumActiveProps: 0
@@ -8278,6 +8301,28 @@ MonoBehaviour:
       enabled: 0
     - businessType: 17
       enabled: 0
+    - businessType: 18
+      enabled: 0
+    - businessType: 19
+      enabled: 0
+    - businessType: 20
+      enabled: 0
+    - businessType: 21
+      enabled: 0
+    - businessType: 22
+      enabled: 0
+    - businessType: 23
+      enabled: 0
+    - businessType: 24
+      enabled: 0
+    - businessType: 25
+      enabled: 0
+    - businessType: 26
+      enabled: 0
+    - businessType: 27
+      enabled: 0
+    - businessType: 255
+      enabled: 0
     includeNestedChildren: 0
     activeRatio: 0.75
     minimumActiveProps: 0
@@ -8307,6 +8352,13 @@ MonoBehaviour:
   autoCenterFrontDoorPoint: 1
   frontDoorOutwardOffsetMeters: 0.35
   frontDoorLocalPoint: {x: -0.17076111, y: 0, z: 9.1340885}
+  useFrontPointAsRoadAccessAnchor: 1
+  warnWhenRendererBoundsExceedCorners: 1
+  rendererBoundsWarningSlackCells: 2
+  rendererBoundsOutlierFloorMeters: 64
+  interiorFloors: []
+  entrancePairs: []
+  activityLocations: []
 --- !u!1 &5215395552777882990
 GameObject:
   m_ObjectHideFlags: 0
@@ -9324,6 +9376,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   type: 0
   gizmoRadius: 0.35
+  useAsRoadAccessAnchor: 0
 --- !u!1 &6136485620330895335
 GameObject:
   m_ObjectHideFlags: 0
@@ -12256,6 +12309,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   type: 2
   gizmoRadius: 0.35
+  useAsRoadAccessAnchor: 0
 --- !u!1 &7861512592746916736
 GameObject:
   m_ObjectHideFlags: 0

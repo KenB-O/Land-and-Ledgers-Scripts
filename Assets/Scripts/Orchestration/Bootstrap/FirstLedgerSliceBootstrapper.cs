@@ -29,6 +29,7 @@ using LandLedgers.Time;
 using LandLedgers.UI;
 using LandLedgers.World;
 using UnityEngine;
+using EntityId = LandLedgers.Primitives.EntityId;
 using UnityEngine.Serialization;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;

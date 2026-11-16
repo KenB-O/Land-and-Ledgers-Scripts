@@ -94,6 +94,11 @@ namespace LandLedgers.Economy.Transport
 
         public bool IsLegActive => legActive || regionalLegActive;
         public string PhysicalJourneyId => physicalJourneyId;
+        public int OperatorPersonId => ethanPersonId;
+        public bool IsPhysicalReturnFor(string journeyId, int personId) =>
+            regionalLegActive && regionalReturnToTownPath
+            && string.Equals(physicalJourneyId, journeyId, StringComparison.Ordinal)
+            && ethanPersonId == personId;
 
         /// <summary>
         /// Starts walking the given path. Refuses (log + false, stays put)

@@ -129,6 +129,13 @@ namespace LandLedgers.Editor.Economy
             return false;
         }
 
+        private PersonActivityReservation ReservedWindow(EntityId person, string label)
+        {
+            foreach (PersonActivityReservation reservation in schedules.ActiveFor(person.Id, Day))
+                if (reservation.Label == label) return reservation;
+            return null;
+        }
+
         private void AssertLoaderCanStartUnrelatedWork(string context)
         {
             tasks.RegisterDefinition(new TaskDefinition("other-work", "Unrelated legitimate job", 30), out _);
@@ -140,20 +147,21 @@ namespace LandLedgers.Editor.Economy
         // ---------- Load: refusal before any task exists ----------
 
         [Test]
-        public void LoadRefusedWhenShoppingWindowOverlaps()
+        public void LoadFindsLaterWindowWhenShoppingWindowOverlaps()
         {
             Assert.IsNull(schedules.TryReserve(loader.Id, PersonActivityKind.Shopping, Day, 480, 60, "bread errand"),
                 "the shopping window itself must reserve cleanly");
 
             LogisticsShipmentState shipment = CreateLotCustodyShipment("load-overlap");
-            Assert.IsFalse(service.BeginLoading(shipment, loader, hooks, out string reason), "the load must refuse over the shopping window");
-            Assert.IsTrue(reason.Contains("refused"), reason);
+            Assert.IsTrue(service.BeginLoading(shipment, loader, hooks, out string reason), reason);
 
-            Assert.AreEqual(0, tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count, "no task may be created");
-            Assert.AreEqual(0, budgets.GetOrCreate(loader).MinutesCommitted, "no budget may be committed");
+            Assert.AreEqual(540, ReservedWindow(loader, "freight:load:load-overlap").StartMinuteOfDay);
+            Assert.AreEqual(1, tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count);
+            Assert.AreEqual(5, budgets.GetOrCreate(loader).MinutesCommitted);
             Assert.IsFalse(shipment.loadApplied, "no cargo may move");
             Assert.AreEqual(0, shipment.RemainingQuantityUnits);
-            Assert.AreEqual(LogisticsShipmentStatus.Planned, shipment.Status);
+            Assert.AreEqual(LogisticsShipmentStatus.Loading, shipment.Status);
+            Assert.IsTrue(HasWindow(loader, "bread errand"), "the existing shopping reservation is preserved");
         }
 
         [Test]
@@ -205,19 +213,36 @@ namespace LandLedgers.Editor.Economy
         // ---------- Unload equivalents ----------
 
         [Test]
-        public void UnloadRefusedWhenWindowOverlaps()
+        public void UnloadFindsLaterWindowWhenPreferredWindowOverlaps()
         {
             Assert.IsNull(schedules.TryReserve(loader.Id, PersonActivityKind.Shopping, Day, 480, 60, "bread errand"));
 
             LogisticsShipmentState shipment = CreateArrivedCustodyShipment("unload-overlap");
-            Assert.IsFalse(service.BeginUnloading(shipment, loader, hooks, out string reason), "the unload must refuse over the shopping window");
-            Assert.IsTrue(reason.Contains("refused"), reason);
+            Assert.IsTrue(service.BeginUnloading(shipment, loader, hooks, out string reason), reason);
 
-            Assert.AreEqual(0, tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count, "no task may be created");
-            Assert.AreEqual(0, budgets.GetOrCreate(loader).MinutesCommitted, "no budget may be committed");
+            Assert.AreEqual(540, ReservedWindow(loader, "freight:unload:unload-overlap").StartMinuteOfDay,
+                "the freight work uses the next free same-day time slot");
+            Assert.AreEqual(1, tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count);
+            Assert.AreEqual(5, budgets.GetOrCreate(loader).MinutesCommitted);
             Assert.AreEqual(10, shipment.RemainingQuantityUnits, "cargo stays in wagon custody");
             Assert.IsFalse(shipment.deliveryApplied);
+            Assert.AreEqual(LogisticsShipmentStatus.Unloading, shipment.Status);
+            Assert.IsTrue(HasWindow(loader, "bread errand"), "the existing shopping reservation is preserved");
+        }
+
+        [Test]
+        public void UnloadStillRefusesWhenNoSameDayWindowExists()
+        {
+            Assert.IsNull(schedules.TryReserve(loader.Id, PersonActivityKind.Work, Day,
+                480, 960, "full-day-work"));
+
+            LogisticsShipmentState shipment = CreateArrivedCustodyShipment("unload-no-window");
+            Assert.IsFalse(service.BeginUnloading(shipment, loader, hooks, out string reason));
+            StringAssert.Contains("no available work window remains today", reason);
+            Assert.AreEqual(0, tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count);
+            Assert.AreEqual(0, budgets.GetOrCreate(loader).MinutesCommitted);
             Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.Status);
+            Assert.AreEqual(10, shipment.RemainingQuantityUnits);
         }
 
         [Test]

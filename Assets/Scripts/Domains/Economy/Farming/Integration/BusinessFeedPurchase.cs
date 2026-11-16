@@ -36,6 +36,35 @@ namespace LandLedgers.Economy.Farming.Integration
         }
 
         /// <summary>
+        /// Explains why a store cannot currently supply a requested feed SKU.
+        /// Keep the message stable while an unchanged stockout persists so a
+        /// daily increase in the desired reserve does not create duplicate
+        /// warnings. The configured owner price is passed separately because
+        /// an empty shelf is intentionally omitted from the live sale offer.
+        /// </summary>
+        public static string DescribeStoreAvailabilityRefusal(
+            string itemId,
+            int requestedPackages,
+            int identifiedPackages,
+            int configuredPriceCents,
+            bool hasLiveSaleOffer)
+        {
+            string sku = string.IsNullOrWhiteSpace(itemId) ? "feed SKU" : itemId.Trim();
+            int stock = Math.Max(0, identifiedPackages);
+            int requested = Math.Max(0, requestedPackages);
+            int price = Math.Max(0, configuredPriceCents);
+            if (price <= 0)
+                return $"B0 has no positive owner-set price for '{sku}' (identified stock={stock}); no cash or stock moved.";
+            if (stock <= 0)
+                return $"B0 has no identified '{sku}' stock (owner-set price remains {price}c/package); no cash or stock moved.";
+            if (!hasLiveSaleOffer)
+                return $"B0 has {stock} identified '{sku}' package(s), but no valid live sale offer; no cash or stock moved.";
+            if (requested > stock)
+                return $"B0 has {stock} identified '{sku}' package(s), fewer than the {requested} requested; no cash or stock moved.";
+            return string.Empty;
+        }
+
+        /// <summary>
         /// The shared procurement service may also carry unrelated SKUs
         /// (for example bakery notions). Only the configured horse-feed SKU
         /// belongs in the animal-feed retail category.

@@ -176,6 +176,7 @@ namespace LandLedgers.Pathing
         public void CancelActiveRoute()
         {
             if (!IsRouteActive) return;
+            CloseRouteDoorways();
             state = AgentMoveState.Failed;
             measuredMovementSpeed = 0f;
             UpdateAnimatorState(true);
@@ -537,8 +538,9 @@ namespace LandLedgers.Pathing
             if (Vector3.Distance(transform.position, outdoor) > stagingRadius) return false;
             List<Vector3> route = new() { outdoor };
             route.AddRange(interiorPath);
+            BuildingDoorAnimator doorway = ResolveDoorAnimator(authority, entrance);
             StartWorldRoute(route, new BuildingAnchor { type = AnchorType.FrontDoor,
-                coord = pathingManager.Grid.WorldToCoord(interiorPath[^1]) });
+                coord = pathingManager.Grid.WorldToCoord(interiorPath[^1]) }, doorway, doorway);
             return true;
         }
 
@@ -571,8 +573,9 @@ namespace LandLedgers.Pathing
             // the actor is already at the first point, so preserve that order
             // when continuing from the indoor threshold to the exterior.
             route.Add(authority.transform.TransformPoint(entrance.outdoorApproachLocal));
+            BuildingDoorAnimator doorway = ResolveDoorAnimator(authority, entrance);
             StartWorldRoute(route, new BuildingAnchor { type = AnchorType.FrontDoor,
-                coord = pathingManager.Grid.WorldToCoord(route[^1]) });
+                coord = pathingManager.Grid.WorldToCoord(route[^1]) }, doorway, doorway);
             return true;
         }
 
@@ -585,16 +588,27 @@ namespace LandLedgers.Pathing
             if (Vector3.Distance(transform.position, interiorPath[^1]) > Mathf.Max(1.25f, entrance.clearWidthMeters * 1.5f)) return false;
             interiorPath.Reverse();
             interiorPath.Add(authority.transform.TransformPoint(entrance.outdoorApproachLocal));
+            BuildingDoorAnimator doorway = ResolveDoorAnimator(authority, entrance);
             StartWorldRoute(interiorPath, new BuildingAnchor { type = AnchorType.FrontDoor,
-                coord = pathingManager.Grid.WorldToCoord(interiorPath[^1]) });
+                coord = pathingManager.Grid.WorldToCoord(interiorPath[^1]) }, doorway, doorway);
             return true;
         }
 
-        private void StartWorldRoute(IReadOnlyList<Vector3> worldPath, BuildingAnchor targetAnchor)
+        private static BuildingDoorAnimator ResolveDoorAnimator(BuildingFootprintAuthority authority,
+            BuildingEntrancePairAuthoring entrance)
+        {
+            Transform source = entrance != null ? entrance.sourceTransform : null;
+            if (source == null) return null;
+            BuildingDoorAnimator door = source.GetComponent<BuildingDoorAnimator>();
+            return door != null ? door : source.GetComponentInParent<BuildingDoorAnimator>();
+        }
+
+        private void StartWorldRoute(IReadOnlyList<Vector3> worldPath, BuildingAnchor targetAnchor,
+            BuildingDoorAnimator startDoorAnimator = null, BuildingDoorAnimator targetDoorAnimator = null)
         {
             currentTargetAnchor = targetAnchor;
-            currentStartDoorAnimator = null;
-            currentTargetDoorAnimator = null;
+            currentStartDoorAnimator = startDoorAnimator;
+            currentTargetDoorAnimator = targetDoorAnimator;
             targetDoorActionTriggeredForRoute = false;
             arrivalEventRaisedForRoute = false;
             hideOnArrival = false;
@@ -608,6 +622,8 @@ namespace LandLedgers.Pathing
             waypointIndex = 0;
             doorPauseTimer = 0f;
             ResetAuthoritativeRouteClock();
+            TriggerDoorActionIfAlive(ref currentStartDoorAnimator);
+            if (currentWorldPath.Count <= 1) TriggerTargetDoorAction();
             currentLocomotionBlend = 0f;
             locomotionBlendVelocity = 0f;
             lastAnimatorWalking = false;
@@ -898,6 +914,15 @@ namespace LandLedgers.Pathing
             }
 
             doorAnimator.TriggerDoorAction();
+        }
+
+        private void CloseRouteDoorways()
+        {
+            if (currentStartDoorAnimator != null) currentStartDoorAnimator.SetDoorOpen(false);
+            if (currentTargetDoorAnimator != null && currentTargetDoorAnimator != currentStartDoorAnimator)
+                currentTargetDoorAnimator.SetDoorOpen(false);
+            currentStartDoorAnimator = null;
+            currentTargetDoorAnimator = null;
         }
 
         private void SetVisible(bool visible)

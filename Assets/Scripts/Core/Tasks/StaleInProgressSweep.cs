@@ -150,10 +150,11 @@ namespace LandLedgers.Tasks
             }
 
             // 3. Staleness: is there an unreleased reservation for this
-            // person, today, under this task's label, whose window has not
-            // ended yet? A matching reservation later today counts as
-            // healthy (accrual resumes when its window arrives); one ending
-            // exactly at now is stale (zero overlap with the current tick).
+            // person, today, under this task's label, whose window reaches
+            // the current tick boundary? A matching reservation ending
+            // exactly at now is still healthy because this sweep runs before
+            // the current tick's elapsed minutes are accrued. It becomes
+            // stale on the following tick if still unfinished.
             // Released reservations are invisible, same as no window.
             PersonActivityReservation stale = null;
             if (reservations != null)
@@ -165,7 +166,7 @@ namespace LandLedgers.Tasks
                     if (reservation.DayIndex != dayIndex) continue;
                     if (reservation.PersonId != task.AssigneeId.Id) continue;
                     if (!string.Equals(reservation.Label, taskReservationLabel, StringComparison.Ordinal)) continue;
-                    if (reservation.EndMinuteOfDay > minuteOfDay)
+                    if (reservation.EndMinuteOfDay >= minuteOfDay)
                     {
                         return new StaleInProgressVerdict(
                             StaleInProgressDecision.UntouchedHealthy, PersonActivityKind.Work,

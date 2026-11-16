@@ -1563,8 +1563,13 @@ namespace LandLedgers.World
             for (int i = 0; i < candidates.Count && createdCount < requested; i++)
             {
                 ExpansionPlotCandidate candidate = candidates[i];
-                if (TryCreatePlot(candidate.bounds, candidate.frontageDirection, candidate.roadAccess, candidate.zone, true))
+                if (TryCreatePlot(candidate.bounds, candidate.frontageDirection, candidate.roadAccess, candidate.zone, false))
                 {
+                    // Expansion candidates can land in a protected edge-residential
+                    // or agricultural lane. Only the existing land-market authority
+                    // decides whether a new vacant parcel may be offered.
+                    TownPlot createdPlot = plots[plots.Count - 1];
+                    createdPlot.reservedForLandSale = IsPlotEligibleForLandMarket(createdPlot);
                     createdCount++;
                 }
             }

@@ -238,6 +238,71 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void ArrivedShipmentReportsUnchangedHandlingRefusalOnceAndKeepsCargo()
+        {
+            hooks.Schedules = new LandLedgers.Population.PersonScheduleTracker();
+            Assert.IsNull(hooks.Schedules.TryReserve(handler.Id, LandLedgers.Population.PersonActivityKind.Work,
+                Day, 480, 960, "full-day-work"));
+            FreightProductionDriver driver = NewDriverWithCarrier(out _);
+            LogisticsShipmentState shipment = CreateViaDriver(driver, "arrival-no-window", "wagon-1");
+            shipment.state = LogisticsShipmentStatus.Arrived;
+            shipment.remainingQuantityUnits = shipment.PlannedQuantityUnits;
+            var diagnostics = new List<string>();
+
+            driver.AdvanceTick(3600f, hooks, handler, diagnostics);
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.Status);
+            Assert.AreEqual(shipment.PlannedQuantityUnits, shipment.RemainingQuantityUnits,
+                "a scheduling refusal cannot deliver or discard cargo");
+            Assert.AreEqual(1, diagnostics.FindAll(line => line.Contains("handling phase 'begin-unload'")).Count);
+            StringAssert.Contains("no available work window remains today", diagnostics[0]);
+
+            diagnostics.Clear();
+            driver.AdvanceTick(3600f, hooks, handler, diagnostics);
+            Assert.AreEqual(0, diagnostics.FindAll(line => line.Contains("handling phase 'begin-unload'")).Count,
+                "an unchanged refusal must not create one warning on every daily retry");
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.Status);
+            Assert.IsFalse(shipment.deliveryApplied);
+        }
+
+        [Test]
+        public void ArrivedUnloadRetriesAfterSameDayReservationIsReleased()
+        {
+            hooks.Schedules = new LandLedgers.Population.PersonScheduleTracker();
+            Assert.IsNull(hooks.Schedules.TryReserve(handler.Id,
+                LandLedgers.Population.PersonActivityKind.Work, Day, 480, 960, "temporary-full-day"));
+            FreightProductionDriver driver = NewDriverWithCarrier(out _);
+            LogisticsShipmentState shipment = CreateViaDriver(driver, "arrival-retry-window", "wagon-1");
+            shipment.state = LogisticsShipmentStatus.Arrived;
+            shipment.remainingQuantityUnits = shipment.PlannedQuantityUnits;
+
+            var diagnostics = new List<string>();
+            Assert.AreEqual(0, driver.RetryArrivedUnloads(hooks, handler, diagnostics));
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.Status,
+                "no unload task may start while the handler's day is reserved");
+
+            LandLedgers.Population.PersonActivityReservation occupied = null;
+            foreach (LandLedgers.Population.PersonActivityReservation reservation in hooks.Schedules.ActiveFor(handler.Id, Day))
+                if (reservation.Label == "temporary-full-day") occupied = reservation;
+            Assert.IsNotNull(occupied);
+            hooks.Schedules.Release(occupied.ReservationId);
+            hooks.MinuteOfDay = 600;
+
+            diagnostics.Clear();
+            Assert.AreEqual(1, driver.RetryArrivedUnloads(hooks, handler, diagnostics));
+            Assert.AreEqual(LogisticsShipmentStatus.Unloading, shipment.Status,
+                "the same-day retry starts unloading when a real schedule window opens");
+            Assert.AreEqual(1, tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count);
+
+            diagnostics.Clear();
+            Assert.AreEqual(0, driver.RetryArrivedUnloads(hooks, handler, diagnostics));
+            Assert.AreEqual(1, tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
+                "later ticks cannot create a duplicate unload task");
+            Assert.AreEqual(shipment.PlannedQuantityUnits, shipment.RemainingQuantityUnits,
+                "retrying the start does not deliver or consume cargo");
+            Assert.IsFalse(shipment.deliveryApplied);
+        }
+
+        [Test]
         public void FullLifecycle_ThroughProductionDriver_SettlesOnlyOnAcceptance()
         {
             FreightProductionDriver driver = NewDriverWithCarrier(out BusinessRuntimeState carrierRuntime);

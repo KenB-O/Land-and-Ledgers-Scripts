@@ -122,6 +122,15 @@ namespace LandLedgers.Economy
         public List<NpcBuildOverrunEvent> Overruns = new List<NpcBuildOverrunEvent>();
         /// <summary>Plain-language decisions the NPC made, in order.</summary>
         public List<string> Decisions = new List<string>();
+        /// <summary>
+        /// D-4: the construction loan funding this build, when one was
+        /// drawn (null when the build is cash-funded). Plain serializable
+        /// data only — the financing approval result itself is never stored
+        /// (read-only properties, a SimulationDate). The draw fills
+        /// DrawnDayIndex, ObligationId and Schedule in place, so the
+        /// record keeps the loan it was commissioned with.
+        /// </summary>
+        public NpcConstructionLoanTerms LoanTerms;
 
         public NpcConstructionRecord() { }
 
@@ -167,8 +176,75 @@ namespace LandLedgers.Economy
         public string ShipmentNotes = string.Empty;
         public List<string> Lines = new List<string>();
         public string Summary = string.Empty;
+        /// <summary>
+        /// D-4: the approved construction loan funding this evaluation,
+        /// when one was sought (null for a cash-only evaluation). The
+        /// evaluation itself is not persisted; the driver copies this onto
+        /// the record at commission time, before the draw fills it in.
+        /// </summary>
+        public NpcConstructionLoanTerms LoanTerms;
 
         public NpcConstructionEvaluation() { }
+    }
+
+    /// <summary>
+    /// D-4: the flat, serializable terms of one NPC construction loan —
+    /// the funding leg of a commissioned build. Copied from a
+    /// <see cref="FinancingApprovalResult"/> at underwriting time by
+    /// <see cref="NpcConstructionCommissioner.BuildLoanTerms"/> (the
+    /// approval result itself is never stored: read-only properties and
+    /// a SimulationDate make it unsuitable for a record). The draw fills
+    /// DrawnDayIndex, ObligationId, SecurityInterestId and Schedule in
+    /// place; servicing updates MissedPayments and the schedule's paid
+    /// amounts. The loan covers the materials estimate only — labour and
+    /// freight are not in the estimate, so hired wages come from the
+    /// household's post-build cash and income, and a shortfall there is
+    /// recorded loudly by the existing wage settlement. The down payment
+    /// is the household's own cash committed to the build (recorded,
+    /// never moved separately — staging draws on the household's cash,
+    /// which the draw has topped up with the principal).
+    /// </summary>
+    [Serializable]
+    public sealed class NpcConstructionLoanTerms
+    {
+        public string AgreementId = string.Empty;
+        public string LenderId = string.Empty;
+        public string LenderOwnerName = string.Empty;
+        public LoanPurpose Purpose = LoanPurpose.Construction;
+        public FinancingDecision Decision = FinancingDecision.Declined;
+        /// <summary>True when the approval cannot fund immediately (conditional, or a quantified shortfall).</summary>
+        public bool HasBlockingReadinessGap = true;
+        public List<string> Conditions = new List<string>();
+        /// <summary>FinancingReasonCode names, as strings — plain data, never the enum list.</summary>
+        public List<string> ReasonCodes = new List<string>();
+        /// <summary>The materials estimate the approval was underwritten against. A loan evaluated for one price never funds another.</summary>
+        public int EvaluatedPriceCents;
+        public int PrincipalCents;
+        public int DownPaymentCents;
+        public int AnnualInterestRateBps;
+        public int TermMonths;
+        public RepaymentFrequency RepaymentFrequency = RepaymentFrequency.Weekly;
+        public int EstimatedPeriodicPaymentCents;
+        public int OriginationFeeCents;
+        public string CollateralId = string.Empty;
+        public LoanCollateralKind CollateralKind = LoanCollateralKind.Unsecured;
+        public int CollateralValueCents;
+        /// <summary>-1 until drawn.</summary>
+        public int DrawnDayIndex = -1;
+        public string ObligationId = string.Empty;
+        public string SecurityInterestId = string.Empty;
+        /// <summary>The repayment plan, built at draw time from the obligation id. Null until drawn.</summary>
+        public LoanPaymentSchedule Schedule;
+        public int MissedPayments;
+        /// <summary>-1 when no payment has ever been missed.</summary>
+        public int LastMissedDayIndex = -1;
+        /// <summary>-1 when no payment has ever been serviced.</summary>
+        public int LastServicedDayIndex = -1;
+
+        /// <summary>True once the principal has moved and the obligation exists — a loan is drawn exactly once.</summary>
+        public bool IsDrawn => DrawnDayIndex >= 0 && !string.IsNullOrWhiteSpace(ObligationId);
+
+        public NpcConstructionLoanTerms() { }
     }
 
     /// <summary>
@@ -504,6 +580,437 @@ namespace LandLedgers.Economy
                 total += unitPrice * Math.Max(0, requirement.RequiredUnits);
             }
             return total;
+        }
+
+        #endregion
+
+        #region Construction loans (D-4)
+
+        /// <summary>
+        /// D-4: underwrites a construction loan for one build through the
+        /// real financing evaluator — the construction purpose policy
+        /// (stricter rate, down payment, collateral support, cash-flow
+        /// coverage and fee). The applicant, collateral and lender are
+        /// caller-supplied, never invented here: no production source
+        /// exists for an NPC household's reputation, trust, weekly cash
+        /// flow or owned assets, and the collateral is the structure to
+        /// be built, valued by its caller-supplied estimate. The down
+        /// payment is the household's cash (all of it, up to the price) —
+        /// exact-shortfall borrowing: the principal is the price minus
+        /// the cash. Returns the evaluator's result, never null, except
+        /// for caller errors (an incoherent price or cash figure, or no
+        /// agreement id), which return null + a loud diagnostic. A
+        /// Declined or ConditionallyApproved result is a real underwriting
+        /// outcome, not an error — only a full approval with no blocking
+        /// readiness gap ever funds.
+        /// </summary>
+        public FinancingApprovalResult EvaluateConstructionLoan(
+            int estimateCents,
+            int cashAvailableCents,
+            FinancingApplicantProfile applicant,
+            CollateralProfile collateral,
+            LenderProfile lender,
+            LoanTermStructure requestedTerm,
+            string agreementId,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (estimateCents <= 0)
+            {
+                diag.Add("NpcCommissioner.EvaluateConstructionLoan: the estimate must be a positive materials cost — a loan cannot be underwritten for an unpriced build.");
+                return null;
+            }
+            if (cashAvailableCents < 0)
+            {
+                diag.Add("NpcCommissioner.EvaluateConstructionLoan: the household's cash cannot be negative.");
+                return null;
+            }
+            if (string.IsNullOrWhiteSpace(agreementId))
+            {
+                diag.Add("NpcCommissioner.EvaluateConstructionLoan: an agreement id is required — the loan is traceable to its commission.");
+                return null;
+            }
+            var request = new FinancingApprovalRequest
+            {
+                agreementId = agreementId,
+                purpose = LoanPurpose.Construction,
+                exactPurchasePriceCents = estimateCents,
+                exactDownPaymentCents = Math.Min(cashAvailableCents, estimateCents),
+                applicant = applicant,
+                collateral = collateral,
+                lender = lender,
+                requestedTerm = requestedTerm,
+                approvalDate = CalendarAnchor.Default.BuildDate(dayIndex),
+                daysPerMonth = 0,
+            };
+            FinancingApprovalResult result = new FinancingEvaluator().EvaluateApproval(request);
+            string outcome = result.Decision == FinancingDecision.Approved
+                ? $"APPROVED {result.EstimatedPrincipalCents}c at {result.Offer.termStructure.annualInterestRateBps} bps, ~{result.EstimatedPeriodicPaymentCents}c/{result.Offer.termStructure.repaymentFrequency}, fee {result.EstimatedOriginationFeeCents}c"
+                : $"{result.Decision} ({string.Join(", ", result.ReasonCodes)})";
+            diag.Add($"NpcCommissioner.EvaluateConstructionLoan: construction loan for ~{estimateCents}c (down {request.exactDownPaymentCents}c) — {outcome}.");
+            if (result.HasConditions)
+                diag.Add($"NpcCommissioner.EvaluateConstructionLoan: conditions — {string.Join("; ", result.RequiredConditions)}");
+            if (result.HasQuantifiedShortfall)
+                diag.Add($"NpcCommissioner.EvaluateConstructionLoan: shortfalls — down {result.AdditionalDownPaymentNeededCents}c, principal support {result.PrincipalSupportShortfallCents}c, weekly cash flow {result.WeeklyCashFlowShortfallCents}c, reputation {result.ReputationShortfall01:0.00}, lender trust {result.LenderTrustShortfall01:0.00}.");
+            return result;
+        }
+
+        /// <summary>
+        /// D-4: flattens an approval result into the plain loan terms a
+        /// record can carry. Returns null when there is no offer to copy
+        /// (a null result, or a result without an offer) — the caller
+        /// treats that as no loan. The collateral is passed in because
+        /// the result does not carry it.
+        /// </summary>
+        public static NpcConstructionLoanTerms BuildLoanTerms(
+            FinancingApprovalResult result,
+            CollateralProfile collateral,
+            string lenderOwnerName,
+            int evaluatedPriceCents)
+        {
+            if (result == null || result.Offer == null) return null;
+            LoanTermStructure term = result.Offer.termStructure.Sanitized();
+            var terms = new NpcConstructionLoanTerms
+            {
+                AgreementId = result.AgreementId ?? string.Empty,
+                LenderId = result.Offer.lenderId ?? string.Empty,
+                LenderOwnerName = lenderOwnerName ?? string.Empty,
+                Purpose = result.Offer.purpose,
+                Decision = result.Decision,
+                HasBlockingReadinessGap = result.HasBlockingReadinessGap,
+                EvaluatedPriceCents = evaluatedPriceCents,
+                PrincipalCents = result.EstimatedPrincipalCents,
+                DownPaymentCents = term.downPaymentCents,
+                AnnualInterestRateBps = term.annualInterestRateBps,
+                TermMonths = term.termMonths,
+                RepaymentFrequency = term.repaymentFrequency,
+                EstimatedPeriodicPaymentCents = result.EstimatedPeriodicPaymentCents,
+                OriginationFeeCents = result.EstimatedOriginationFeeCents,
+                CollateralId = collateral.collateralId ?? string.Empty,
+                CollateralKind = collateral.kind,
+                CollateralValueCents = collateral.estimatedValueCents,
+            };
+            if (result.RequiredConditions != null) terms.Conditions.AddRange(result.RequiredConditions);
+            if (result.ReasonCodes != null)
+                foreach (FinancingReasonCode code in result.ReasonCodes)
+                    terms.ReasonCodes.Add(code.ToString());
+            return terms;
+        }
+
+        /// <summary>
+        /// D-4: the loan-funded commission evaluation — the same pricing,
+        /// sleeping, alternatives and shipment checks as the cash-only
+        /// evaluation, with the funding stack cash + approved loan
+        /// principal instead of cash alone. Only a full approval with no
+        /// blocking readiness gap funds: a conditional approval is refused
+        /// loudly with its conditions named, and a loan evaluated for a
+        /// different price never funds this design (stale approvals do not
+        /// travel). The cash-only overload is unchanged — existing callers
+        /// keep their behaviour.
+        /// </summary>
+        public NpcConstructionEvaluation EvaluateCommissionWithLoan(
+            BuildingDesignCatalog catalog,
+            string designId,
+            int requiredSleepingPlaces,
+            IConstructionMaterialPricePort pricePort,
+            int cashAvailableCents,
+            NpcConstructionLoanTerms loanTerms,
+            int? maxUnitsPerTrip,
+            NpcConstructionReason reason,
+            string reasonNotes,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (loanTerms == null)
+            {
+                var noLoan = new NpcConstructionEvaluation
+                {
+                    ChosenDesignId = designId ?? string.Empty,
+                    FundsCents = cashAvailableCents,
+                    RequiredPlaces = Math.Max(1, requiredSleepingPlaces),
+                    RefusalReason = "NpcCommissioner.EvaluateCommissionWithLoan: no loan terms supplied — use the cash-only evaluation when no loan is sought.",
+                };
+                diag.Add(noLoan.RefusalReason);
+                return noLoan;
+            }
+            if (loanTerms.Decision != FinancingDecision.Approved || loanTerms.HasBlockingReadinessGap)
+            {
+                var notFundable = new NpcConstructionEvaluation
+                {
+                    ChosenDesignId = designId ?? string.Empty,
+                    FundsCents = cashAvailableCents,
+                    RequiredPlaces = Math.Max(1, requiredSleepingPlaces),
+                    LoanTerms = loanTerms,
+                    RefusalReason = $"NpcCommissioner.EvaluateCommissionWithLoan: the construction loan is {loanTerms.Decision} and cannot fund this build"
+                        + (loanTerms.Conditions != null && loanTerms.Conditions.Count > 0
+                            ? $" — conditions: {string.Join("; ", loanTerms.Conditions)}"
+                            : ".")
+                        + " Only a full approval with no blocking readiness gap funds a commission.",
+                };
+                diag.Add(notFundable.RefusalReason);
+                return notFundable;
+            }
+            int funds = cashAvailableCents + Math.Max(0, loanTerms.PrincipalCents);
+            NpcConstructionEvaluation evaluation = EvaluateCommission(catalog, designId,
+                requiredSleepingPlaces, pricePort, funds, maxUnitsPerTrip,
+                reason, reasonNotes, dayIndex, diag);
+            evaluation.LoanTerms = loanTerms;
+            if (!evaluation.IsViable) return evaluation;
+            if (loanTerms.EvaluatedPriceCents != evaluation.EstimateCents)
+            {
+                evaluation.IsViable = false;
+                evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommissionWithLoan: the loan was underwritten for ~{loanTerms.EvaluatedPriceCents}c but design '{designId}' now prices at ~{evaluation.EstimateCents}c — a stale approval never funds a different price.";
+                diag.Add(evaluation.RefusalReason);
+                return evaluation;
+            }
+            evaluation.Lines.Add($"day {dayIndex}: funded by cash {cashAvailableCents}c + construction loan {loanTerms.PrincipalCents}c from '{loanTerms.LenderId}' at {loanTerms.AnnualInterestRateBps} bps, ~{loanTerms.EstimatedPeriodicPaymentCents}c/{loanTerms.RepaymentFrequency} over {loanTerms.TermMonths} months, fee {loanTerms.OriginationFeeCents}c, down payment {loanTerms.DownPaymentCents}c.");
+            evaluation.Summary += $", funded cash {cashAvailableCents}c + loan {loanTerms.PrincipalCents}c ({loanTerms.LenderId}, {loanTerms.AnnualInterestRateBps} bps)";
+            diag.Add($"NpcCommissioner.EvaluateCommissionWithLoan: '{designId}' funded by cash {cashAvailableCents}c + loan {loanTerms.PrincipalCents}c (margin {evaluation.MarginCents}c).");
+            return evaluation;
+        }
+
+        /// <summary>
+        /// D-4: draws an approved construction loan at commission time —
+        /// moves the principal from the lender's real cash store to the
+        /// household (finite capital, never conjured), creates the debt
+        /// through the single debt authority with the offer's terms, builds
+        /// the repayment schedule from the obligation id, and files a
+        /// first lien on the parcel the structure stands on. Called AFTER
+        /// CommissionProject, so the record exists to hold the loan; the
+        /// driver pre-checks the lender's balance before creating the
+        /// project, so a draw failure here is near-unreachable — and when
+        /// it does happen the commission is refused, the project is
+        /// dropped (CreateProject only returns the project, nothing leaks)
+        /// and the failure is recorded on the record. On an obligation
+        /// failure after the cash moved, the cash is refunded immediately
+        /// and the failure is loud. A loan is drawn exactly once.
+        /// Returns null on success, the refusal on failure.
+        /// </summary>
+        public string DrawConstructionLoan(
+            NpcConstructionRecord record,
+            NpcConstructionLoanTerms loanTerms,
+            CreditCashBridge cash,
+            FinancialObligationAuthority obligations,
+            EntityIdRegistry ids,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (record == null || loanTerms == null)
+                return "NpcCommissioner.DrawConstructionLoan: record and loan terms required.";
+            if (loanTerms.IsDrawn)
+                return $"NpcCommissioner.DrawConstructionLoan: the loan for project '{record.ProjectId}' was already drawn on day {loanTerms.DrawnDayIndex} (obligation '{loanTerms.ObligationId}') — a loan is drawn exactly once.";
+            if (loanTerms.Decision != FinancingDecision.Approved || loanTerms.HasBlockingReadinessGap)
+                return $"NpcCommissioner.DrawConstructionLoan: the loan for project '{record.ProjectId}' is {loanTerms.Decision} and cannot be drawn — only a full approval with no blocking readiness gap funds a commission.";
+            if (loanTerms.PrincipalCents <= 0)
+                return $"NpcCommissioner.DrawConstructionLoan: the loan for project '{record.ProjectId}' has no principal to draw.";
+            if (string.IsNullOrWhiteSpace(loanTerms.LenderOwnerName))
+                return $"NpcCommissioner.DrawConstructionLoan: the loan for project '{record.ProjectId}' names no lender cash store — the principal cannot be drawn from nowhere.";
+            if (cash == null || obligations == null || ids == null)
+                return "NpcCommissioner.DrawConstructionLoan: cash bridge, obligation authority and id registry required.";
+            string householdOwnerName = "household:" + record.HouseholdId;
+            IRealCashStore lenderStore = cash.FindStore(loanTerms.LenderOwnerName);
+            if (lenderStore == null)
+                return $"NpcCommissioner.DrawConstructionLoan: lender '{loanTerms.LenderOwnerName}' has no real cash store — the {loanTerms.PrincipalCents}c principal cannot be drawn.";
+            if (lenderStore.ReadBalanceCents() < loanTerms.PrincipalCents)
+                return $"NpcCommissioner.DrawConstructionLoan: lender '{loanTerms.LenderOwnerName}' holds {lenderStore.ReadBalanceCents()}c, short of the {loanTerms.PrincipalCents}c principal — the bank lends finite capital only.";
+            if (cash.FindStore(householdOwnerName) == null)
+                return $"NpcCommissioner.DrawConstructionLoan: '{householdOwnerName}' has no real cash store — the principal has nowhere to go.";
+            string moveProblem = ConstructionCashMover.MoveCash(cash, loanTerms.LenderOwnerName,
+                householdOwnerName, loanTerms.PrincipalCents, dayIndex,
+                $"construction loan draw for project '{record.ProjectId}'", diag);
+            if (moveProblem != null)
+                return $"NpcCommissioner.DrawConstructionLoan: the {loanTerms.PrincipalCents}c principal could not move — {moveProblem}";
+            var paymentTerms = new FinancialPaymentTerms
+            {
+                AnnualInterestRateBps = loanTerms.AnnualInterestRateBps,
+                Structure = FinancialPaymentStructure.PrincipalInstallments,
+                PaymentIntervalDays = loanTerms.RepaymentFrequency == RepaymentFrequency.Monthly ? 30 : 7,
+                InstallmentPrincipalCents = 0,
+                AllowsEarlyPayoff = true,
+            };
+            FinancialObligation obligation = obligations.CreateWithTerms(ids,
+                FinancialObligationKind.Loan, householdOwnerName, loanTerms.LenderOwnerName,
+                loanTerms.PrincipalCents, dayIndex,
+                $"construction loan for project '{record.ProjectId}' — {loanTerms.AnnualInterestRateBps} bps, {loanTerms.TermMonths} months, {loanTerms.RepaymentFrequency}",
+                $"construction loan for project '{record.ProjectId}'",
+                paymentTerms, loanTerms.AgreementId);
+            if (obligation == null)
+            {
+                string refundProblem = ConstructionCashMover.MoveCash(cash, householdOwnerName,
+                    loanTerms.LenderOwnerName, loanTerms.PrincipalCents, dayIndex,
+                    $"refund of failed construction loan draw for project '{record.ProjectId}'", diag);
+                return $"NpcCommissioner.DrawConstructionLoan: the obligation could not be created after the {loanTerms.PrincipalCents}c principal moved"
+                    + (refundProblem != null ? $" — and the refund ALSO failed: {refundProblem} The money is stuck and this must be reconciled by hand." : " — the principal was refunded to the lender.")
+                    + " Nothing was drawn.";
+            }
+            var termStructure = new LoanTermStructure
+            {
+                principalCents = loanTerms.PrincipalCents,
+                downPaymentCents = loanTerms.DownPaymentCents,
+                annualInterestRateBps = loanTerms.AnnualInterestRateBps,
+                termMonths = loanTerms.TermMonths,
+                amortizationMonths = loanTerms.TermMonths,
+                repaymentFrequency = loanTerms.RepaymentFrequency,
+                originationFeeCents = loanTerms.OriginationFeeCents,
+                balloonPaymentCents = 0,
+            };
+            LoanPaymentSchedule schedule = new PaymentScheduleBuilder().Build(
+                obligation.ObligationId, termStructure,
+                CalendarAnchor.Default.BuildDate(dayIndex), 7, CalendarAnchor.Default);
+            if (schedule == null || schedule.payments == null || schedule.payments.Count == 0)
+            {
+                string refundProblem = ConstructionCashMover.MoveCash(cash, householdOwnerName,
+                    loanTerms.LenderOwnerName, loanTerms.PrincipalCents, dayIndex,
+                    $"refund of failed construction loan draw for project '{record.ProjectId}'", diag);
+                return $"NpcCommissioner.DrawConstructionLoan: no repayment schedule could be built for the {loanTerms.PrincipalCents}c loan — a debt with no repayment plan is never drawn"
+                    + (refundProblem != null ? $" — and the refund ALSO failed: {refundProblem} The money is stuck and this must be reconciled by hand." : " — the principal was refunded to the lender.");
+            }
+            paymentTerms.InstallmentPrincipalCents = schedule.payments[0].principalCents;
+            obligation.FeesCents = loanTerms.OriginationFeeCents;
+            obligation.MaturityDayIndex = schedule.payments[schedule.payments.Count - 1].dueDayIndex;
+            SecurityInterestRecord security = null;
+            if (!string.IsNullOrWhiteSpace(record.ParcelId))
+            {
+                security = obligations.AttachSecurity(ids, obligation.ObligationId,
+                    loanTerms.LenderOwnerName, householdOwnerName,
+                    new[] { "parcel:" + record.ParcelId }, dayIndex, 1, false);
+                if (security == null)
+                    diag.Add($"NpcCommissioner.DrawConstructionLoan: the first lien on parcel '{record.ParcelId}' could not be filed — the loan and obligation stand, but the security filing is missing and must be reconciled.");
+            }
+            loanTerms.DrawnDayIndex = dayIndex;
+            loanTerms.ObligationId = obligation.ObligationId;
+            loanTerms.SecurityInterestId = security != null ? security.SecurityInterestId : string.Empty;
+            loanTerms.Schedule = schedule;
+            record.Decisions.Add($"day {dayIndex}: construction loan drawn — {loanTerms.PrincipalCents}c from '{loanTerms.LenderOwnerName}' at {loanTerms.AnnualInterestRateBps} bps, ~{loanTerms.EstimatedPeriodicPaymentCents}c/{loanTerms.RepaymentFrequency} over {loanTerms.TermMonths} months, fee {loanTerms.OriginationFeeCents}c, first payment due day {schedule.payments[0].dueDayIndex} (obligation '{obligation.ObligationId}').");
+            diag.Add($"NpcCommissioner.DrawConstructionLoan: drew {loanTerms.PrincipalCents}c for project '{record.ProjectId}' from '{loanTerms.LenderOwnerName}' (obligation '{obligation.ObligationId}', first payment due day {schedule.payments[0].dueDayIndex}).");
+            return null;
+        }
+
+        /// <summary>
+        /// D-4: services one drawn construction loan for one day — pays
+        /// the next scheduled installment when it is due, through the real
+        /// cash and debt authorities. The schedule is the calendar and the
+        /// plan; the obligation authority is the single debt truth. The
+        /// amount paid is the schedule's remaining due for that payment,
+        /// capped at the obligation's outstanding (the final payment's
+        /// rounding residual never overpays); interest is accrued through
+        /// the day first, and the origination fee rides with the first
+        /// payment (fees first). When the household cannot cover the full
+        /// installment, NOTHING is paid — no partial installments in D-4 —
+        /// the miss is recorded loudly (missed count, decision line, the
+        /// obligation marked delinquent, the schedule payment left unpaid
+        /// for retry on a later drive). Returns null when nothing was due
+        /// or the payment succeeded; a problem string when a payment was
+        /// due but could not be made (the driver logs it; the build
+        /// continues — a missed payment never blocks the house).
+        /// </summary>
+        public string ServiceConstructionLoan(
+            NpcConstructionRecord record,
+            CreditCashBridge cash,
+            FinancialObligationAuthority obligations,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (record == null || record.LoanTerms == null || !record.LoanTerms.IsDrawn)
+                return null;
+            NpcConstructionLoanTerms loanTerms = record.LoanTerms;
+            if (cash == null || obligations == null)
+                return $"NpcCommissioner.ServiceConstructionLoan: no cash bridge or obligation authority — the loan for project '{record.ProjectId}' cannot be serviced.";
+            FinancialObligation obligation = obligations.Find(loanTerms.ObligationId);
+            if (obligation == null)
+                return $"NpcCommissioner.ServiceConstructionLoan: the loan obligation '{loanTerms.ObligationId}' for project '{record.ProjectId}' is gone — the loan cannot be serviced and the loss must be reconciled.";
+            if (obligation.Settled) return null;
+            LoanPaymentDue duePayment = null;
+            if (loanTerms.Schedule != null && loanTerms.Schedule.payments != null)
+            {
+                foreach (LoanPaymentDue payment in loanTerms.Schedule.payments)
+                {
+                    if (payment == null || payment.status == LoanPaymentStatus.Paid) continue;
+                    if (payment.dueDayIndex > dayIndex) break;
+                    duePayment = payment;
+                    break;
+                }
+            }
+            if (duePayment == null) return null;
+            string householdOwnerName = "household:" + record.HouseholdId;
+            string lenderOwnerName = loanTerms.LenderOwnerName;
+            string accrueProblem = obligations.AccrueInterestThroughDay(loanTerms.ObligationId, dayIndex);
+            if (accrueProblem != null)
+                return $"NpcCommissioner.ServiceConstructionLoan: interest could not be accrued for the loan on project '{record.ProjectId}' — {accrueProblem}";
+            int amount = Math.Max(0, duePayment.totalDueCents - duePayment.paidCents);
+            if (amount <= 0)
+            {
+                duePayment.status = LoanPaymentStatus.Paid;
+                return null;
+            }
+            int outstanding = obligation.TotalOutstandingCents;
+            if (amount > outstanding) amount = outstanding;
+            IRealCashStore householdStore = cash.FindStore(householdOwnerName);
+            if (householdStore == null)
+                return MissedLoanPayment(record, loanTerms, obligations, obligation, duePayment, dayIndex,
+                    $"'{householdOwnerName}' has no real cash store — the {amount}c installment has nowhere to come from.", diag);
+            if (householdStore.ReadBalanceCents() < amount)
+                return MissedLoanPayment(record, loanTerms, obligations, obligation, duePayment, dayIndex,
+                    $"'{householdOwnerName}' holds {householdStore.ReadBalanceCents()}c, short of the {amount}c installment (payment {duePayment.paymentNumber}, due day {duePayment.dueDayIndex}).", diag);
+            string moveProblem = ConstructionCashMover.MoveCash(cash, householdOwnerName,
+                lenderOwnerName, amount, dayIndex,
+                $"construction loan installment {duePayment.paymentNumber} for project '{record.ProjectId}'", diag);
+            if (moveProblem != null)
+                return MissedLoanPayment(record, loanTerms, obligations, obligation, duePayment, dayIndex,
+                    $"the {amount}c installment could not move — {moveProblem}", diag);
+            FinancialPaymentRecord applied = obligations.ApplyPayment(loanTerms.ObligationId,
+                amount, dayIndex, householdOwnerName, lenderOwnerName,
+                "construction-loan:" + record.RecordId,
+                Math.Min(amount, Math.Max(0, obligation.FeesCents)));
+            if (applied == null)
+            {
+                string refundProblem = ConstructionCashMover.MoveCash(cash, lenderOwnerName,
+                    householdOwnerName, amount, dayIndex,
+                    $"refund of unapplied construction loan installment for project '{record.ProjectId}'", diag);
+                return $"NpcCommissioner.ServiceConstructionLoan: the {amount}c installment moved but the debt authority would not apply it"
+                    + (refundProblem != null ? $" — and the refund ALSO failed: {refundProblem} The money is stuck and this must be reconciled by hand." : " — the installment was refunded to the household.")
+                    + " Nothing was paid.";
+            }
+            duePayment.paidCents += applied.AmountCents;
+            duePayment.status = obligation.Settled || duePayment.paidCents >= duePayment.totalDueCents
+                ? LoanPaymentStatus.Paid
+                : LoanPaymentStatus.PartiallyPaid;
+            loanTerms.LastServicedDayIndex = dayIndex;
+            if (obligation.Settled)
+            {
+                record.Decisions.Add($"day {dayIndex}: construction loan for project '{record.ProjectId}' SETTLED — final installment {applied.AmountCents}c paid (obligation '{obligation.ObligationId}').");
+                diag.Add($"NpcCommissioner.ServiceConstructionLoan: loan for project '{record.ProjectId}' settled on day {dayIndex} (final installment {applied.AmountCents}c).");
+            }
+            else
+            {
+                diag.Add($"NpcCommissioner.ServiceConstructionLoan: paid installment {duePayment.paymentNumber} ({applied.AmountCents}c) for project '{record.ProjectId}' — {obligation.TotalOutstandingCents}c outstanding.");
+            }
+            return null;
+        }
+
+        private string MissedLoanPayment(
+            NpcConstructionRecord record,
+            NpcConstructionLoanTerms loanTerms,
+            FinancialObligationAuthority obligations,
+            FinancialObligation obligation,
+            LoanPaymentDue duePayment,
+            int dayIndex,
+            string reason,
+            List<string> diag)
+        {
+            loanTerms.MissedPayments++;
+            loanTerms.LastMissedDayIndex = dayIndex;
+            duePayment.status = LoanPaymentStatus.Late;
+            if (obligations != null && obligation != null)
+                obligations.MarkDelinquent(obligation.ObligationId);
+            string problem = $"NpcCommissioner.ServiceConstructionLoan: MISSED installment {duePayment.paymentNumber} for project '{record.ProjectId}' — {reason} Missed count is now {loanTerms.MissedPayments}; the payment stays due and is retried on a later drive.";
+            record.Decisions.Add($"day {dayIndex}: MISSED construction loan installment {duePayment.paymentNumber} ({Math.Max(0, duePayment.totalDueCents - duePayment.paidCents)}c due, day {duePayment.dueDayIndex}) — {reason}");
+            diag.Add(problem);
+            return problem;
         }
 
         #endregion
@@ -1480,6 +1987,10 @@ namespace LandLedgers.Economy
                     }
                 }
                 if (record.Decisions != null) copy.Decisions.AddRange(record.Decisions);
+                // D-4: the loan survives a save — terms, schedule and
+                // missed-payment counts are copied, never shared with the
+                // DTO's record objects.
+                copy.LoanTerms = CopyLoanTerms(record.LoanTerms);
                 records[copy.RecordId] = copy;
             }
             // Plan 26 (Q30a, note 102 C7): continue the id sequence instead
@@ -1520,6 +2031,72 @@ namespace LandLedgers.Economy
                 if (record != null && string.Equals(record.ProjectId, projectId, StringComparison.Ordinal))
                     return record;
             return null;
+        }
+
+        /// <summary>D-4: deep copy of one loan's terms, including its repayment schedule. Null in, null out.</summary>
+        private static NpcConstructionLoanTerms CopyLoanTerms(NpcConstructionLoanTerms source)
+        {
+            if (source == null) return null;
+            var copy = new NpcConstructionLoanTerms
+            {
+                AgreementId = source.AgreementId ?? string.Empty,
+                LenderId = source.LenderId ?? string.Empty,
+                LenderOwnerName = source.LenderOwnerName ?? string.Empty,
+                Purpose = source.Purpose,
+                Decision = source.Decision,
+                HasBlockingReadinessGap = source.HasBlockingReadinessGap,
+                EvaluatedPriceCents = source.EvaluatedPriceCents,
+                PrincipalCents = source.PrincipalCents,
+                DownPaymentCents = source.DownPaymentCents,
+                AnnualInterestRateBps = source.AnnualInterestRateBps,
+                TermMonths = source.TermMonths,
+                RepaymentFrequency = source.RepaymentFrequency,
+                EstimatedPeriodicPaymentCents = source.EstimatedPeriodicPaymentCents,
+                OriginationFeeCents = source.OriginationFeeCents,
+                CollateralId = source.CollateralId ?? string.Empty,
+                CollateralKind = source.CollateralKind,
+                CollateralValueCents = source.CollateralValueCents,
+                DrawnDayIndex = source.DrawnDayIndex,
+                ObligationId = source.ObligationId ?? string.Empty,
+                SecurityInterestId = source.SecurityInterestId ?? string.Empty,
+                MissedPayments = source.MissedPayments,
+                LastMissedDayIndex = source.LastMissedDayIndex,
+                LastServicedDayIndex = source.LastServicedDayIndex,
+            };
+            if (source.Conditions != null) copy.Conditions.AddRange(source.Conditions);
+            if (source.ReasonCodes != null) copy.ReasonCodes.AddRange(source.ReasonCodes);
+            if (source.Schedule != null)
+            {
+                var schedule = new LoanPaymentSchedule
+                {
+                    loanId = source.Schedule.loanId ?? string.Empty,
+                    principalCents = source.Schedule.principalCents,
+                    totalPrincipalCents = source.Schedule.totalPrincipalCents,
+                    totalInterestCents = source.Schedule.totalInterestCents,
+                    totalPaymentCents = source.Schedule.totalPaymentCents,
+                    originationFeeCents = source.Schedule.originationFeeCents,
+                };
+                if (source.Schedule.payments != null)
+                {
+                    foreach (LoanPaymentDue payment in source.Schedule.payments)
+                    {
+                        if (payment == null) continue;
+                        schedule.payments.Add(new LoanPaymentDue
+                        {
+                            paymentNumber = payment.paymentNumber,
+                            dueDate = payment.dueDate,
+                            dueDayIndex = payment.dueDayIndex,
+                            principalCents = payment.principalCents,
+                            interestCents = payment.interestCents,
+                            totalDueCents = payment.totalDueCents,
+                            paidCents = payment.paidCents,
+                            status = payment.status,
+                        });
+                    }
+                }
+                copy.Schedule = schedule;
+            }
+            return copy;
         }
 
         /// <summary>Numeric suffix after the last '-' in an id, or -1 when there is none. (Plan 26 Q30a, note 102 C7: duplicated from the executor — no cross-class coupling for a 9-line pure function.)</summary>

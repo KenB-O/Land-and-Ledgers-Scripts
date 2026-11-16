@@ -212,6 +212,52 @@ namespace LandLedgers.Economy
         /// </summary>
         public Func<int, int> WorkerHouseholdByPerson { get; set; }
 
+        /// <summary>
+        /// D-4: per-household construction-loan applicant profile
+        /// (reputation, trust, weekly cash flow, owned assets, prior
+        /// financing history). Bound by the production driver when a real
+        /// profile source exists; null means no loan underwriting is
+        /// available — commissions stay cash-only and the skip is
+        /// recorded, never newly blocking a cash-funded commission. No
+        /// production source exists yet (Agent F owns lending terms), so
+        /// the production leg is unbound in D-4 and the loan path is
+        /// exercised through tests until then. The collateral is NOT a
+        /// provider input: the driver builds it from the priced estimate
+        /// and the parcel (the structure to be built, valued at its
+        /// estimated materials cost — see BuildLoanCollateral).
+        /// </summary>
+        public Func<int, FinancingApplicantProfile> LoanApplicantByHousehold { get; set; }
+
+        /// <summary>
+        /// D-4: the lender's cash-store owner name — the store the loan
+        /// principal is drawn from and installments are paid to. Null or
+        /// empty means no loan underwriting is available (see
+        /// <see cref="LoanApplicantByHousehold"/>). The lender profile
+        /// itself defaults to the financing evaluator's local bank when
+        /// <see cref="LoanLender"/> is left default.
+        /// </summary>
+        public string LoanLenderOwnerName { get; set; }
+
+        /// <summary>
+        /// D-4: the lender profile used for underwriting. Default (empty
+        /// lenderId) means the financing evaluator's default local bank
+        /// ("frontier_local_bank"). Only read when the loan leg is bound.
+        /// </summary>
+        public LenderProfile LoanLender { get; set; }
+
+        /// <summary>
+        /// D-4: the loan term a commission asks for. Default is the
+        /// evaluator's own default — 60 months, weekly installments.
+        /// Agent F owns lending terms and may tighten this when a real
+        /// lending policy lands.
+        /// </summary>
+        public LoanTermStructure LoanRequestedTerm { get; set; } = new LoanTermStructure
+        {
+            termMonths = 60,
+            amortizationMonths = 60,
+            repaymentFrequency = RepaymentFrequency.Weekly,
+        };
+
         public NpcConstructionDriver(
             NpcConstructionCommissioner commissioner,
             ConstructionProjectExecutor executor,
@@ -322,8 +368,33 @@ namespace LandLedgers.Economy
                 request.Reason, request.ReasonNotes, dayIndex, diag);
             if (evaluation == null || !evaluation.IsViable)
             {
-                diag.Add($"NpcConstructionDriver.Commission: design '{request.DesignId}' refused for H{request.HouseholdId} — see the evaluation refusal above.");
-                return null;
+                // D-4: a cash-only refusal on affordability is the one case
+                // a construction loan can cure — the design exists, is
+                // priced and sleeps the household, but the household's cash
+                // falls short. Any other refusal (unknown design, unpriced
+                // materials, too small) is not a funding problem and no
+                // loan is sought.
+                if (evaluation != null && evaluation.ChosenDesign != null
+                    && evaluation.EstimateCents > evaluation.FundsCents)
+                {
+                    evaluation = TryEvaluateWithLoan(request, buyerStore, evaluation, dayIndex, diag);
+                }
+                if (evaluation == null || !evaluation.IsViable)
+                {
+                    diag.Add($"NpcConstructionDriver.Commission: design '{request.DesignId}' refused for H{request.HouseholdId} — see the evaluation refusal above.");
+                    return null;
+                }
+                // D-4: the loan was approved, but the approval does not
+                // check the lender's actual cash — verify the bank can fund
+                // it BEFORE creating the project, so a short lender refuses
+                // the commission instead of leaving a created project with
+                // a failed draw.
+                if (evaluation.LoanTerms != null
+                    && LoanLenderCannotFund(evaluation.LoanTerms, diag))
+                {
+                    diag.Add($"NpcConstructionDriver.Commission: design '{request.DesignId}' refused for H{request.HouseholdId} — the approved loan cannot be drawn (see above).");
+                    return null;
+                }
             }
             IConstructionMaterialSource householdSource = MaterialSourceByHousehold != null
                 ? MaterialSourceByHousehold(request.HouseholdId) : null;
@@ -359,9 +430,133 @@ namespace LandLedgers.Economy
             record.EvaluationSummary = evaluation.Summary ?? string.Empty;
             if (evaluation.Lines != null && evaluation.Lines.Count > 0)
                 record.Decisions.InsertRange(0, evaluation.Lines);
+            // D-4: the record carries the loan terms (the same object the
+            // evaluation holds) BEFORE the draw fills them in — the draw
+            // mutates the terms in place, so the record sees the drawn
+            // loan, its obligation and its schedule.
+            record.LoanTerms = evaluation.LoanTerms;
+            if (evaluation.LoanTerms != null)
+            {
+                string drawProblem = commissioner.DrawConstructionLoan(record, evaluation.LoanTerms,
+                    cash, obligations, ids, dayIndex, diag);
+                if (drawProblem != null)
+                {
+                    record.Decisions.Add($"day {dayIndex}: construction loan draw refused — {drawProblem} The commission is refused; the project is not added to the build list.");
+                    diag.Add($"NpcConstructionDriver.Commission: design '{request.DesignId}' refused for H{request.HouseholdId} — the approved loan could not be drawn (see above).");
+                    return null;
+                }
+            }
             if (projects != null) projects.Add(project);
             diag.Add($"NpcConstructionDriver: H{request.HouseholdId} commissioned '{request.DesignId}' on parcel '{request.ParcelId}' (project '{project.ProjectId}').");
             return project;
+        }
+
+        /// <summary>
+        /// D-4: tries the construction-loan leg for a cash-only
+        /// affordability refusal. Returns the loan-funded evaluation when
+        /// underwriting approves it in full; otherwise returns the
+        /// original cash evaluation (still non-viable) so the caller
+        /// refuses with the cash shortfall — the diag above the refusal
+        /// already names the loan outcome. The loan leg is skipped
+        /// entirely when no underwriting is bound, and the skip is
+        /// recorded, never newly blocking a cash-funded commission.
+        /// </summary>
+        private NpcConstructionEvaluation TryEvaluateWithLoan(
+            NpcConstructionRequest request,
+            IRealCashStore buyerStore,
+            NpcConstructionEvaluation cashEvaluation,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (LoanApplicantByHousehold == null || string.IsNullOrWhiteSpace(LoanLenderOwnerName))
+            {
+                diag.Add($"NpcConstructionDriver: no construction-loan underwriting bound for H{request.HouseholdId} — commissions stay cash-only (no applicant-profile provider or lender cash store bound).");
+                return cashEvaluation;
+            }
+            FinancingApplicantProfile applicant = LoanApplicantByHousehold(request.HouseholdId);
+            if (string.IsNullOrWhiteSpace(applicant.applicantId))
+            {
+                diag.Add($"NpcConstructionDriver: no loan applicant profile for H{request.HouseholdId} — commissions stay cash-only for this household.");
+                return cashEvaluation;
+            }
+            CollateralProfile collateral = BuildLoanCollateral(
+                cashEvaluation.EstimateCents, request.ParcelId, request.DesignId);
+            string agreementId = $"construction-loan:H{request.HouseholdId}:{request.DesignId}:{request.ParcelId}:d{dayIndex}";
+            FinancingApprovalResult result = commissioner.EvaluateConstructionLoan(
+                cashEvaluation.EstimateCents, buyerStore.ReadBalanceCents(),
+                applicant, collateral, LoanLender, LoanRequestedTerm,
+                agreementId, dayIndex, diag);
+            if (result == null) return cashEvaluation;
+            NpcConstructionLoanTerms terms = NpcConstructionCommissioner.BuildLoanTerms(
+                result, collateral, LoanLenderOwnerName, cashEvaluation.EstimateCents);
+            if (terms == null)
+            {
+                diag.Add($"NpcConstructionDriver: the construction loan for H{request.HouseholdId} produced no offer — the commission stays refused.");
+                return cashEvaluation;
+            }
+            if (result.Decision != FinancingDecision.Approved || result.HasBlockingReadinessGap)
+            {
+                diag.Add($"NpcConstructionDriver: the construction loan for H{request.HouseholdId} is {result.Decision} and cannot fund the build"
+                    + (result.HasConditions ? $" — conditions: {string.Join("; ", result.RequiredConditions)}" : ".")
+                    + " The commission stays refused; the household cannot fund it even with a loan.");
+                return cashEvaluation;
+            }
+            int members = request.MemberPersonIds != null ? request.MemberPersonIds.Count : 0;
+            return commissioner.EvaluateCommissionWithLoan(catalog, request.DesignId,
+                Math.Max(1, members), pricePort, buyerStore.ReadBalanceCents(),
+                terms, MaxUnitsPerTrip, request.Reason, request.ReasonNotes, dayIndex, diag);
+        }
+
+        /// <summary>
+        /// D-4: the lender's cash store must hold the approved principal
+        /// before the project is created. Returns true (with the shortfall
+        /// in diagnostics) when the lender cannot fund the loan.
+        /// </summary>
+        private bool LoanLenderCannotFund(NpcConstructionLoanTerms terms, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (terms == null || terms.PrincipalCents <= 0) return false;
+            IRealCashStore lenderStore = cash != null ? cash.FindStore(terms.LenderOwnerName) : null;
+            if (lenderStore == null)
+            {
+                diag.Add($"NpcConstructionDriver: lender '{terms.LenderOwnerName}' has no real cash store — the approved {terms.PrincipalCents}c loan cannot be drawn.");
+                return true;
+            }
+            if (lenderStore.ReadBalanceCents() < terms.PrincipalCents)
+            {
+                diag.Add($"NpcConstructionDriver: lender '{terms.LenderOwnerName}' holds {lenderStore.ReadBalanceCents()}c, short of the approved {terms.PrincipalCents}c loan — the bank lends finite capital only.");
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// D-4: builds the collateral for a construction loan from the
+        /// priced estimate and the parcel — the structure to be built,
+        /// valued at its estimated materials cost (the cost approach),
+        /// secured by a first lien on the parcel it stands on. Land value
+        /// is NOT counted: no parcel valuation exists, so capacity is
+        /// conservative (about 0.56x the estimate at the construction
+        /// policy's multipliers — Agent F owns parcel valuation, which
+        /// would raise capacity). Liquidity and condition are documented
+        /// defaults (a half-built house is illiquid; a new structure is
+        /// in full condition); the financing evaluator does not read them
+        /// for this decision. Encumbered value is zero — the parcel is
+        /// not otherwise pledged.
+        /// </summary>
+        private static CollateralProfile BuildLoanCollateral(int estimateCents, string parcelId, string designId)
+        {
+            return new CollateralProfile
+            {
+                collateralId = "parcel:" + parcelId + "+structure:" + designId,
+                kind = LoanCollateralKind.ImprovedProperty,
+                estimatedValueCents = Math.Max(0, estimateCents),
+                lienPriority = 1,
+                liquidity01 = 0.5f,
+                condition01 = 1.0f,
+                encumberedValueCents = 0,
+            };
         }
 
         /// <summary>Commissions every queued request, in order. Refused requests stay queued with their reason in diagnostics.</summary>
@@ -410,6 +605,13 @@ namespace LandLedgers.Economy
                 }
                 if (DriveProject(project, dayIndex, diag)) advanced++;
             }
+            // D-4: service drawn construction loans — a loan outlives the
+            // build (repayment continues after the house is finished, and
+            // a cancelled build does not cancel its debt: the drawn
+            // principal was spent, the obligation stands). A missed
+            // payment never blocks the build; it is recorded loudly by
+            // the service itself and retried on a later drive.
+            ServiceConstructionLoans(dayIndex, diag);
             // CAMPAIGN-C (DEF-020): diagnostic slice only — one day-keyed
             // summary line naming every stranded procurement package
             // (identity + days stranded + recorded reason) into the daily
@@ -420,9 +622,32 @@ namespace LandLedgers.Economy
             return advanced;
         }
 
-        private bool DriveProject(ConstructionProject project, int dayIndex, List<string> diag)
+        /// <summary>
+        /// D-4: services every drawn construction loan on a live project,
+        /// once per drive. Loans on completed and cancelled projects are
+        /// serviced too — the debt outlives the build. A missed payment
+        /// is logged here and recorded on the record by the service
+        /// itself; it never blocks the build and is retried on a later
+        /// drive.
+        /// </summary>
+        private void ServiceConstructionLoans(int dayIndex, List<string> diag)
         {
-            WorkPackage next = NextIncompletePackage(project);
+            diag = diag ?? diagnostics;
+            if (commissioner == null || projects == null) return;
+            var snapshot = new List<ConstructionProject>(projects);
+            foreach (ConstructionProject project in snapshot)
+            {
+                if (project == null) continue;
+                NpcConstructionRecord record = commissioner.FindRecordForProject(project.ProjectId);
+                if (record == null || record.LoanTerms == null || !record.LoanTerms.IsDrawn) continue;
+                string problem = commissioner.ServiceConstructionLoan(record, cash, obligations, dayIndex, diag);
+                if (problem != null)
+                    diag.Add($"NpcConstructionDriver: construction loan for project '{project.ProjectId}' could not be serviced — {problem}");
+            }
+        }
+
+        private bool DriveProject(ConstructionProject project, int dayIndex, List<string> diag)
+        {            WorkPackage next = NextIncompletePackage(project);
             if (next == null)
             {
                 if (project.WorkPackages == null || project.WorkPackages.Count == 0)

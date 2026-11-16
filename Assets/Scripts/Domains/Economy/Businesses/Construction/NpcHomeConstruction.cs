@@ -223,7 +223,33 @@ namespace LandLedgers.Economy
         private readonly List<string> diagnostics = new List<string>();
         private int sequence;
 
+        /// <summary>
+        /// D-10: completion handoffs published by CompleteProject, in
+        /// completion order — one per completed project, for B's installation
+        /// contract. Re-derived from the saved project on load (see
+        /// LoadFromSaveDto); the list itself is not a save field.
+        /// </summary>
+        private readonly List<CompletedBuildingHandoff> completionHandoffs = new List<CompletedBuildingHandoff>();
+
         public IReadOnlyList<string> Diagnostics => diagnostics;
+
+        /// <summary>D-10: every completion handoff published so far, in completion order.</summary>
+        public IReadOnlyList<CompletedBuildingHandoff> CompletionHandoffs => completionHandoffs;
+
+        /// <summary>
+        /// D-10: the completion handoff for one project, or null when the
+        /// project has not completed — no handoff exists before completion,
+        /// so installation (which consumes the handoff) can only be ordered
+        /// against a completed building (plan §7 Q5).
+        /// </summary>
+        public CompletedBuildingHandoff HandoffForProject(string projectId)
+        {
+            if (string.IsNullOrWhiteSpace(projectId)) return null;
+            foreach (CompletedBuildingHandoff handoff in completionHandoffs)
+                if (handoff != null && string.Equals(handoff.ProjectId, projectId, StringComparison.Ordinal))
+                    return handoff;
+            return null;
+        }
 
         /// <summary>
         /// Pass VIII Worker 3: optional equipment reservation authority.
@@ -919,6 +945,7 @@ namespace LandLedgers.Economy
             project.CompletedDayIndex = dayIndex;
             diag.Add($"ConstructionProjectExecutor: project '{project.ProjectId}' complete — building '{buildingId}' " +
                 $"({design.SpaceSpecs.Count} space(s)) on parcel '{project.ParcelId}'.");
+            PublishCompletionHandoff(project, dayIndex, diag);
             if (project.VisualPlacementPending)
                 diag.Add($"ConstructionProjectExecutor: visual placement PENDING Codex handoff '{project.PrefabHandoffRecordId}' — data is real, visuals are not claimed.");
             return null;
@@ -981,6 +1008,111 @@ namespace LandLedgers.Economy
             return null;
         }
 
+        /// <summary>
+        /// D-10: houses a single lodger — a person who is NOT a member of
+        /// the commissioning household — in a completed building under a
+        /// stated arrangement and a recorded property agreement. Josh
+        /// Saunders (a single sawmill labourer, employed by Enzo Kwint) is
+        /// the first case: employer lodging in a cabin his employer
+        /// commissioned, under an employer-lodging agreement with no charge.
+        /// Occupancy is NOT membership: the lodger's own household id is
+        /// recorded on the occupancy, never the commissioning household's.
+        /// Refuses unless the project is a completed building, the
+        /// arrangement is stated, and the agreement exists and names this
+        /// building, its parcel, or one of its spaces. Commercial lodging
+        /// arrangements (EmployerLodging included) are capacity-guarded by
+        /// the housing authority — a room cannot be rented beyond its
+        /// sleeping capacity; non-commercial arrangements place into the
+        /// first space and record overcrowding as a risk, never a refusal
+        /// (Canon 12.7), mirroring OccupyCompletedHome. The production
+        /// caller is a future driver slice (G) — D publishes the contract.
+        /// </summary>
+        public string OccupyCompletedHomeAsLodger(
+            ConstructionProject project,
+            HousingAuthority housing,
+            int lodgerPersonId,
+            int lodgerHouseholdId,
+            AccommodationArrangement arrangement,
+            string agreementId,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (project == null || housing == null)
+                return "ConstructionProjectExecutor.OccupyCompletedHomeAsLodger: project and housing authority required.";
+            if (project.Status != ConstructionProjectStatus.Complete || string.IsNullOrWhiteSpace(project.BuildingId))
+                return $"ConstructionProjectExecutor.OccupyCompletedHomeAsLodger: project '{project?.ProjectId}' is not a completed building.";
+            if (arrangement == AccommodationArrangement.Unspecified)
+                return "ConstructionProjectExecutor.OccupyCompletedHomeAsLodger: the arrangement must be stated.";
+            if (lodgerPersonId < 0)
+                return "ConstructionProjectExecutor.OccupyCompletedHomeAsLodger: the lodger must be named.";
+            if (string.IsNullOrWhiteSpace(agreementId))
+                return "ConstructionProjectExecutor.OccupyCompletedHomeAsLodger: the lodging agreement must be named — the arrangement is recorded, not a handshake.";
+            PropertyAgreement agreement = housing.FindAgreement(agreementId);
+            if (agreement == null)
+                return $"ConstructionProjectExecutor.OccupyCompletedHomeAsLodger: no recorded agreement '{agreementId}' — record the lodging agreement first.";
+            List<AccommodationSpace> spaces = housing.SpacesForBuilding(project.BuildingId);
+            if (spaces == null || spaces.Count == 0)
+                return $"ConstructionProjectExecutor.OccupyCompletedHomeAsLodger: building '{project.BuildingId}' has no accommodation spaces.";
+            bool targetIsBuildingOrParcel =
+                string.Equals(agreement.SpaceOrParcelId, project.BuildingId, StringComparison.Ordinal)
+                || string.Equals(agreement.SpaceOrParcelId, project.ParcelId, StringComparison.Ordinal);
+            string targetSpace = null;
+            if (!targetIsBuildingOrParcel)
+            {
+                foreach (AccommodationSpace space in spaces)
+                {
+                    if (space != null && string.Equals(agreement.SpaceOrParcelId, space.SpaceId, StringComparison.Ordinal))
+                    {
+                        targetSpace = space.SpaceId;
+                        break;
+                    }
+                }
+            }
+            if (!targetIsBuildingOrParcel && targetSpace == null)
+                return $"ConstructionProjectExecutor.OccupyCompletedHomeAsLodger: agreement '{agreementId}' names '{agreement.SpaceOrParcelId}', not building '{project.BuildingId}' or parcel '{project.ParcelId}' — a lodging agreement for another building cannot house a lodger here.";
+            string chosen = targetSpace;
+            if (chosen == null)
+            {
+                foreach (AccommodationSpace space in spaces)
+                {
+                    if (space == null) continue;
+                    if (housing.OccupantCount(space.SpaceId) < Math.Max(0, space.SleepingCapacity))
+                    {
+                        chosen = space.SpaceId;
+                        break;
+                    }
+                }
+            }
+            if (chosen == null)
+            {
+                if (HousingAuthority.IsCommercialLodgingArrangement(arrangement))
+                    return $"ConstructionProjectExecutor.OccupyCompletedHomeAsLodger: building '{project.BuildingId}' has no remaining sleeping capacity — a room cannot be rented beyond capacity.";
+                chosen = spaces[0] != null ? spaces[0].SpaceId : null;
+                if (chosen == null)
+                    return $"ConstructionProjectExecutor.OccupyCompletedHomeAsLodger: building '{project.BuildingId}' has no accommodation spaces.";
+                diag.Add($"ConstructionProjectExecutor: no remaining sleeping capacity in '{project.BuildingId}' for P{lodgerPersonId} — recorded as overcrowding risk, not blocked.");
+            }
+            else if (HousingAuthority.IsCommercialLodgingArrangement(arrangement))
+            {
+                AccommodationSpace chosenSpace = housing.FindSpace(chosen);
+                if (chosenSpace != null && housing.OccupantCount(chosen) >= Math.Max(0, chosenSpace.SleepingCapacity))
+                    return $"ConstructionProjectExecutor.OccupyCompletedHomeAsLodger: '{chosen}' sleeps {chosenSpace.SleepingCapacity} and is full — a room cannot be rented beyond capacity.";
+            }
+            else
+            {
+                AccommodationSpace chosenSpace = housing.FindSpace(chosen);
+                if (chosenSpace != null && housing.OccupantCount(chosen) >= Math.Max(0, chosenSpace.SleepingCapacity))
+                    diag.Add($"ConstructionProjectExecutor: no remaining sleeping capacity in '{project.BuildingId}' for P{lodgerPersonId} — recorded as overcrowding risk, not blocked.");
+            }
+            string problem = housing.TryOccupyUnderAgreement(
+                lodgerPersonId, lodgerHouseholdId, chosen, arrangement, dayIndex, agreementId, diag, out ResidentialOccupancy occupancy);
+            if (problem != null)
+                return $"ConstructionProjectExecutor.OccupyCompletedHomeAsLodger: {problem}";
+            diag.Add($"ConstructionProjectExecutor: P{lodgerPersonId} (H{lodgerHouseholdId}) lodges in '{project.BuildingId}' as {arrangement} under agreement '{agreementId}'.");
+            return null;
+        }
+
         /// <summary>Phase D: binds a written contract to the project (contract → project link).</summary>
         public string BindContract(ConstructionProject project, ConstructionContract contract, List<string> diag)
         {
@@ -998,6 +1130,59 @@ namespace LandLedgers.Economy
         {
             diag.Add($"ConstructionProjectExecutor: {message}");
             return null;
+        }
+
+        /// <summary>
+        /// D-10: publishes the completion handoff for one completed
+        /// project — exactly once per project (deduped by project id, so a
+        /// double restore publishes once). The handoff carries what B's
+        /// installation contract needs: building id + parcel + owner
+        /// household, with design, project and completion day as provenance.
+        /// It is a record, not a second building registry — the building
+        /// itself lives in the HousingAuthority.
+        /// </summary>
+        private void PublishCompletionHandoff(ConstructionProject project, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (project == null || string.IsNullOrWhiteSpace(project.ProjectId)) return;
+            if (HandoffForProject(project.ProjectId) != null) return;
+            if (string.IsNullOrWhiteSpace(project.BuildingId)) return;
+            completionHandoffs.Add(new CompletedBuildingHandoff
+            {
+                BuildingId = project.BuildingId,
+                ParcelId = project.ParcelId ?? string.Empty,
+                OwnerHouseholdId = project.HouseholdId,
+                DesignId = project.DesignId ?? string.Empty,
+                ProjectId = project.ProjectId,
+                CompletedDayIndex = dayIndex,
+            });
+            diag.Add($"ConstructionProjectExecutor: completion handoff published for '{project.BuildingId}' (parcel '{project.ParcelId}', owner H{project.HouseholdId}) — B's installation contract may consume it.");
+        }
+
+        /// <summary>
+        /// D-10: the completion handoff — what CompleteProject publishes
+        /// for B's installation contract. Building id + parcel + owner
+        /// household, with the design, project and completion day as
+        /// provenance. A record, not a second building registry: the
+        /// building itself lives in the HousingAuthority. Published exactly
+        /// once per completed project, at completion; no handoff exists
+        /// before completion, so installation (which consumes the handoff)
+        /// can only be ordered against a completed building — the
+        /// pre-completion ordering rule (plan §7 Q5). Nested (like
+        /// ConstructionProjectSaveDto) so the Pass 9 assembly scan does not
+        /// treat it as an unwired type. It does NOT carry a Unity building
+        /// instance id: the parcel-side binding is G's driver work.
+        /// </summary>
+        public sealed class CompletedBuildingHandoff
+        {
+            public string BuildingId = string.Empty;
+            public string ParcelId = string.Empty;
+            public int OwnerHouseholdId;
+            public string DesignId = string.Empty;
+            public string ProjectId = string.Empty;
+            public int CompletedDayIndex = -1;
+
+            public CompletedBuildingHandoff() { }
         }
 
         #region Save / Load
@@ -1165,6 +1350,16 @@ namespace LandLedgers.Economy
                     maxSuffix = Math.Max(maxSuffix, TrailingNumber(package.PackageId));
             }
             sequence = Math.Max(dto.ExecutorSequence, maxSuffix + 1);
+            // D-10: the completion handoff is re-derived from the saved
+            // project on load — the project already carries building id,
+            // parcel, owner, design and completion day, so no DTO change is
+            // needed. Deduped by project id (see PublishCompletionHandoff),
+            // so a double restore publishes once.
+            foreach (ConstructionProject project in projects)
+            {
+                if (project == null || project.Status != ConstructionProjectStatus.Complete) continue;
+                PublishCompletionHandoff(project, project.CompletedDayIndex, diag);
+            }
             return projects;
         }
 

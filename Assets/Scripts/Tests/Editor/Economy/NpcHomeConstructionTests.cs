@@ -411,5 +411,368 @@ namespace LandLedgers.EditorTests.Economy
             List<ConstructionProject> deduped = executor.LoadFromSaveDto(dto, diag);
             Assert.AreEqual(1, deduped.Count);
         }
+
+        // ---- D-10: unfurnished-occupancy proof + completion handoff to B ----
+
+        private ConstructionProject CompleteCabin(
+            BuildingDesignCatalog catalog, ConstructionProjectExecutor executor,
+            HousingAuthority housing, int householdId, string designId, string parcelId,
+            int startDayIndex, List<string> diag)
+        {
+            ConstructionProject project = executor.CreateProject(catalog, householdId, designId, parcelId, startDayIndex, diag);
+            Assert.IsNotNull(project);
+            Assert.IsNull(executor.CreateWorkPackages(project, catalog.FindDesign(designId), startDayIndex, diag));
+            var source = StockedSource();
+            var tracker = new PersonScheduleTracker();
+            var custody = new FakeToolCustody();
+            custody.Grant(householdId, "shovel");
+            custody.Grant(householdId, "saw");
+            var tasks = new TaskAuthority();
+            var budgets = new WorkTimeBudgetStore();
+            for (int i = 0; i < project.WorkPackages.Count; i++)
+            {
+                int day = startDayIndex + i;
+                WorkPackage package = project.WorkPackages[i];
+                Assert.IsNull(executor.StagePackageMaterials(project, package, source, day, diag));
+                Assert.IsNull(executor.CommitLabor(project, package, 5, tracker, custody, tasks, budgets, day, 360, package.LaborMinutesRequired, "build", diag));
+                string taskId = project.LaborTaskIds[project.LaborTaskIds.Count - 1];
+                Assert.IsNull(executor.WorkCommittedLabor(project, package, taskId, package.LaborMinutesRequired, tasks, budgets, day, diag));
+                Assert.IsNull(executor.AdvancePackage(project, package, day, diag));
+                Assert.AreEqual(WorkPackageStatus.Complete, package.Status);
+            }
+            int completeDay = startDayIndex + project.WorkPackages.Count - 1;
+            Assert.IsNull(executor.CompleteProject(project, catalog.FindDesign(designId), housing, completeDay, diag));
+            Assert.AreEqual(ConstructionProjectStatus.Complete, project.Status);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(project.BuildingId));
+            return project;
+        }
+
+        private static List<PersonState> Members(params (int id, int age, int householdId)[] defs)
+        {
+            var list = new List<PersonState>();
+            foreach (var def in defs)
+                list.Add(new PersonState { id = def.id, age = def.age, householdId = def.householdId, deathDayIndex = -1 });
+            return list;
+        }
+
+        [Test]
+        public void UnfurnishedBuildingOccupies_NoFurnishingGate()
+        {
+            // D-10: a completed building is unfurnished by design, and
+            // occupancy is NEVER gated by furnishing. This test creates no
+            // bed, no furnishing register, no sleeping-place registry at
+            // all — a later slice that adds a furnishing gate to occupancy
+            // breaks it loudly, by design.
+            var diag = new List<string>();
+            var catalog = new BuildingDesignCatalog();
+            catalog.RegisterDesign(CabinDesign("cabin-a"), diag);
+            var executor = new ConstructionProjectExecutor();
+            var housing = new HousingAuthority();
+            ConstructionProject project = CompleteCabin(catalog, executor, housing, 1, "cabin-a", "parcel-9", 10, diag);
+
+            Assert.IsNull(executor.OccupyCompletedHome(project, housing,
+                new List<int> { 5, 6 }, AccommodationArrangement.OwnerOccupied, 12, diag));
+            Assert.AreEqual(1, housing.CurrentOccupanciesForPerson(5).Count);
+            Assert.AreEqual(1, housing.CurrentOccupanciesForPerson(6).Count);
+            Assert.AreEqual(AccommodationArrangement.OwnerOccupied,
+                housing.CurrentOccupanciesForPerson(5)[0].Arrangement);
+
+            // Suitability reads the space, not beds: 4 sleeping places
+            // from the design spec, 2 required for two adults.
+            var evaluator = new HouseholdShelterSuitabilityEvaluator();
+            HouseholdShelterSuitability verdict = evaluator.Evaluate(1, Members((5, 30, 1), (6, 28, 1)), housing, diag);
+            Assert.AreEqual(2, verdict.Composition.RequiredSleepingPlaces);
+            Assert.AreEqual(4, verdict.ProvidedSleepingPlaces);
+            Assert.IsTrue(verdict.IsSuitable);
+            Assert.AreEqual(0, verdict.GapPlaces);
+        }
+
+        [Test]
+        public void OvercrowdingIsRecorded_NotBlocked()
+        {
+            // D-10: Canon 12.7 freedom with consequence — five people in a
+            // four-place cabin are all housed; the fifth is recorded as an
+            // overcrowding risk, never refused at the door.
+            var diag = new List<string>();
+            var catalog = new BuildingDesignCatalog();
+            catalog.RegisterDesign(CabinDesign("cabin-a"), diag);
+            var executor = new ConstructionProjectExecutor();
+            var housing = new HousingAuthority();
+            ConstructionProject project = CompleteCabin(catalog, executor, housing, 1, "cabin-a", "parcel-9", 10, diag);
+
+            Assert.IsNull(executor.OccupyCompletedHome(project, housing,
+                new List<int> { 5, 6, 7, 8, 9 }, AccommodationArrangement.OwnerOccupied, 12, diag));
+            for (int personId = 5; personId <= 9; personId++)
+                Assert.AreEqual(1, housing.CurrentOccupanciesForPerson(personId).Count, $"P{personId} must be housed");
+            bool riskRecorded = false;
+            foreach (string line in diag)
+                if (line.Contains("overcrowding risk")) { riskRecorded = true; break; }
+            Assert.IsTrue(riskRecorded, "overcrowding must be recorded in diagnostics");
+        }
+
+        [Test]
+        public void CompletionHandoffPublished_BuildingParcelOwner()
+        {
+            // D-10: CompleteProject publishes building id + parcel + owner
+            // for B's installation contract, with design, project and
+            // completion day as provenance.
+            var diag = new List<string>();
+            var catalog = new BuildingDesignCatalog();
+            catalog.RegisterDesign(CabinDesign("cabin-a"), diag);
+            var executor = new ConstructionProjectExecutor();
+            var housing = new HousingAuthority();
+            ConstructionProject project = CompleteCabin(catalog, executor, housing, 1, "cabin-a", "parcel-9", 10, diag);
+
+            Assert.AreEqual(1, executor.CompletionHandoffs.Count);
+            ConstructionProjectExecutor.CompletedBuildingHandoff handoff = executor.CompletionHandoffs[0];
+            Assert.AreEqual(project.BuildingId, handoff.BuildingId);
+            Assert.AreEqual("parcel-9", handoff.ParcelId);
+            Assert.AreEqual(1, handoff.OwnerHouseholdId);
+            Assert.AreEqual("cabin-a", handoff.DesignId);
+            Assert.AreEqual(project.ProjectId, handoff.ProjectId);
+            Assert.AreEqual(11, handoff.CompletedDayIndex);
+            Assert.AreEqual(handoff, executor.HandoffForProject(project.ProjectId));
+            Assert.IsNull(executor.HandoffForProject("no-such-project"));
+            Assert.IsNull(executor.HandoffForProject(null));
+        }
+
+        [Test]
+        public void NoHandoffBeforeCompletion()
+        {
+            // D-10 (plan §7 Q5): installation waits for completion because
+            // the handoff only exists after it — before CompleteProject
+            // there is nothing for B's install path to consume.
+            var diag = new List<string>();
+            var catalog = new BuildingDesignCatalog();
+            catalog.RegisterDesign(CabinDesign("cabin-a"), diag);
+            var executor = new ConstructionProjectExecutor();
+            ConstructionProject project = executor.CreateProject(catalog, 1, "cabin-a", "parcel-9", 10, diag);
+            executor.CreateWorkPackages(project, catalog.FindDesign("cabin-a"), 10, diag);
+
+            Assert.AreEqual(0, executor.CompletionHandoffs.Count);
+            Assert.IsNull(executor.HandoffForProject(project.ProjectId));
+
+            string refusal = executor.CompleteProject(project, catalog.FindDesign("cabin-a"), new HousingAuthority(), 12, diag);
+            Assert.IsNotNull(refusal);
+            StringAssert.Contains("no fake completions", refusal);
+            Assert.AreEqual(0, executor.CompletionHandoffs.Count);
+            Assert.IsNull(executor.HandoffForProject(project.ProjectId));
+        }
+
+        [Test]
+        public void HandoffSurvivesSaveLoad_RederivedFromProject()
+        {
+            // D-10: the handoff is re-derived from the saved project on
+            // load — no DTO change — and a double restore publishes once.
+            var diag = new List<string>();
+            var catalog = new BuildingDesignCatalog();
+            catalog.RegisterDesign(CabinDesign("cabin-a"), diag);
+            var executor = new ConstructionProjectExecutor();
+            var housing = new HousingAuthority();
+            ConstructionProject project = CompleteCabin(catalog, executor, housing, 1, "cabin-a", "parcel-9", 10, diag);
+
+            ConstructionProjectExecutor.ConstructionProjectSaveDto dto =
+                executor.CaptureSaveDto(new List<ConstructionProject> { project });
+            var loader = new ConstructionProjectExecutor();
+            List<ConstructionProject> loaded = loader.LoadFromSaveDto(dto, diag);
+            Assert.AreEqual(1, loaded.Count);
+            Assert.AreEqual(1, loader.CompletionHandoffs.Count);
+            Assert.AreEqual(project.BuildingId, loader.CompletionHandoffs[0].BuildingId);
+            Assert.AreEqual(project.ProjectId, loader.CompletionHandoffs[0].ProjectId);
+            Assert.AreEqual(11, loader.CompletionHandoffs[0].CompletedDayIndex);
+
+            List<ConstructionProject> loadedTwice = loader.LoadFromSaveDto(dto, diag);
+            Assert.AreEqual(1, loadedTwice.Count);
+            Assert.AreEqual(1, loader.CompletionHandoffs.Count, "a double restore must not publish a second handoff");
+        }
+
+        [Test]
+        public void SuitabilityWithRegistryReadsInstalledBeds_NotSpaces()
+        {
+            // D-10: the plan's shorthand ("suitability reads spaces, not
+            // beds") is exact only without a registry. With a
+            // same-household sleeping-place registry supplied, B1's rule
+            // applies: ProvidedSleepingPlaces comes from installed beds
+            // instead — a household sleeping on the floor is housed but
+            // unsuitably housed. Both arms are pinned here.
+            var diag = new List<string>();
+            var housing = new HousingAuthority();
+            housing.RegisterBuilding("b-1", "p-1", "house", 0, "test fixture", diag);
+            AccommodationSpace room = housing.DefineSpace("b-1", 4, diag);
+            housing.Occupy(1, 1, room.SpaceId, AccommodationArrangement.Rental, 5, diag);
+            housing.Occupy(2, 1, room.SpaceId, AccommodationArrangement.Rental, 5, diag);
+
+            var evaluator = new HouseholdShelterSuitabilityEvaluator();
+            HouseholdShelterSuitability withoutRegistry = evaluator.Evaluate(1, Members((1, 34, 1), (2, 31, 1)), housing, diag);
+            Assert.AreEqual(4, withoutRegistry.ProvidedSleepingPlaces);
+            Assert.IsTrue(withoutRegistry.IsSuitable);
+
+            var emptyRegistry = new SleepingPlaceRegistry { HouseholdId = 1 };
+            Assert.AreEqual(0, emptyRegistry.InstalledBedPlaceCount());
+            HouseholdShelterSuitability withRegistry = evaluator.Evaluate(1, Members((1, 34, 1), (2, 31, 1)), housing, diag, emptyRegistry);
+            Assert.AreEqual(0, withRegistry.ProvidedSleepingPlaces);
+            Assert.IsFalse(withRegistry.IsSuitable);
+            Assert.AreEqual(2, withRegistry.GapPlaces);
+            StringAssert.Contains("(installed beds)", withRegistry.Summary);
+        }
+
+        [Test]
+        public void JoshSaunders_EmployerLodgingInCompletedCabin()
+        {
+            // D-10 (plan §15): Josh Saunders, single sawmill labourer
+            // employed by Enzo Kwint, lodges in a cabin his employer
+            // commissioned, under a recorded employer-lodging agreement
+            // with no charge. Occupancy is NOT membership: Josh's own
+            // household id is recorded, never Enzo's. Fixture-local ids
+            // (P77, H10/H11) pin the mechanism; production person and
+            // household ids come from C-8's town-config authorship.
+            var diag = new List<string>();
+            var catalog = new BuildingDesignCatalog();
+            catalog.RegisterDesign(CabinDesign("cabin-a"), diag);
+            var executor = new ConstructionProjectExecutor();
+            var housing = new HousingAuthority();
+            ConstructionProject project = CompleteCabin(catalog, executor, housing, 10, "cabin-a", "parcel-sawmill-1", 10, diag);
+
+            PropertyAgreement agreement = housing.RecordAgreement(
+                "employer lodging", "Enzo Kwint", "Josh Saunders", project.BuildingId,
+                "employer lodging, no charge", 11, -1, string.Empty, diag);
+            Assert.IsNotNull(agreement);
+            Assert.IsNull(agreement.PaymentTerms, "employer lodging with no charge carries no payment schedule");
+
+            Assert.IsNull(executor.OccupyCompletedHomeAsLodger(project, housing,
+                77, 11, AccommodationArrangement.EmployerLodging, agreement.AgreementId, 12, diag));
+            List<ResidentialOccupancy> occupancies = housing.CurrentOccupanciesForPerson(77);
+            Assert.AreEqual(1, occupancies.Count);
+            Assert.AreEqual(77, occupancies[0].PersonId);
+            Assert.AreEqual(11, occupancies[0].HouseholdId, "the lodger's own household is recorded, not the employer's");
+            Assert.AreEqual(AccommodationArrangement.EmployerLodging, occupancies[0].Arrangement);
+            Assert.AreEqual(agreement.AgreementId, occupancies[0].AgreementId);
+            Assert.AreEqual(housing.SpacesForBuilding(project.BuildingId)[0].SpaceId, occupancies[0].SpaceId);
+            Assert.AreEqual(agreement, housing.FindAgreement(agreement.AgreementId));
+
+            var evaluator = new HouseholdShelterSuitabilityEvaluator();
+            HouseholdShelterSuitability verdict = evaluator.Evaluate(11, Members((77, 24, 11)), housing, diag);
+            Assert.AreEqual(1, verdict.Composition.RequiredSleepingPlaces);
+            Assert.AreEqual(4, verdict.ProvidedSleepingPlaces);
+            Assert.IsTrue(verdict.IsSuitable);
+        }
+
+        [Test]
+        public void LodgerRefused_WhenAgreementIsForAnotherBuilding()
+        {
+            var diag = new List<string>();
+            var catalog = new BuildingDesignCatalog();
+            catalog.RegisterDesign(CabinDesign("cabin-a"), diag);
+            var executor = new ConstructionProjectExecutor();
+            var housing = new HousingAuthority();
+            ConstructionProject project = CompleteCabin(catalog, executor, housing, 10, "cabin-a", "parcel-sawmill-1", 10, diag);
+
+            PropertyAgreement agreement = housing.RecordAgreement(
+                "employer lodging", "Enzo Kwint", "Josh Saunders", "bld-somewhere-else",
+                "employer lodging, no charge", 11, -1, string.Empty, diag);
+            Assert.IsNotNull(agreement);
+
+            string refusal = executor.OccupyCompletedHomeAsLodger(project, housing,
+                77, 11, AccommodationArrangement.EmployerLodging, agreement.AgreementId, 12, diag);
+            Assert.IsNotNull(refusal);
+            StringAssert.Contains("not building", refusal);
+            Assert.AreEqual(0, housing.CurrentOccupanciesForPerson(77).Count);
+        }
+
+        [Test]
+        public void LodgerRefused_WhenProjectNotComplete()
+        {
+            var diag = new List<string>();
+            var catalog = new BuildingDesignCatalog();
+            catalog.RegisterDesign(CabinDesign("cabin-a"), diag);
+            var executor = new ConstructionProjectExecutor();
+            var housing = new HousingAuthority();
+            ConstructionProject project = executor.CreateProject(catalog, 10, "cabin-a", "parcel-sawmill-1", 10, diag);
+            executor.CreateWorkPackages(project, catalog.FindDesign("cabin-a"), 10, diag);
+            PropertyAgreement agreement = housing.RecordAgreement(
+                "employer lodging", "Enzo Kwint", "Josh Saunders", "parcel-sawmill-1",
+                "employer lodging, no charge", 10, -1, string.Empty, diag);
+            Assert.IsNotNull(agreement);
+
+            string refusal = executor.OccupyCompletedHomeAsLodger(project, housing,
+                77, 11, AccommodationArrangement.EmployerLodging, agreement.AgreementId, 11, diag);
+            Assert.IsNotNull(refusal);
+            StringAssert.Contains("not a completed building", refusal);
+            Assert.AreEqual(0, housing.CurrentOccupanciesForPerson(77).Count);
+        }
+
+        [Test]
+        public void LodgerRefused_WhenAgreementMissing()
+        {
+            var diag = new List<string>();
+            var catalog = new BuildingDesignCatalog();
+            catalog.RegisterDesign(CabinDesign("cabin-a"), diag);
+            var executor = new ConstructionProjectExecutor();
+            var housing = new HousingAuthority();
+            ConstructionProject project = CompleteCabin(catalog, executor, housing, 10, "cabin-a", "parcel-sawmill-1", 10, diag);
+
+            string refusal = executor.OccupyCompletedHomeAsLodger(project, housing,
+                77, 11, AccommodationArrangement.EmployerLodging, "pag-nope", 12, diag);
+            Assert.IsNotNull(refusal);
+            StringAssert.Contains("no recorded agreement", refusal);
+            Assert.AreEqual(0, housing.CurrentOccupanciesForPerson(77).Count);
+
+            string blankRefusal = executor.OccupyCompletedHomeAsLodger(project, housing,
+                77, 11, AccommodationArrangement.EmployerLodging, string.Empty, 12, diag);
+            Assert.IsNotNull(blankRefusal);
+            StringAssert.Contains("must be named", blankRefusal);
+        }
+
+        [Test]
+        public void LodgerCapacityGuard_CommercialRefuses()
+        {
+            // D-10: a commercial lodging arrangement cannot rent a room
+            // beyond its sleeping capacity — the cabin sleeps 4 and holds 4.
+            var diag = new List<string>();
+            var catalog = new BuildingDesignCatalog();
+            catalog.RegisterDesign(CabinDesign("cabin-a"), diag);
+            var executor = new ConstructionProjectExecutor();
+            var housing = new HousingAuthority();
+            ConstructionProject project = CompleteCabin(catalog, executor, housing, 10, "cabin-a", "parcel-sawmill-1", 10, diag);
+            Assert.IsNull(executor.OccupyCompletedHome(project, housing,
+                new List<int> { 5, 6, 7, 8 }, AccommodationArrangement.OwnerOccupied, 12, diag));
+            PropertyAgreement agreement = housing.RecordAgreement(
+                "employer lodging", "Enzo Kwint", "Josh Saunders", project.BuildingId,
+                "employer lodging, no charge", 11, -1, string.Empty, diag);
+            Assert.IsNotNull(agreement);
+
+            string refusal = executor.OccupyCompletedHomeAsLodger(project, housing,
+                77, 11, AccommodationArrangement.EmployerLodging, agreement.AgreementId, 12, diag);
+            Assert.IsNotNull(refusal);
+            StringAssert.Contains("capacity", refusal);
+            Assert.AreEqual(0, housing.CurrentOccupanciesForPerson(77).Count);
+        }
+
+        [Test]
+        public void LodgerCapacityGuard_NonCommercialRecordsRisk()
+        {
+            // D-10: the same full cabin takes a non-commercial lodger —
+            // overcrowding is recorded as a risk, never refused at the door.
+            var diag = new List<string>();
+            var catalog = new BuildingDesignCatalog();
+            catalog.RegisterDesign(CabinDesign("cabin-a"), diag);
+            var executor = new ConstructionProjectExecutor();
+            var housing = new HousingAuthority();
+            ConstructionProject project = CompleteCabin(catalog, executor, housing, 10, "cabin-a", "parcel-sawmill-1", 10, diag);
+            Assert.IsNull(executor.OccupyCompletedHome(project, housing,
+                new List<int> { 5, 6, 7, 8 }, AccommodationArrangement.OwnerOccupied, 12, diag));
+            PropertyAgreement agreement = housing.RecordAgreement(
+                "kin hosting", "Enzo Kwint", "Josh Saunders", project.BuildingId,
+                "kin hosting, no charge", 11, -1, string.Empty, diag);
+            Assert.IsNotNull(agreement);
+
+            Assert.IsNull(executor.OccupyCompletedHomeAsLodger(project, housing,
+                77, 11, AccommodationArrangement.KinHosting, agreement.AgreementId, 12, diag));
+            Assert.AreEqual(1, housing.CurrentOccupanciesForPerson(77).Count);
+            bool riskRecorded = false;
+            foreach (string line in diag)
+                if (line.Contains("overcrowding risk")) { riskRecorded = true; break; }
+            Assert.IsTrue(riskRecorded, "overcrowding must be recorded in diagnostics");
+        }
     }
 }

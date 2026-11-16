@@ -147,6 +147,8 @@ namespace LandLedgers.Editor.Economy
                     ParcelId = "parcel-9",
                     MemberPersonIds = new List<int> { 101 },
                     Arrangement = AccommodationArrangement.OwnerOccupied,
+                    Reason = NpcConstructionReason.Overcrowding,
+                    ReasonNotes = "test fixture: priced commission",
                 };
             }
         }

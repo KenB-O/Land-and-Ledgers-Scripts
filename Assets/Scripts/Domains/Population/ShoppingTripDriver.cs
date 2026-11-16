@@ -97,6 +97,11 @@ namespace LandLedgers.Population
         public string HomeLocationId = string.Empty;
         public int ResultNeedSequence;
         public int State;
+        // Save/Continue (this slice, F2): true when the trip was waiting
+        // in the driver's returnRecoveries list (a paid return whose
+        // recovery had not been planned yet). Additive; old saves read
+        // false and take the active-trip path.
+        public bool InReturnRecovery;
         public string FailureReason = string.Empty;
         public int UnitsSettled;
         public int DeliveryMinutes;
@@ -1121,7 +1126,11 @@ namespace LandLedgers.Population
             return (int)Math.Floor((gameSeconds - day * 86400f) / 60f);
         }
 
-        /// <summary>Save: active trips (owning runtime class holds its DTO).</summary>
+        /// <summary>Save: active trips (owning runtime class holds its DTO).
+        /// Save/Continue (this slice, F2): trips waiting in returnRecoveries
+        /// are captured too, flagged InReturnRecovery — they carry paid goods
+        /// in loop custody, and dropping them strands the batch with the need
+        /// open and no recovery ever planned.</summary>
         public List<PlannedShoppingTripSaveDto> CaptureSaveDto()
         {
             var dtos = new List<PlannedShoppingTripSaveDto>();
@@ -1132,6 +1141,15 @@ namespace LandLedgers.Population
                     dtos.Add(ToDto(trip));
                 }
             }
+            foreach (PlannedShoppingTrip trip in returnRecoveries)
+            {
+                if (trip != null)
+                {
+                    PlannedShoppingTripSaveDto dto = ToDto(trip);
+                    dto.InReturnRecovery = true;
+                    dtos.Add(dto);
+                }
+            }
 
             return dtos;
         }
@@ -1139,10 +1157,17 @@ namespace LandLedgers.Population
         /// <summary>
         /// Save: clear-then-load. Leg tasks and suppliers re-resolve through
         /// their authorities — call RehydrateAfterLoad once those are restored.
+        /// Save/Continue (this slice, F2): DTOs flagged InReturnRecovery go
+        /// back into returnRecoveries, not activeTrips — they wait for the
+        /// next day's PlanForHousehold to retry the paid return, exactly as
+        /// before the save. Their batch, trip-id sequence, and need are
+        /// attached exactly like an active trip's; their candidate is rebuilt
+        /// in RehydrateAfterLoad, where the supplier directory is available.
         /// </summary>
         public void LoadFromSaveDto(List<PlannedShoppingTripSaveDto> dtos)
         {
             activeTrips.Clear();
+            returnRecoveries.Clear();
             legsByTaskIdString.Clear();
             serviceTaskIdStringToTripId.Clear();
             if (dtos == null)
@@ -1159,7 +1184,14 @@ namespace LandLedgers.Population
                 }
 
                 PlannedShoppingTrip trip = FromDto(dto);
-                activeTrips.Add(trip);
+                if (dto.InReturnRecovery)
+                {
+                    returnRecoveries.Add(trip);
+                }
+                else
+                {
+                    activeTrips.Add(trip);
+                }
                 // Priority U-3: register the restored batch in the loop's
                 // custody, so the trip's batch and the loop's custody are
                 // one object (the read model reports it, the receipt
@@ -1177,7 +1209,7 @@ namespace LandLedgers.Population
                 AttachTripNeedToRegistry(trip);
             }
 
-            NeedsRehydrateAfterLoad = activeTrips.Count > 0;
+            NeedsRehydrateAfterLoad = activeTrips.Count > 0 || returnRecoveries.Count > 0;
         }
 
         /// <summary>
@@ -1327,6 +1359,36 @@ namespace LandLedgers.Population
                 // the state says which leg is airborne.
                 RebuildInFlightLeg(trip);
 
+                // Save/Continue (this slice, F1): a trip saved mid-route
+                // has no physical route in this session — the pathing
+                // director's routes are live scene state and are never
+                // persisted. Re-issue the route here, while the leg due
+                // still has time to fire: the arrival gate then sees a
+                // live route and retries on progress (the live slow-route
+                // path), instead of aborting at the first due on "no
+                // longer active". Only when all three delegates are bound
+                // (production; null in the harness) and the shopper is
+                // neither arrived nor already routed. A refused restart
+                // is diagnosed loudly; the trip then aborts at its leg
+                // due exactly as before this fix — never silently, never
+                // worse.
+                if ((trip.State == PlannedShoppingTrip.TripState.Outbound
+                    || trip.State == PlannedShoppingTrip.TripState.Returning)
+                    && startPhysicalRoute != null && hasPhysicallyArrived != null
+                    && hasActivePhysicalRoute != null)
+                {
+                    string destination = trip.State == PlannedShoppingTrip.TripState.Outbound
+                        ? trip.Candidate?.Supplier?.LocationId ?? string.Empty
+                        : trip.HomeLocationId ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(destination)
+                        && !hasPhysicallyArrived(trip.ShopperPersonId, destination)
+                        && hasActivePhysicalRoute(trip.ShopperPersonId, destination) == false
+                        && !startPhysicalRoute(trip.ShopperPersonId, destination))
+                    {
+                        diag.Add($"ShoppingTripDriver: trip {trip.TripId} could not restart its physical route to '{destination}' after save/load — it will abort at its leg due.");
+                    }
+                }
+
                 if (trip.State == PlannedShoppingTrip.TripState.AtStore)
                 {
                     // Settlement already ran (batch/custody persisted); resume
@@ -1396,6 +1458,43 @@ namespace LandLedgers.Population
                 // into it. Nothing here resurrects the old legs.
                 if (trip.Legs == null) trip.Legs = new HouseholdShoppingLoop.PlannedTrip();
                 RecoverStrandedPaidBatch(trip, dayIndex, diag);
+            }
+
+            // Save/Continue (this slice, F2): rehydrate the paid-return
+            // recovery trips restored into returnRecoveries — same
+            // attachments as the active trips above (batch, trip-id
+            // sequence, need, candidate), but no leg resolution: their
+            // legs were cancelled by the abort, and TryPlanPaidReturnRecovery
+            // plans fresh return legs into trip.Legs (which must exist).
+            // A recovery whose supplier cannot be rebuilt can never
+            // recover; drop it loudly — the batch stays in loop custody,
+            // the need stays open, and the diag names the loss, exactly
+            // like a dead active trip.
+            var deadRecoveries = new List<PlannedShoppingTrip>();
+            foreach (PlannedShoppingTrip trip in returnRecoveries)
+            {
+                if (trip == null) continue;
+                AttachTripBatchToLoop(trip);
+                if (loop != null)
+                {
+                    loop.SeedTripSequenceFromTripId(trip.TripId);
+                }
+                if (!AttachTripNeedToRegistry(trip))
+                {
+                    diag.Add($"ShoppingTripDriver: recovery trip {trip.TripId} household {trip.HouseholdId} need {trip.Need?.NeedSequence} has no registry instance — the receipt will decrement the DTO copy, not the registry need.");
+                }
+                trip.Candidate = RebuildCandidate(trip.CandidateDto, supplierByBusinessId);
+                if (trip.Candidate == null)
+                {
+                    diag.Add($"ShoppingTripDriver: recovery trip {trip.TripId} lost its supplier across save/load — dropped, paid batch stays in custody, need stays open.");
+                    deadRecoveries.Add(trip);
+                    continue;
+                }
+                if (trip.Legs == null) trip.Legs = new HouseholdShoppingLoop.PlannedTrip();
+            }
+            foreach (PlannedShoppingTrip trip in deadRecoveries)
+            {
+                returnRecoveries.Remove(trip);
             }
 
             NeedsRehydrateAfterLoad = false;

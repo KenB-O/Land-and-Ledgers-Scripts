@@ -2163,6 +2163,16 @@ namespace LandLedgers.FirstLedger
             // lot ids. (Catalog needs no pre-creation: Restore replaces it.)
             if (pass9.WholesaleIntake == null)
                 pass9.WholesaleIntake = new LandLedgers.Economy.Ordering.Pass3WholesaleIntake();
+            // DEF-009 follow-on (Decision 5): same window, same rule — the
+            // fuel-yard intake holder must exist before the Pass XL restore
+            // consumes the state. Without this the restore parks the saved
+            // lots as pending and a re-save before any driver runs writes an
+            // empty section, silently dropping them. With it the lots restore
+            // in place, clear-then-load, exactly like the other Pass 9
+            // holders above. Empty holder only; inventory arrives solely
+            // through the sawmill-byproduct custody transfer.
+            if (pass9.FuelIntake == null)
+                pass9.FuelIntake = new FuelYardByproductIntake();
             // Creates/reuses the Bakery runtime + driver when a Bakery business
             // instance exists (binding the owner, attaching the fuel source);
             // warn-returns otherwise, leaving the state + freight driver above
@@ -2826,7 +2836,99 @@ namespace LandLedgers.FirstLedger
             var port = new LumberYardConstructionPricePort(liveYardRuntime);
             drivers.BindConstructionPricePort(port);
             drivers.RegisterLumberYardConstructionSuppliers(liveYardRuntime, port);
+            BindSettlerCabinDesign(drivers);
             Debug.Log($"[LumberYardConstruction] Bound the construction price port and registered the yard supplier for '{yardBusiness.RuntimeDisplayName}' ({yardBusiness.InstanceId}).", this);
+        }
+
+        /// <summary>
+        /// DEF-011 (Decision 7): registers the one production design the
+        /// NPC construction trigger can select — a settler cabin in lumber
+        /// only, the only material the production price port can price and
+        /// the yard can supply. Framing is split across two phases so each
+        /// package ships inside the 400-unit single-trip bound (volume
+        /// binds first: 4 m3 / 0.01 m3 per unit); the total material is the
+        /// same 600 lumber the test cabin frames with, plus a 40-lumber
+        /// sill phase — real construction proceeds in stages with materials
+        /// arriving per stage, and mud-sill cabins were built on wooden
+        /// sills laid on grade. A fieldstone foundation phase is a
+        /// follow-up: it needs a real fieldstone supplier and price, and
+        /// neither may be invented. Idempotent: registering twice refuses
+        /// the duplicate and the existing design stands.
+        /// </summary>
+        private void BindSettlerCabinDesign(SimulationDrivers drivers)
+        {
+            var catalog = new BuildingDesignCatalog();
+            var design = new BuildingDesign
+            {
+                DesignId = "settler-cabin",
+                DisplayName = "Settler cabin",
+                WorksKind = ConstructionWorksKind.NewBuilding,
+                KindLabel = "cabin",
+            };
+            var sills = new BuildingDesignPhase
+            {
+                PhaseName = "Sills", Sequence = 0, LaborMinutes = 120,
+                Notes = "sill logs laid on grade",
+            };
+            sills.Materials.Add(new ConstructionMaterialRequirement
+            {
+                RequirementId = "REQ-sill-lumber",
+                MaterialKind = ConstructionMaterialKind.Lumber,
+                MaterialDisplayName = "lumber",
+                RequiredUnits = 40,
+                UnitLabel = "board feet",
+                ProvenanceKind = ConstructionMaterialProvenanceKind.AnyRealSource,
+                SupplierBusinessId = "lumber-yard",
+                SupplierDisplayName = "Lumber Yard",
+            });
+            sills.RequiredToolItemIds.Add("saw");
+            var walls = new BuildingDesignPhase
+            {
+                PhaseName = "Framing - walls", Sequence = 1, LaborMinutes = 240,
+                Notes = "log walls",
+            };
+            walls.Materials.Add(new ConstructionMaterialRequirement
+            {
+                RequirementId = "REQ-wall-lumber",
+                MaterialKind = ConstructionMaterialKind.Lumber,
+                MaterialDisplayName = "lumber",
+                RequiredUnits = 300,
+                UnitLabel = "board feet",
+                ProvenanceKind = ConstructionMaterialProvenanceKind.AnyRealSource,
+                SupplierBusinessId = "lumber-yard",
+                SupplierDisplayName = "Lumber Yard",
+            });
+            walls.RequiredToolItemIds.Add("saw");
+            var roof = new BuildingDesignPhase
+            {
+                PhaseName = "Framing - roof", Sequence = 2, LaborMinutes = 240,
+                Notes = "log roof",
+            };
+            roof.Materials.Add(new ConstructionMaterialRequirement
+            {
+                RequirementId = "REQ-roof-lumber",
+                MaterialKind = ConstructionMaterialKind.Lumber,
+                MaterialDisplayName = "lumber",
+                RequiredUnits = 300,
+                UnitLabel = "board feet",
+                ProvenanceKind = ConstructionMaterialProvenanceKind.AnyRealSource,
+                SupplierBusinessId = "lumber-yard",
+                SupplierDisplayName = "Lumber Yard",
+            });
+            roof.RequiredToolItemIds.Add("saw");
+            design.Phases.Add(sills);
+            design.Phases.Add(walls);
+            design.Phases.Add(roof);
+            design.SpaceSpecs.Add(new BuildingDesignSpaceSpec { Label = "main room", SleepingCapacity = 4 });
+            var diag = new List<string>();
+            string refusal = catalog.RegisterDesign(design, diag);
+            if (refusal != null)
+            {
+                Debug.LogWarning($"[LumberYardConstruction] Settler-cabin design not registered: {refusal}", this);
+                return;
+            }
+            drivers.BindConstructionDesignCatalog(catalog);
+            Debug.Log("[LumberYardConstruction] Registered the settler-cabin design for NPC construction commissioning.", this);
         }
 
         private void ConfigureMillbrookAidTable(SimulationDrivers drivers)

@@ -106,6 +106,15 @@ namespace LandLedgers.Population
         /// </summary>
         private readonly Func<IGoodsSupplier, string> carrierBusinessIdForSupplier;
         private readonly Func<string, BusinessRuntimeState> carrierRuntimeResolver;
+        /// <summary>DEF-067: optional charge recorder; null means record nothing (today's behavior exactly). Rebound by the driver when the loop is (re)built.</summary>
+        private HouseholdFoodChargeReconciliation chargeRecorder;
+
+        /// <summary>DEF-067: charge recorder, rebound by the driver. Null records nothing.</summary>
+        public HouseholdFoodChargeReconciliation ChargeRecorder
+        {
+            get => chargeRecorder;
+            set => chargeRecorder = value;
+        }
 
         /// <summary>
         /// Plan 08 Slice 2 (Q03, AUD-266): the off-map journey authority
@@ -525,7 +534,8 @@ namespace LandLedgers.Population
             Func<int, HouseholdSpendingPolicy> spendingPolicyProvider = null,
             OffMapJourneyAuthority offMapJourneys = null,
             Func<IGoodsSupplier, string> carrierBusinessIdForSupplier = null,
-            Func<string, BusinessRuntimeState> carrierRuntimeResolver = null)
+            Func<string, BusinessRuntimeState> carrierRuntimeResolver = null,
+            HouseholdFoodChargeReconciliation chargeRecorder = null)
         {
             this.population = population ?? throw new ArgumentNullException(nameof(population));
             this.membership = membership ?? throw new ArgumentNullException(nameof(membership));
@@ -545,6 +555,7 @@ namespace LandLedgers.Population
             this.offMapJourneys = offMapJourneys;
             this.carrierBusinessIdForSupplier = carrierBusinessIdForSupplier;
             this.carrierRuntimeResolver = carrierRuntimeResolver;
+            this.chargeRecorder = chargeRecorder;
         }
 
         /// <summary>
@@ -2131,6 +2142,18 @@ namespace LandLedgers.Population
         {
             // Observer faults never break the trip; they are test/diagnostic aids.
         }
+
+        // DEF-067: record the posted Phase C charge (success only, after
+        // the sale and the partial-fill true-up, so units/cents are final;
+        // a null recorder records nothing and changes no behavior).
+        // Cash mode: the household debit is BuyerOutflowCents (total minus
+        // the partial-fill refund). Credit mode: the household owes goods
+        // + freight, so the debit is the delivered total.
+        chargeRecorder?.RecordPhaseC(
+            need.HouseholdId, dayIndex, need.ItemId, sold, goodsCost, freightCost,
+            settlement.Mode == ShoppingSettlementMode.CashFromLedger ? result.BuyerOutflowCents : goodsCost + freightCost,
+            need.NeedSequence, chosen.Supplier.SupplierName,
+            settlement.Mode == ShoppingSettlementMode.CashFromLedger ? "cash" : "credit");
             return SettlementOutcome.Succeeded(batch, sold);
         }
 

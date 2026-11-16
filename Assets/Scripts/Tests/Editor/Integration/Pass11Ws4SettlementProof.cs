@@ -1405,6 +1405,8 @@ namespace LandLedgers.Editor.Integration
                 ParcelId = "parcel-9",
                 MemberPersonIds = new List<int> { P4 },
                 Arrangement = AccommodationArrangement.OwnerOccupied,
+                Reason = NpcConstructionReason.HouseholdFormation,
+                ReasonNotes = "settlement story: H4 establishes its first home on parcel-9",
             }, Parcels, d, Diag);
             if (project == null) Diag.Add("day " + d + ": cabin-1 commission refused (see diagnostics).");
             else Diag.Add("day " + d + ": cabin-1 commissioned for H4 on parcel-9.");
@@ -1420,6 +1422,8 @@ namespace LandLedgers.Editor.Integration
                 ParcelId = "parcel-10",
                 MemberPersonIds = new List<int> { P4 },
                 Arrangement = AccommodationArrangement.OwnerOccupied,
+                Reason = NpcConstructionReason.HouseholdFormation,
+                ReasonNotes = "settlement story: second cabin on parcel-10 to prove the material-short stall",
             }, Parcels, d, Diag);
             if (project == null) Diag.Add("day " + d + ": cabin-2 commission refused (see diagnostics).");
             else Diag.Add("day " + d + ": cabin-2 commissioned for H4 on parcel-10 (lumber short: 50 on hand, 600 needed).");

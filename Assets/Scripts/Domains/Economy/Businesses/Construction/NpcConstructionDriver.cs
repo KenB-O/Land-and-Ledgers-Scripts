@@ -24,6 +24,32 @@ namespace LandLedgers.Economy
         public string ParcelId = string.Empty;
         public List<int> MemberPersonIds = new List<int>();
         public AccommodationArrangement Arrangement = AccommodationArrangement.OwnerOccupied;
+        /// <summary>
+        /// DEF-011 (Decision 7): the legitimate reason for the build. A
+        /// commission with Unspecified is refused — the driver never builds
+        /// for no stated reason.
+        /// </summary>
+        public NpcConstructionReason Reason = NpcConstructionReason.Unspecified;
+        /// <summary>Free-text evidence for the reason (the gap, the shared building, ...).</summary>
+        public string ReasonNotes = string.Empty;
+    }
+
+    /// <summary>
+    /// DEF-011 (Decision 7): the legitimate reasons a household or business
+    /// may initiate construction. BusinessExpansion, Replacement, Relocation
+    /// and NewEnterprise have no real signals in the tree yet, so the need
+    /// evaluator does not auto-detect them — they are available as explicit
+    /// requests with a stated reason.
+    /// </summary>
+    public enum NpcConstructionReason
+    {
+        Unspecified = 0,
+        Overcrowding = 1,
+        HouseholdFormation = 2,
+        BusinessExpansion = 3,
+        Replacement = 4,
+        Relocation = 5,
+        NewEnterprise = 6,
     }
 
     /// <summary>
@@ -129,6 +155,17 @@ namespace LandLedgers.Economy
         /// </summary>
         public Func<int, IConstructionMaterialSource> MaterialSourceByHousehold { get; set; }
 
+        /// <summary>
+        /// DEF-011: the single-trip shipment bound in material units, when
+        /// the caller can supply it (computed from the real wagon's mass and
+        /// volume capacities and the cargo spec — never hardcoded here; the
+        /// construction layer does not own the wagon). Null means no bound
+        /// was supplied: the commission-time shipment check is skipped and
+        /// the skip is recorded on the evaluation, while the shipment
+        /// service still refuses over-capacity loads pre-load.
+        /// </summary>
+        public int? MaxUnitsPerTrip { get; set; }
+
         public NpcConstructionDriver(
             NpcConstructionCommissioner commissioner,
             ConstructionProjectExecutor executor,
@@ -181,11 +218,15 @@ namespace LandLedgers.Economy
         }
 
         /// <summary>
-        /// Commissions one explicit request: the design must exist, sleep
-        /// the household and be fundable from the household's real cash;
-        /// the parcel authority must authorize the build; only then is the
-        /// project created and added to the project list. Returns null on
-        /// refusal (with the reason in diagnostics).
+        /// Commissions one explicit request: the request must state a
+        /// legitimate reason; the design must exist, sleep the household
+        /// and be fundable from the household's real cash (the evaluation
+        /// records affordability, benefit, alternatives and shipment
+        /// feasibility on the record); a real material supplier and at
+        /// least one active household member must exist; the parcel
+        /// authority must authorize the build; only then is the project
+        /// created and added to the project list. Returns null on refusal
+        /// (with the reason in diagnostics).
         /// </summary>
         public ConstructionProject Commission(NpcConstructionRequest request,
             IConstructionParcelAuthority parcelAuthority, int dayIndex, List<string> diag)
@@ -224,12 +265,33 @@ namespace LandLedgers.Economy
                 diag.Add($"NpcConstructionDriver.Commission: '{buyerOwnerName}' has no real cash store — funding cannot be checked.");
                 return null;
             }
-            int members = request.MemberPersonIds != null ? request.MemberPersonIds.Count : 0;
-            BuildingDesign design = commissioner.SelectDesign(catalog, request.DesignId,
-                Math.Max(1, members), pricePort, buyerStore.ReadBalanceCents(), diag);
-            if (design == null)
+            if (request.Reason == NpcConstructionReason.Unspecified)
             {
-                diag.Add($"NpcConstructionDriver.Commission: design '{request.DesignId}' refused for H{request.HouseholdId} — see the selection refusal above.");
+                diag.Add($"NpcConstructionDriver.Commission: H{request.HouseholdId} gave no reason — a commission needs a legitimate reason (overcrowding, household formation, business expansion, replacement, relocation, new enterprise).");
+                return null;
+            }
+            int members = request.MemberPersonIds != null ? request.MemberPersonIds.Count : 0;
+            NpcConstructionEvaluation evaluation = commissioner.EvaluateCommission(catalog, request.DesignId,
+                Math.Max(1, members), pricePort, buyerStore.ReadBalanceCents(), MaxUnitsPerTrip,
+                request.Reason, request.ReasonNotes, dayIndex, diag);
+            if (evaluation == null || !evaluation.IsViable)
+            {
+                diag.Add($"NpcConstructionDriver.Commission: design '{request.DesignId}' refused for H{request.HouseholdId} — see the evaluation refusal above.");
+                return null;
+            }
+            IConstructionMaterialSource householdSource = MaterialSourceByHousehold != null
+                ? MaterialSourceByHousehold(request.HouseholdId) : null;
+            if (procurement == null && materialSource == null && householdSource == null
+                && string.IsNullOrWhiteSpace(defaultSupplierOwnerName))
+            {
+                diag.Add($"NpcConstructionDriver.Commission: H{request.HouseholdId} has no material supplier — no procurement port, no material source, no per-household source, no named supplier owner. A commission needs a real supplier before it starts.");
+                return null;
+            }
+            IReadOnlyList<int> householdMemberIds = householdMembers != null
+                ? householdMembers(request.HouseholdId) : null;
+            if (householdMemberIds == null || householdMemberIds.Count == 0)
+            {
+                diag.Add($"NpcConstructionDriver.Commission: H{request.HouseholdId} has no active members — nobody to work the build.");
                 return null;
             }
             string authProblem = parcelAuthority.AuthorizeBuild(request.HouseholdId, request.ParcelId, dayIndex, diag);
@@ -246,6 +308,11 @@ namespace LandLedgers.Economy
                 diag.Add($"NpcConstructionDriver.Commission: commissioning '{request.DesignId}' for H{request.HouseholdId} failed — see diagnostics.");
                 return null;
             }
+            record.Reason = request.Reason;
+            record.ReasonNotes = request.ReasonNotes ?? string.Empty;
+            record.EvaluationSummary = evaluation.Summary ?? string.Empty;
+            if (evaluation.Lines != null && evaluation.Lines.Count > 0)
+                record.Decisions.InsertRange(0, evaluation.Lines);
             if (projects != null) projects.Add(project);
             diag.Add($"NpcConstructionDriver: H{request.HouseholdId} commissioned '{request.DesignId}' on parcel '{request.ParcelId}' (project '{project.ProjectId}').");
             return project;

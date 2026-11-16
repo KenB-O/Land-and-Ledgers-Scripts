@@ -365,6 +365,8 @@ namespace LandLedgers.Orchestration.Systems
         private readonly HashSet<string> fellingWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> logHaulWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private EmbodiedPurchaseExecutor purchaseExecutor;
+        /// <summary>DEF-067: diagnostics-only food-charge reconciliation (in-memory, never saved). Constructed once in DriveDailyNeeds.</summary>
+        private HouseholdFoodChargeReconciliation foodChargeReconciliation;
         private HouseholdMembershipRegistry householdMemberships;
         private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
         private readonly Dictionary<string, LaborDemandReport> latestDemandByBusiness =
@@ -2000,6 +2002,19 @@ namespace LandLedgers.Orchestration.Systems
                 + "' sells through the real freight chain (25c dispatch plus 1c per mile, round trip, provisional).", this);
         }
 
+        /// <summary>
+        /// DEF-011: binds the construction design catalog. Sets ONLY
+        /// npcConstructionCatalog; it does not touch prices, materials,
+        /// procurement, parcel authority, or labor. The driver re-reads
+        /// the field on every drive (DriveNpcConstruction), so the next
+        /// drive picks it up. Do NOT route this through
+        /// ConfigureNpcConstruction — that would clear the other fields.
+        /// </summary>
+        public void BindConstructionDesignCatalog(BuildingDesignCatalog catalog)
+        {
+            npcConstructionCatalog = catalog;
+        }
+
         /// <summary>Queues an explicit household request; no autonomous build decision is made here.</summary>
         public string QueueNpcConstructionRequest(NpcConstructionRequest request)
         {
@@ -2040,6 +2055,40 @@ namespace LandLedgers.Orchestration.Systems
         /// advance, complete, occupy, cancel via the driver API) and
         /// commissions queued requests when the parcel authority is bound.
         /// </summary>
+        /// <summary>
+        /// DEF-011: true when the household has a construction project that
+        /// is neither cancelled nor complete — the need evaluator never
+        /// queues a second build for such a household.
+        /// </summary>
+        private bool HasLiveConstructionProject(int householdId)
+        {
+            if (hub?.ConstructionProjects == null) return false;
+            foreach (ConstructionProject project in hub.ConstructionProjects)
+            {
+                if (project == null || project.HouseholdId != householdId) continue;
+                if (project.Status != ConstructionProjectStatus.Cancelled
+                    && project.Status != ConstructionProjectStatus.Complete) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// DEF-011: true when the household already has a queued commission
+        /// request, either waiting in npcConstructionRequests or refused and
+        /// still sitting in the driver's pending list — the need evaluator
+        /// never queues a duplicate.
+        /// </summary>
+        private bool HasPendingConstructionRequest(int householdId)
+        {
+            if (npcConstructionRequests != null)
+                foreach (NpcConstructionRequest request in npcConstructionRequests)
+                    if (request != null && request.HouseholdId == householdId) return true;
+            if (npcConstructionDriver != null && npcConstructionDriver.PendingRequests != null)
+                foreach (NpcConstructionRequest request in npcConstructionDriver.PendingRequests)
+                    if (request != null && request.HouseholdId == householdId) return true;
+            return false;
+        }
+
         private void DriveNpcConstruction(int absoluteDayIndex)
         {
             if (hub == null) return;
@@ -2065,6 +2114,35 @@ namespace LandLedgers.Orchestration.Systems
                     : new List<int>());
             driver.MaterialSourceByHousehold = CreateHouseholdConstructionMaterialSource;
             var diag = new List<string>();
+            // DEF-011: the commissioning trigger — queue explicit requests
+            // for households with an evidenced need (overcrowding,
+            // household formation) before the pending requests are
+            // commissioned below. The evaluator only queues; every request
+            // still passes the driver's full commission gates.
+            if (npcConstructionCatalog != null && npcConstructionPricePort != null
+                && populationManager?.State?.households != null)
+            {
+                AcquisitionMarketManager needMarket = FindAnyObjectByType<AcquisitionMarketManager>();
+                var needTitles = needMarket != null ? needMarket.Titles : null;
+                var peopleById = new Dictionary<int, PersonState>();
+                if (populationManager.State.people != null)
+                    foreach (PersonState person in populationManager.State.people)
+                        if (person != null && !peopleById.ContainsKey(person.id))
+                            peopleById[person.id] = person;
+                var needEvaluator = new NpcConstructionNeedEvaluator(
+                    hub.NpcConstructionCommissioner, npcConstructionCatalog, npcConstructionPricePort,
+                    hub.CreditCash, hub.Housing, needTitles,
+                    householdId => householdMemberships != null
+                        ? householdMemberships.GetActiveMembers(householdId)
+                        : new List<int>(),
+                    personId => peopleById.TryGetValue(personId, out PersonState found) ? found : null,
+                    householdId => HasLiveConstructionProject(householdId),
+                    householdId => HasPendingConstructionRequest(householdId));
+                List<NpcConstructionRequest> freshRequests = needEvaluator.EvaluateDay(
+                    populationManager.State.households, absoluteDayIndex, driver.MaxUnitsPerTrip, diag);
+                foreach (NpcConstructionRequest fresh in freshRequests)
+                    if (fresh != null) npcConstructionRequests.Add(fresh);
+            }
             if (npcConstructionParcelAuthority == null)
             {
                 AcquisitionMarketManager market = FindAnyObjectByType<AcquisitionMarketManager>();
@@ -2269,13 +2347,20 @@ namespace LandLedgers.Orchestration.Systems
                         if (sharedBusinessRuntime == null) return null;
                         BusinessInstanceState found;
                         return sharedBusinessRuntime.TryFindByInstanceId(id, out found) ? found.RuntimeState : null;
-                    });
+                    },
+                    chargeRecorder: foodChargeReconciliation);
             }
             else
             {
                 householdShoppingLoop.RebindPopulationAuthorities(
                     populationManager.State, householdMemberships, currentJourneys);
             }
+
+            // DEF-067: (re)bind the charge recorder every build — the loop
+            // may have been constructed before the first daily drive created
+            // the recorder, and the ctor argument above only applies at
+            // construction. Null until the first DriveDailyNeeds runs.
+            householdShoppingLoop.ChargeRecorder = foodChargeReconciliation;
 
             // Plan 16: General Store employee service. The loop resolves the
             // manager-bound store's live queue and a filled clerk by supplier
@@ -5933,13 +6018,16 @@ namespace LandLedgers.Orchestration.Systems
 
             dailyNeedsService ??= new DailyNeedsService();
             consumptionPlanner ??= new HouseholdConsumptionPlanner();
+            // DEF-067: construct the charge reconciliation before the
+            // executor so the legacy path records from its first drive.
+            foodChargeReconciliation ??= new HouseholdFoodChargeReconciliation();
             // P2: wire the legacy person-int id space to HF-1 EntityIds so the
             // travel-time leg of embodied purchasing actually gates on the
             // person's TTS-1 work-time budget (previously always skipped).
             purchaseExecutor ??= new EmbodiedPurchaseExecutor(
                 populationManager.State, hub.HouseholdLedgers, supplierDirectory, journeys,
                 ResolvePersonJourneyLocation, hub.WorkTimeBudgets, pid => EntityId.For(EntityKind.Person, pid),
-                hub.HouseholdInventories);
+                hub.HouseholdInventories, foodChargeReconciliation);
 
             // P2: W2B/W2C/W3B nutrition links — count real prepared meals
             // served by live eating-house runtimes (Canon §2.5) so households
@@ -6021,6 +6109,12 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             DriveEmbodiedShopping(absoluteDayIndex, diag);
+            // DEF-067: one compact daily charge-reconciliation line (legacy
+            // vs Phase C per household-day, with OVERLAP / MULTI-ITEM flags).
+            // Emitted every day, even all-zero, so a missing line never looks
+            // like a logging cutoff. The recorder is constructed above in
+            // this drive, so it is non-null here.
+            diag.Add(foodChargeReconciliation.SummarizeDayLine(absoluteDayIndex));
             DriveHouseholdAutonomy(absoluteDayIndex, diag);
             PublishHouseholdShoppingSummariesAndTraces(absoluteDayIndex, diag);
             if (diag.Count > 0)

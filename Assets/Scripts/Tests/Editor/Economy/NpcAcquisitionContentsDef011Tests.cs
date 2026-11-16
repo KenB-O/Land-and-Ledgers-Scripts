@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Labor;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.World;
@@ -48,6 +49,20 @@ namespace LandLedgers.EditorTests.Financing
     /// and title untouched, because the negotiation never touches them:
     /// the caller builds the plan from the agreed result and closes it
     /// through the D-6/D-7 path.
+    ///
+    /// D-9 (Agent D, expanded campaign 2026-11-16): the player selection
+    /// API — list eligible items, set mode, toggle items, compute the
+    /// contents value, validate the selection — routed through B7's
+    /// presence contract (the player must be present at the property, or
+    /// act through an authorized agent, before any selection work
+    /// happens; the confirmed selection is applied only through the
+    /// contract's Execute, once Ready). The agreed price is the caller's
+    /// input and the implied structure value is derived from it (agreed
+    /// minus contents, never the F6 anchor — D-8 §16); the confirmed
+    /// selection closes through the D-6/D-7 path with cash and title
+    /// conserved. The player-flow attach in AcquisitionMarketManager
+    /// (the presence-contract seam + BeginPlayerContentsSelection
+    /// factory) is harness-excluded and source-reviewed only.
     ///
     /// Prices and the structure value here are TEST-LOCAL calibration only
     /// (the price func is the caller's real price data in production —
@@ -1470,6 +1485,753 @@ namespace LandLedgers.EditorTests.Financing
             Assert.AreEqual(300000, f.Cash.FindStore("household:" + BuyerHouseholdId).ReadBalanceCents());
             Assert.AreEqual(5000, f.Cash.FindStore("household:" + SellerHouseholdId).ReadBalanceCents());
             Assert.AreEqual("household:" + SellerHouseholdId, f.Titles.CurrentHolder("parcel-farm"));
+        }
+
+        // ---- D-9: player selection API ----
+
+        private const string PlayerHouseholdId = "household-9";
+        private const string HouseLocationId = "house-101";
+        private const string FarmLocationId = "farmhouse";
+        private const int AuthorizedAgentPersonId = 7;
+
+        /// <summary>D-9: fake presence driver — models the seam, never the real director.</summary>
+        private sealed class FakePresenceDriver : IPlayerFurnishingPresenceDriver
+        {
+            public EntityId PlayerPersonId { get; set; } = EntityId.For(EntityKind.Person, 1);
+            public string CurrentLocationId { get; set; } = HouseLocationId;
+            public bool IsTravelling { get; set; }
+            public string TravelDestinationLocationId { get; set; }
+            public bool IsOffMap { get; set; }
+            public string ForcedCurrentTaskDefinitionId { get; set; }
+
+            public string CurrentTaskDefinitionId => ForcedCurrentTaskDefinitionId;
+
+            public Dictionary<string, int> Routes = new Dictionary<string, int>();
+            public int TravelTotalMinutes { get; private set; }
+            public int TravelElapsedMinutes { get; private set; }
+            public int RouteCalls { get; private set; }
+            public int TravelCalls { get; private set; }
+            public int InterruptCalls { get; private set; }
+            public int CancelTravelCalls { get; private set; }
+            public bool TravelFails { get; set; }
+
+            public bool TryRouteMinutes(string fromLocationId, string toLocationId, out int minutes, out string reason)
+            {
+                RouteCalls++;
+                int routed;
+                if (Routes.TryGetValue(fromLocationId + "|" + toLocationId, out routed))
+                {
+                    minutes = routed;
+                    reason = null;
+                    return true;
+                }
+                minutes = 0;
+                reason = "no route from " + fromLocationId + " to " + toLocationId + ".";
+                return false;
+            }
+
+            public bool TryTravelTo(string destinationLocationId, int minutes, out string reason)
+            {
+                TravelCalls++;
+                if (TravelFails)
+                {
+                    reason = "move intent refused.";
+                    return false;
+                }
+                IsTravelling = true;
+                TravelDestinationLocationId = destinationLocationId;
+                TravelTotalMinutes = minutes;
+                TravelElapsedMinutes = 0;
+                reason = null;
+                return true;
+            }
+
+            public bool TryInterruptRoutineActivity(out string reason)
+            {
+                InterruptCalls++;
+                if (FurnishingPresencePolicy.IsRoutineTaskDefinitionId(ForcedCurrentTaskDefinitionId))
+                {
+                    ForcedCurrentTaskDefinitionId = null;
+                    reason = null;
+                    return true;
+                }
+                reason = "no routine activity to interrupt.";
+                return false;
+            }
+
+            public bool TryCancelTravel(out string reason)
+            {
+                CancelTravelCalls++;
+                if (!IsTravelling)
+                {
+                    reason = "not travelling.";
+                    return false;
+                }
+                IsTravelling = false;
+                TravelDestinationLocationId = null;
+                reason = null;
+                return true;
+            }
+
+            /// <summary>Per-tick travel progress: the location changes only when the full minutes are advanced.</summary>
+            public void AdvanceTravel(int minutes)
+            {
+                if (!IsTravelling) return;
+                TravelElapsedMinutes += minutes;
+                if (TravelElapsedMinutes < TravelTotalMinutes) return;
+                IsTravelling = false;
+                CurrentLocationId = TravelDestinationLocationId;
+                TravelDestinationLocationId = null;
+            }
+        }
+
+        /// <summary>D-9: fake agent authorization — answers from a set table, never assumes.</summary>
+        private sealed class FakeAgentAuthorization : IFurnishingAgentAuthorization
+        {
+            public Dictionary<string, HashSet<int>> Authorized = new Dictionary<string, HashSet<int>>();
+
+            public bool IsAuthorizedAgent(string householdId, int agentPersonId)
+            {
+                HashSet<int> agents;
+                return Authorized.TryGetValue(householdId, out agents) && agents.Contains(agentPersonId);
+            }
+        }
+
+        private static PlayerContentsSelectionApi MakeApi(
+            HouseholdFurnishingRegister register, FakePresenceDriver driver,
+            Func<string, int> priceFunc = null, IFurnishingAgentAuthorization authorization = null)
+        {
+            var contract = new PlayerFurnishingPresenceContract(driver, authorization);
+            return new PlayerContentsSelectionApi(contract, register, BuildingInstanceId,
+                "household", SellerHouseholdId.ToString(), priceFunc ?? PriceForKind,
+                Day, PlayerHouseholdId, HouseLocationId);
+        }
+
+        private static FakePresenceDriver DriverAtHouse()
+        {
+            return new FakePresenceDriver { CurrentLocationId = HouseLocationId };
+        }
+
+        private static FakePresenceDriver DriverAtFarm(int routeMinutes = 90)
+        {
+            var driver = new FakePresenceDriver { CurrentLocationId = FarmLocationId };
+            driver.Routes[FarmLocationId + "|" + HouseLocationId] = routeMinutes;
+            return driver;
+        }
+
+        private static int PriceWithoutStove(string kind)
+        {
+            if (kind == "furniture.cooking-stove") return 0;
+            return PriceForKind(kind);
+        }
+
+        [Test]
+        public void D9_BeginSelection_PlayerAtProperty_ReadyAtOnce()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+
+            DirectedActionVerdict verdict = api.BeginSelection(0,
+                out DirectedFurnishingAction action, out string reason);
+
+            Assert.AreEqual(DirectedActionVerdict.Ready, verdict, reason);
+            Assert.IsTrue(api.IsActive);
+            Assert.NotNull(action);
+            Assert.AreEqual(FurnishingActionKind.SelectContents, action.ActionKind);
+            Assert.AreEqual(HouseLocationId, action.TargetLocationId);
+            Assert.AreEqual(DirectedActionStatus.Ready, action.Status);
+            Assert.AreSame(action, api.PendingAction);
+        }
+
+        [Test]
+        public void D9_BeginSelection_PlayerElsewhere_TravellingThenReady()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            var driver = DriverAtFarm();
+            PlayerContentsSelectionApi api = MakeApi(register, driver);
+
+            DirectedActionVerdict verdict = api.BeginSelection(0,
+                out DirectedFurnishingAction action, out string reason);
+
+            Assert.AreEqual(DirectedActionVerdict.Travelling, verdict, reason);
+            Assert.IsFalse(api.IsActive);
+            Assert.AreEqual(DirectedActionStatus.Travelling, action.Status);
+            Assert.AreEqual(1, driver.TravelCalls);
+
+            // The player has not arrived: listing refuses before presence.
+            List<FurnishingContentsItem> listed = api.ListEligible(out string listReason);
+            Assert.IsNull(listed);
+            Assert.IsTrue(listReason.Contains("not active"), listReason);
+
+            // Travel is real: the session stays inactive until the full
+            // minutes are advanced.
+            driver.AdvanceTravel(45);
+            Assert.IsFalse(api.AdvancePending());
+            Assert.IsFalse(api.IsActive);
+            driver.AdvanceTravel(45);
+            Assert.IsTrue(api.AdvancePending());
+            Assert.IsTrue(api.IsActive);
+
+            listed = api.ListEligible(out listReason);
+            Assert.NotNull(listed);
+            Assert.AreEqual(5, listed.Count);
+        }
+
+        [Test]
+        public void D9_BeginSelection_NoRoute_RefusedNeverTeleports()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            var driver = new FakePresenceDriver { CurrentLocationId = FarmLocationId };
+            PlayerContentsSelectionApi api = MakeApi(register, driver);
+
+            DirectedActionVerdict verdict = api.BeginSelection(0,
+                out DirectedFurnishingAction action, out string reason);
+
+            Assert.AreEqual(DirectedActionVerdict.Refused, verdict, reason);
+            Assert.IsTrue(reason.Contains("no route"), reason);
+            Assert.IsNull(action);
+            Assert.IsNull(api.PendingAction);
+            Assert.IsFalse(api.IsActive);
+            Assert.AreEqual(0, driver.TravelCalls);
+        }
+
+        [Test]
+        public void D9_BeginSelection_OffMap_DefersAndRetries()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            var driver = DriverAtFarm();
+            driver.IsOffMap = true;
+            PlayerContentsSelectionApi api = MakeApi(register, driver);
+
+            DirectedActionVerdict verdict = api.BeginSelection(0,
+                out DirectedFurnishingAction action, out string reason);
+
+            Assert.AreEqual(DirectedActionVerdict.Deferred, verdict, reason);
+            Assert.IsFalse(api.IsActive);
+            Assert.AreEqual(DirectedActionStatus.Deferred, action.Status);
+            Assert.AreEqual(0, driver.TravelCalls);
+
+            List<FurnishingContentsItem> listed = api.ListEligible(out string listReason);
+            Assert.IsNull(listed);
+            Assert.IsTrue(listReason.Contains("not active"), listReason);
+
+            // Still off-map: the retry stays deferred, never executes remotely.
+            DirectedActionVerdict retry = api.RetryDeferred(out string retryReason);
+            Assert.AreEqual(DirectedActionVerdict.Deferred, retry, retryReason);
+            Assert.IsFalse(api.IsActive);
+
+            driver.IsOffMap = false;
+            driver.CurrentLocationId = HouseLocationId;
+            retry = api.RetryDeferred(out retryReason);
+            Assert.AreEqual(DirectedActionVerdict.Ready, retry, retryReason);
+            Assert.IsTrue(api.IsActive);
+        }
+
+        [Test]
+        public void D9_BeginSelection_BusyNonRoutine_Refused()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            var driver = DriverAtHouse();
+            driver.ForcedCurrentTaskDefinitionId = "test.work";
+            PlayerContentsSelectionApi api = MakeApi(register, driver);
+
+            DirectedActionVerdict verdict = api.BeginSelection(0,
+                out DirectedFurnishingAction action, out string reason);
+
+            Assert.AreEqual(DirectedActionVerdict.Refused, verdict, reason);
+            Assert.IsTrue(reason.Contains("cancel it first"), reason);
+            Assert.IsNull(action);
+            Assert.IsNull(api.PendingAction);
+            Assert.IsFalse(api.IsActive);
+        }
+
+        [Test]
+        public void D9_BeginSelection_RoutineTask_InterruptsAndReady()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            var driver = DriverAtHouse();
+            driver.ForcedCurrentTaskDefinitionId = Pass2TaskCatalogs.EatMealId;
+            PlayerContentsSelectionApi api = MakeApi(register, driver);
+
+            DirectedActionVerdict verdict = api.BeginSelection(0,
+                out DirectedFurnishingAction action, out string reason);
+
+            Assert.AreEqual(DirectedActionVerdict.Ready, verdict, reason);
+            Assert.IsTrue(api.IsActive);
+            Assert.AreEqual(1, driver.InterruptCalls);
+            Assert.IsNull(driver.ForcedCurrentTaskDefinitionId);
+        }
+
+        [Test]
+        public void D9_BeginSelection_AuthorizedAgent_ReadyWithoutTravel()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            var driver = DriverAtFarm();
+            var authorization = new FakeAgentAuthorization();
+            authorization.Authorized[PlayerHouseholdId] = new HashSet<int> { AuthorizedAgentPersonId };
+            PlayerContentsSelectionApi api = MakeApi(register, driver, null, authorization);
+
+            DirectedActionVerdict verdict = api.BeginSelection(AuthorizedAgentPersonId,
+                out DirectedFurnishingAction action, out string reason);
+
+            Assert.AreEqual(DirectedActionVerdict.Ready, verdict, reason);
+            Assert.IsTrue(api.IsActive);
+            Assert.IsTrue(action.ViaAuthorizedAgent);
+            Assert.AreEqual(0, driver.TravelCalls);
+        }
+
+        [Test]
+        public void D9_BeginSelection_UnauthorizedAgent_Refused()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            var driver = DriverAtFarm();
+            var authorization = new FakeAgentAuthorization();
+            PlayerContentsSelectionApi api = MakeApi(register, driver, null, authorization);
+
+            DirectedActionVerdict verdict = api.BeginSelection(AuthorizedAgentPersonId,
+                out DirectedFurnishingAction action, out string reason);
+
+            Assert.AreEqual(DirectedActionVerdict.Refused, verdict, reason);
+            Assert.IsTrue(reason.Contains("not authorized"), reason);
+            Assert.IsNull(action);
+
+            // An agent id with no authorization source bound is never
+            // assumed authorized.
+            PlayerContentsSelectionApi noSource = MakeApi(register, driver);
+            verdict = noSource.BeginSelection(AuthorizedAgentPersonId,
+                out action, out reason);
+            Assert.AreEqual(DirectedActionVerdict.Refused, verdict, reason);
+            Assert.IsTrue(reason.Contains("no authorized-agent source"), reason);
+        }
+
+        [Test]
+        public void D9_BeginSelection_SecondBeginWhileOpen_Refused()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out _, out _));
+
+            DirectedActionVerdict verdict = api.BeginSelection(0,
+                out DirectedFurnishingAction action, out string reason);
+
+            Assert.AreEqual(DirectedActionVerdict.Refused, verdict, reason);
+            Assert.IsTrue(reason.Contains("already open"), reason);
+            Assert.IsNull(action);
+        }
+
+        [Test]
+        public void D9_ListEligible_InstalledItemsOnly()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            Assert.IsNull(register.TryRegisterAsset(MakeAsset("crate-1", "furniture.crate")));
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out _, out _));
+
+            List<FurnishingContentsItem> listed = api.ListEligible(out string reason);
+
+            Assert.NotNull(listed, reason);
+            Assert.AreEqual(5, listed.Count);
+            // The crate sits in household custody, not installed in the
+            // building: it is not part of the property and never listed.
+            foreach (FurnishingContentsItem item in listed)
+                Assert.AreNotEqual("crate-1", item.AssetId);
+            FurnishingContentsItem bed = listed.Find(i => i.AssetId == "bed-1");
+            Assert.NotNull(bed);
+            Assert.AreEqual(FurnishingFixtureKind.Movable, bed.Kind);
+            FurnishingContentsItem stove = listed.Find(i => i.AssetId == "stove-1");
+            Assert.NotNull(stove);
+            Assert.AreEqual(FurnishingFixtureKind.Fixture, stove.Kind);
+            FurnishingContentsItem shelf = listed.Find(i => i.AssetId == "shelf-1");
+            Assert.NotNull(shelf);
+            Assert.AreEqual(FurnishingFixtureKind.Fixture, shelf.Kind);
+        }
+
+        [Test]
+        public void D9_ListEligible_BeforeBegin_Refused()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+
+            List<FurnishingContentsItem> listed = api.ListEligible(out string reason);
+
+            Assert.IsNull(listed);
+            Assert.IsTrue(reason.Contains("not active"), reason);
+        }
+
+        [Test]
+        public void D9_SetMode_All_ValuesExact()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out _, out _));
+
+            Assert.IsTrue(api.SetMode(ContentsSelectionMode.All, out string reason), reason);
+
+            // Bed 10000 + table 8000 + chair 3000 + stove 12000 + shelf 2000 = 35000.
+            Assert.AreEqual(35000, api.TotalContentsValueCents);
+            Assert.AreEqual(14000, api.IncludedFixtureValueCents);
+            Assert.AreEqual(21000, api.IncludedMovableValueCents);
+            Assert.AreEqual(ContentsSelectionMode.All, api.DraftSelection.Mode);
+            Assert.AreEqual(5, api.DraftSelection.Lines.Count);
+            Assert.IsTrue(api.ValidateSelection(out List<string> problems),
+                string.Join("; ", problems));
+        }
+
+        [Test]
+        public void D9_SetMode_NoMovable_FixturesOnly()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out _, out _));
+
+            Assert.IsTrue(api.SetMode(ContentsSelectionMode.NoMovable, out string reason), reason);
+
+            Assert.AreEqual(14000, api.TotalContentsValueCents);
+            Assert.AreEqual(14000, api.IncludedFixtureValueCents);
+            Assert.AreEqual(0, api.IncludedMovableValueCents);
+            foreach (FurnishingContentsLine line in api.DraftSelection.Lines)
+            {
+                if (line.Kind == FurnishingFixtureKind.Movable)
+                {
+                    Assert.IsFalse(line.Included);
+                    Assert.AreEqual(ExcludedItemDisposition.RemovedBySeller, line.Disposition);
+                }
+            }
+            Assert.IsTrue(api.ValidateSelection(out List<string> problems),
+                string.Join("; ", problems));
+        }
+
+        [Test]
+        public void D9_ToggleItem_CustomFlow()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out _, out _));
+
+            // Toggling needs a draft first.
+            Assert.IsFalse(api.ToggleItem("bed-1", true, out string reason));
+            Assert.IsTrue(reason.Contains("SetMode"), reason);
+
+            Assert.IsTrue(api.SetMode(ContentsSelectionMode.Custom, out reason), reason);
+            Assert.AreEqual(0, api.TotalContentsValueCents);
+
+            Assert.IsTrue(api.ToggleItem("bed-1", true, out reason), reason);
+            Assert.AreEqual(10000, api.TotalContentsValueCents);
+            Assert.IsTrue(api.ToggleItem("table-1", true, out reason), reason);
+            Assert.AreEqual(18000, api.TotalContentsValueCents);
+            Assert.IsTrue(api.ToggleItem("bed-1", false, out reason), reason);
+            Assert.AreEqual(8000, api.TotalContentsValueCents);
+            // Toggling an item already in the requested state is a no-op success.
+            Assert.IsTrue(api.ToggleItem("bed-1", false, out reason), reason);
+            Assert.AreEqual(8000, api.TotalContentsValueCents);
+
+            Assert.IsFalse(api.ToggleItem("not-an-item", true, out reason));
+            Assert.IsTrue(reason.Contains("not an eligible item"), reason);
+            Assert.IsFalse(api.ToggleItem("crate-1", true, out reason));
+            Assert.IsTrue(reason.Contains("not an eligible item"), reason);
+        }
+
+        [Test]
+        public void D9_ToggleItem_NonCustomMode_Refused()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out _, out _));
+            Assert.IsTrue(api.SetMode(ContentsSelectionMode.All, out string reason), reason);
+
+            Assert.IsFalse(api.ToggleItem("bed-1", false, out reason));
+            Assert.IsTrue(reason.Contains("switch to Custom"), reason);
+            Assert.AreEqual(35000, api.TotalContentsValueCents);
+        }
+
+        [Test]
+        public void D9_SetMode_AllThenCustom_PreservesIncludedSet()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out _, out _));
+            Assert.IsTrue(api.SetMode(ContentsSelectionMode.All, out string reason), reason);
+
+            // All-then-Custom keeps every item included, so the player
+            // can remove a few instead of re-adding them all.
+            Assert.IsTrue(api.SetMode(ContentsSelectionMode.Custom, out reason), reason);
+            Assert.AreEqual(35000, api.TotalContentsValueCents);
+            Assert.IsTrue(api.ToggleItem("chair-1", false, out reason), reason);
+            Assert.AreEqual(32000, api.TotalContentsValueCents);
+        }
+
+        [Test]
+        public void D9_ValidateSelection_UnpricedIncluded_Refused()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse(), PriceWithoutStove);
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out _, out _));
+            Assert.IsTrue(api.SetMode(ContentsSelectionMode.All, out string reason), reason);
+            Assert.IsTrue(api.DraftSelection.UnpricedIncludedAssetIds.Contains("stove-1"));
+
+            Assert.IsFalse(api.ValidateSelection(out List<string> problems));
+            bool namesStove = false;
+            foreach (string problem in problems)
+            {
+                if (problem.Contains("stove-1") && problem.Contains("no supplied replacement cost")) namesStove = true;
+            }
+            Assert.IsTrue(namesStove, string.Join("; ", problems));
+
+            // The remedy is choosing: exclude the unpriced stove and the
+            // selection validates.
+            Assert.IsTrue(api.SetMode(ContentsSelectionMode.Custom, out reason), reason);
+            Assert.IsTrue(api.ToggleItem("stove-1", false, out reason), reason);
+            Assert.AreEqual(23000, api.TotalContentsValueCents);
+            Assert.IsTrue(api.ValidateSelection(out problems), string.Join("; ", problems));
+        }
+
+        [Test]
+        public void D9_SetMode_BareBuilding_Refused()
+        {
+            HouseholdFurnishingRegister register = MakeRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out _, out _));
+
+            Assert.IsFalse(api.SetMode(ContentsSelectionMode.All, out string reason));
+            Assert.IsTrue(reason.Contains("bare sale"), reason);
+        }
+
+        [Test]
+        public void D9_SetMode_UnclassifiableItem_Refused()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            BuildingFootprintAuthority building = MakeBuilding("seller-house");
+            Assert.IsNull(register.TryRegisterAsset(MakeAsset("mystery-1", "furniture.mystery-widget")));
+            InstallAsset(register, building, "mystery-1");
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out _, out _));
+
+            Assert.IsFalse(api.SetMode(ContentsSelectionMode.All, out string reason));
+            Assert.IsTrue(reason.Contains("mystery-1"), reason);
+            Assert.IsTrue(reason.Contains("could not be classified"), reason);
+        }
+
+        [Test]
+        public void D9_ImpliedStructure_AndConservation()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out _, out _));
+            Assert.IsTrue(api.SetMode(ContentsSelectionMode.All, out string reason), reason);
+
+            // The implied structure value comes from the AGREED price,
+            // never the F6 anchor: 235000 agreed minus 35000 contents.
+            Assert.IsTrue(api.TryImpliedStructureValueCents(235000,
+                out int implied, out reason), reason);
+            Assert.AreEqual(200000, implied);
+            Assert.IsNull(api.CheckConservation(235000, implied));
+
+            // A different structure value does NOT conserve: validate
+            // and close must use the same implied value (D-8 §16).
+            string mismatch = api.CheckConservation(235000, 235000);
+            Assert.IsNotNull(mismatch);
+            Assert.IsTrue(mismatch.Contains("235000"), mismatch);
+
+            // A price that does not cover the contents has no implied
+            // structure value at all.
+            Assert.IsFalse(api.TryImpliedStructureValueCents(30000, out _, out reason));
+            Assert.IsTrue(reason.Contains("does not cover"), reason);
+            Assert.IsFalse(api.TryImpliedStructureValueCents(-1, out _, out reason));
+            Assert.IsTrue(reason.Contains("negative"), reason);
+        }
+
+        [Test]
+        public void D9_ConfirmSelection_ExecutorAppliesSelection()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out DirectedFurnishingAction action, out _));
+            Assert.IsTrue(api.SetMode(ContentsSelectionMode.All, out string reason), reason);
+
+            PropertyContentsSelection applied = null;
+            int executorCalls = 0;
+            bool confirmed = api.ConfirmSelection(a =>
+            {
+                executorCalls++;
+                applied = api.DraftSelection;
+                return null;
+            }, out reason);
+
+            Assert.IsTrue(confirmed, reason);
+            Assert.AreEqual(1, executorCalls);
+            Assert.AreSame(api.DraftSelection, applied);
+            Assert.AreSame(api.DraftSelection, api.ConfirmedSelection);
+            Assert.IsTrue(api.IsConfirmed);
+            Assert.AreEqual(DirectedActionStatus.Done, action.Status);
+
+            // The session is complete: a new selection opens fresh.
+            DirectedActionVerdict second = api.BeginSelection(0,
+                out DirectedFurnishingAction secondAction, out reason);
+            Assert.AreEqual(DirectedActionVerdict.Ready, second, reason);
+            Assert.AreNotEqual(action.ActionId, secondAction.ActionId);
+        }
+
+        [Test]
+        public void D9_ConfirmSelection_FailingExecutor_NothingConfirmed()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out DirectedFurnishingAction action, out _));
+            Assert.IsTrue(api.SetMode(ContentsSelectionMode.All, out string reason), reason);
+
+            bool confirmed = api.ConfirmSelection(a => "the deal is gone.", out reason);
+
+            Assert.IsFalse(confirmed);
+            Assert.AreEqual("the deal is gone.", reason);
+            Assert.IsNull(api.ConfirmedSelection);
+            Assert.IsFalse(api.IsConfirmed);
+            Assert.AreEqual(DirectedActionStatus.Failed, action.Status);
+            Assert.AreEqual("the deal is gone.", action.RefusalReason);
+        }
+
+        [Test]
+        public void D9_ConfirmSelection_NotReady_ExecutorNotCalled()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            var driver = DriverAtFarm();
+            PlayerContentsSelectionApi api = MakeApi(register, driver);
+            Assert.AreEqual(DirectedActionVerdict.Travelling,
+                api.BeginSelection(0, out _, out _));
+            Assert.IsFalse(api.IsActive);
+
+            int executorCalls = 0;
+            bool confirmed = api.ConfirmSelection(a =>
+            {
+                executorCalls++;
+                return null;
+            }, out string reason);
+
+            Assert.IsFalse(confirmed);
+            Assert.AreEqual(0, executorCalls);
+            Assert.IsTrue(reason.Contains("not active"), reason);
+        }
+
+        [Test]
+        public void D9_CancelPending_ClearsSession()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            var driver = DriverAtFarm();
+            PlayerContentsSelectionApi api = MakeApi(register, driver);
+            Assert.AreEqual(DirectedActionVerdict.Travelling,
+                api.BeginSelection(0, out _, out _));
+            Assert.AreEqual(1, driver.TravelCalls);
+
+            Assert.IsTrue(api.CancelPending(out string reason), reason);
+            Assert.IsNull(api.PendingAction);
+            Assert.IsFalse(api.IsActive);
+            Assert.IsNull(api.DraftSelection);
+            Assert.AreEqual(1, driver.CancelTravelCalls);
+
+            // A new session opens fresh — the cancelled trip is not resumed.
+            DirectedActionVerdict verdict = api.BeginSelection(0,
+                out DirectedFurnishingAction action, out reason);
+            Assert.AreEqual(DirectedActionVerdict.Travelling, verdict, reason);
+            Assert.AreEqual(2, driver.TravelCalls);
+            Assert.AreNotEqual(null, action);
+        }
+
+        [Test]
+        public void D9_ConfirmedSelection_ClosesThroughD6D7_CashAndTitleConserved()
+        {
+            var f = MakeDealFixture();
+            string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            PlayerContentsSelectionApi api = MakeApi(register, DriverAtHouse());
+            Assert.AreEqual(DirectedActionVerdict.Ready,
+                api.BeginSelection(0, out _, out _));
+            Assert.IsTrue(api.SetMode(ContentsSelectionMode.Custom, out string reason), reason);
+            Assert.IsTrue(api.ToggleItem("bed-1", true, out reason), reason);
+            Assert.IsTrue(api.ToggleItem("table-1", true, out reason), reason);
+            Assert.AreEqual(18000, api.TotalContentsValueCents);
+            Assert.IsTrue(api.ValidateSelection(out List<string> problems),
+                string.Join("; ", problems));
+
+            // The agreed price is the caller's input; the implied
+            // structure value is derived from it (D-8 §16).
+            int agreed = 218000;
+            Assert.IsTrue(api.TryImpliedStructureValueCents(agreed,
+                out int implied, out reason), reason);
+            Assert.AreEqual(200000, implied);
+            Assert.IsNull(api.CheckConservation(agreed, implied));
+
+            PropertyContentsSelection applied = null;
+            Assert.IsTrue(api.ConfirmSelection(a =>
+            {
+                applied = api.DraftSelection;
+                return null;
+            }, out reason), reason);
+            Assert.AreSame(api.ConfirmedSelection, applied);
+
+            NpcAcquisitionPlan plan = f.BasePlan("parcel-farm", spaceId, agreed);
+            plan.Contents = applied;
+            Assert.IsNull(f.Acquisition.ValidatePlan(plan, f.Titles, f.Negotiations, f.Cash, f.Diag, register, implied));
+
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            var resolver = new FakePlacementResolver(placements, building);
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, buyerRegister, resolver, implied);
+
+            Assert.IsTrue(result.Closed, result.FailureReason);
+            Assert.AreEqual("household:" + BuyerHouseholdId, f.Titles.CurrentHolder("parcel-farm"));
+            Assert.AreEqual(300000 - agreed, f.Cash.FindStore("household:" + BuyerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual(5000 + agreed, f.Cash.FindStore("household:" + SellerHouseholdId).ReadBalanceCents());
+            Assert.IsTrue(result.CashConserved);
+            // Bed and table moved; the chair was removed by the seller;
+            // the stove and shelf stay held in place as the seller's.
+            Assert.AreEqual(2, result.TransferredContentsAssetIds.Count);
+            Assert.IsTrue(result.TransferredContentsAssetIds.Contains("bed-1"));
+            Assert.IsTrue(result.TransferredContentsAssetIds.Contains("table-1"));
+            Assert.AreEqual(1, result.RemovedContentsAssetIds.Count);
+            Assert.IsTrue(result.RemovedContentsAssetIds.Contains("chair-1"));
+            Assert.AreEqual(2, result.HeldInPlaceContentsAssetIds.Count);
+            Assert.IsTrue(result.HeldInPlaceContentsAssetIds.Contains("stove-1"));
+            Assert.IsTrue(result.HeldInPlaceContentsAssetIds.Contains("shelf-1"));
+            Assert.AreEqual(2, buyerRegister.Assets.Count);
+            Assert.NotNull(buyerRegister.LiveBindingFor("bed-1"));
+            Assert.NotNull(buyerRegister.LiveBindingFor("table-1"));
+            Assert.AreEqual(0, register.Validate().Count);
+            Assert.AreEqual(0, buyerRegister.Validate().Count);
+        }
+
+        [Test]
+        public void D9_Constructor_NullInputs_ThrowLoudly()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            var driver = DriverAtHouse();
+            var contract = new PlayerFurnishingPresenceContract(driver);
+
+            Assert.Throws<ArgumentNullException>(() => new PlayerContentsSelectionApi(
+                null, register, BuildingInstanceId, "household", "7", PriceForKind, Day, PlayerHouseholdId, HouseLocationId));
+            Assert.Throws<ArgumentNullException>(() => new PlayerContentsSelectionApi(
+                contract, null, BuildingInstanceId, "household", "7", PriceForKind, Day, PlayerHouseholdId, HouseLocationId));
+            Assert.Throws<ArgumentNullException>(() => new PlayerContentsSelectionApi(
+                contract, register, BuildingInstanceId, "household", "7", null, Day, PlayerHouseholdId, HouseLocationId));
+            Assert.Throws<ArgumentException>(() => new PlayerContentsSelectionApi(
+                contract, register, -1, "household", "7", PriceForKind, Day, PlayerHouseholdId, HouseLocationId));
+            Assert.Throws<ArgumentException>(() => new PlayerContentsSelectionApi(
+                contract, register, BuildingInstanceId, "household", "", PriceForKind, Day, PlayerHouseholdId, HouseLocationId));
+            Assert.Throws<ArgumentException>(() => new PlayerContentsSelectionApi(
+                contract, register, BuildingInstanceId, "household", "7", PriceForKind, Day, "", HouseLocationId));
+            Assert.Throws<ArgumentException>(() => new PlayerContentsSelectionApi(
+                contract, register, BuildingInstanceId, "household", "7", PriceForKind, Day, PlayerHouseholdId, ""));
         }
     }
 }

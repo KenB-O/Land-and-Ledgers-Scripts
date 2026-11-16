@@ -365,6 +365,8 @@ namespace LandLedgers.Orchestration.Systems
         private readonly HashSet<string> fellingWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> logHaulWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private EmbodiedPurchaseExecutor purchaseExecutor;
+        /// <summary>DEF-067: diagnostics-only food-charge reconciliation (in-memory, never saved). Constructed once in DriveDailyNeeds.</summary>
+        private HouseholdFoodChargeReconciliation foodChargeReconciliation;
         private HouseholdMembershipRegistry householdMemberships;
         private ShopperSellerKnowledge sellerKnowledge = new ShopperSellerKnowledge();
         private readonly Dictionary<string, LaborDemandReport> latestDemandByBusiness =
@@ -2117,13 +2119,20 @@ namespace LandLedgers.Orchestration.Systems
                         if (sharedBusinessRuntime == null) return null;
                         BusinessInstanceState found;
                         return sharedBusinessRuntime.TryFindByInstanceId(id, out found) ? found.RuntimeState : null;
-                    });
+                    },
+                    chargeRecorder: foodChargeReconciliation);
             }
             else
             {
                 householdShoppingLoop.RebindPopulationAuthorities(
                     populationManager.State, householdMemberships, currentJourneys);
             }
+
+            // DEF-067: (re)bind the charge recorder every build — the loop
+            // may have been constructed before the first daily drive created
+            // the recorder, and the ctor argument above only applies at
+            // construction. Null until the first DriveDailyNeeds runs.
+            householdShoppingLoop.ChargeRecorder = foodChargeReconciliation;
 
             // Plan 16: General Store employee service. The loop resolves the
             // manager-bound store's live queue and a filled clerk by supplier
@@ -5776,13 +5785,16 @@ namespace LandLedgers.Orchestration.Systems
 
             dailyNeedsService ??= new DailyNeedsService();
             consumptionPlanner ??= new HouseholdConsumptionPlanner();
+            // DEF-067: construct the charge reconciliation before the
+            // executor so the legacy path records from its first drive.
+            foodChargeReconciliation ??= new HouseholdFoodChargeReconciliation();
             // P2: wire the legacy person-int id space to HF-1 EntityIds so the
             // travel-time leg of embodied purchasing actually gates on the
             // person's TTS-1 work-time budget (previously always skipped).
             purchaseExecutor ??= new EmbodiedPurchaseExecutor(
                 populationManager.State, hub.HouseholdLedgers, supplierDirectory, journeys,
                 ResolvePersonJourneyLocation, hub.WorkTimeBudgets, pid => EntityId.For(EntityKind.Person, pid),
-                hub.HouseholdInventories);
+                hub.HouseholdInventories, foodChargeReconciliation);
 
             // P2: W2B/W2C/W3B nutrition links — count real prepared meals
             // served by live eating-house runtimes (Canon §2.5) so households
@@ -5864,6 +5876,12 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             DriveEmbodiedShopping(absoluteDayIndex, diag);
+            // DEF-067: one compact daily charge-reconciliation line (legacy
+            // vs Phase C per household-day, with OVERLAP / MULTI-ITEM flags).
+            // Emitted every day, even all-zero, so a missing line never looks
+            // like a logging cutoff. The recorder is constructed above in
+            // this drive, so it is non-null here.
+            diag.Add(foodChargeReconciliation.SummarizeDayLine(absoluteDayIndex));
             DriveHouseholdAutonomy(absoluteDayIndex, diag);
             PublishHouseholdShoppingSummariesAndTraces(absoluteDayIndex, diag);
             if (diag.Count > 0)

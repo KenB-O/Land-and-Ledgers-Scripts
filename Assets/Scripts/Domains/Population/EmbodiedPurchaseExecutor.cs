@@ -98,11 +98,14 @@ namespace LandLedgers.Population
         private readonly HouseholdInventoryRegistry inventories;
         private readonly Func<int, EntityId> personEntityId;
         private readonly List<string> log = new List<string>();
+        /// <summary>DEF-067: optional charge recorder; null means record nothing (today's behavior exactly).</summary>
+        private readonly HouseholdFoodChargeReconciliation chargeRecorder;
 
         /// <param name="personLocationId">Resolves a person's journey location id; defaults to town center.</param>
         /// <param name="budgets">Optional: travel minutes are committed against the person's TTS-1 budget.</param>
         /// <param name="personEntityId">Optional: maps legacy person int id to HF-1 EntityId for budget lookup.</param>
         /// <param name="inventories">Optional (Phase B): purchased goods also book real lots via the reserve bridge.</param>
+        /// <param name="chargeRecorder">Optional (DEF-067): records each successful purchase as a structured legacy food charge; null records nothing.</param>
         public EmbodiedPurchaseExecutor(
             PopulationState population,
             HouseholdLedgerRegistry ledgers,
@@ -111,7 +114,8 @@ namespace LandLedgers.Population
             Func<int, string> personLocationId = null,
             WorkTimeBudgetStore budgets = null,
             Func<int, EntityId> personEntityId = null,
-            HouseholdInventoryRegistry inventories = null)
+            HouseholdInventoryRegistry inventories = null,
+            HouseholdFoodChargeReconciliation chargeRecorder = null)
         {
             this.population = population ?? throw new ArgumentNullException(nameof(population));
             this.ledgers = ledgers ?? throw new ArgumentNullException(nameof(ledgers));
@@ -121,6 +125,7 @@ namespace LandLedgers.Population
             this.budgets = budgets;
             this.personEntityId = personEntityId;
             this.inventories = inventories;
+            this.chargeRecorder = chargeRecorder;
         }
 
         public IReadOnlyList<string> Log => log;
@@ -280,6 +285,9 @@ namespace LandLedgers.Population
             result.Counterparty = chosen.SupplierName;
             result.Notes = $"Day {dayIndex}: P{actingPersonId} walked {chosenRoute.TotalMiles:F1} mi ({roundTripMinutes} min round trip) to '{chosen.SupplierName}' and bought {sold}u {need.CategoryId} for {result.AmountPaidCents}c.";
             log.Add(result.Notes);
+            // DEF-067: record the posted legacy charge (success only; a
+            // null recorder records nothing and changes no behavior).
+            chargeRecorder?.RecordLegacy(need.HouseholdId, dayIndex, need.CategoryId, sold, result.AmountPaidCents, need.NeedSequence, result.Counterparty);
             return result;
         }
     }

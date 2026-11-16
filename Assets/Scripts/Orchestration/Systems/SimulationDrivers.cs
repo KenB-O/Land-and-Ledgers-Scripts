@@ -1581,6 +1581,27 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // C-4 (OD-C5): the transfer is a wholesale PURCHASE — bind
+            // the cash ports fresh each drive from the mill and yard
+            // business runtime states (the byproduct-transfer pattern).
+            // A transfer with no formed business runtime state has no
+            // cash to debit or credit, so the drive is skipped loudly
+            // rather than moving lumber unpaid.
+            if (millBusiness?.RuntimeState == null)
+            {
+                LogSawmillTransferWarningOnce("no-mill-cash",
+                    "Sawmill-to-yard transfer skipped: no formed Sawmill business runtime state to credit.");
+                return;
+            }
+            if (yardBusiness?.RuntimeState == null)
+            {
+                LogSawmillTransferWarningOnce("no-yard-cash",
+                    "Sawmill-to-yard transfer skipped: no formed LumberYard business runtime state to debit.");
+                return;
+            }
+            driver.YardCash = new Series2BusinessRuntimeCashPort(yardBusiness.RuntimeState);
+            driver.MillCash = new Series2BusinessRuntimeCashPort(millBusiness.RuntimeState);
+
             var diag = new List<string>();
 
             // 3. Re-attempt pass (C7 analogue): open Planned jobs from
@@ -1602,6 +1623,7 @@ namespace LandLedgers.Orchestration.Systems
             int begunCount = 0;
             int transferredCount = 0;
             int failedCount = 0;
+            int settledCents = 0;
 
             foreach (SawmillToYardTransferJob openJob in openJobs)
             {
@@ -1609,6 +1631,7 @@ namespace LandLedgers.Orchestration.Systems
                 if (RunYardTransferJobOnce(driver, openJob, absoluteDayIndex, diag, ref failedCount) && openJob.State == SawmillToYardTransferJobState.Transferred)
                 {
                     transferredCount++;
+                    if (openJob.SettledPriceCents >= 0) settledCents += openJob.SettledPriceCents;
                 }
             }
 
@@ -1646,7 +1669,11 @@ namespace LandLedgers.Orchestration.Systems
                     diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: lot '{lotId}' is no longer in the mill yard — never conjured, skipped.");
                     continue;
                 }
-                SawmillToYardTransferJob job = driver.BeginTransfer(lotId, LumberYardGradeCatalog.DefaultGradeId, 0, absoluteDayIndex, out string beginRefusal);
+                // C-4 (OD-C5): the transfer is a wholesale purchase at
+                // the driver's wholesale unit price — never a zero-cost
+                // gift (a zero-cost lot quotes 1c at retail and the mill
+                // earns nothing, the F6 defect).
+                SawmillToYardTransferJob job = driver.BeginTransfer(lotId, LumberYardGradeCatalog.DefaultGradeId, SawmillToYardTransferDriver.WholesaleLumberUnitCostCents, absoluteDayIndex, out string beginRefusal);
                 if (job == null)
                 {
                     diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: lot '{lotId}' could not begin — {beginRefusal}");
@@ -1656,11 +1683,12 @@ namespace LandLedgers.Orchestration.Systems
                 if (RunYardTransferJobOnce(driver, job, absoluteDayIndex, diag, ref failedCount) && job.State == SawmillToYardTransferJobState.Transferred)
                 {
                     transferredCount++;
+                    if (job.SettledPriceCents >= 0) settledCents += job.SettledPriceCents;
                 }
             }
 
             // 7. Summary.
-            Debug.Log($"[SawmillTransfer] Day {absoluteDayIndex}: re-attempted {reattemptedCount} open job(s), began {begunCount} new job(s), {transferredCount} job(s) transferred, {failedCount} job(s) failed. {string.Join(" | ", diag)}", this);
+            Debug.Log($"[SawmillTransfer] Day {absoluteDayIndex}: re-attempted {reattemptedCount} open job(s), began {begunCount} new job(s), {transferredCount} job(s) transferred ({settledCents}c settled wholesale), {failedCount} job(s) failed. {string.Join(" | ", diag)}", this);
         }
 
         /// <summary>
@@ -1697,6 +1725,14 @@ namespace LandLedgers.Orchestration.Systems
                     }
                 }
                 return false;
+            }
+            // C-4: custody moved but the mill credit was refused — the
+            // driver recorded the unsettled debit loudly in its own
+            // diagnostics, and the production summary must carry it too
+            // (the driver's diagnostics list is not read in production).
+            if (job.SettledPriceCents < 0)
+            {
+                diag.Add($"[SawmillTransfer] Day {dayIndex}: job '{job.JobId}' transferred custody but the mill credit is UNSETTLED — the yard paid and the mill has not been credited; reconcile the books before the next drive.");
             }
             return true;
         }

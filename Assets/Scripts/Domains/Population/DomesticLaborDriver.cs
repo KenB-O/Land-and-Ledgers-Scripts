@@ -53,6 +53,24 @@ namespace LandLedgers.Population
             public bool CleaningNeeded;
             public bool ColdSeason;
             public bool HasAnimals;
+            /// <summary>
+            /// B2 (Agent B, expanded campaign 2026-11-16): the household's
+            /// stove registry, when the caller has one (Agent G wires it
+            /// from the hub/state in production). Null means no stove
+            /// information — meal-prep plans as before, with
+            /// MealPrepMode Unspecified. The registry never blocks the
+            /// task: without a ready stove the mode is ColdFoodFallback
+            /// and the household eats cold food from stores.
+            /// </summary>
+            public HouseholdStoveRegistry Stoves;
+            /// <summary>
+            /// B2: the household's fuel-wood reserve units as the caller
+            /// reads them, for the stove gate's fuel support check.
+            /// -1 means unknown (legacy callers) — only fuel already in
+            /// the stove stores counts. Agent G wires the real value
+            /// from the household reserve.
+            /// </summary>
+            public int FuelWoodReserveUnits = -1;
         }
 
         /// <summary>One planned domestic task: not yet scheduled.</summary>
@@ -67,6 +85,18 @@ namespace LandLedgers.Population
             public int StartMinuteOfDay;
             public string Status = "Pending"; // Pending | Started | Failed
             public string Note = string.Empty;
+            /// <summary>
+            /// B2 (Agent B, expanded campaign 2026-11-16): how this
+            /// meal-prep task cooks — StoveCooking when the household's
+            /// stove gate passed, ColdFoodFallback when it fell back to
+            /// cold food from stores, Unspecified when no stove registry
+            /// was consulted (legacy). Only meal-prep tasks carry a
+            /// mode; B3 reads it at cook time (fuel from the stove
+            /// store for StoveCooking, none for ColdFoodFallback).
+            /// Additive: old saves deserialize it as Unspecified — the
+            /// honest old-save default (not evaluated).
+            /// </summary>
+            public HouseholdStoveMealPrepMode MealPrepMode = HouseholdStoveMealPrepMode.Unspecified;
         }
 
         /// <summary>One in-flight domestic task: scheduled, awaiting its due event.</summary>
@@ -198,6 +228,27 @@ namespace LandLedgers.Population
                     continue;
                 }
 
+                // B2 (Agent B, expanded campaign 2026-11-16): the stove
+                // gate for meal-prep. A ready stove cooks on the stove;
+                // anything else falls back to cold food from stores —
+                // the task is still planned and still credits family
+                // labour (DEF-015: meal-prep serves no meal and changes
+                // no meal count). The stove never blocks eating, and the
+                // fallback is recorded loudly on the task note, never
+                // silently. Without a stove registry the mode stays
+                // Unspecified (legacy behaviour, Agent G's wiring).
+                HouseholdStoveMealPrepMode mealPrepMode = HouseholdStoveMealPrepMode.Unspecified;
+                string taskNote = want.why;
+                if (string.Equals(want.definitionId, DomesticTaskCatalog.MealPrepId, StringComparison.Ordinal)
+                    && inputs.Stoves != null)
+                {
+                    string stoveReason;
+                    mealPrepMode = inputs.Stoves.CheckMealPrep(dayIndex, inputs.FuelWoodReserveUnits, diag, out stoveReason);
+                    taskNote = mealPrepMode == HouseholdStoveMealPrepMode.StoveCooking
+                        ? want.why + " — stove cooking"
+                        : want.why + " — cold food, no stove: " + stoveReason;
+                }
+
                 pending.Add(new PendingDomesticTask
                 {
                     HouseholdId = inputs.HouseholdId,
@@ -206,7 +257,8 @@ namespace LandLedgers.Population
                     DayIndex = dayIndex,
                     StartMinuteOfDay = selectedStartMinute,
                     Status = "Pending",
-                    Note = want.why,
+                    Note = taskNote,
+                    MealPrepMode = mealPrepMode,
                 });
                 diag.Add("DomesticLaborDriver: planned '" + definition.DisplayName + "' for P" + personId +
                     " at minute " + want.startMinute + " (" + want.why + ").");

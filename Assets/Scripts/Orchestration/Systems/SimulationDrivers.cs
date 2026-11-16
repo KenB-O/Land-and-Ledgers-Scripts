@@ -3579,9 +3579,11 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         /// <summary>
         /// Pass V drive-by: daily domestic labor. Each household's
-        /// need-driven tasks (meals for members at home, fuel in cold season,
-        /// animal care when the household owns animals, baseline chores) are
-        /// planned by DomesticLaborDriver and scheduled on real person time.
+        /// need-driven tasks (meals for members at home, fuel when the
+        /// household burns fuel and has fuel on hand, animal care when the
+        /// household owns animals, cleaning once accumulated household use
+        /// reaches the threshold) are planned by DomesticLaborDriver and
+        /// scheduled on real person time.
         /// </summary>
         private void DriveDomesticLaborDay(int absoluteDayIndex)
         {
@@ -3603,6 +3605,10 @@ namespace LandLedgers.Orchestration.Systems
                 if (household == null) continue;
                 List<int> members = householdMemberships.GetActiveMembers(household.id);
                 if (members.Count == 0) continue;
+                // Campaign C-24 (DEF-010, Decision 6): record today's household
+                // use before planning, so the cleaning need reads the
+                // accumulated state including today.
+                hub.DomesticLaborDriver.AccumulateCleaningUse(household.id, members.Count, absoluteDayIndex);
                 var inputs = new DomesticLaborDriver.DomesticDayInputs
                 {
                     HouseholdId = household.id,
@@ -3615,20 +3621,33 @@ namespace LandLedgers.Orchestration.Systems
                     IsWindowUnavailable = (personId, startMinute, durationMinutes) =>
                         pathingDirector != null && pathingDirector.IsCommittedToScheduledWorkWindow(
                             personId, absoluteDayIndex, startMinute, durationMinutes),
-                    // DailyNeedsService currently serves/consumes meals from
-                    // actual received lots, but no production authority reports
-                    // an unmet cooking requirement or supported recipe here.
-                    // Do not schedule a stove task merely because residents
-                    // exist; the existing daily meal accounting remains intact.
-                    MealsAtHomeCount = 0,
-                    // A month/season flag is not evidence that a household hearth
-                    // needs fuel handling. No installed-equipment/burn-state
-                    // authority is currently wired to this driver.
-                    FuelHandlingNeeded = false,
-                    // No household cleanliness state currently supplies this
-                    // need. Ordinary cleaning remains optional and unscheduled
-                    // until a real need source exists.
-                    CleaningNeeded = false,
+                    // Campaign C-24 (DEF-010, Decision 6): the cooking need is
+                    // measured from the meal authority's own served-meal
+                    // records for today (meals eaten at home), not assumed
+                    // from residents existing. DriveDailyNeeds runs before
+                    // this drive in the same OnDayChanged, so today's records
+                    // are already written. A household whose larder is empty
+                    // serves no meals at home and gets no meal-prep task —
+                    // the shortfall is a shopping need, not a cooking task.
+                    // Planning the task credits family labour only; it serves
+                    // no meal and changes no meal count (DEF-015 untouched).
+                    MealsAtHomeCount = DomesticNeedAuthorities.MealsAtHomeToday(
+                        hub.MealLog, household.id, absoluteDayIndex),
+                    // Campaign C-24 (DEF-010, Decision 6): fuel handling is
+                    // needed when the household burns fuel today (the heating
+                    // authority's own forecast: season, members, stove and
+                    // heat-retention tiers) and has fuel on hand to handle.
+                    // No fuel on hand means nothing to handle — the shortfall
+                    // is a procurement need. The fuel itself is still consumed
+                    // only by HouseholdReserveEvaluator (DEF-019 untouched).
+                    FuelHandlingNeeded = DomesticNeedAuthorities.FuelHandlingNeeded(
+                        household, absoluteDayIndex),
+                    // Campaign C-24 (DEF-010, Decision 6): cleaning comes from
+                    // the driver's accumulated-use tracker (one unit per
+                    // occupant per day; need at 14 person-days; a completed
+                    // Chores task resets it). No cleanliness state existed
+                    // before this package.
+                    CleaningNeeded = hub.DomesticLaborDriver.CleaningNeeded(household.id),
                     ColdSeason = coldSeason,
                     HasAnimals = HouseholdOwnsAnimals(household.id, members),
                 };

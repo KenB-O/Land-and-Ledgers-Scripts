@@ -89,6 +89,16 @@ namespace LandLedgers.Population
         private readonly List<InFlightDomesticTask> inFlight = new List<InFlightDomesticTask>();
         private readonly List<string> diagnostics = new List<string>();
 
+        /// <summary>
+        /// Campaign C-24 (DEF-010, Decision 6): the household cleanliness
+        /// need state. No cleanliness state existed in the repo, so this
+        /// tracker is the new measurable state: use accumulates per occupant
+        /// per day, a Chores completion resets it. Owned here because this
+        /// driver owns domestic state; persisted through
+        /// DomesticLaborDriverSaveDto alongside pending/in-flight.
+        /// </summary>
+        private readonly HouseholdCleanlinessTracker cleanliness = new HouseholdCleanlinessTracker();
+
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public IReadOnlyList<PendingDomesticTask> Pending => pending;
         public IReadOnlyList<InFlightDomesticTask> InFlight => inFlight;
@@ -495,6 +505,15 @@ namespace LandLedgers.Population
             {
                 diag.Add("DomesticLaborDriver: P" + flight.PersonId + " completed '" +
                     flight.DefinitionId + "' (" + remaining + " min worked, family labor, no wages).");
+                // Campaign C-24 (DEF-010): a completed Chores task cleans the
+                // household — the cleanliness accumulation resets and the need
+                // is re-earned by further use. Every domestic completion flows
+                // through here (ScheduleDomesticWork is called only by this
+                // driver), so no completion path can skip the reset.
+                if (string.Equals(flight.DefinitionId, DomesticTaskCatalog.ChoresId, StringComparison.Ordinal))
+                {
+                    cleanliness.ResetAfterCleaning(flight.HouseholdId, dayIndex);
+                }
             }
         }
 
@@ -867,6 +886,27 @@ namespace LandLedgers.Population
             }
         }
 
+        /// <summary>
+        /// Campaign C-24 (DEF-010): record one day of household use for the
+        /// cleaning need (one unit per occupant present). Idempotent per
+        /// household per day — the tracker guards the day key. Called by the
+        /// daily drive before planning, so the cleaning input reads the
+        /// accumulated state including today.
+        /// </summary>
+        public void AccumulateCleaningUse(int householdId, int membersAtHome, int dayIndex)
+        {
+            cleanliness.Accumulate(householdId, membersAtHome, dayIndex);
+        }
+
+        /// <summary>
+        /// Campaign C-24 (DEF-010): true once the household's accumulated use
+        /// reaches the cleaning threshold.
+        /// </summary>
+        public bool CleaningNeeded(int householdId)
+        {
+            return cleanliness.NeedsCleaning(householdId);
+        }
+
         /// <summary>Save: pending + in-flight driver state (owning runtime class holds its DTO).</summary>
         public DomesticLaborDriverSaveDto CaptureSaveDto()
         {
@@ -874,6 +914,10 @@ namespace LandLedgers.Population
             {
                 pending = new List<PendingDomesticTask>(pending),
                 inFlight = new List<InFlightDomesticTask>(inFlight),
+                // Campaign C-24 (DEF-010): cleanliness accumulation is domestic
+                // state too — a save that lost it would forget how soiled each
+                // household is and re-earn every cleaning need from zero.
+                cleanliness = cleanliness.CaptureRecords(),
             };
         }
 
@@ -882,6 +926,7 @@ namespace LandLedgers.Population
         {
             pending.Clear();
             inFlight.Clear();
+            cleanliness.LoadRecords(null);
             if (dto == null)
             {
                 return;
@@ -896,6 +941,8 @@ namespace LandLedgers.Population
             {
                 inFlight.AddRange(dto.inFlight);
             }
+
+            cleanliness.LoadRecords(dto.cleanliness);
         }
     }
 
@@ -905,5 +952,7 @@ namespace LandLedgers.Population
     {
         public List<DomesticLaborDriver.PendingDomesticTask> pending = new List<DomesticLaborDriver.PendingDomesticTask>();
         public List<DomesticLaborDriver.InFlightDomesticTask> inFlight = new List<DomesticLaborDriver.InFlightDomesticTask>();
+        /// <summary>Campaign C-24 (DEF-010): per-household cleanliness accumulation.</summary>
+        public List<HouseholdCleanlinessRecord> cleanliness = new List<HouseholdCleanlinessRecord>();
     }
 }

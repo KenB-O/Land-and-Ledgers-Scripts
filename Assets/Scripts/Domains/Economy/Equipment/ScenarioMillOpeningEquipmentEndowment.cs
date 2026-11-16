@@ -17,9 +17,13 @@ namespace LandLedgers.Economy.Equipment
     /// condition, business-owned, located at the business). Per
     /// business key, scenario-owned, zero by default, NewGame-only in
     /// the bootstrapper's call, idempotent via the BusinessRuntimeState
-    /// endowment marker, and never changes cash. A mill whose business
-    /// key has no opening-equipment entry gets nothing; a scenario
-    /// whose config does not use this field gets nothing. The code
+    /// endowment marker, and never changes cash. Re-application installs
+    /// only the listed assets the register does not already hold (C-3 heal
+    /// for pre-C-3 saves, whose marker predates later entries); a present
+    /// asset is never re-installed, so a used asset is never silently
+    /// repaired. A mill whose business key has no opening-equipment entry
+    /// gets nothing; a scenario whose config does not use this field gets
+    /// nothing. The code
     /// installs exactly what the config lists, once. The asset ids are
     /// Kennedy-authored; the slice fixture id "slice-felling-axe" is
     /// refused here and in DevelopmentTownConfiguration.Validate.
@@ -95,21 +99,30 @@ namespace LandLedgers.Economy.Equipment
             }
 
             string endowmentId = $"development-town-opening-mill-equipment:{configuration.ConfigurationId}:{businessKey}:{businessInstanceId}";
-            if (businessRuntimeState.HasAppliedScenarioEndowment(endowmentId))
-            {
-                report = $"Opening mill equipment already recorded for {businessInstanceId}; no asset recreated.";
-                return true;
-            }
+            bool alreadyRecorded = businessRuntimeState.HasAppliedScenarioEndowment(endowmentId);
 
-            // Defense in depth, independent of the marker (the marker is
-            // persisted — BusinessRuntimeState save/load round-trips the
-            // applied-endowment ids — but a register restored without it
-            // must still never double-install): re-registering the same
-            // asset id replaces, never duplicates
-            // (BusinessEquipmentRegister dedupes by id).
+            // C-3 heal: install only the listed assets the register does not
+            // already hold. RegisterAsset replaces by id, so re-installing a
+            // present asset would silently repair a used one to full
+            // condition — skipping present assets keeps the endowment
+            // once-only per asset while healing a pre-C-3 save, whose marker
+            // predates the saw-line components: they install on the first
+            // post-C-3 boot. There is no production removal path for
+            // register assets, so a missing listed asset can only mean
+            // "never installed", never "legitimately removed" — revisit this
+            // if a removal path is ever added.
             var installed = new List<string>();
             foreach (DevelopmentTownConfiguration.OpeningAssetEntry asset in assets)
             {
+                bool alreadyPresent = false;
+                if (register.Assets != null)
+                    foreach (EquipmentAsset existing in register.Assets)
+                        if (existing != null && string.Equals(existing.AssetId, asset.assetId.Trim(), StringComparison.Ordinal)) { alreadyPresent = true; break; }
+                if (alreadyPresent)
+                {
+                    diag.Add($"ScenarioMillOpeningEquipmentEndowment: mill asset '{asset.assetId.Trim()}' already present for {businessInstanceId} — left alone, never repaired.");
+                    continue;
+                }
                 register.RegisterAsset(new EquipmentAsset
                 {
                     AssetId = asset.assetId.Trim(),
@@ -125,6 +138,18 @@ namespace LandLedgers.Economy.Equipment
 
             if (string.IsNullOrWhiteSpace(register.BusinessInstanceId))
                 register.BusinessInstanceId = businessInstanceId;
+
+            if (installed.Count == 0 && alreadyRecorded)
+            {
+                report = $"Opening mill equipment already recorded for {businessInstanceId}; no asset recreated.";
+                return true;
+            }
+            if (installed.Count > 0 && alreadyRecorded)
+            {
+                diag.Add($"ScenarioMillOpeningEquipmentEndowment: opening mill equipment already recorded for {businessInstanceId}; healed {installed.Count} missing asset(s): {string.Join("; ", installed)}.");
+                report = $"Opening mill equipment already recorded for {businessInstanceId}; installed {installed.Count} missing asset(s): {string.Join("; ", installed)}.";
+                return true;
+            }
             if (!businessRuntimeState.RecordAppliedScenarioEndowment(endowmentId))
             {
                 error = $"Could not record opening mill equipment allocation '{endowmentId}'.";
@@ -132,7 +157,9 @@ namespace LandLedgers.Economy.Equipment
             }
 
             report = installed.Count == 0
-                ? $"Opening equipment entry for '{businessKey}' ({businessInstanceId}) lists no assets; nothing was installed."
+                ? (assets.Count == 0
+                    ? $"Opening equipment entry for '{businessKey}' ({businessInstanceId}) lists no assets; nothing was installed."
+                    : $"Opening mill equipment already present for {businessInstanceId}; nothing installed.")
                 : $"Applied configured opening mill equipment to '{businessKey}' ({businessInstanceId}): {string.Join("; ", installed)}.";
             return true;
         }

@@ -157,6 +157,42 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void MillOpeningEquipment_Reapply_HealsMissingComponents_WithoutRepairingPresentOnes()
+        {
+            var diag = new List<string>();
+            // First apply: the C-1/C-2 entry (axes + wagon) — the pre-C-3 save.
+            DevelopmentTownConfiguration firstConfig = BuildConfig(new[]
+            {
+                MillEquipmentEntry(("felling-axe-1", "felling-axe"), ("felling-axe-2", "felling-axe"), ("log-wagon-1", "log-wagon")),
+            });
+            (BusinessRuntimeState state, BusinessEquipmentRegister register) = NewMillWithRegister();
+            Assert.IsTrue(Apply(firstConfig, state, register, diag, out _, out string firstError), firstError);
+            Assert.AreEqual(3, register.Assets.Count, "the pre-C-3 save holds axes + wagon");
+
+            // The axes have been used since: one is worn to half condition.
+            register.Assets[0].Condition01 = 0.5f;
+
+            // Second apply: the C-3 entry (axes + wagon + saw-line
+            // components), same endowment id — the first post-C-3 boot of
+            // the pre-C-3 save.
+            DevelopmentTownConfiguration secondConfig = BuildConfig(new[]
+            {
+                MillEquipmentEntry(("felling-axe-1", "felling-axe"), ("felling-axe-2", "felling-axe"), ("log-wagon-1", "log-wagon"),
+                    ("saw-line-1", "saw-line"), ("log-carriage-1", "log-carriage"), ("drive-system-1", "drive-system")),
+            });
+            Assert.IsTrue(Apply(secondConfig, state, register, diag, out string secondReport, out string secondError), secondError);
+            StringAssert.Contains("already recorded", secondReport, "the heal reports the recorded endowment; report: " + secondReport);
+            StringAssert.Contains("saw-line-1", secondReport, "the heal names the newly installed components; report: " + secondReport);
+
+            Assert.AreEqual(6, register.Assets.Count, "the three saw-line components install; nothing duplicates");
+            Assert.AreEqual(0.5f, register.Assets[0].Condition01, "a present asset is never re-installed, so a used axe is never silently repaired");
+            Assert.AreEqual(1f, register.Assets[3].Condition01, "the healed components install at full condition");
+            Assert.AreEqual("saw-line", register.Assets[3].Kind);
+            Assert.AreEqual("log-carriage", register.Assets[4].Kind);
+            Assert.AreEqual("drive-system", register.Assets[5].Kind);
+        }
+
+        [Test]
         public void MillOpeningEquipment_EmptyConfig_InstallsNothing_AndFellingGateRefuses()
         {
             var diag = new List<string>();

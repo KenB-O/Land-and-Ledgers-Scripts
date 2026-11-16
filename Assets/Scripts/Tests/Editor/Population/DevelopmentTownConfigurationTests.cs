@@ -99,16 +99,24 @@ namespace LandLedgers.EditorTests.Population
             // for the two-person crew, seven cover days of camp provisions,
             // and the mill hand's opening employment. C-2b: the log wagon
             // (1200 kg two-horse logging wagon, OD-C4) the mill teamster
-            // hauls with, beside the axes.
+            // hauls with, beside the axes. C-3: the saw-line components
+            // (saw-line, log-carriage, drive-system) the bootstrapper wires
+            // into the mill's saw-line workstation.
             DevelopmentTownConfiguration.BusinessOpeningEquipment millEquipment =
                 configuration.OpeningEquipment.Single(item => item.businessKey == "sawmill");
-            Assert.AreEqual(3, millEquipment.assetEntries.Length);
+            Assert.AreEqual(6, millEquipment.assetEntries.Length);
             Assert.AreEqual("felling-axe-1", millEquipment.assetEntries[0].assetId);
             Assert.AreEqual("felling-axe", millEquipment.assetEntries[0].kind);
             Assert.AreEqual("felling-axe-2", millEquipment.assetEntries[1].assetId);
             Assert.AreEqual("felling-axe", millEquipment.assetEntries[1].kind);
             Assert.AreEqual("log-wagon-1", millEquipment.assetEntries[2].assetId);
             Assert.AreEqual("log-wagon", millEquipment.assetEntries[2].kind);
+            Assert.AreEqual("saw-line-1", millEquipment.assetEntries[3].assetId);
+            Assert.AreEqual("saw-line", millEquipment.assetEntries[3].kind);
+            Assert.AreEqual("log-carriage-1", millEquipment.assetEntries[4].assetId);
+            Assert.AreEqual("log-carriage", millEquipment.assetEntries[4].kind);
+            Assert.AreEqual("drive-system-1", millEquipment.assetEntries[5].assetId);
+            Assert.AreEqual("drive-system", millEquipment.assetEntries[5].kind);
             Assert.AreEqual(7, configuration.OpeningLoggingCampProvisionCoverDays);
             Assert.AreEqual(1, configuration.OpeningEmployees.Count);
             DevelopmentTownConfiguration.BusinessEmployeeDefinition millHand = configuration.OpeningEmployees[0];

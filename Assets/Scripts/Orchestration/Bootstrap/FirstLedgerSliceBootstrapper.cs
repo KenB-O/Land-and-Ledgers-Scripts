@@ -6,6 +6,7 @@ using LandLedgers.CameraSystem;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Core;
 using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.Bakery;
@@ -2761,6 +2762,26 @@ namespace LandLedgers.FirstLedger
                     pass9.EquipmentRegisters.Add(millRegister);
                 Debug.Log($"[SawmillProduction] {axeReport}", this);
                 foreach (string line in axeDiag) Debug.Log($"[SawmillProduction] {line}", this);
+
+                // C-3 (expanded campaign): establish the mill's saw-line
+                // workstation in the hub-owned workstation registry, from
+                // the register the endowment just filled (the endowment
+                // heals a pre-C-3 save, so the saw-line components are
+                // present). Steam motive power (OD-C6, Canon §8.5A). The
+                // station is re-derived on every boot, so no save seam is
+                // needed; the mill's support context (saw-filing + the
+                // opening lubrication store) is registered beside it.
+                BusinessWorkstations millStations = systemsHub.WorkstationRegisterFor(millBusiness.InstanceId);
+                var stationDiag = new List<string>();
+                if (!SawmillWorkstationEstablishment.TryEstablishStation(millStations, millRegister,
+                        MotivePowerKind.Steam, stationDiag, out string stationReport, out string stationError))
+                {
+                    Debug.LogError($"[SawmillProduction] {stationError}", this);
+                }
+                else Debug.Log($"[SawmillProduction] {stationReport}", this);
+                foreach (string line in stationDiag) Debug.Log($"[SawmillProduction] {line}", this);
+                SupportContext millSupport = systemsHub.SupportContextFor(millBusiness.InstanceId);
+                SawmillWorkstationEstablishment.RegisterMillSupport(millSupport);
             }
         }
 #endif

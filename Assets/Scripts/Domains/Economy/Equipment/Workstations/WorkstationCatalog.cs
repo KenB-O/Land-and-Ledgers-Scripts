@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace LandLedgers.Economy.Equipment.Workstations
@@ -456,5 +457,18 @@ namespace LandLedgers.Economy.Equipment.Workstations
             BarberChairStation, BarberBathStation, TailorCuttingTableStation, TellerWindowStation,
             CarpenterWorkstation, HouseholdStove,
         };
+
+        /// <summary>
+        /// C-3: finds a workstation definition by id, or null when no definition
+        /// carries it. The production hub gate wires this as its
+        /// FindWorkstationDefinition supplier.
+        /// </summary>
+        public static WorkstationDefinition Find(string workstationId)
+        {
+            if (string.IsNullOrWhiteSpace(workstationId)) return null;
+            foreach (var def in All)
+                if (def != null && string.Equals(def.WorkstationId, workstationId, StringComparison.Ordinal)) return def;
+            return null;
+        }
     }
 }

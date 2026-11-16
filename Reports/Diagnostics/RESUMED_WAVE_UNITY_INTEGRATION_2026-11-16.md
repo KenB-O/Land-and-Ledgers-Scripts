@@ -40,7 +40,7 @@ The PlayMode review then found the DEF-067 daily reconciliation line was added t
 
 ## Live simulation
 
-One live New Game run was made in the real Main Scene. It started on March 1, 1870 and ended on April 3, 1870, about 34 calendar days, at the UI's **Extreme 250x Normal** preset (`5.76 simulated seconds/day`, 24-minute Normal day). It was left in Edit Mode. Startup selected `Fixed Testing World / Default QA Town`, seed 1886, not an Open Frontier preset. Startup logs record 9 residents, 5 households, 13 parcels, and 11 generated buildings. The enabled production runtimes included the bakery, fuel dealer, freight company, sawmill and lumber yard, plus the General Store.
+One live New Game run was made in the real Main Scene. The HUD started on March 1, 1870 and ended on April 3, 1870 (34 calendar dates inclusive; 33 days between those dates), at the UI's **Extreme 250x Normal** preset (`5.76 simulated seconds/day`, 24-minute Normal day). The daily economic logs advanced their absolute day index through day 36; that mismatch against the HUD date is unresolved and should be considered when interpreting per-day rates. The run was left in Edit Mode. Startup selected `Fixed Testing World / Default QA Town`, seed 1886, not an Open Frontier preset. Startup logs record 9 residents, 5 households, 13 parcels, and 11 generated buildings. The enabled production runtimes included the bakery, fuel dealer, freight company, sawmill and lumber yard, plus the General Store.
 
 ### Economic evidence
 

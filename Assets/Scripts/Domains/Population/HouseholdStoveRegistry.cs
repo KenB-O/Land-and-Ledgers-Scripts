@@ -146,6 +146,23 @@ namespace LandLedgers.Population
             Furnishings = furnishings;
         }
 
+        /// <summary>
+        /// B8 (Agent B, expanded campaign 2026-11-16): the creation seam
+        /// for a household's stove registry — construct from the B0
+        /// furnishing register and immediately re-derive the installed
+        /// stoves from it. The stoves list is materialized ONLY by
+        /// RebuildFromRegister, so a registry built without the rebuild
+        /// reads empty even when a stove is installed; every creator
+        /// must go through here (the hub accessor does). A null
+        /// furnishing register derives an empty registry, never a throw.
+        /// </summary>
+        public static HouseholdStoveRegistry CreateDerived(int householdId, HouseholdFurnishingRegister furnishings)
+        {
+            var registry = new HouseholdStoveRegistry(householdId, furnishings);
+            registry.RebuildFromRegister();
+            return registry;
+        }
+
         /// <summary>Fuel physically in one stove (installed store, else orphaned fuel for an uninstalled stove, else 0).</summary>
         public int FuelWoodUnitsOnHand(string stoveAssetId)
         {

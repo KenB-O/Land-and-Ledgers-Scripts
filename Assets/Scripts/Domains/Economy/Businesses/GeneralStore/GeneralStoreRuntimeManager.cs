@@ -1501,6 +1501,15 @@ namespace LandLedgers.FirstLedger
 
             generatedHouseholdCount = population.households.Count;
             int absoluteDay = timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : 0;
+            // B8 (Agent B, expanded campaign 2026-11-16): the hub, resolved
+            // once for the household loop (same FindAnyObjectByType pattern
+            // this file already uses for HouseholdLedgers and
+            // HouseholdInventories). It supplies the per-household stove
+            // registry below, so the daily heating burn debits installed
+            // stove stores first and the reserve second (B3). Null when no
+            // hub exists — the burn then runs exactly as before, with no
+            // stove information.
+            SimulationSystemsHub systemsHub = FindAnyObjectByType<SimulationSystemsHub>();
             for (int i = 0; i < population.households.Count; i++)
             {
                 HouseholdState household = population.households[i];
@@ -1515,7 +1524,8 @@ namespace LandLedgers.FirstLedger
                 HouseholdReserveEvaluator.ResolveDailyUse(
                     household,
                     absoluteDay,
-                    timeManager != null ? timeManager.TimelineAnchor : CalendarAnchor.Default);
+                    timeManager != null ? timeManager.TimelineAnchor : CalendarAnchor.Default,
+                    systemsHub?.HouseholdStoveRegistryFor(household.id));
                 HouseholdDemandSnapshot demand = HouseholdReserveEvaluator.BuildDemandSnapshot(household);
                 household.demandSnapshot = demand;
 

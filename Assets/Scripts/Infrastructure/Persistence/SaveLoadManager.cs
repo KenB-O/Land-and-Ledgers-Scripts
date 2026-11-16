@@ -885,6 +885,25 @@ namespace LandLedgers.Persistence
                 : string.Empty
             };
 
+            // W-G1 (Agent G, expanded campaign 2026-11-16): adopt any
+            // hub-owned equipment/furnishing registers created
+            // mid-game into the Pass 9 state lists BEFORE the
+            // coordinator Capture below snapshots them — otherwise a
+            // register created after NewGame (lumber yard, carpenter
+            // business, household furnishings) is silently lost at
+            // save, because the state lists are the only persistence
+            // path for registers. The sync never deletes and adopts
+            // only non-empty registers; the hub DTO is untouched, so
+            // the Pass 9 state stays the single persistence path.
+            // This call site is source-reviewed only (SaveLoadManager
+            // is harness-excluded); Unity compilation proof is owed
+            // from Codex. The sync method itself is Unity-free and
+            // pinned by Roslyn tests.
+            var registerSyncDiagnostics = new List<string>();
+            Series2Pass9State?.SyncRegistersFromHub(systemsHub?.AllEquipmentRegisters, systemsHub?.AllFurnishingRegisters, registerSyncDiagnostics);
+            foreach (string registerSyncDiagnostic in registerSyncDiagnostics)
+                Debug.Log($"[SaveLoad] {registerSyncDiagnostic}");
+
             LandLedgersSaveGameDto save = new()
             {
                 world = world,

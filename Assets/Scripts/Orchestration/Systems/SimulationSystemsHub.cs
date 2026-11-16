@@ -8,6 +8,7 @@ using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.DraftPower;
 using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Economy.Farming;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Freight;
@@ -183,6 +184,18 @@ namespace LandLedgers.Orchestration.Systems
         // register holds no equipment — the gate still refuses loudly.
         private Dictionary<string, BusinessEquipmentRegister> equipmentRegisters;
 
+        // F1 part 2 (expanded campaign 2026-11-16, O-F3; mirrors the
+        // C-3 workstation registry on the integration branch):
+        // hub-owned per-business workstation registries, keyed by
+        // business instance id. The registries are the live holders for
+        // the equipment task gate (WorkstationsFor). A holder with no
+        // registry holds no workstation — the gate refuses "not
+        // established". The registries are derived state, not saved
+        // state: the workstation instances are re-established from the
+        // business's equipment register at bootstrap (NewGame and
+        // Continue alike), so no Pass 9 slot is needed.
+        private Dictionary<string, BusinessWorkstations> workstationRegisters;
+
         // B0 (Agent B, expanded campaign 2026-11-16): hub-owned
         // per-household furnishing registers, keyed by household id
         // (the int id from HouseholdState / HouseholdLedger). The
@@ -228,6 +241,25 @@ namespace LandLedgers.Orchestration.Systems
                 equipmentRegisters[businessInstanceId] = register;
             }
             return register;
+        }
+
+        /// <summary>
+        /// F1 part 2 (O-F3; mirrors the C-3 workstation registry on the
+        /// integration branch): the workstation registry for one holder,
+        /// created on first use (empty). Mirrors EquipmentRegisterFor. A
+        /// holder with no registry holds no workstation — the gate
+        /// refuses "not established".
+        /// </summary>
+        public BusinessWorkstations WorkstationRegisterFor(string holderId)
+        {
+            if (string.IsNullOrWhiteSpace(holderId)) return null;
+            workstationRegisters ??= new Dictionary<string, BusinessWorkstations>(StringComparer.Ordinal);
+            if (!workstationRegisters.TryGetValue(holderId, out BusinessWorkstations registry) || registry == null)
+            {
+                registry = new BusinessWorkstations(holderId);
+                workstationRegisters[holderId] = registry;
+            }
+            return registry;
         }
 
         /// <summary>C2: the lumber yard runtime for one business, created on first use (empty).</summary>

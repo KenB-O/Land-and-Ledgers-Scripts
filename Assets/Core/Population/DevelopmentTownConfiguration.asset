@@ -87,6 +87,22 @@ MonoBehaviour:
     isFemale: 0
     occupation: Unemployed; seeking work
     homeBuildingOrdinal: 4
+  - key: don-millward
+    firstName: Don
+    lastName: Millward
+    age: 58
+    ageIsProvisionalCalibration: 1
+    isFemale: 0
+    occupation: Carpenter
+    homeBuildingOrdinal: 5
+  - key: grace-millward
+    firstName: Grace
+    lastName: Millward
+    age: 56
+    ageIsProvisionalCalibration: 1
+    isFemale: 1
+    occupation: Unemployed
+    homeBuildingOrdinal: 5
   households:
   - key: base-household:0
     displayName: Baldwin-Ooms Household
@@ -127,6 +143,14 @@ MonoBehaviour:
     - shane
     homeBuildingOrdinal: 4
     openingCashCents: 0
+  - key: millward
+    displayName: Millward Household
+    surname: Millward
+    memberPersonKeys:
+    - don-millward
+    - grace-millward
+    homeBuildingOrdinal: 5
+    openingCashCents: 0
   relationships:
   - firstPersonKey: base:0
     secondPersonKey: base:1
@@ -142,6 +166,9 @@ MonoBehaviour:
     relationship: 1
   - firstPersonKey: ethan
     secondPersonKey: tia
+    relationship: 0
+  - firstPersonKey: don-millward
+    secondPersonKey: grace-millward
     relationship: 0
   businesses:
   - key: general-store
@@ -210,6 +237,17 @@ MonoBehaviour:
       baseServiceFeeCents: 0
       ratePerMileCents: 0
       chargeRoundTrip: 1
+  - key: carpentry-workshop
+    operationId: carpentry-workshop
+    ownerPersonKey: don-millward
+    businessId: 
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 10000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
   businessCashTargets:
   - businessKey: general-store
     targetCashCents: 50000
@@ -223,6 +261,8 @@ MonoBehaviour:
     targetCashCents: 15000
   - businessKey: lumber-yard
     targetCashCents: 12000
+  - businessKey: carpentry-workshop
+    targetCashCents: 10000
   householdCashTargets:
   - anchorPersonKey: base:2
     targetCashCents: 40000
@@ -233,6 +273,8 @@ MonoBehaviour:
   - anchorPersonKey: ethan
     targetCashCents: 40000
   - anchorPersonKey: shane
+    targetCashCents: 40000
+  - anchorPersonKey: don-millward
     targetCashCents: 40000
   openingInventory:
   - businessKey: general-store
@@ -292,6 +334,12 @@ MonoBehaviour:
       - bake-peels-1
     kitIds:
     - baker-hand-kit
+  - businessKey: carpentry-workshop
+    assetEntries:
+    - assetId: carpenter-workbench-1
+      kind: workbench
+    kitIds:
+    - carpenter-hand-tool-kit
   timberStands:
   - standId: stand-pine-north
     displayName: North Pine Stand
@@ -323,6 +371,7 @@ MonoBehaviour:
   openingBakeryFuelUnits: 40
   openingBakeryFlourPounds: 120
   openingBakeryNotionsUnits: 30
+  openingCarpentryLumberUnits: 15
   fuelDealerIntakeUnitsPerBakeryUnit: 4
   freightBusinessKey: freight-company
   openingHorseId: A0

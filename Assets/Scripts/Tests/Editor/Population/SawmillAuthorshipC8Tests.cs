@@ -127,7 +127,7 @@ namespace LandLedgers.Editor.Population
         {
             string[] lines = ReadAssetLines();
             var businesses = ParseSection(lines, "businesses");
-            Assert.AreEqual(6, businesses.Count, "C-8 adds no business — Enzo takes over the existing sawmill.");
+            Assert.AreEqual(7, businesses.Count, "C-8 adds no business — Enzo takes over the existing sawmill; the seventh is the carpentry workshop from F1 part 2.");
 
             var sawmill = SingleEntry(businesses, "key", "sawmill", "business");
             Assert.AreEqual("enzo", sawmill["ownerPersonKey"], "Enzo Kwint runs the sawmill (Kennedy 2026-11-16).");
@@ -146,7 +146,7 @@ namespace LandLedgers.Editor.Population
         {
             string[] lines = ReadAssetLines();
             var people = ParseSection(lines, "people");
-            Assert.AreEqual(13, people.Count, "Ten residents before C-8, plus Enzo, Emma Kwint, and Josh.");
+            Assert.AreEqual(15, people.Count, "Thirteen at C-8 (ten residents before, plus Enzo, Emma Kwint, and Josh), plus Don and Grace Millward from F1 part 2.");
 
             var enzo = SingleEntry(people, "key", "enzo", "person");
             Assert.AreEqual("Enzo", enzo["firstName"]);
@@ -176,7 +176,7 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual("6", josh["homeBuildingOrdinal"], "Josh boards in the Kwint home.");
 
             var households = ParseSection(lines, "households");
-            Assert.AreEqual(7, households.Count, "Six households before C-8, plus the Kwints'.");
+            Assert.AreEqual(8, households.Count, "Seven at C-8 (six households before, plus the Kwints'), plus the Millwards' from F1 part 2.");
             var kwint = SingleEntry(households, "key", "enzo-emma", "household");
             Assert.AreEqual("Kwint", kwint["surname"]);
             Assert.AreEqual("enzo,emma-kwint,josh", kwint["memberPersonKeys"]);
@@ -184,7 +184,7 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual("0", kwint["openingCashCents"]);
 
             var relationships = ParseSection(lines, "relationships");
-            Assert.AreEqual(6, relationships.Count);
+            Assert.AreEqual(7, relationships.Count);
             Assert.IsTrue(relationships.Any(r =>
                 r.TryGetValue("firstPersonKey", out string first) && first == "enzo"
                 && r.TryGetValue("secondPersonKey", out string second) && second == "emma-kwint"
@@ -242,7 +242,7 @@ namespace LandLedgers.Editor.Population
                 "Emma Baldwin-Ooms is not a member of the Kwint household.");
 
             var cashTargets = ParseSection(lines, "householdCashTargets");
-            Assert.AreEqual(7, cashTargets.Count, "Six household targets before C-8, plus the Kwints'.");
+            Assert.AreEqual(8, cashTargets.Count, "Seven at C-8 (six household targets before, plus the Kwints'), plus the Millwards' from F1 part 2.");
             var kwintTarget = SingleEntry(cashTargets, "anchorPersonKey", "enzo", "household cash target");
             Assert.AreEqual("40000", kwintTarget["targetCashCents"]);
             var personKeys = new HashSet<string>(people.Select(p => p["key"]), StringComparer.OrdinalIgnoreCase);

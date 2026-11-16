@@ -84,8 +84,21 @@ public sealed class MillbrookFlourReorderTests
         return new OffMapAidBusinessRuntime(definition);
     }
 
+    // DEF-070 (Decision 13): a committed lot is already aboard freight for
+    // the need it was ordered for; it does not cover a new order. The
+    // previous pin asserted the opposite (a committed lot blocks) and
+    // conflicted with FreightRepeatabilityTests
+    // .MeetingRefusal_WhileWagonBusy_DefersNotRefuses, which places a second
+    // lot while haul 1 is live and was a baseline failure on the old rule.
+    // A merchant with flour in transit orders the next sack; a one-lot limit
+    // would stall the bakery for the whole 50-mile haul on every cycle, and
+    // a delayed haul would brick reordering outright. The duplicate guard
+    // survives for uncommitted lots (PlaceReorder_OutstandingLotBlocksDuplicate
+    // and RefusedRequestLotBlocksAllLaterReorders), and the only production
+    // caller nets committed flour out of the need itself
+    // (BakeryWholesaleDailyDriver passes outstandingAlreadyCounted=true).
     [Test]
-    public void FreightCommittedFlourStillBlocksDuplicateProcurement()
+    public void FreightCommittedFlourDoesNotBlockNewOrder()
     {
         var supplier = NewSupplier();
         var cash = new FakeBusinessCashPort(20000);
@@ -93,11 +106,14 @@ public sealed class MillbrookFlourReorderTests
         Assert.IsNull(MillbrookFlourReorder.PlaceReorder(supplier, cash, BuyerBusinessId, BuyerName,
             2, 1, diag, out var first));
         Assert.IsNull(supplier.CommitFreightPickup(first.LotId, "shipment-1", 2));
-        int before = cash.BalanceCents;
-        Assert.IsNotNull(MillbrookFlourReorder.PlaceReorder(supplier, cash, BuyerBusinessId, BuyerName,
-            2, 2, diag, out _));
-        Assert.AreEqual(before, cash.BalanceCents);
-        Assert.AreEqual(1, supplier.Lots.Count);
+        Assert.IsNull(MillbrookFlourReorder.PlaceReorder(supplier, cash, BuyerBusinessId, BuyerName,
+            2, 2, diag, out var second), "a committed lot must not block a new order: " + string.Join("; ", diag));
+        Assert.IsNotNull(second);
+        Assert.AreNotEqual(first.LotId, second.LotId);
+        Assert.AreEqual(2, second.PackageUnits);
+        Assert.AreEqual(2, supplier.Lots.Count);
+        Assert.AreEqual(20000 - 192, cash.BalanceCents, "both orders debit once each (2 x 96c)");
+        Assert.AreEqual(190, supplier.GetInventoryUnits("bakery_flour_sack"), "supplier stock debited twice (230 - 40 lb)");
     }
 
     [TestCase(false)]

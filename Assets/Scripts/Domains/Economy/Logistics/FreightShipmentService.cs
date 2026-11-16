@@ -907,6 +907,72 @@ namespace LandLedgers.Economy.Logistics
             Log(hooks, "shipment '" + shipment.ShipmentId + "' resumed -> " + shipment.Status + ".");
         }
 
+        /// <summary>
+        /// DEF-070 (Decision 13): the terminal disposition for a shipment whose
+        /// driver has given up on it. A Delayed state is only honest when a
+        /// driver will resume the shipment; construction shipments have no
+        /// driver (the detailed driver only iterates company lists), so a failed
+        /// chain must end here instead of staying live forever holding its
+        /// wagon, its team, and its cargo. Idempotent: an already-Failed
+        /// shipment is left exactly as it is. Mirrors the completion sweep —
+        /// reservation hold released, transport unbound, terminal state — plus
+        /// the handling-task close from FailLoadOnDebitRefusal, so no handler
+        /// stays bound to an unworkable task. Cargo: a never-loaded shipment
+        /// owns zero cargo (MR-P001, goods never left the supplier, the sale
+        /// stands); a loaded shipment keeps its remaining units on the record
+        /// with an explicit stranded-cargo note (PASS7-008 quarantine doctrine)
+        /// — recorded, visible, never silently dropped and never silently
+        /// returned to the supplier, whose restock plus a buyer refund is a
+        /// separate recovery (the service holds no supplier stock authority).
+        /// </summary>
+        public void FailAbandonedShipment(LogisticsShipmentState shipment, string reason, FreightShipmentHooks hooks)
+        {
+            if (shipment == null) return;
+            if (shipment.Status == LogisticsShipmentStatus.Failed)
+            {
+                Log(hooks, "shipment '" + shipment.ShipmentId + "' is already failed — disposition unchanged.");
+                return;
+            }
+            string why = string.IsNullOrWhiteSpace(reason) ? "abandoned by its driver" : reason.Trim();
+            if (hooks != null && hooks.Tasks != null)
+            {
+                if (loadTasks.TryGetValue(shipment.ShipmentId, out EntityId loadTaskId))
+                {
+                    WorkTask loadTask = hooks.Tasks.FindTask(loadTaskId);
+                    EntityId loaderId = loadTask != null ? loadTask.AssigneeId : EntityId.Invalid;
+                    hooks.Tasks.CompleteTask(loadTaskId, TaskOutcome.RecoverableFailure, hooks.DayIndex, hooks.Budgets);
+                    ReleaseHandlerWindow(loadReservations, hooks, shipment.ShipmentId, loaderId,
+                        "freight:load:" + shipment.ShipmentId);
+                    loadTasks.Remove(shipment.ShipmentId);
+                }
+                if (unloadTasks.TryGetValue(shipment.ShipmentId, out EntityId unloadTaskId))
+                {
+                    WorkTask unloadTask = hooks.Tasks.FindTask(unloadTaskId);
+                    EntityId unloaderId = unloadTask != null ? unloadTask.AssigneeId : EntityId.Invalid;
+                    hooks.Tasks.CompleteTask(unloadTaskId, TaskOutcome.RecoverableFailure, hooks.DayIndex, hooks.Budgets);
+                    ReleaseHandlerWindow(unloadReservations, hooks, shipment.ShipmentId, unloaderId,
+                        "freight:unload:" + shipment.ShipmentId);
+                    unloadTasks.Remove(shipment.ShipmentId);
+                }
+            }
+            ReleaseShipmentReservations(shipment);
+            shipment.physicalTransportBound = false;
+            if (!shipment.loadApplied)
+            {
+                shipment.remainingQuantityUnits = 0;
+                shipment.sourceCommittedAtSchedule = false;
+                shipment.blockedReason = why;
+            }
+            else
+            {
+                shipment.blockedReason = why + " — STRANDED CARGO: " + shipment.RemainingQuantityUnits
+                    + "u quarantined on failed shipment '" + shipment.ShipmentId
+                    + "' (goods in wagon custody; physical return to the entitled party is a separate recovery).";
+            }
+            shipment.state = LogisticsShipmentStatus.Failed;
+            Log(hooks, "shipment '" + shipment.ShipmentId + "' FAILED (abandoned): " + shipment.BlockedReason);
+        }
+
         /// <summary>Begins unloading: creates the real handling-time WorkTask.
         /// A partially received shipment (Partial, delivery not applied, no open
         /// unload task) may begin unloading again to retry the remainder.</summary>

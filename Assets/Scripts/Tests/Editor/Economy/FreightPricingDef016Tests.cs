@@ -422,6 +422,150 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(32, coordinator.LastFreightPaidCents);
         }
 
+        // DEF-070 (Decision 13): freight is earned once the wagon is under
+        // way. A haul that never departs earns nothing and its prepaid
+        // freight is refunded; a haul that departed keeps its freight. The
+        // failed shipment is always dispositioned terminally — it has no
+        // driver to resume it, so leaving it live would hold its wagon and
+        // its cargo forever and brick the package on retry.
+
+        [Test]
+        public void Coordinator_WagonBusyAtCreation_RefundsFreight_NoShipmentTracked()
+        {
+            var chain = new TripChain(100000);
+            // Another live shipment already holds the plan's wagon.
+            chain.Freight.RegisterWagon(chain.Wagon());
+            var decoyHooks = new FreightShipmentHooks
+            {
+                Tasks = chain.Tasks, Budgets = chain.Budgets, DayIndex = 11, Diagnostics = chain.Diag,
+            };
+            LogisticsShipmentState decoy = chain.Freight.CreateShipment("decoy-0", "lumber-yard", "proj-1",
+                10, LumberSpec(), "opening-freight-wagon", decoyHooks, out string decoyReason);
+            Assert.IsNotNull(decoy, decoyReason);
+
+            var coordinator = new ConstructionMaterialFreightCoordinator();
+            var stockpile = new ConstructionSiteStockpile { ProjectId = "proj-1" };
+
+            string problem = coordinator.FreightSaleToSite(chain.Sale(56),
+                chain.Plan(2, 32, 64), stockpile, 11, chain.Diag);
+            Assert.IsNotNull(problem);
+            StringAssert.Contains("not created", problem);
+            StringAssert.Contains("Freight refunded", problem);
+            Assert.AreEqual(0, stockpile.AvailableUnits("lumber"));
+            Assert.AreEqual(0, chain.CarrierPurse.ReadBalanceCents(),
+                "the prepaid freight must return to the buyer — the haul never departed");
+            Assert.AreEqual(100000, chain.HouseholdLedger.GetBalanceCents());
+            Assert.AreEqual(0, coordinator.LastFreightPaidCents);
+            Assert.AreEqual(1, chain.Freight.TrackedShipments.Count, "only the decoy is tracked");
+            Assert.AreEqual("decoy-0", chain.Freight.TrackedShipments[0].ShipmentId);
+        }
+
+        [Test]
+        public void Coordinator_DispatchRefused_LoadedShipmentRefundedAndFailed_CargoQuarantined()
+        {
+            var chain = new TripChain(100000);
+            // A dispatched decoy on a second wagon holds the driver and the
+            // draft animal, so the trip loads and then cannot dispatch.
+            chain.Freight.RegisterWagon(chain.Wagon());
+            chain.Freight.RegisterWagon(new EquipmentAsset
+            {
+                AssetId = "wagon-2", Kind = "wagon", DisplayName = "second wagon", Condition01 = 1f,
+                PayloadMassCapacityKg = WagonAuthority.DefaultMassCapacityKg,
+                CargoVolumeCapacityM3 = WagonAuthority.DefaultVolumeCapacityM3,
+            });
+            var decoyHooks = new FreightShipmentHooks
+            {
+                Tasks = chain.Tasks, Budgets = chain.Budgets, DayIndex = 11, Diagnostics = chain.Diag,
+            };
+            LogisticsShipmentState decoy = chain.Freight.CreateShipment("decoy-0", "lumber-yard", "proj-1",
+                10, LumberSpec(), "wagon-2", decoyHooks, out string decoyReason);
+            Assert.IsNotNull(decoy, decoyReason);
+            Assert.IsTrue(chain.Freight.BeginLoading(decoy, EntityId.For(EntityKind.Person, 44),
+                decoyHooks, out string beginReason), beginReason);
+            int guard = 0;
+            while (!decoy.loadApplied && guard++ < 100)
+                Assert.IsTrue(chain.Freight.WorkLoading(decoy, 60, decoyHooks, out string workReason), workReason);
+            Assert.IsTrue(chain.Freight.Dispatch(decoy, EntityId.For(EntityKind.Person, 41),
+                new List<EntityId> { EntityId.For(EntityKind.Animal, 1) },
+                decoyHooks, out string dispatchReason), dispatchReason);
+            Assert.AreEqual(LogisticsShipmentStatus.InTransit, decoy.Status);
+
+            var coordinator = new ConstructionMaterialFreightCoordinator();
+            var stockpile = new ConstructionSiteStockpile { ProjectId = "proj-1" };
+
+            string problem = coordinator.FreightSaleToSite(chain.Sale(56),
+                chain.Plan(2, 32, 64), stockpile, 11, chain.Diag);
+            Assert.IsNotNull(problem);
+            StringAssert.Contains("dispatch refused", problem);
+            StringAssert.Contains("Freight refunded", problem);
+            Assert.AreEqual(0, stockpile.AvailableUnits("lumber"));
+            Assert.AreEqual(0, chain.CarrierPurse.ReadBalanceCents(),
+                "the prepaid freight must return — the wagon never departed");
+            Assert.AreEqual(100000, chain.HouseholdLedger.GetBalanceCents());
+            Assert.AreEqual(0, coordinator.LastFreightPaidCents);
+            LogisticsShipmentState failed = null;
+            foreach (LogisticsShipmentState tracked in chain.Freight.TrackedShipments)
+                if (tracked != null && string.Equals(tracked.ShipmentId, "cship-0", StringComparison.Ordinal))
+                    failed = tracked;
+            Assert.IsNotNull(failed, "the failed trip's shipment must still be tracked");
+            Assert.AreEqual(LogisticsShipmentStatus.Failed, failed.Status);
+            Assert.IsTrue(failed.loadApplied, "the load was applied before dispatch refused");
+            Assert.AreEqual(28, failed.RemainingQuantityUnits,
+                "the loaded cargo stays on the failed record, never silently dropped");
+            Assert.IsTrue(failed.BlockedReason.Contains("STRANDED CARGO"),
+                "the failure names the stranded cargo, but got '" + failed.BlockedReason + "'");
+            Assert.IsTrue(!FreightShipmentService.IsLiveShipment(failed),
+                "a Failed shipment holds no wagon for the retry");
+            Assert.IsNull(chain.Freight.FindExclusivityConflict(null, "opening-freight-wagon",
+                EntityId.Invalid, null), "the wagon must be free of the failed shipment");
+            Assert.IsNotNull(chain.Freight.FindExclusivityConflict(null, null,
+                EntityId.For(EntityKind.Person, 41),
+                new List<EntityId> { EntityId.For(EntityKind.Animal, 1) }),
+                "the decoy still holds the driver and animal — the disposition frees only the failed shipment");
+        }
+
+        [Test]
+        public void Coordinator_UnloadRefusedAfterDeparture_FreightKept_CargoQuarantined()
+        {
+            var chain = new TripChain(100000);
+            // The unloader's whole day budget is already committed, so the
+            // unload task cannot start — after the wagon has hauled to the
+            // site. Freight stays paid: carriage was undertaken.
+            Assert.IsTrue(chain.Budgets.TryCommitTask(EntityId.For(EntityKind.Person, 43), 600,
+                out string commitReason), commitReason);
+
+            var coordinator = new ConstructionMaterialFreightCoordinator();
+            var stockpile = new ConstructionSiteStockpile { ProjectId = "proj-1" };
+
+            string problem = coordinator.FreightSaleToSite(chain.Sale(56),
+                chain.Plan(2, 32, 64), stockpile, 11, chain.Diag);
+            Assert.IsNotNull(problem);
+            StringAssert.Contains("unloading refused", problem);
+            Assert.IsTrue(!problem.Contains("Freight refunded"),
+                "freight for a departed haul is earned, not refunded: " + problem);
+            Assert.AreEqual(0, stockpile.AvailableUnits("lumber"));
+            Assert.AreEqual(32, chain.CarrierPurse.ReadBalanceCents(),
+                "the carrier keeps the first trip's freight — it hauled to the site");
+            Assert.AreEqual(100000 - 32, chain.HouseholdLedger.GetBalanceCents());
+            Assert.AreEqual(32, coordinator.LastFreightPaidCents);
+            LogisticsShipmentState failed = null;
+            foreach (LogisticsShipmentState tracked in chain.Freight.TrackedShipments)
+                if (tracked != null && string.Equals(tracked.ShipmentId, "cship-0", StringComparison.Ordinal))
+                    failed = tracked;
+            Assert.IsNotNull(failed, "the failed trip's shipment must still be tracked");
+            Assert.AreEqual(LogisticsShipmentStatus.Failed, failed.Status);
+            // The shipment reached Arrived before the unload refusal — the
+            // state is overwritten to Failed by the disposition, so the kept
+            // freight above (32c, not refunded) is the observable proof the
+            // haul departed.
+            Assert.AreEqual(28, failed.RemainingQuantityUnits,
+                "the loaded cargo stays on the failed record, never silently dropped");
+            Assert.IsTrue(failed.BlockedReason.Contains("STRANDED CARGO"),
+                "the failure names the stranded cargo, but got '" + failed.BlockedReason + "'");
+            Assert.IsTrue(!FreightShipmentService.IsLiveShipment(failed),
+                "a Failed shipment holds no wagon for the retry");
+        }
+
         #endregion
     }
 }

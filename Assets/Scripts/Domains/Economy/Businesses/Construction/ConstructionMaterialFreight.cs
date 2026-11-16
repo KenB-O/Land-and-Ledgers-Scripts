@@ -616,6 +616,64 @@ namespace LandLedgers.Economy
         }
 
         /// <summary>
+        /// DEF-070 (Decision 13): the shared failure exit for one trip.
+        /// Freight is earned once the wagon is under way (InTransit): a haul
+        /// that never departs (no shipment, Planned, Loading, or pre-load
+        /// Failed) earns nothing, so its prepaid per-trip charge is refunded
+        /// to the buyer through the real cash bridge and LastFreightPaidCents
+        /// is decremented to the net paid. A haul that departed keeps its
+        /// freight — the carrier loaded and hauled; any damages claim is a
+        /// separate process. The shipment is always dispositioned terminally
+        /// through the service (no-op when already Failed): a failed
+        /// construction shipment has no driver to resume it, so leaving it
+        /// live would hold its wagon, its team, and its cargo forever and
+        /// brick the package on retry. A refund failure is named loudly —
+        /// the money is then in dispute, not silently kept — and never blocks
+        /// the disposition (the wagon release must not wait on the refund).
+        /// </summary>
+        private string FailTrip(ConstructionFreightPlan plan, ConstructionMaterialSale sale,
+            LogisticsShipmentState shipment, int perTripCharge, string tripLabel,
+            string failure, int deliveredUnits, int dayIndex,
+            FreightShipmentHooks hooks, List<string> diag)
+        {
+            bool neverDeparted = shipment == null
+                || shipment.Status == LogisticsShipmentStatus.Planned
+                || shipment.Status == LogisticsShipmentStatus.Loading
+                || shipment.Status == LogisticsShipmentStatus.Failed;
+            string refundNote = string.Empty;
+            if (neverDeparted && perTripCharge > 0)
+            {
+                string refundProblem = ConstructionCashMover.MoveCash(plan.Cash, plan.CarrierPayeeLabel,
+                    plan.BuyerOwnerName, perTripCharge, dayIndex,
+                    $"freight refund — sale '{sale.SaleId}' {tripLabel} never departed: {failure}", diag);
+                if (refundProblem == null)
+                {
+                    LastFreightPaidCents -= perTripCharge;
+                    refundNote = $" Freight refunded ({perTripCharge}c returned to '{plan.BuyerOwnerName}').";
+                }
+                else
+                {
+                    refundNote = $" Freight refund FAILED — {refundProblem} (carrier keeps {perTripCharge}c; in dispute).";
+                }
+            }
+            string dispositionNote;
+            if (shipment == null)
+            {
+                dispositionNote = " No shipment exists.";
+            }
+            else
+            {
+                plan.Freight.FailAbandonedShipment(shipment, failure, hooks);
+                dispositionNote = shipment.loadApplied
+                    ? $" {shipment.RemainingQuantityUnits}u quarantined on the failed shipment."
+                    : " Goods stay with the supplier.";
+            }
+            return "ConstructionMaterialFreightCoordinator: " + tripLabel + " failed — " + failure
+                + refundNote + dispositionNote
+                + $" ({deliveredUnits} of {sale.TotalUnits} unit(s) already at the site).";
+        }
+
+        /// <summary>
         /// DEF-016: runs the plan's trips back to back. Each trip is
         /// priced and settled separately (its charge is paid before its
         /// wagon rolls), runs the real shipment chain, is conservation-
@@ -701,15 +759,17 @@ namespace LandLedgers.Economy
                     shipmentId, sale.SupplierBusinessId, plan.SiteLabel, tripSale.TotalUnits,
                     plan.CargoSpec ?? new FreightCargoSpec(), plan.Wagon.AssetId, hooks, out reason);
                 if (shipment == null)
-                    return "ConstructionMaterialFreightCoordinator: " + tripLabel + " shipment not created — " + reason
-                        + $" ({deliveredUnits} of {sale.TotalUnits} unit(s) already at the site).";
+                    return FailTrip(plan, sale, null, perTripCharge, tripLabel,
+                        "shipment not created — " + reason, deliveredUnits, dayIndex, hooks, diag);
                 if (shipment.Status == LogisticsShipmentStatus.Failed)
-                    return $"ConstructionMaterialFreightCoordinator: shipment '{shipmentId}' ({tripLabel}) blocked pre-load ({shipment.BlockedReason}) — goods stay with the supplier ({deliveredUnits} of {sale.TotalUnits} unit(s) already at the site).";
+                    return FailTrip(plan, sale, shipment, perTripCharge, tripLabel,
+                        $"shipment '{shipmentId}' blocked pre-load ({shipment.BlockedReason})",
+                        deliveredUnits, dayIndex, hooks, diag);
 
                 string failure = RunShipmentChain(plan, shipment, hooks, dayIndex, diag);
                 if (failure != null)
-                    return "ConstructionMaterialFreightCoordinator: " + tripLabel + " failed — " + failure
-                        + $" ({deliveredUnits} of {sale.TotalUnits} unit(s) already at the site).";
+                    return FailTrip(plan, sale, shipment, perTripCharge, tripLabel,
+                        failure, deliveredUnits, dayIndex, hooks, diag);
 
                 string verifyReason;
                 if (!plan.Freight.VerifyConservation(shipment, tripSale.TotalUnits, out verifyReason))

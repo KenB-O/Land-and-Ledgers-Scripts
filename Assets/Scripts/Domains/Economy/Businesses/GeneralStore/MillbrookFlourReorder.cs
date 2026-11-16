@@ -76,7 +76,14 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             }
 
             // The daily planner passes a net uncovered quantity. Other callers
-            // retain the duplicate guard, including goods already aboard freight.
+            // retain the duplicate guard — but only for lots still awaiting
+            // pickup. A committed lot is already aboard freight for the need
+            // it was ordered for; it does not cover a new order (DEF-070: a
+            // merchant with flour in transit orders the next sack, and a
+            // delayed haul must not brick reordering). The duplicate guard
+            // still blocks a second order while an uncommitted lot is
+            // outstanding, and the shipment/lot binding refuses the same lot
+            // shipping twice.
             if (!outstandingAlreadyCounted)
             {
                 OffMapAidCargoLot outstanding = null;
@@ -86,6 +93,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     if (candidate != null
                         && string.Equals(candidate.BuyerBusinessId, buyerBusinessId, StringComparison.Ordinal)
                         && string.Equals(candidate.SkuId, FlourSkuId, StringComparison.Ordinal)
+                        && !candidate.SourceCommitted
                         && !candidate.Received)
                     {
                         outstanding = outstanding ?? candidate;

@@ -12,7 +12,7 @@ namespace LandLedgers.Economy
     /// needs the game can actually evidence — overcrowding (occupancy-backed)
     /// and household formation (a household sharing its home building with
     /// another) — and queues ONE explicit request per household, only when
-    /// the household holds a parcel and can fund the cheapest adequate
+    /// the household holds a vacant parcel and can fund the cheapest adequate
     /// design whose packages are shippable by multi-trip freight at the
     /// single-trip bound (D-1: the wagon must be able to carry the cargo
     /// at all — the trip count is recorded, never a refusal by itself).
@@ -72,8 +72,9 @@ namespace LandLedgers.Economy
         /// commission requests, at most one per household. Households are
         /// skipped (counted in the summary) when they have no active
         /// members, already have a live project or a pending request, hold
-        /// no parcel, cannot fund the cheapest adequate design, or have no
-        /// adequate design at all. Households skipped for no evidenced need
+        /// no parcel, hold no vacant parcel (D-15), cannot fund the cheapest
+        /// adequate design, or have no adequate design at all. Households
+        /// skipped for no evidenced need
         /// are split three ways in the summary (no-occupancy-data,
         /// suitably-housed, no-sharing) and each gets one diagnostic trace
         /// line naming its housing evidence, parcels held and cash, so one
@@ -120,6 +121,7 @@ namespace LandLedgers.Economy
 
             int skippedLiveOrPending = 0;
             int skippedNoParcel = 0;
+            int skippedNoVacantParcel = 0;
             int skippedCannotFund = 0;
             int skippedNoDesign = 0;
             int skippedShipment = 0;
@@ -187,7 +189,18 @@ namespace LandLedgers.Economy
                     skippedNoParcel++;
                     continue;
                 }
-                string parcelId = parcels[0];
+                // D-15 (F-D11-5): prefer a vacant parcel among the held
+                // ones. A household whose only held parcel is its home
+                // parcel queued under the old first-parcel pick and refused
+                // at Commission under the D-2 vacancy gate, retrying daily;
+                // it now skips here with a counted, traced reason instead.
+                string parcelId = SelectVacantParcel(parcels, dayIndex, household, diag);
+                if (parcelId == null)
+                {
+                    skippedNoVacantParcel++;
+                    TraceNoVacantParcel(dayIndex, household, parcels, diag);
+                    continue;
+                }
                 int funds = FundsFor(household.id);
                 string designId = SelectCheapestViableDesign(memberCount, funds, maxUnitsPerTrip,
                     reason, notes, dayIndex, out string selectionSkip);
@@ -218,7 +231,10 @@ namespace LandLedgers.Economy
 
             diag.Add($"NpcConstructionNeedEvaluator day {dayIndex}: scanned {memberCounts.Count} active household(s), queued {requests.Count} request(s) " +
                 $"(live/pending {skippedLiveOrPending}, no parcel {skippedNoParcel}, cannot fund {skippedCannotFund}, " +
-                $"no design {skippedNoDesign}, shipment-blocked {skippedShipment}, no evidenced need {skippedUnevaluated} (no-occupancy-data {skippedNoOccupancyData}, suitably-housed {skippedSuitablyHoused}, no-sharing {skippedNoSharing}), no members {skippedNoMembers}).");
+                $"no design {skippedNoDesign}, shipment-blocked {skippedShipment}, no evidenced need {skippedUnevaluated} (no-occupancy-data {skippedNoOccupancyData}, suitably-housed {skippedSuitablyHoused}, no-sharing {skippedNoSharing}), no members {skippedNoMembers}, no vacant parcel {skippedNoVacantParcel}).");
+            // D-15: the "no vacant parcel" token sits last so the D-0
+            // summary-token assertions ("live/pending 0, no parcel 0, cannot
+            // fund 0, ..." and "..., no members 0") still match verbatim.
             return requests;
         }
 
@@ -297,6 +313,66 @@ namespace LandLedgers.Economy
                 $"provided {provided} sleeping place(s), gap {gap}, uncovered {uncovered} person(s), " +
                 $"parcels held {parcelCount}, cash {funds}c " +
                 $"(overcrowding: {DescribeOvercrowding(overcrowding, verdict)}; formation: {DescribeFormation(formation)}).");
+        }
+
+        /// <summary>
+        /// D-15 (F-D11-5): among the held parcels, prefer the first with no
+        /// registered building — the D-2 vacancy signal
+        /// (HousingAuthority.BuildingsForParcel, the same read
+        /// AuthorizeBuild uses). A parcel with any registered building is
+        /// not vacant; a closed building still holds its parcel (there is
+        /// no demolition system). Returns null when every held parcel
+        /// carries a building. When no housing authority is supplied the
+        /// vacancy check cannot run — the D-2 precedent applies: the first
+        /// held parcel is returned and the unchecked choice is recorded in
+        /// diagnostics, so a missing housing authority never newly blocks a
+        /// commission (the D-1 missing-wagon precedent). The held order is
+        /// the order ParcelsHeldBy returns, the same order the old
+        /// first-parcel pick used — no new ordering is assumed. Reads
+        /// authorities only; it queues nothing.
+        /// </summary>
+        private string SelectVacantParcel(IReadOnlyList<string> parcels, int dayIndex,
+            HouseholdState household, List<string> diag)
+        {
+            if (housing == null)
+            {
+                diag.Add($"NpcConstructionNeedEvaluator day {dayIndex}: H{household.id} vacancy unchecked - " +
+                    $"no housing authority supplied, queuing on first held parcel '{parcels[0]}' without a vacancy check.");
+                return parcels[0];
+            }
+            foreach (string parcelId in parcels)
+            {
+                List<Building> existing = housing.BuildingsForParcel(parcelId);
+                if (existing == null || existing.Count == 0) return parcelId;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// D-15 diagnostic only: one trace line per household skipped because
+        /// every held parcel carries a registered building, naming the parcels
+        /// held and the first building on each — so one Unity run distinguishes
+        /// "has parcels but all occupied" from "has no parcels" (no parcel)
+        /// and from "cannot fund". Reads authorities only; it changes no state
+        /// and queues nothing.
+        /// </summary>
+        private void TraceNoVacantParcel(int dayIndex, HouseholdState household,
+            IReadOnlyList<string> parcels, List<string> diag)
+        {
+            var held = new List<string>();
+            foreach (string parcelId in parcels)
+            {
+                string first = string.Empty;
+                if (housing != null)
+                {
+                    List<Building> existing = housing.BuildingsForParcel(parcelId);
+                    if (existing != null && existing.Count > 0 && existing[0] != null)
+                        first = existing[0].BuildingId;
+                }
+                held.Add(string.IsNullOrEmpty(first) ? parcelId : parcelId + " (" + first + ")");
+            }
+            diag.Add($"NpcConstructionNeedEvaluator day {dayIndex}: H{household.id} no vacant parcel - " +
+                $"holds {parcels.Count} parcel(s), all occupied: {string.Join(", ", held)}.");
         }
 
         private static string DescribeOvercrowding(OvercrowdingSignal signal, HouseholdShelterSuitability verdict)

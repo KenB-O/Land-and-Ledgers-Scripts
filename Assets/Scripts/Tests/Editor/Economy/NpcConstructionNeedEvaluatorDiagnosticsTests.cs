@@ -130,8 +130,16 @@ namespace LandLedgers.EditorTests.Economy
 
             public void OccupyHousehold(int householdId, List<int> personIds, int sleepingCapacity)
             {
+                // D-15: the home building sits on its own unheld fixture
+                // parcel, NOT on a parcel the household holds — under the
+                // D-15 vacancy preference a household whose only held parcel
+                // is its home parcel skips (no vacant parcel), so the
+                // design/funding tests below need a vacant held parcel to
+                // reach their intended path. The occupied-home-parcel case
+                // is pinned explicitly by the D-15 tests in
+                // NpcConstructionNeedEvaluatorDiagnosticsTests.
                 var hdiag = new List<string>();
-                Assert.IsNotNull(Housing.RegisterBuilding("bld-h" + householdId, "parcel-9",
+                Assert.IsNotNull(Housing.RegisterBuilding("bld-h" + householdId, "parcel-home-" + householdId,
                     "house", 0, "test", hdiag), string.Join("; ", hdiag));
                 AccommodationSpace space = Housing.DefineSpace("bld-h" + householdId, sleepingCapacity, hdiag);
                 Assert.IsNotNull(space, string.Join("; ", hdiag));
@@ -139,6 +147,16 @@ namespace LandLedgers.EditorTests.Economy
                     Assert.IsNotNull(Housing.Occupy(personId, householdId, space.SpaceId,
                         AccommodationArrangement.OwnerOccupied, 0, hdiag),
                         string.Join("; ", hdiag));
+            }
+
+            public void RegisterBuildingOnParcel(string buildingId, string parcelId)
+            {
+                // D-15: registers an existing building on a held parcel so
+                // the vacancy preference has an occupied parcel to pass over
+                // (or to skip on, when every held parcel is occupied).
+                var bdiag = new List<string>();
+                Assert.IsNotNull(Housing.RegisterBuilding(buildingId, parcelId,
+                    "house", 0, "test", bdiag), string.Join("; ", bdiag));
             }
 
             public NpcConstructionNeedEvaluator NewEvaluator()
@@ -351,6 +369,97 @@ namespace LandLedgers.EditorTests.Economy
                 "the trace reports the evidenced (zero) values: " + traces[0]);
             Assert.IsTrue(traces[0].Contains("(overcrowding: probe unavailable; formation: no shared building)"),
                 "the trace names the unavailable probe: " + traces[0]);
+        }
+
+        // ----------------------------------------------------------------
+        // D-15 (F-D11-5): vacant-parcel preference among held parcels
+        // ----------------------------------------------------------------
+
+        [Test]
+        public void VacancyPreference_OccupiedFirstParcel_VacantSecondParcelQueues()
+        {
+            var f = new EvaluatorFixture();
+            f.RegisterCabinDesigns();
+            f.AddAdult(101); f.AddAdult(102); f.AddAdult(103);
+            f.MembersByHousehold[7] = new List<int> { 101, 102, 103 };
+            f.OccupyHousehold(7, new List<int> { 101, 102, 103 }, 2);
+            f.RegisterParcel("parcel-9", 7);
+            f.RegisterParcel("parcel-10", 7);
+            f.RegisterBuildingOnParcel("bld-old", "parcel-9");
+            f.FundHousehold(7, 30000);
+            var evaluator = f.NewEvaluator();
+
+            List<NpcConstructionRequest> requests = evaluator.EvaluateDay(
+                new List<HouseholdState> { EvaluatorFixture.Household(7, 5) }, 10, 400, f.Diag);
+
+            Assert.AreEqual(1, requests.Count, JoinedDiag(f.Diag));
+            Assert.AreEqual(7, requests[0].HouseholdId);
+            Assert.AreEqual("parcel-10", requests[0].ParcelId,
+                "the occupied first parcel is passed over for the vacant second one");
+            Assert.AreEqual("cabin-small", requests[0].DesignId);
+            Assert.AreEqual(NpcConstructionReason.Overcrowding, requests[0].Reason);
+            Assert.IsTrue(requests[0].ReasonNotes.Contains("overcrowded by 1"),
+                "the reason is unchanged by the parcel choice: " + requests[0].ReasonNotes);
+            string summary = SummaryLine(f.Diag);
+            Assert.IsTrue(summary.Contains("queued 1 request(s)"), "summary: " + summary);
+            Assert.IsTrue(summary.Contains("no vacant parcel 0"), "nothing skipped for vacancy: " + summary);
+        }
+
+        [Test]
+        public void VacancyPreference_NoVacantParcel_SkipsWithCountAndTrace()
+        {
+            var f = new EvaluatorFixture();
+            f.RegisterCabinDesigns();
+            f.AddAdult(101); f.AddAdult(102); f.AddAdult(103);
+            f.MembersByHousehold[7] = new List<int> { 101, 102, 103 };
+            f.OccupyHousehold(7, new List<int> { 101, 102, 103 }, 2);
+            f.RegisterParcel("parcel-9", 7);
+            f.RegisterBuildingOnParcel("bld-old", "parcel-9");
+            f.FundHousehold(7, 30000);
+            var evaluator = f.NewEvaluator();
+
+            List<NpcConstructionRequest> requests = evaluator.EvaluateDay(
+                new List<HouseholdState> { EvaluatorFixture.Household(7, 5) }, 10, 400, f.Diag);
+
+            Assert.AreEqual(0, requests.Count, JoinedDiag(f.Diag));
+            string summary = SummaryLine(f.Diag);
+            Assert.IsTrue(summary.Contains("queued 0 request(s)"), "summary: " + summary);
+            Assert.IsTrue(summary.Contains("no vacant parcel 1"),
+                "the D-2 consequence case now skips here instead of queueing to refuse at Commission: " + summary);
+            Assert.IsTrue(summary.Contains("no evidenced need 0"),
+                "the household HAD an evidenced need — this is a parcel skip, not a no-evidence skip: " + summary);
+            Assert.IsTrue(JoinedDiag(f.Diag).Contains("H7 no vacant parcel - holds 1 parcel(s), all occupied: parcel-9 (bld-old)"),
+                "the trace names the occupied parcel and its building: " + JoinedDiag(f.Diag));
+        }
+
+        [Test]
+        public void VacancyPreference_NoHousingAuthority_QueuesOnFirstParcelUnchecked()
+        {
+            var f = new EvaluatorFixture();
+            f.RegisterCabinDesigns();
+            f.AddAdult(101); f.AddAdult(102); f.AddAdult(103);
+            f.MembersByHousehold[7] = new List<int> { 101, 102 };
+            f.MembersByHousehold[8] = new List<int> { 103 };
+            f.RegisterParcel("parcel-7", 7);
+            f.RegisterParcel("parcel-8", 8);
+            f.FundHousehold(7, 30000);
+            f.FundHousehold(8, 30000);
+            var evaluator = f.NewEvaluatorWithHousing(null);
+
+            List<NpcConstructionRequest> requests = evaluator.EvaluateDay(
+                new List<HouseholdState>
+                {
+                    EvaluatorFixture.Household(7, 5),
+                    EvaluatorFixture.Household(8, 5),
+                }, 10, 400, f.Diag);
+
+            Assert.AreEqual(1, requests.Count, JoinedDiag(f.Diag));
+            Assert.AreEqual(8, requests[0].HouseholdId,
+                "formation still evidences the offshoot household with no housing authority");
+            Assert.AreEqual("parcel-8", requests[0].ParcelId,
+                "with no vacancy signal the first held parcel is taken, per the D-2 precedent");
+            Assert.IsTrue(JoinedDiag(f.Diag).Contains("H8 vacancy unchecked - no housing authority supplied, queuing on first held parcel 'parcel-8' without a vacancy check."),
+                "the unchecked choice is recorded in diagnostics: " + JoinedDiag(f.Diag));
         }
     }
 }

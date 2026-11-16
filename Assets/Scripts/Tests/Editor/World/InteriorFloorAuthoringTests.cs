@@ -363,6 +363,102 @@ namespace LandLedgers.Editor.World
         }
 
         [Test]
+        public void IndependentEquipmentPlacementCanMoveBetweenBuildingInstancesAndDetach()
+        {
+            GameObject firstBuilding = new("Independent equipment building A");
+            GameObject secondBuilding = new("Independent equipment building B");
+            GameObject shelf = null;
+            try
+            {
+                BuildingFootprintAuthority firstAuthority = firstBuilding.AddComponent<BuildingFootprintAuthority>();
+                BuildingFootprintAuthority secondAuthority = secondBuilding.AddComponent<BuildingFootprintAuthority>();
+                AddWalkableTestFloor(firstAuthority, "A floor");
+                AddWalkableTestFloor(secondAuthority, "B floor");
+                secondBuilding.transform.position = new Vector3(12f, 0f, 0f);
+
+                Vector3 firstLocalPoint = new(0f, 0f, 0f);
+                Assert.IsTrue(firstAuthority.TryEvaluateInteriorLocalPoint(firstLocalPoint, 0, null, out string clearBefore), clearBefore);
+
+                shelf = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                shelf.name = "Independent Shelf";
+                shelf.transform.position = firstBuilding.transform.TransformPoint(firstLocalPoint);
+                BuildingEquipmentPlacement placement = shelf.AddComponent<BuildingEquipmentPlacement>();
+                placement.Configure("independent-shelf", "furniture.shelf", "Independent Shelf", 0);
+                placement.AssociateWithBuilding(firstAuthority);
+
+                Assert.IsFalse(firstAuthority.TryEvaluateInteriorLocalPoint(firstLocalPoint, 0, null, out string firstBlocked));
+                StringAssert.Contains("Independent Shelf", firstBlocked);
+                Assert.IsTrue(string.IsNullOrEmpty(placement.EconomicOwnerId),
+                    "A physical building association must not invent or transfer economic ownership.");
+                Assert.IsTrue(secondAuthority.TryEvaluateInteriorLocalPoint(firstLocalPoint, 0, null, out string otherBuildingUnaffected),
+                    otherBuildingUnaffected);
+
+                Vector3 secondLocalPoint = new(0f, 0f, 0f);
+                shelf.transform.position = secondBuilding.transform.TransformPoint(secondLocalPoint);
+                typeof(BuildingEquipmentPlacement).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(placement, null);
+                placement.AssociateWithBuilding(secondAuthority);
+
+                Assert.IsTrue(firstAuthority.TryEvaluateInteriorLocalPoint(firstLocalPoint, 0, null, out string released), released,
+                    "Reassigning an object must remove its old building obstruction.");
+                Assert.IsFalse(secondAuthority.TryEvaluateInteriorLocalPoint(secondLocalPoint, 0, null, out string secondBlocked));
+                StringAssert.Contains("Independent Shelf", secondBlocked);
+
+                placement.AssociateWithBuilding(null);
+                Assert.IsTrue(secondAuthority.TryEvaluateInteriorLocalPoint(secondLocalPoint, 0, null, out string detached), detached,
+                    "Detaching independent equipment must invalidate and release the previous building obstruction.");
+            }
+            finally
+            {
+                if (shelf != null) Object.DestroyImmediate(shelf);
+                Object.DestroyImmediate(firstBuilding);
+                Object.DestroyImmediate(secondBuilding);
+            }
+        }
+
+        [Test]
+        public void IndependentEquipmentTransformChangesRefreshAssociatedNavigation()
+        {
+            GameObject building = new("Independent equipment movement test");
+            GameObject shelf = null;
+            try
+            {
+                BuildingFootprintAuthority authority = building.AddComponent<BuildingFootprintAuthority>();
+                AddWalkableTestFloor(authority, "Ground");
+                Vector3 oldLocal = Vector3.zero;
+                Vector3 newLocal = new(1.5f, 0f, 1.5f);
+
+                shelf = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                shelf.name = "Moving Independent Shelf";
+                shelf.transform.position = building.transform.TransformPoint(oldLocal);
+                BuildingEquipmentPlacement placement = shelf.AddComponent<BuildingEquipmentPlacement>();
+                placement.Configure("moving-independent-shelf", "furniture.shelf", "Moving Independent Shelf", 0);
+                placement.AssociateWithBuilding(authority);
+
+                Assert.IsFalse(authority.TryEvaluateInteriorLocalPoint(oldLocal, 0, null, out string initiallyBlocked));
+                shelf.transform.position = building.transform.TransformPoint(newLocal);
+                typeof(BuildingEquipmentPlacement).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(placement, null);
+
+                Assert.IsTrue(authority.TryEvaluateInteriorLocalPoint(oldLocal, 0, null, out string oldPointReleased), oldPointReleased);
+                Assert.IsFalse(authority.TryEvaluateInteriorLocalPoint(newLocal, 0, null, out string movedBlock));
+                StringAssert.Contains("Moving Independent Shelf", movedBlock);
+            }
+            finally
+            {
+                if (shelf != null) Object.DestroyImmediate(shelf);
+                Object.DestroyImmediate(building);
+            }
+        }
+
+        private static void AddWalkableTestFloor(BuildingFootprintAuthority authority, string label)
+        {
+            InteriorFloorAuthoring floor = new() { floorIndex = 0, floorHeightLocal = 0f };
+            floor.walkableAreas.Add(Rectangle(label, -3f, -3f, 3f, 3f));
+            GetInteriorFloors(authority).Add(floor);
+        }
+
+        [Test]
         public void FloorMeshTrianglesDeriveAnIrregularWalkableSurfaceWithoutManualPolygon()
         {
             GameObject building = new("Mesh-derived interior floor test");

@@ -201,6 +201,11 @@ namespace LandLedgers.World
         [NonSerialized]
         private BuildingEquipmentPlacement[] equipmentPlacementCache;
 
+        // Scene/runtime equipment may be independent of this transform. The
+        // building remains the authority for its associated physical placements.
+        [NonSerialized]
+        private HashSet<BuildingEquipmentPlacement> registeredEquipmentPlacements;
+
         [NonSerialized]
         private Collider[] interiorColliderCache;
 
@@ -260,6 +265,36 @@ namespace LandLedgers.World
             equipmentPlacementCache = null;
             interiorColliderCache = null;
             interiorGeometryCache?.Clear();
+        }
+
+        internal void RegisterEquipmentPlacement(BuildingEquipmentPlacement placement)
+        {
+            if (placement == null) return;
+            registeredEquipmentPlacements ??= new HashSet<BuildingEquipmentPlacement>();
+            if (registeredEquipmentPlacements.Add(placement)) InvalidateEquipmentPlacementCache();
+        }
+
+        internal void UnregisterEquipmentPlacement(BuildingEquipmentPlacement placement)
+        {
+            if (placement == null || registeredEquipmentPlacements == null) return;
+            if (registeredEquipmentPlacements.Remove(placement)) InvalidateEquipmentPlacementCache();
+        }
+
+        private BuildingEquipmentPlacement[] GetAssociatedEquipmentPlacements()
+        {
+            if (equipmentPlacementCache != null) return equipmentPlacementCache;
+
+            var placements = new HashSet<BuildingEquipmentPlacement>(GetComponentsInChildren<BuildingEquipmentPlacement>(false));
+            if (registeredEquipmentPlacements != null)
+            {
+                foreach (BuildingEquipmentPlacement placement in registeredEquipmentPlacements)
+                {
+                    if (placement != null && placement.BuildingAuthority == this) placements.Add(placement);
+                }
+            }
+
+            equipmentPlacementCache = placements.ToArray();
+            return equipmentPlacementCache;
         }
 
         /// <summary>Refreshes geometry-derived floors and physical obstruction caches after authored module edits.</summary>
@@ -967,8 +1002,7 @@ namespace LandLedgers.World
                 }
             }
 
-            equipmentPlacementCache ??= GetComponentsInChildren<BuildingEquipmentPlacement>(false);
-            foreach (BuildingEquipmentPlacement placement in equipmentPlacementCache)
+            foreach (BuildingEquipmentPlacement placement in GetAssociatedEquipmentPlacements())
             {
                 if (placement == null || !placement.BlocksInteriorPoint(this, localPoint, floorIndex)) continue;
                 reason = $"Point is blocked by installed equipment '{placement.DisplayName}' ({placement.DefinitionId}).";
@@ -2401,7 +2435,7 @@ namespace LandLedgers.World
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Placed Building Equipment", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "Equipment placed here becomes a child of this scene building instance. Its placement record does not grant ownership or create inventory. Rendered geometry blocks the assigned interior floor at runtime.",
+                "The placement tool creates a separate scene object under this building instance, not shared prefab equipment. Other independently placed objects can reference this Building Authority on Building Equipment Placement. Placement records affect physical navigation only; they do not grant ownership or create inventory.",
                 MessageType.Info);
 
             if (equipmentPrefab == null)

@@ -18,6 +18,8 @@ namespace LandLedgers.World
         [SerializeField] private string displayName = "Placed Equipment";
         [SerializeField] private int floorIndex;
         [SerializeField, Min(0f)] private float navigationClearanceMeters = 0.2f;
+        [SerializeField, Tooltip("Optional explicit scene-instance association for equipment that is not parented under its building. This is a physical placement link only; it grants no ownership.")]
+        private BuildingFootprintAuthority buildingAuthority;
         [SerializeField, Tooltip("Optional external authority references. Blank values do not imply free or business-owned equipment.")]
         private string economicOwnerId = string.Empty;
         [SerializeField, Tooltip("Optional acquisition or opening-endowment record ID.")]
@@ -32,6 +34,7 @@ namespace LandLedgers.World
         public string DisplayName => string.IsNullOrWhiteSpace(displayName) ? name : displayName;
         public int FloorIndex => floorIndex;
         public float NavigationClearanceMeters => Mathf.Max(0f, navigationClearanceMeters);
+        public BuildingFootprintAuthority BuildingAuthority => ResolveBuildingAuthority();
         public string EconomicOwnerId => economicOwnerId;
         public string AcquisitionSourceId => acquisitionSourceId;
 
@@ -45,20 +48,25 @@ namespace LandLedgers.World
         private void OnEnable()
         {
             EnsureStableId();
-            InvalidateBuildingCache();
+            RefreshBuildingAssociation();
             CaptureWorldMatrix();
         }
 
-        private void OnDisable() => InvalidateBuildingCache();
+        private void OnDisable()
+        {
+            BuildingFootprintAuthority previous = cachedBuilding;
+            cachedBuilding = null;
+            if (previous != null) previous.UnregisterEquipmentPlacement(this);
+        }
 
         private void OnValidate()
         {
             navigationClearanceMeters = Mathf.Max(0f, navigationClearanceMeters);
             EnsureStableId();
-            InvalidateBuildingCache();
+            RefreshBuildingAssociation();
         }
 
-        private void OnTransformParentChanged() => InvalidateBuildingCache();
+        private void OnTransformParentChanged() => RefreshBuildingAssociation();
 
         private void Update()
         {
@@ -66,7 +74,7 @@ namespace LandLedgers.World
             if (hasWorldMatrix && current == lastWorldMatrix) return;
             lastWorldMatrix = current;
             hasWorldMatrix = true;
-            InvalidateBuildingCache();
+            RefreshBuildingAssociation();
         }
 
         private void CaptureWorldMatrix()
@@ -81,11 +89,24 @@ namespace LandLedgers.World
             placementId = Guid.NewGuid().ToString("N");
         }
 
-        private void InvalidateBuildingCache()
+        private BuildingFootprintAuthority ResolveBuildingAuthority()
         {
-            if (cachedBuilding != null) cachedBuilding.InvalidateEquipmentPlacementCache();
-            cachedBuilding = GetComponentInParent<BuildingFootprintAuthority>();
-            if (cachedBuilding != null) cachedBuilding.InvalidateEquipmentPlacementCache();
+            return buildingAuthority != null ? buildingAuthority : GetComponentInParent<BuildingFootprintAuthority>();
+        }
+
+        private void RefreshBuildingAssociation()
+        {
+            BuildingFootprintAuthority resolved = ResolveBuildingAuthority();
+            if (cachedBuilding == resolved)
+            {
+                if (cachedBuilding != null) cachedBuilding.InvalidateEquipmentPlacementCache();
+                return;
+            }
+
+            BuildingFootprintAuthority previous = cachedBuilding;
+            cachedBuilding = resolved;
+            if (previous != null) previous.UnregisterEquipmentPlacement(this);
+            if (cachedBuilding != null) cachedBuilding.RegisterEquipmentPlacement(this);
         }
 
         public void Configure(string stableId, string equipmentDefinitionId, string label, int assignedFloor)
@@ -94,15 +115,27 @@ namespace LandLedgers.World
             definitionId = string.IsNullOrWhiteSpace(equipmentDefinitionId) ? "furniture.unspecified" : equipmentDefinitionId;
             displayName = string.IsNullOrWhiteSpace(label) ? name : label;
             floorIndex = assignedFloor;
-            InvalidateBuildingCache();
+            RefreshBuildingAssociation();
             CaptureWorldMatrix();
+        }
+
+        /// <summary>
+        /// Associates this independently placed scene/runtime object with one
+        /// building instance. Passing null removes an explicit association;
+        /// a parent BuildingFootprintAuthority, if present, remains the fallback.
+        /// This does not acquire, transfer, or create the equipment.
+        /// </summary>
+        public void AssociateWithBuilding(BuildingFootprintAuthority authority)
+        {
+            buildingAuthority = authority;
+            RefreshBuildingAssociation();
         }
 
         /// <summary>Tests a floor-local point against this object's rendered physical footprint.</summary>
         internal bool BlocksInteriorPoint(BuildingFootprintAuthority building, Vector3 buildingLocalPoint, int requestedFloor)
         {
             if (!isActiveAndEnabled || !gameObject.activeInHierarchy || requestedFloor != floorIndex
-                || building == null || !transform.IsChildOf(building.transform)) return false;
+                || building == null || ResolveBuildingAuthority() != building) return false;
 
             Vector3 worldPoint = building.transform.TransformPoint(buildingLocalPoint);
             Vector3 placementPoint = transform.InverseTransformPoint(worldPoint);
@@ -143,7 +176,7 @@ namespace LandLedgers.World
         public bool TryGetBuildingLocalPlacement(out Vector3 localPosition, out Quaternion localRotation,
             out BuildingFootprintAuthority building)
         {
-            building = GetComponentInParent<BuildingFootprintAuthority>();
+            building = ResolveBuildingAuthority();
             if (building == null || transform == building.transform)
             {
                 localPosition = default;

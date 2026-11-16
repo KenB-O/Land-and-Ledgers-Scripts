@@ -43,7 +43,7 @@ namespace LandLedgers.Economy
     {
         private const float DefaultWholesaleCostShare = 0.7f;
 
-        [Tooltip("1897 frontier baseline retail price, stored in cents for stable tuning.")]
+        [Tooltip("Frontier baseline retail price, stored in cents for stable tuning.")]
         [Min(0)]
         public int baselineCents;
 
@@ -65,6 +65,21 @@ namespace LandLedgers.Economy
         [Tooltip("Future hook for supply/demand systems. 0 means ignore pressure, 1 means full pressure.")]
         [Range(0f, 2f)]
         public float supplyDemandSensitivity;
+
+        /// <summary>
+        /// DEF-013 (Decision 9): supply/demand pressure from the category's
+        /// live stock health (CategoryStockState.StockHealth01: 0 = empty,
+        /// 1 = at or above target). Empty stock is the maximum scarcity
+        /// premium (+1), half stock is neutral (0), full stock is the maximum
+        /// surplus discount (-1). The per-item supplyDemandSensitivity scales
+        /// it inside GetDisplayPriceCents / GetCostPlusPriceCents, and the
+        /// item's localMarketBand clamps the result, so a sensitivity of 0
+        /// means the price never moves. Out-of-range input clamps.
+        /// </summary>
+        public static float ResolveSupplyDemandPressure01(float stockHealth01)
+        {
+            return Mathf.Clamp(1f - 2f * stockHealth01, -1f, 1f);
+        }
 
         public int GetDisplayPriceCents(float categoryMarkupMultiplier = 1f, float supplyDemandPressure = 0f)
         {

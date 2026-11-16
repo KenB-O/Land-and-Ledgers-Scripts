@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using LandLedgers.Orchestration.Scenarios;
 
 namespace LandLedgers.Orchestration.Scenarios.FirstLedger
 {
@@ -107,5 +108,38 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
 
         /// <summary>Equity thresholds in cents, ladder order (goals 3, 6, 8).</summary>
         public static readonly int[] EquityThresholdsCents = { 500000, 1000000, 1500000 };
+
+        /// <summary>
+        /// DEF-013 (Decision 9): the scenario asset's equity tunables are the
+        /// scenario target; the static array is only the fallback. A tunable
+        /// wins when it is an int and positive; otherwise the static threshold
+        /// stands, per entry. Same pattern as the starting-stake resolver in
+        /// the bootstrapper. GetTunable returns null with no active scenario
+        /// or a missing key, which falls back cleanly.
+        /// </summary>
+        public static int[] ResolveEquityThresholds(
+            TunableValue equityTarget1Cents,
+            TunableValue equityTarget2Cents,
+            TunableValue equityTarget3Cents)
+        {
+            return new[]
+            {
+                ResolveEquityThreshold(equityTarget1Cents, EquityThresholdsCents[0]),
+                ResolveEquityThreshold(equityTarget2Cents, EquityThresholdsCents[1]),
+                ResolveEquityThreshold(equityTarget3Cents, EquityThresholdsCents[2]),
+            };
+        }
+
+        private static int ResolveEquityThreshold(TunableValue tunable, int fallbackCents)
+        {
+            if (tunable != null
+                && tunable.Kind == TunableValue.ValueKind.Int
+                && tunable.IntValue > 0)
+            {
+                return tunable.IntValue;
+            }
+
+            return fallbackCents;
+        }
     }
 }

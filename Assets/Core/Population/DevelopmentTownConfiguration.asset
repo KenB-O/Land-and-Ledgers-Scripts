@@ -183,7 +183,7 @@ MonoBehaviour:
     businessId: 
     premisesId: 
     premisesRequired: 0
-    openingCashCents: 10000
+    openingCashCents: 20000
     freightRateCard:
       baseServiceFeeCents: 25
       ratePerMileCents: 1

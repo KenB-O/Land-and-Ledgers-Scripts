@@ -691,14 +691,22 @@ namespace LandLedgers.FirstLedger
 #endif
             RunOpeningSettlementReconciliation();
             ConfigurePopulationPathingDirector();
+            // DEF-013 (Decision 9): a fresh New Game has no legacy business
+            // cash to migrate. The store's authored opening cash stays
+            // business capital; the portfolio is marked initialized without
+            // moving it, so the first load restores the saved portfolio
+            // instead of running the legacy migration.
+            bool portfolioWasInitialized = playerPortfolioManager != null && playerPortfolioManager.IsInitialized;
+            playerPortfolioManager?.InitializeFreshGame(storeRuntime, sharedBusinessRuntime);
             // P4: the scenario promises "a stake of cash" (FirstLedger.asset tunable
             // 'startingCashCents'). Seed it once on a fresh game — never on load.
-            bool portfolioWasInitialized = playerPortfolioManager != null && playerPortfolioManager.IsInitialized;
-            playerPortfolioManager?.InitializeFromLegacyBusinessCash(storeRuntime, sharedBusinessRuntime);
             if (!portfolioWasInitialized)
             {
                 SeedPlayerStartingStake();
             }
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            RunOpeningEconomyAudit();
+#endif
             AppendStartupTiming(timing, stepTimer, "business/runtime configure");
 
             ConfigureAcquisitionMarket();
@@ -2975,6 +2983,93 @@ namespace LandLedgers.FirstLedger
             }
             foreach (BusinessInstanceState business in businessesByKey.Values)
                 Debug.Log($"[ScenarioFinance] opening business balance: '{business.RuntimeDisplayName}' ({business.InstanceId})={business.RuntimeState.CurrentCashCents}c.", this);
+        }
+
+        /// <summary>
+        /// DEF-013 (Decision 9): opening-economy audit, diagnostic only. Runs
+        /// after every New Game endowment and the player stake are seeded, and
+        /// verifies the authored opening figures equal the actual balances:
+        /// business cash targets, household cash targets, owner stake, and
+        /// zero liabilities. Logs each mismatch; never corrects anything.
+        /// The horse-feed order placed earlier is CashOnArrival, so no
+        /// payment has left the store yet at this point.
+        /// </summary>
+        private void RunOpeningEconomyAudit()
+        {
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (startupIntent != WorldStartupIntent.NewGame || !enableDevelopmentTownConfiguration || configuration == null)
+                return;
+
+            if (sharedBusinessRuntime?.Businesses == null || populationManager?.State == null
+                || systemsHub?.HouseholdLedgers == null || playerPortfolioManager == null)
+            {
+                Debug.LogError("[OpeningEconomyAudit] Audit refused: business, population, household ledger, or portfolio authority is missing.", this);
+                return;
+            }
+
+            // Same business matching as ApplyDevelopmentTownOpeningCash above:
+            // by operation type plus the authored owner's runtime person id.
+            var businessesByKey = new Dictionary<string, BusinessInstanceState>(StringComparer.OrdinalIgnoreCase);
+            foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
+            {
+                if (candidate?.RuntimeState == null) continue;
+                foreach (DevelopmentTownConfiguration.BusinessCashTarget target in configuration.BusinessCashTargets)
+                {
+                    if (!configuration.TryGetBusiness(target.businessKey, out DevelopmentTownConfiguration.BusinessDefinition slot)) continue;
+                    int ownerId = configuration.ResolveRuntimePersonId(slot.ownerPersonKey);
+                    if (candidate.BusinessType == ToBusinessType(slot.operationId)
+                        && candidate.Owner?.PersonId == ownerId && !businessesByKey.ContainsKey(target.businessKey))
+                        businessesByKey.Add(target.businessKey, candidate);
+                }
+            }
+
+            var authored = new OpeningEconomyAudit.AuthoredOpening();
+            var actual = new OpeningEconomyAudit.ActualOpening();
+            foreach (DevelopmentTownConfiguration.BusinessCashTarget target in configuration.BusinessCashTargets)
+            {
+                authored.BusinessCashTargets[target.businessKey] = target.targetCashCents;
+                if (businessesByKey.TryGetValue(target.businessKey, out BusinessInstanceState business))
+                {
+                    actual.BusinessCash[target.businessKey] = business.RuntimeState.CurrentCashCents;
+                }
+            }
+
+            foreach (DevelopmentTownConfiguration.HouseholdCashTarget target in configuration.HouseholdCashTargets)
+            {
+                authored.HouseholdCashTargets[target.anchorPersonKey] = target.targetCashCents;
+                int personId = configuration.ResolveRuntimePersonId(target.anchorPersonKey);
+                PersonState person = populationManager.State.GetPerson(personId);
+                HouseholdLedger ledger = person != null && person.householdId >= 0
+                    ? systemsHub.HouseholdLedgers.Get(person.householdId)
+                    : null;
+                if (ledger != null)
+                {
+                    actual.HouseholdCash[target.anchorPersonKey] = ledger.GetBalanceCents();
+                }
+            }
+
+            ScenarioDirector director = FindAnyObjectByType<ScenarioDirector>();
+            authored.OwnerStakeCents = ResolveStartingStakeCents(
+                director != null ? director.GetTunable("startingCashCents") : null,
+                fallbackStartingCashCents);
+            actual.OwnerCashCents = playerPortfolioManager.OwnerCashCents;
+
+            // The dev scenario authors no debts, pantry lots, or lenders at
+            // opening, so the authored liability is zero.
+            authored.AuthoredLiabilityCents = 0;
+            actual.LiabilityCents = 0;
+
+            List<string> diagnostics = OpeningEconomyAudit.Check(authored, actual);
+            if (diagnostics.Count == 0)
+            {
+                Debug.Log("[OpeningEconomyAudit] Opening economy matches the authored figures.", this);
+                return;
+            }
+
+            foreach (string diagnostic in diagnostics)
+            {
+                Debug.LogError($"[OpeningEconomyAudit] {diagnostic}", this);
+            }
         }
 #endif
 

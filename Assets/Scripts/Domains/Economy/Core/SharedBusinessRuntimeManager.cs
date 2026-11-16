@@ -8299,6 +8299,20 @@ namespace LandLedgers.Economy
                 ? ManagerPolicyEffects.CalculateMarginAdjustment01(business.ControlState, business.ManagerPolicy)
                 : 0f;
             float effectiveMarkup = Mathf.Max(1f, categoryMarkup + policyMarginAdjustment);
+
+            // DEF-013 (Decision 9): the category price responds to live
+            // stock through the authored supply/demand hook. Same stock
+            // source as CalculateLocalMarketCapture01: the category stock
+            // state, falling back to the business-wide stock health. No
+            // business means no signal and the price is unchanged.
+            float supplyDemandPressure = 0f;
+            if (business != null && business.RuntimeState != null)
+            {
+                CategoryStockState stock = business.RuntimeState.GetCategoryStock(categoryId);
+                float stockHealth01 = stock != null ? stock.StockHealth01 : business.RuntimeState.StockHealth01;
+                supplyDemandPressure = RetailPricingDefinition.ResolveSupplyDemandPressure01(stockHealth01);
+            }
+
             int total = 0;
             int count = 0;
             ReadOnlySpan<ItemDefinition> items = profile.Items;
@@ -8317,8 +8331,8 @@ namespace LandLedgers.Economy
                 // systematically underprices otherwise healthy service
                 // businesses (for example the authored freight visit).
                 total += IsServiceCategory(profile, categoryId)
-                    ? item.Pricing.GetDisplayPriceCents(effectiveMarkup, 0f)
-                    : item.Pricing.GetCostPlusPriceCents(effectiveMarkup, 0f);
+                    ? item.Pricing.GetDisplayPriceCents(effectiveMarkup, supplyDemandPressure)
+                    : item.Pricing.GetCostPlusPriceCents(effectiveMarkup, supplyDemandPressure);
                 count++;
             }
 

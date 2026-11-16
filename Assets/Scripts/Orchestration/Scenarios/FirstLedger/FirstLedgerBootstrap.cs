@@ -246,6 +246,7 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
                     && string.Equals(scenarioDirector.ActiveScenarioId, FirstLedgerScenario.ScenarioId, StringComparison.Ordinal))
                 {
                     RegisterObjectiveQualifiers();
+                    ConfigureEvaluatorThresholds();
                 }
             }
 
@@ -288,6 +289,28 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
             }
 
             RegisterObjectiveQualifiers();
+            ConfigureEvaluatorThresholds();
+        }
+
+        /// <summary>
+        /// DEF-013 (Decision 9): the equity thresholds are a scenario target,
+        /// read from the scenario asset's equityTarget tunables. The resolver
+        /// falls back to the static ladder per entry when a tunable is
+        /// missing, so a scenario without the tunables keeps the old
+        /// behaviour. Runs at scenario start, before any evaluation tick.
+        /// </summary>
+        private void ConfigureEvaluatorThresholds()
+        {
+            if (evaluator == null || scenarioDirector == null)
+            {
+                return;
+            }
+
+            int[] thresholds = FirstLedgerScenario.ResolveEquityThresholds(
+                scenarioDirector.GetTunable("equityTarget1Cents"),
+                scenarioDirector.GetTunable("equityTarget2Cents"),
+                scenarioDirector.GetTunable("equityTarget3Cents"));
+            evaluator.ConfigureEquityThresholds(thresholds[0], thresholds[1], thresholds[2]);
         }
 
         private void RunEvaluation()

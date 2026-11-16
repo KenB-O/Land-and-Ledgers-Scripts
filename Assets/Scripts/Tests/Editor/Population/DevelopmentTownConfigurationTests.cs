@@ -60,6 +60,18 @@ namespace LandLedgers.EditorTests.Population
                 "Development household liquidity has one scenario allocation authority, not a base seed plus top-up.");
             Assert.AreEqual(50000, configuration.BusinessCashTargets.Single(item => item.businessKey == "general-store").targetCashCents);
             Assert.AreEqual(35000, configuration.BusinessCashTargets.Single(item => item.businessKey == "bakery").targetCashCents);
+            // DEF-013 (Decision 9): a business's opening cash is one
+            // scenario-authored figure, not a creation floor plus a top-up
+            // that disagrees with it. (Households are deliberately
+            // different: their openingCashCents is pinned to 0 above, with
+            // the target top-up as the single authority.)
+            foreach (DevelopmentTownConfiguration.BusinessDefinition business in configuration.Businesses)
+            {
+                DevelopmentTownConfiguration.BusinessCashTarget target =
+                    configuration.BusinessCashTargets.Single(item => item.businessKey == business.key);
+                Assert.AreEqual(target.targetCashCents, business.openingCashCents,
+                    $"Business '{business.key}' opens with {business.openingCashCents}c but its cash target is {target.targetCashCents}c.");
+            }
             Assert.AreEqual(120, configuration.OpeningBakeryFlourPounds);
             Assert.AreEqual(30, configuration.OpeningBakeryNotionsUnits);
         }

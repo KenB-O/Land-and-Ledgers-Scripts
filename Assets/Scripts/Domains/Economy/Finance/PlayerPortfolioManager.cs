@@ -454,6 +454,32 @@ namespace LandLedgers.Economy
             PushOwnerCashToHud();
         }
 
+        /// <summary>
+        /// DEF-013 (Decision 9): a fresh New Game has no legacy business cash
+        /// to migrate. Marks the portfolio initialized WITHOUT touching any
+        /// business's cash, so the store keeps its scenario-authored opening
+        /// capital as business capital and the first load restores the saved
+        /// portfolio instead of running the legacy migration. Household funds
+        /// and business capital stay separate by construction.
+        /// </summary>
+        public void InitializeFreshGame(
+            GeneralStoreRuntimeManager storeRuntime,
+            SharedBusinessRuntimeManager sharedBusinessRuntime)
+        {
+            if (initialized)
+            {
+                RegisterOwnedBusinessCheckpoints(storeRuntime, sharedBusinessRuntime);
+                PushOwnerCashToHud();
+                return;
+            }
+
+            initialized = true;
+            RegisterOwnedBusinessCheckpoints(storeRuntime, sharedBusinessRuntime);
+            lastStatusSummary = "Owner portfolio initialized for a fresh game. No legacy business cash migrated.";
+            lastTransactionSummary = lastStatusSummary;
+            PushOwnerCashToHud();
+        }
+
         public bool TrySpendOwnerCash(int cents, string reason, out string message)
         {
             int amount = Mathf.Max(0, cents);

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.Orchestration.Scenarios.FirstLedger;
 using NUnit.Framework;
@@ -109,6 +110,88 @@ namespace LandLedgers.EditorTests.Orchestration
         {
             // Canon Part I §1.1: every authored scenario opens with narration.
             Assert.IsFalse(string.IsNullOrWhiteSpace(FirstLedgerScenario.OpeningNarration));
+        }
+
+        // DEF-013 (Decision 9): the equity thresholds are a scenario target
+        // from the asset's equityTarget tunables, not a universal rule.
+
+        [Test]
+        public void ResolveEquityThresholds_AllTunablesWin()
+        {
+            int[] resolved = FirstLedgerScenario.ResolveEquityThresholds(
+                new TunableValue("equityTarget1Cents", 400000),
+                new TunableValue("equityTarget2Cents", 900000),
+                new TunableValue("equityTarget3Cents", 1200000));
+
+            Assert.AreEqual(400000, resolved[0]);
+            Assert.AreEqual(900000, resolved[1]);
+            Assert.AreEqual(1200000, resolved[2]);
+        }
+
+        [Test]
+        public void ResolveEquityThresholds_MissingTunablesFallBack()
+        {
+            int[] resolved = FirstLedgerScenario.ResolveEquityThresholds(
+                null,
+                new TunableValue("equityTarget2Cents", 900000),
+                null);
+
+            Assert.AreEqual(500000, resolved[0]);
+            Assert.AreEqual(900000, resolved[1]);
+            Assert.AreEqual(1500000, resolved[2]);
+        }
+
+        [Test]
+        public void ResolveEquityThresholds_NonPositiveOrWrongKindFallsBack()
+        {
+            int[] resolved = FirstLedgerScenario.ResolveEquityThresholds(
+                new TunableValue("equityTarget1Cents", 0),
+                new TunableValue("equityTarget2Cents", -5),
+                new TunableValue("equityTarget3Cents", 1.5f));
+
+            Assert.AreEqual(500000, resolved[0]);
+            Assert.AreEqual(1000000, resolved[1]);
+            Assert.AreEqual(1500000, resolved[2]);
+        }
+
+        [Test]
+        public void Evaluate_CustomThresholds_FireAtTheCustomValues()
+        {
+            var evaluator = new FirstLedgerGoalEvaluator(400000, 900000, 1200000);
+            var state = new FakeState
+            {
+                PlayerOwnedBusinessCount = 1,
+                ActivePlayerEmployeeCount = 1,
+                PlayerOwnerEquityCents = 399999
+            };
+
+            evaluator.Evaluate(state);
+            Assert.AreEqual("equity-5000", evaluator.Progress().nextGoalId);
+
+            state.PlayerOwnerEquityCents = 400000;
+            List<string> newly = evaluator.Evaluate(state);
+            Assert.Contains("equity-5000", newly);
+        }
+
+        [Test]
+        public void ConfigureEquityThresholds_NoOpAfterAnEquityGoalCompletes()
+        {
+            var evaluator = new FirstLedgerGoalEvaluator();
+            var state = new FakeState
+            {
+                PlayerOwnedBusinessCount = 1,
+                ActivePlayerEmployeeCount = 1,
+                PlayerOwnerEquityCents = 500000
+            };
+
+            List<string> newly = evaluator.Evaluate(state);
+            Assert.Contains("equity-5000", newly);
+
+            // Thresholds must not move mid-game, even when reconfigured.
+            evaluator.ConfigureEquityThresholds(9000000, 9000000, 9000000);
+            Assert.AreEqual(3, evaluator.Progress().completed);
+            Assert.IsTrue(evaluator.CompletedGoalIds.Contains("equity-5000"));
+            Assert.AreEqual(0, evaluator.Evaluate(state).Count);
         }
     }
 }

@@ -33,10 +33,64 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
     {
         private readonly HashSet<string> completedGoalIds = new HashSet<string>();
 
+        /// <summary>
+        /// DEF-013 (Decision 9): the equity thresholds are a scenario target,
+        /// not a universal rule. Defaults to the static ladder; the bootstrap
+        /// reconfigures them from the scenario asset's equityTarget tunables
+        /// when the scenario starts.
+        /// </summary>
+        private int[] equityThresholdsCents;
+
         /// <summary>Raised once per goal, in ladder order, when it completes.</summary>
         public event Action<string> GoalCompleted;
 
         public IReadOnlyCollection<string> CompletedGoalIds => completedGoalIds;
+
+        public FirstLedgerGoalEvaluator()
+            : this(
+                FirstLedgerScenario.EquityThresholdsCents[0],
+                FirstLedgerScenario.EquityThresholdsCents[1],
+                FirstLedgerScenario.EquityThresholdsCents[2])
+        {
+        }
+
+        public FirstLedgerGoalEvaluator(
+            int equityThreshold1Cents,
+            int equityThreshold2Cents,
+            int equityThreshold3Cents)
+        {
+            equityThresholdsCents = new[]
+            {
+                Math.Max(0, equityThreshold1Cents),
+                Math.Max(0, equityThreshold2Cents),
+                Math.Max(0, equityThreshold3Cents),
+            };
+        }
+
+        /// <summary>
+        /// Replaces the equity thresholds from the scenario asset. A no-op
+        /// once any equity goal has completed: thresholds must not move
+        /// mid-game.
+        /// </summary>
+        public void ConfigureEquityThresholds(
+            int equityThreshold1Cents,
+            int equityThreshold2Cents,
+            int equityThreshold3Cents)
+        {
+            if (completedGoalIds.Contains("equity-5000")
+                || completedGoalIds.Contains("equity-10000")
+                || completedGoalIds.Contains("equity-15000"))
+            {
+                return;
+            }
+
+            equityThresholdsCents = new[]
+            {
+                Math.Max(0, equityThreshold1Cents),
+                Math.Max(0, equityThreshold2Cents),
+                Math.Max(0, equityThreshold3Cents),
+            };
+        }
 
         public void RestoreCompletedGoals(IEnumerable<string> goalIds)
         {
@@ -70,12 +124,12 @@ namespace LandLedgers.Orchestration.Scenarios.FirstLedger
 
             Check("acquire-first-business", state.PlayerOwnedBusinessCount >= 1, newlyCompleted);
             Check("hire-first-employee", state.ActivePlayerEmployeeCount >= 1, newlyCompleted);
-            Check("equity-5000", state.PlayerOwnerEquityCents >= FirstLedgerScenario.EquityThresholdsCents[0], newlyCompleted);
+            Check("equity-5000", state.PlayerOwnerEquityCents >= equityThresholdsCents[0], newlyCompleted);
             Check("own-two-businesses", state.PlayerOwnedBusinessCount >= 2, newlyCompleted);
             Check("three-employees", state.ActivePlayerEmployeeCount >= 3, newlyCompleted);
-            Check("equity-10000", state.PlayerOwnerEquityCents >= FirstLedgerScenario.EquityThresholdsCents[1], newlyCompleted);
+            Check("equity-10000", state.PlayerOwnerEquityCents >= equityThresholdsCents[1], newlyCompleted);
             Check("own-three-businesses", state.PlayerOwnedBusinessCount >= 3, newlyCompleted);
-            Check("equity-15000", state.PlayerOwnerEquityCents >= FirstLedgerScenario.EquityThresholdsCents[2], newlyCompleted);
+            Check("equity-15000", state.PlayerOwnerEquityCents >= equityThresholdsCents[2], newlyCompleted);
 
             return newlyCompleted;
         }

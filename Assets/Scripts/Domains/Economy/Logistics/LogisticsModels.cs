@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Pathing;
 using LandLedgers.Persistence;
 using LandLedgers.World;
@@ -101,6 +102,18 @@ namespace LandLedgers.Economy
         [SerializeField] public string cargoLotId = string.Empty;
         [SerializeField] public string cargoSkuId = string.Empty;
         [SerializeField] public bool requiresSourceLotCustody;
+        // F3 (expanded campaign 2026-11-16): the consolidated manifest —
+        // one line per source lot — owned by this shipment record. A
+        // single-lot shipment leaves this empty and behaves exactly as
+        // before; a consolidated shipment carries its lines here and the
+        // per-line custody hooks read them. Persisted through
+        // FreightServiceSaveDto (the service's own save seam), NOT through
+        // LogisticsShipmentSaveDto, so no shim change is needed. A null
+        // list after restore (old save) reads as no manifest.
+        [SerializeField] public List<FreightManifestLine> manifestLines = new();
+        public bool IsConsolidated => manifestLines != null && manifestLines.Count > 0;
+        public IReadOnlyList<FreightManifestLine> ManifestLines =>
+            manifestLines ?? new List<FreightManifestLine>();
         [SerializeField] public bool sourceLotDebitApplied;
         [SerializeField] public string summaryLabel = string.Empty;
         [SerializeField] public string blockedReason = string.Empty;

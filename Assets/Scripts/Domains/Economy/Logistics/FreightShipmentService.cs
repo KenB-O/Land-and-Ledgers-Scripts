@@ -184,6 +184,16 @@ namespace LandLedgers.Economy.Logistics
         // itself is never auto-passed. Service-side memory only: a save/load
         // resets the count (custody state is unaffected).
         public const int PhysicalReceivingPinLimit = 3;
+        /// <summary>
+        /// DEF-071 (Decision 14): consecutive failed delivery attempts after
+        /// which a Delayed shipment is abandoned instead of retried. Three
+        /// mirrors the pin limit of 3 already in the receiving gate — a
+        /// carrier gives up after three days of refusals, not after one bad
+        /// day. A tunable constant, not a universal law; any forward move
+        /// (load, dispatch, arrival, delivery) resets the count, so the
+        /// bound only bites on consecutive failures without progress.
+        /// </summary>
+        public const int AbandonDelayCycles = 3;
         private readonly Dictionary<string, int> physicalReceivingPins =
             new Dictionary<string, int>(StringComparer.Ordinal);
         // Pass IX WS3 (A4-13): every shipment this service created or restored,
@@ -783,6 +793,9 @@ namespace LandLedgers.Economy.Logistics
             loadTasks.Remove(shipment.ShipmentId);
             // Loading applied: the wagon now has custody of the full planned quantity.
             shipment.loadApplied = true;
+            // DEF-071 (Decision 14): cargo in wagon custody is forward
+            // progress — a later failure counts from here, not from before.
+            shipment.ResetDelayCycles();
             shipment.sourceCommittedAtSchedule = true;
             shipment.remainingQuantityUnits = shipment.PlannedQuantityUnits;
             shipment.physicalLocationId = "wagon:" + shipment.physicalWagonAssetId;
@@ -864,6 +877,9 @@ namespace LandLedgers.Economy.Logistics
             shipment.physicalTransportBound = true;
             shipment.state = LogisticsShipmentStatus.InTransit;
             shipment.stageElapsedGameSeconds = 0f;
+            // DEF-071 (Decision 14): dispatch is forward progress — a later
+            // failure counts from here, not from before.
+            shipment.ResetDelayCycles();
             Log(hooks, "shipment '" + shipment.ShipmentId + "': dispatched — driver " + driverId
                 + ", " + shipment.physicalDraftAnimalIds.Count + " animals, in transit.");
             return true;
@@ -887,6 +903,9 @@ namespace LandLedgers.Economy.Logistics
             if (shipment.stageElapsedGameSeconds + 0.0001f < duration) return;
             shipment.state = LogisticsShipmentStatus.Arrived;
             shipment.stageElapsedGameSeconds = 0f;
+            // DEF-071 (Decision 14): arrival is forward progress — a later
+            // failure counts from here, not from before.
+            shipment.ResetDelayCycles();
             shipment.physicalProgress01 = 1f;
             shipment.physicalLocationId = shipment.destinationBusinessInstanceId;
             Log(hooks, "shipment '" + shipment.ShipmentId + "': arrived at '" + shipment.destinationBusinessInstanceId + "'.");
@@ -1123,6 +1142,8 @@ namespace LandLedgers.Economy.Logistics
                 shipment.physicalLocationId = shipment.destinationBusinessInstanceId;
                 shipment.physicalTransportBound = false;
                 shipment.state = LogisticsShipmentStatus.Partial;
+                // DEF-071 (Decision 14): the transport completed — forward progress.
+                shipment.ResetDelayCycles();
                 Log(hooks, "shipment '" + shipment.ShipmentId + "': unload complete with zero cargo — nothing to deliver.");
                 return true;
             }
@@ -1156,6 +1177,8 @@ namespace LandLedgers.Economy.Logistics
                 shipment.physicalLocationId = shipment.destinationBusinessInstanceId;
                 shipment.physicalTransportBound = false;
                 shipment.state = LogisticsShipmentStatus.Completed;
+                // DEF-071 (Decision 14): the lot was credited — forward progress.
+                shipment.ResetDelayCycles();
                 hooks.OnPhysicalReceivingComplete?.Invoke(shipment, unloadTask.AssigneeId);
                 ReleaseShipmentReservations(shipment);
                 Log(hooks, $"shipment '{shipment.ShipmentId}': lot '{shipment.cargoLotId}' credited once to '{shipment.destinationBusinessInstanceId}' ({remaining}u).");
@@ -1184,6 +1207,8 @@ namespace LandLedgers.Economy.Logistics
                 shipment.physicalLocationId = shipment.destinationBusinessInstanceId;
                 shipment.physicalTransportBound = false;
                 shipment.state = LogisticsShipmentStatus.Completed;
+                // DEF-071 (Decision 14): the goods were accepted — forward progress.
+                shipment.ResetDelayCycles();
                 ReleaseShipmentReservations(shipment);
                 Log(hooks, "shipment '" + shipment.ShipmentId + "': delivered — recipient '"
                     + shipment.destinationBusinessInstanceId + "' accepted " + accepted + "u into inventory.");
@@ -1194,6 +1219,9 @@ namespace LandLedgers.Economy.Logistics
             {
                 shipment.deliveryApplied = false;
                 shipment.state = LogisticsShipmentStatus.Partial;
+                // DEF-071 (Decision 14): goods were actually accepted — forward
+                // progress, even though a remainder stays in wagon custody.
+                shipment.ResetDelayCycles();
                 shipment.blockedReason = "recipient accepted " + accepted + "/" + remaining + "u"
                     + (string.IsNullOrWhiteSpace(receiveReason) ? "" : " (" + receiveReason.Trim() + ")");
                 Log(hooks, "shipment '" + shipment.ShipmentId + "': PARTIAL — " + shipment.blockedReason

@@ -346,11 +346,12 @@ namespace LandLedgers.Economy.Freight
         }
 
         /// <summary>
-        /// Cancels an accepted agreement with its cause. Harness-pinned
-        /// but uncalled: no live permanent-failure site that knows the
-        /// agreement has been established (Plan 07 Slice 2 source review),
-        /// so the caller question stays open and no caller is invented.
-        /// A second transition is refused.
+        /// Cancels an accepted agreement with its cause. DEF-071
+        /// (Decision 14) supplies the live caller the Plan 07 Slice 2
+        /// review left open: FreightProductionDriver.AdvanceTick's
+        /// settlement pass cancels the agreement of every Failed shipment
+        /// still Accepted, with the shipment's failure cause. A second
+        /// transition is refused.
         /// </summary>
         public string CancelAgreement(string agreementId, string reason)
         {

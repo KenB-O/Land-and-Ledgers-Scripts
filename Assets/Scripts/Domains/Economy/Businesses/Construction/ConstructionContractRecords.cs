@@ -353,6 +353,10 @@ namespace LandLedgers.Economy
         Recorded = 1,        // the obligation exists; not yet due/released
         Released = 2,        // due and released to the payee (still not auto-paid)
         SettledExternally = 3, // the ledgers report it settled — recorded here, never moved by this book
+        // DEF-071 (Decision 14): voided on cancellation — the obligation
+        // was never earned (no accepted work behind it) and dies with the
+        // contract. Appended only; serialized values are never renumbered.
+        Voided = 4,          // cancelled before it was earned; owed to nobody
     }
 
     /// <summary>D4G: one payment obligation on a contract (deposit, milestone, final balance).</summary>

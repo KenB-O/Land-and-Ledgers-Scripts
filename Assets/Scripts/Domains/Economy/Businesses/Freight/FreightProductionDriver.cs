@@ -292,10 +292,16 @@ namespace LandLedgers.Economy.Freight
             if (!string.IsNullOrWhiteSpace(sourceLotId)
                 && !service.TryBindSourceLot(shipment, sourceLotId, sourceSkuId, out reason))
             {
-                shipment.state = LogisticsShipmentStatus.Failed;
-                shipment.blockedReason = "Source lot binding refused before pickup: " + reason;
-                shipment.remainingQuantityUnits = 0;
-                shipment.loadApplied = false;
+                // DEF-071 (Decision 14, D1): a lot-binding refusal is a
+                // terminal disposition, not an inline state flip — the
+                // shipment never left the supplier, so it owns zero cargo
+                // (MR-P001) and holds nothing, and its agreement is settled
+                // by the tick's settlement pass. The agreement id is recorded
+                // on the shipment first: it was created under that agreement,
+                // and the pass finds the agreement through this reference.
+                shipment.freightServiceAgreementId = freightServiceAgreementId ?? string.Empty;
+                service.FailAbandonedShipment(shipment,
+                    "Source lot binding refused before pickup: " + reason, hooks);
                 return shipment;
             }
 
@@ -353,8 +359,10 @@ namespace LandLedgers.Economy.Freight
         /// Advances every live detailed shipment by one tick step and then
         /// collects revenue for newly completed shipments. Returns the
         /// number of shipments whose state advanced this tick. Delayed
-        /// shipments (including refused deliveries) are left exactly as
-        /// they are: cargo in legitimate wagon custody, no revenue.
+        /// shipments (including refused deliveries) are retried while under
+        /// the abandonment bound and abandoned at it (DEF-071, Decision 14);
+        /// cargo stays in legitimate wagon custody and no revenue ever
+        /// settles for cargo that was not accepted.
         /// </summary>
         public int AdvanceTick(
             float gameSeconds,
@@ -464,6 +472,20 @@ namespace LandLedgers.Economy.Freight
                                 service.BeginUnloading(shipment, handlerId, hooks, out reason), reason, diagnostics);
                         break;
                     case LogisticsShipmentStatus.Delayed:
+                        // DEF-071 (Decision 14, D2): three consecutive failed
+                        // attempts without a forward move is the carrier's
+                        // give-up point — abandon instead of resuming a fourth
+                        // time. The settlement pass below cancels the linked
+                        // agreement in this same tick.
+                        if (shipment.DelayCycles >= FreightShipmentService.AbandonDelayCycles)
+                        {
+                            int cycles = shipment.DelayCycles;
+                            service.FailAbandonedShipment(shipment,
+                                "abandoned after " + cycles
+                                + " consecutive failed delivery attempts: " + shipment.BlockedReason, hooks);
+                            diagnostics.Add($"FreightProductionDriver: shipment '{shipment.ShipmentId}' abandoned after {cycles} consecutive failed delivery attempts.");
+                            break;
+                        }
                         // Slice A1 (QA-02): Delayed is retryable, not terminal.
                         // Resume when the recorded resume state is one the tick
                         // can drive from (Planned, Loading, InTransit, Arrived);
@@ -493,9 +515,13 @@ namespace LandLedgers.Economy.Freight
             // Slice A1 (QA-03, partial): name live shipments holding a dispatch
             // reservation while stalled in Delayed, so a wagon, driver and
             // animals held past the stall are visible instead of silently
-            // locked. The hold itself still releases only on completion; the
-            // abandonment disposition (what happens to cargo on give-up) is an
-            // open owner decision, so no shipment is failed here.
+            // locked. DEF-071 (Decision 14) decided the abandonment
+            // disposition the QA-03 comment left open: a Delayed shipment is
+            // abandoned after AbandonDelayCycles consecutive failures (see the
+            // Delayed case above), and a failed shipment's agreement is
+            // settled by the pass below. Shipments under the bound still hold
+            // their reservation while stalled — the hold releases on
+            // completion, abandonment, or agreement settlement.
             foreach (LogisticsShipmentState shipment in AllShipments())
             {
                 if (shipment == null || !FreightShipmentService.IsLiveShipment(shipment)) continue;
@@ -534,6 +560,39 @@ namespace LandLedgers.Economy.Freight
                     if (serviceAgreements.MarkFulfilled(shipment.FreightServiceAgreementId, shipment) == null)
                         diagnostics.Add($"FreightProductionDriver: agreement '{shipment.FreightServiceAgreementId}' fulfilled for collected shipment '{shipmentId}'.");
                 }
+            }
+
+            // DEF-071 (Decision 14, D1): settle the agreements of failed
+            // shipments. A hired-freight charge is collected on delivery
+            // only, so a failed haul owes no refund — the settlement is
+            // agreement-cancel + hold release + cargo record, and the
+            // shipment's Failed state with its blocked reason IS the cargo
+            // record (zero cargo when never loaded, STRANDED CARGO note when
+            // loaded). Runs every tick; idempotent — CancelAgreement refuses
+            // anything not still Accepted, so a settled agreement is never
+            // touched twice. A Failed shipment whose transport is still
+            // bound (failed after binding, outside FailAbandonedShipment)
+            // has its reservations released and is unbound here first.
+            foreach (LogisticsShipmentState shipment in AllShipments())
+            {
+                if (shipment == null || shipment.Status != LogisticsShipmentStatus.Failed)
+                    continue;
+                if (string.IsNullOrWhiteSpace(shipment.FreightServiceAgreementId))
+                    continue;
+                FreightServiceAgreement agreement =
+                    serviceAgreements.FindAgreement(shipment.FreightServiceAgreementId);
+                if (agreement == null || agreement.Status != FreightServiceAgreementStatus.Accepted)
+                    continue;
+                if (shipment.physicalTransportBound)
+                {
+                    service.ReleaseShipmentReservations(shipment);
+                    shipment.physicalTransportBound = false;
+                }
+                string cause = string.IsNullOrWhiteSpace(shipment.BlockedReason)
+                    ? "shipment failed with no recorded cause"
+                    : shipment.BlockedReason;
+                if (serviceAgreements.CancelAgreement(shipment.FreightServiceAgreementId, cause) == null)
+                    diagnostics.Add($"FreightProductionDriver: agreement '{shipment.FreightServiceAgreementId}' cancelled — its shipment '{shipment.ShipmentId}' failed ({cause}).");
             }
             return advanced;
         }

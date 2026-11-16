@@ -772,6 +772,44 @@ namespace LandLedgers.Economy
             return ConstructionCashMover.MoveCash(cash, payer, payee, amountCents, dayIndex, purpose, diag);
         }
 
+        /// <summary>
+        /// DEF-071 (Decision 14, D3): records unpaid hired wages as a
+        /// FinancialObligationAuthority debt — a claim, never treated as
+        /// paid. Returns false (and diagnoses loudly) when the debt cannot
+        /// be recorded; the caller records the shortfall in diagnostics and
+        /// proceeds — the cancel is never blocked by an unrecordable debt.
+        /// </summary>
+        private static bool RecordWageDebt(
+            FinancialObligationAuthority obligations,
+            EntityIdRegistry ids,
+            string payerOwnerName,
+            int workerHouseholdId,
+            int amountCents,
+            ConstructionProject project,
+            WorkPackage package,
+            int dayIndex,
+            List<string> diag)
+        {
+            if (amountCents <= 0) return true;
+            if (obligations == null || ids == null || string.IsNullOrWhiteSpace(payerOwnerName)
+                || workerHouseholdId < 0)
+            {
+                diag.Add($"NpcCommissioner.SettleCancellationWages: {amountCents}c hired wages for package '{package?.PackageId}' could not be recorded as a debt (no obligation authority, id registry, payer, or worker household) — the unpaid amount is recorded here only, not as a claim.");
+                return false;
+            }
+            FinancialObligation debt = obligations.Create(ids, FinancialObligationKind.Payable,
+                payerOwnerName, "household:" + workerHouseholdId, amountCents, dayIndex,
+                $"unpaid hired-worker wages on cancelled project '{project?.ProjectId}', package '{package?.PackageId}'",
+                $"hired wages owed on cancellation (project '{project?.ProjectId}', package '{package?.PackageId}')");
+            if (debt == null)
+            {
+                diag.Add($"NpcCommissioner.SettleCancellationWages: {amountCents}c hired wages for package '{package?.PackageId}' could not be recorded as a debt — the obligation authority refused it.");
+                return false;
+            }
+            diag.Add($"NpcCommissioner.SettleCancellationWages: {amountCents}c hired wages for package '{package?.PackageId}' recorded as debt '{debt.ObligationId}' ({payerOwnerName} owes household:{workerHouseholdId}).");
+            return true;
+        }
+
         #endregion
 
         #region Hired-builder path
@@ -870,6 +908,192 @@ namespace LandLedgers.Economy
             string drawProblem = billing.RecordMilestone(contract, milestoneId, dayIndex, diag);
             if (drawProblem != null) return "NpcCommissioner: " + drawProblem;
             diag.Add($"NpcCommissioner: stage '{stageId}' accepted; milestone '{milestoneId}' draw released to the builder.");
+            return null;
+        }
+
+        /// <summary>
+        /// DEF-071 (Decision 14, D3): settles hired-worker wages when a
+        /// project is cancelled. For each INCOMPLETE package whose funding
+        /// line hired workers and committed minutes, the agreed pro-rata
+        /// wage is paid from the payer's real cash through
+        /// PayWorkerForPackage (same formula, same cash bridge). When the
+        /// payment is refused — the household cannot cover it — the unpaid
+        /// remainder is recorded as a FinancialObligationAuthority debt
+        /// (Payable, a claim, never treated as paid) and the cancel
+        /// proceeds: refusing the whole cancel over a short household would
+        /// brick the project, and the debt survives instead. Every listed
+        /// employment is then ended EndedByAgreement on the cancel day,
+        /// whether its wage was paid or recorded as a debt. Own-labour
+        /// packages owe no wages. Returns null on success, INCLUDING
+        /// converted-to-debt refusals; a non-null return is an argument
+        /// error only, and the caller (the driver) logs it and proceeds
+        /// with the material cancel regardless.
+        /// </summary>
+        public string SettleCancellationWages(
+            EmploymentRelationshipRegistry employments,
+            FinancialObligationAuthority obligations,
+            EntityIdRegistry ids,
+            NpcConstructionRecord record,
+            ConstructionProject project,
+            CreditCashBridge cash,
+            string payerOwnerName,
+            Dictionary<int, int> workerHouseholdByPerson,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (employments == null || record == null || project == null)
+                return "NpcCommissioner.SettleCancellationWages: employments, record and project required.";
+            if (project.WorkPackages == null || record.PackageFundings == null)
+                return null; // nothing to settle.
+            foreach (WorkPackage package in project.WorkPackages)
+            {
+                if (package == null || package.Status == WorkPackageStatus.Complete)
+                    continue;
+                NpcBuildPackageFunding funding = record.FindFunding(package.PackageId);
+                if (funding == null || funding.LaborKind != NpcBuildLaborKind.HiredWorker
+                    || funding.WorkerMinutesCommitted <= 0 || funding.EmploymentIds == null
+                    || funding.EmploymentIds.Count == 0)
+                    continue;
+                // Expected wage per employment, same formula as
+                // PayWorkerForPackage: ceil(weekly wage x minutes /
+                // standard week). Unresolvable employments have no
+                // computable wage; they are named loudly and excluded from
+                // the expected total rather than guessed.
+                var expected = new List<(string EmploymentId, int HouseholdId, int WageCents)>();
+                var unresolvable = new List<string>();
+                int week = Math.Max(1, StandardWorkWeekMinutes);
+                foreach (string employmentId in funding.EmploymentIds)
+                {
+                    if (!employments.TryGetById(employmentId, out EmploymentRelationship relationship)
+                        || relationship == null)
+                    {
+                        unresolvable.Add(employmentId);
+                        continue;
+                    }
+                    int weekly = Math.Max(0, relationship.Compensation.AgreedWeeklyWageCents);
+                    int wage = (int)Math.Ceiling(weekly
+                        * (Math.Max(0, funding.WorkerMinutesCommitted) / (double)week));
+                    if (wage <= 0) continue;
+                    int householdId = -1;
+                    if (workerHouseholdByPerson != null)
+                        workerHouseholdByPerson.TryGetValue(relationship.EmployeePersonId, out householdId);
+                    if (householdId < 0)
+                    {
+                        unresolvable.Add(employmentId);
+                        continue;
+                    }
+                    expected.Add((employmentId, householdId, wage));
+                }
+                int expectedTotal = 0;
+                foreach (var line in expected) expectedTotal += line.WageCents;
+                if (unresolvable.Count > 0)
+                    diag.Add($"NpcCommissioner.SettleCancellationWages: package '{package.PackageId}' has {unresolvable.Count} employment(s) with no computable wage ({string.Join(", ", unresolvable)}) — their wages are not in the settlement total; the employments are still ended below.");
+                bool attemptedPayment = funding.WagesPaidCents <= 0;
+                string payProblem = null;
+                if (attemptedPayment)
+                {
+                    payProblem = PayWorkerForPackage(employments, record, package, cash,
+                        payerOwnerName, workerHouseholdByPerson, dayIndex, diag);
+                    if (payProblem != null)
+                        diag.Add($"NpcCommissioner.SettleCancellationWages: wage payment for package '{package.PackageId}' refused — {payProblem} The unpaid remainder is recorded as a debt, not treated as paid.");
+                }
+                // Unpaid remainder: expected minus what the funding line
+                // records as paid. PayWorkerForPackage pays employments in
+                // list order and stops at the first refusal, so the paid set
+                // is the prefix whose wages sum to WagesPaidCents; the rest
+                // are unpaid, in order.
+                int paidCents = Math.Max(0, funding.WagesPaidCents);
+                int unpaidTotal = Math.Max(0, expectedTotal - paidCents);
+                if (unpaidTotal > 0)
+                {
+                    int running = 0;
+                    int firstUnpaidIndex = expected.Count;
+                    for (int i = 0; i < expected.Count; i++)
+                    {
+                        if (running == paidCents) { firstUnpaidIndex = i; break; }
+                        running += expected[i].WageCents;
+                        if (running == paidCents) { firstUnpaidIndex = i + 1; break; }
+                    }
+                    bool prefixMatches = running == paidCents;
+                    if (prefixMatches)
+                    {
+                        for (int i = firstUnpaidIndex; i < expected.Count; i++)
+                            RecordWageDebt(obligations, ids, payerOwnerName, expected[i].HouseholdId,
+                                expected[i].WageCents, project, package, dayIndex, diag);
+                    }
+                    else
+                    {
+                        // Attribution uncertain: no prefix of the expected
+                        // wages sums to what the funding line records as
+                        // paid. One debt for the whole remainder to the first
+                        // employment's household, named loudly — the claim
+                        // survives, the uncertainty is on the record.
+                        diag.Add($"NpcCommissioner.SettleCancellationWages: package '{package.PackageId}' paid-prefix reconstruction failed (paid {paidCents}c, expected {expectedTotal}c) — recording one debt for the {unpaidTotal}c remainder to the first employment's household.");
+                        if (expected.Count > 0)
+                            RecordWageDebt(obligations, ids, payerOwnerName, expected[0].HouseholdId,
+                                unpaidTotal, project, package, dayIndex, diag);
+                    }
+                    record.Decisions.Add($"day {dayIndex}: cancelled '{package.PackageId}' — {unpaidTotal}c hired wages unpaid, recorded as a debt (see obligations).");
+                }
+                else if (attemptedPayment && payProblem == null && expectedTotal > 0)
+                {
+                    record.Decisions.Add($"day {dayIndex}: cancelled '{package.PackageId}' — hired wages {paidCents}c paid on cancellation.");
+                }
+                foreach (string employmentId in funding.EmploymentIds)
+                {
+                    if (!employments.EndEmployment(employmentId, dayIndex, EmploymentEndReason.EndedByAgreement))
+                        diag.Add($"NpcCommissioner.SettleCancellationWages: employment '{employmentId}' for package '{package.PackageId}' was already ended or unknown — nothing to end.");
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// DEF-071 (Decision 14, D4): cancels the builder contract bound to
+        /// a project and settles it through the billing service — the mirror
+        /// of CommissionBuilderContract / AcceptBuilderStageAndReleaseDraw,
+        /// which take their authorities as parameters. The driver holds
+        /// neither the contract book nor the billing service, so this stays
+        /// a commissioner-level method for the production caller to invoke
+        /// when it cancels a project; its existence (harness-tested) is the
+        /// fix, the trigger — who decides to cancel — is a separate
+        /// NPC-decision concern, same as the project-cancel trigger itself.
+        /// Order: cancel first (the reason is recorded on the contract),
+        /// settle second (SettleCancellation requires a Cancelled contract).
+        /// If settlement is refused (no cash port, short owner cash), the
+        /// contract stays Cancelled with its obligations unsettled — honest,
+        /// and the settlement is retryable; the cancel itself is not
+        /// rolled back.
+        /// </summary>
+        public string CancelBuilderContract(
+            ConstructionContract contract,
+            ConstructionProgressBillingService billing,
+            NpcConstructionRecord record,
+            string reason,
+            string cancelledBy,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (contract == null || billing == null)
+                return "NpcCommissioner.CancelBuilderContract: contract and billing service required.";
+            if (record != null && !string.IsNullOrWhiteSpace(record.ContractId)
+                && !string.Equals(record.ContractId, contract.ContractId, StringComparison.Ordinal))
+                return $"NpcCommissioner.CancelBuilderContract: contract '{contract.ContractId}' is not the contract bound to record '{record.RecordId}' ('{record.ContractId}') — refusing to cancel the wrong contract.";
+            string cancelProblem = contract.Cancel(dayIndex, diag, reason, cancelledBy);
+            if (cancelProblem != null) return cancelProblem;
+            string settleProblem = billing.SettleCancellation(contract, dayIndex, diag);
+            if (settleProblem != null)
+            {
+                diag.Add($"NpcCommissioner.CancelBuilderContract: contract '{contract.ContractId}' is cancelled but its settlement was refused — {settleProblem} The obligations stay unsettled and the settlement can be retried.");
+                if (record != null)
+                    record.Decisions.Add($"day {dayIndex}: builder contract '{contract.ContractId}' cancelled ({reason ?? "no reason recorded"}) — settlement refused, obligations unsettled (retryable).");
+                return settleProblem;
+            }
+            if (record != null)
+                record.Decisions.Add($"day {dayIndex}: builder contract '{contract.ContractId}' cancelled ({reason ?? "no reason recorded"}) and settled.");
+            diag.Add($"NpcCommissioner: builder contract '{contract.ContractId}' cancelled and settled on day {dayIndex}.");
             return null;
         }
 

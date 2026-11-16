@@ -203,7 +203,9 @@ namespace LandLedgers.EditorTests.Economy
         {
             ConstructionContract contract = MakeContract("CTR-0001", 50000);
             contract.PaymentTerms.DepositCents = 10000;
-            Assert.IsNull(contract.Cancel(6, diag));
+            // DEF-071 (Decision 14): a contract cancel now requires a reason,
+            // so the cancel call carries one.
+            Assert.IsNull(contract.Cancel(6, diag, "owner cancelled", "Ada Owner"));
 
             Assert.IsNotNull(billing.RecordDeposit(contract, 7, diag));
             Assert.AreEqual(0, port.Balances[BuilderKey]);

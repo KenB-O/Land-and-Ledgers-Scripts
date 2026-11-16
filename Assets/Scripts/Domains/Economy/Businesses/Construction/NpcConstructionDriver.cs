@@ -558,14 +558,51 @@ namespace LandLedgers.Economy
         /// Cancels a project through the executor: staged materials return
         /// to the source exactly once through the restock port, completed
         /// packages stay built. A second cancel is refused by the executor.
+        /// DEF-071 (Decision 14, D3): when an employment registry and a
+        /// worker-household map are supplied, hired wages for incomplete
+        /// packages are settled FIRST (paid from real cash, or recorded as
+        /// a debt when the household cannot cover them) and the employments
+        /// ended — before the executor fails the labour tasks. Without a
+        /// registry the wage settlement cannot run; that is recorded loudly
+        /// and the material cancel proceeds (the commissioner can settle
+        /// them when a registry is available). The optional parameters keep
+        /// existing callers compiling unchanged.
         /// </summary>
         public string Cancel(ConstructionProject project, IConstructionMaterialRestock restock,
             PersonScheduleTracker scheduleTracker, TaskAuthority tasks,
-            WorkTimeBudgetStore budgets, int dayIndex, List<string> diag)
+            WorkTimeBudgetStore budgets, int dayIndex, List<string> diag,
+            EmploymentRelationshipRegistry employments = null,
+            Dictionary<int, int> workerHouseholdByPerson = null)
         {
             diag = diag ?? diagnostics;
             if (executor == null || project == null)
                 return "NpcConstructionDriver.Cancel: executor and project required.";
+            // DEF-071 (Decision 14, D3): refuse a second cancel BEFORE
+            // settling wages — otherwise a re-cancel would re-settle wages
+            // before the executor refuses it. (The WagesPaidCents == 0 gate
+            // in SettleCancellationWages is the backstop.)
+            if (project.Status == ConstructionProjectStatus.Cancelled)
+                return $"NpcConstructionDriver.Cancel: project '{project.ProjectId}' is already cancelled — nothing to cancel.";
+            if (employments != null && workerHouseholdByPerson != null && commissioner != null)
+            {
+                NpcConstructionRecord record = commissioner.FindRecordForProject(project.ProjectId);
+                if (record != null)
+                {
+                    string wageProblem = commissioner.SettleCancellationWages(employments, obligations, ids,
+                        record, project, cash, "household:" + project.HouseholdId,
+                        workerHouseholdByPerson, dayIndex, diag);
+                    if (wageProblem != null)
+                        diag.Add($"NpcConstructionDriver.Cancel: wage settlement reported a problem — {wageProblem} The material cancel proceeds regardless.");
+                }
+                else
+                {
+                    diag.Add($"NpcConstructionDriver.Cancel: no commissioner record for project '{project.ProjectId}' — hired wages could not be settled; the material cancel proceeds.");
+                }
+            }
+            else
+            {
+                diag.Add($"NpcConstructionDriver.Cancel: no employment registry or worker-household map supplied for project '{project.ProjectId}' — hired wages could not be settled; the material cancel proceeds (the commissioner can settle them when a registry is available).");
+            }
             return executor.CancelProject(project, null, restock, scheduleTracker, tasks, budgets, dayIndex, diag);
         }
     }

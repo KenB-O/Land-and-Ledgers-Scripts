@@ -269,6 +269,29 @@ namespace LandLedgers.Economy
         }
 
         /// <summary>
+        /// DEF-071 (Decision 14): ends ONE employment by id with the given
+        /// reason and returns whether it was active and ended. Unlike
+        /// EndEmploymentByReason, which ends every active employment a
+        /// person holds, this ends only the named engagement — a hired hand
+        /// on a cancelled building job keeps any other job they hold. The
+        /// record is retained as history, never deleted. Returns false when
+        /// the id is unknown or the employment is already ended.
+        /// </summary>
+        public bool EndEmployment(string employmentId, int dayIndex, EmploymentEndReason reason)
+        {
+            if (!TryGetById(employmentId, out EmploymentRelationship relationship) || relationship == null)
+                return false;
+            if (!relationship.IsActive)
+                return false;
+            relationship.LifecycleState = EmploymentLifecycleState.Ended;
+            relationship.EndDayIndex = dayIndex;
+            relationship.EndReason = reason;
+            diagnostics.Add(
+                $"EmploymentRelationshipRegistry: ended employment '{employmentId}' for P{relationship.EmployeePersonId} ({reason}).");
+            return true;
+        }
+
+        /// <summary>
         /// Pass IX (A2-10): ends every active employment for a person who
         /// migrated off-map, mirroring EndEmploymentsForDeceased. Without
         /// this, payroll kept paying departed migrants full wages forever

@@ -614,6 +614,34 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(40, c.Restock.Returned["fieldstone"]);
         }
 
+        // DEF-071 (Decision 14, D3/T12): cancelling through the driver without
+        // an employment registry records loudly that wages could not be
+        // settled — and still returns the staged materials. The wages are
+        // not silently dropped; the commissioner can settle them when a
+        // registry is available.
+        [Test]
+        public void Driver_CancelWithoutRegistry_RecordsUnsettledWages_AndStillReturnsMaterials()
+        {
+            var c = new Chain();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var driver = c.NewDriver();
+            ConstructionProject project = driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag);
+            Assert.IsNotNull(project, string.Join("; ", c.Diag));
+            Assert.AreEqual(1, driver.Drive(11, c.Diag));
+
+            int diagBefore = c.Diag.Count;
+            Assert.IsNull(driver.Cancel(project, c.Restock, c.Tracker, c.Tasks, c.Budgets, 12, c.Diag),
+                string.Join("; ", c.Diag));
+            Assert.AreEqual(ConstructionProjectStatus.Cancelled, project.Status);
+            Assert.AreEqual(40, c.Restock.Returned["fieldstone"]);
+            Assert.IsTrue(project.WorkPackages[0].StagedMaterialsReturned);
+            bool recorded = false;
+            for (int i = diagBefore; i < c.Diag.Count; i++)
+                if (c.Diag[i].Contains("could not be settled")) recorded = true;
+            Assert.IsTrue(recorded, "the cancel must record loudly that wages could not be settled: " + string.Join("; ", c.Diag));
+        }
+
         [Test]
         public void Driver_PausedProject_Skipped_NotAutoResumed()
         {

@@ -271,6 +271,48 @@ namespace LandLedgers.Economy
             return relationship;
         }
 
+        /// <summary>
+        /// DEF-071 (Decision 14, D5): a contracting principal (or explicitly
+        /// authorized delegate) stops their own standing order. Records the
+        /// cancellation on the relationship with the given reason, exactly as
+        /// the automatic breach path does (RecordCancelled) — future
+        /// ResolveOrder calls return Cancelled with the recorded reason.
+        /// Requires a non-empty reason and an existing, still-active
+        /// relationship; stopping an already-cancelled relationship, or one
+        /// that never existed, is refused. Shipments already dispatched are
+        /// untouched: relationships hold no shipment references (an in-flight
+        /// shipment is a separate object dispatched via the request's
+        /// ScheduleShipment callback), so stopping the order cannot cancel
+        /// what is already on the road.
+        /// </summary>
+        public string StopRelationship(LocalRecurringOrderTemplate template, BusinessInstanceState seller,
+            BusinessInstanceState buyer, string reason, int weekKey)
+        {
+            if (template == null || seller == null || buyer == null)
+                return "LocalRecurringOrderManager: template, seller and buyer are required to stop a standing order.";
+            if (string.IsNullOrWhiteSpace(reason))
+                return "LocalRecurringOrderManager: stopping a standing order requires its reason.";
+            LocalRecurringOrderRelationshipState relationship = TryFindRelationship(template, seller, buyer);
+            if (relationship == null)
+                return "LocalRecurringOrderManager: no standing order exists for this template, seller and buyer — nothing to stop.";
+            if (!relationship.Active)
+                return $"LocalRecurringOrderManager: the standing order is already cancelled ({relationship.CancellationReason}) — a second stop is refused.";
+            relationship.RecordCancelled(weekKey, reason);
+            return null;
+        }
+
+        private LocalRecurringOrderRelationshipState TryFindRelationship(
+            LocalRecurringOrderTemplate template,
+            BusinessInstanceState seller,
+            BusinessInstanceState buyer)
+        {
+            // Lookup only — unlike GetOrCreateRelationship, stopping must
+            // never create a relationship just to cancel it.
+            string relationshipId = LocalRecurringOrderRelationshipState.BuildRelationshipId(template, seller, buyer);
+            return relationshipsById.TryGetValue(relationshipId, out LocalRecurringOrderRelationshipState relationship)
+                ? relationship : null;
+        }
+
         private int ApplyTransfer(
             LocalRecurringOrderFulfillmentRequest request,
             int transferUnits,

@@ -389,6 +389,111 @@ namespace LandLedgers.Economy
         }
 
         /// <summary>
+        /// DEF-071 (Decision 14, D4): settles a CANCELLED contract. Requires
+        /// the contract to be Cancelled (refuse otherwise — cancel first,
+        /// settle second, always in that order) and the cash port to be bound
+        /// (refuse loudly, same pattern as the other entry points). Then,
+        /// owner to builder through the port:
+        /// - every Released obligation is paid and marked SettledExternally
+        ///   with an event (earned money — an accepted milestone draw or the
+        ///   final balance, recorded but not yet moved);
+        /// - the retainage balance held back on accepted work is released
+        ///   with an event and cleared (the retainage was security for
+        ///   completion and defects, and cancellation ends that window by
+        ///   the cancelling party's act);
+        /// - every Recorded obligation is voided with an event (never earned
+        ///   — a deposit not yet settled, a final balance never released —
+        ///   and owed to nobody once the contract is cancelled).
+        /// Already-settled obligations are untouched; a settled deposit stays
+        /// settled. The total (Released obligations + retainage) is
+        /// pre-flighted once against the owner's port balance; insufficient
+        /// balance refuses the WHOLE settlement with nothing moved (atomic,
+        /// mirroring the other entry points' refusal style). This is the ONLY
+        /// path that settles on a cancelled contract — MarkObligationSettled
+        /// and CheckContractBillable refuse cancelled contracts by design,
+        /// and are deliberately not called here. Void events record amount 0:
+        /// a void is not a billing, and CumulativeBilledCents sums event
+        /// amounts.
+        /// </summary>
+        public string SettleCancellation(ConstructionContract contract, int dayIndex, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            string noPortRefusal = CheckCashPortBound("SettleCancellation", diagnostics);
+            if (noPortRefusal != null) return noPortRefusal;
+            if (contract == null) return "ConstructionProgressBillingService: no contract supplied.";
+            if (contract.Status != ConstructionContractStatus.Cancelled)
+                return $"ConstructionProgressBillingService: {contract.ContractId} is {contract.Status}, not Cancelled — settle a cancellation only after cancelling (cancel first, settle second).";
+            string ownerKey = ResolvePartyKey(contract.OwnerParty, "owner", contract.ContractId, diagnostics);
+            if (ownerKey == null) return diagnostics[diagnostics.Count - 1];
+            string builderKey = ResolvePartyKey(contract.BuilderParty, "builder", contract.ContractId, diagnostics);
+            if (builderKey == null) return diagnostics[diagnostics.Count - 1];
+
+            int releasedTotal = 0;
+            int retainedCents = RetainageBalanceCents(contract.ContractId);
+            if (contract.PaymentObligations != null)
+            {
+                foreach (ConstructionPaymentObligation obligation in contract.PaymentObligations)
+                {
+                    if (obligation != null && obligation.Status == ConstructionPaymentObligationStatus.Released)
+                        releasedTotal += Math.Max(0, obligation.AmountCents);
+                }
+            }
+            int totalMoveCents = releasedTotal + retainedCents;
+            if (totalMoveCents > 0)
+            {
+                string balanceRefusal = cashPort.TryGetCashBalance(ownerKey, out int ownerBalance);
+                if (balanceRefusal != null)
+                    return $"ConstructionProgressBillingService: {contract.ContractId} cancellation settlement refused — owner balance unreadable: {balanceRefusal}";
+                if (ownerBalance < totalMoveCents)
+                {
+                    diagnostics.Add($"ConstructionProgressBillingService: {contract.ContractId} cancellation settlement REFUSED — owner holds {FormatMoney(ownerBalance)}, needs {FormatMoney(totalMoveCents)} for released obligations plus retainage. Nothing moved; the obligations stay unsettled and the settlement can be retried.");
+                    return $"ConstructionProgressBillingService: {contract.ContractId} cancellation settlement refused: owner holds {FormatMoney(ownerBalance)}, needs {FormatMoney(totalMoveCents)}.";
+                }
+                // Overbilling guard on the released total, mirroring
+                // RecordCompletionBalance (retainage was already reserved in
+                // the draw-time checks, so it is not checked again here).
+                string overbillingRefusal = CheckOverbilling(contract, releasedTotal, diagnostics);
+                if (overbillingRefusal != null) return overbillingRefusal;
+                string portRefusal = cashPort.MoveCash(ownerKey, builderKey, totalMoveCents, dayIndex,
+                    $"{contract.ContractId} cancellation settlement (released obligations + retainage release)", diagnostics);
+                if (portRefusal != null)
+                {
+                    diagnostics.Add($"ConstructionProgressBillingService: {contract.ContractId} cancellation settlement REFUSED — {portRefusal} Nothing moved; the obligations stay unsettled and the settlement can be retried.");
+                    return $"ConstructionProgressBillingService: {contract.ContractId} cancellation settlement refused: {portRefusal}";
+                }
+            }
+            // Money moved (or nothing was owed): settle the record.
+            if (contract.PaymentObligations != null)
+            {
+                foreach (ConstructionPaymentObligation obligation in contract.PaymentObligations)
+                {
+                    if (obligation == null) continue;
+                    if (obligation.Status == ConstructionPaymentObligationStatus.Released)
+                    {
+                        obligation.Status = ConstructionPaymentObligationStatus.SettledExternally;
+                        RecordEvent(contract.ContractId, obligation.ObligationId, "cancellation-settlement",
+                            Math.Max(0, obligation.AmountCents), dayIndex,
+                            $"Released obligation '{obligation.Description}' paid on cancellation ({FormatMoney(Math.Max(0, obligation.AmountCents))}).");
+                    }
+                    else if (obligation.Status == ConstructionPaymentObligationStatus.Recorded)
+                    {
+                        obligation.Status = ConstructionPaymentObligationStatus.Voided;
+                        RecordEvent(contract.ContractId, obligation.ObligationId, "obligation-voided", 0, dayIndex,
+                            $"Recorded obligation '{obligation.Description}' ({FormatMoney(Math.Max(0, obligation.AmountCents))}) voided on cancellation — never earned, owed to nobody.");
+                    }
+                }
+            }
+            if (retainedCents > 0)
+            {
+                RecordEvent(contract.ContractId, string.Empty, "retainage-release", retainedCents, dayIndex,
+                    $"Retainage {FormatMoney(retainedCents)} released on cancellation (withheld from earlier progress draws per billing policy; cancellation ends the holdback window).");
+                ClearRetainage(contract.ContractId);
+            }
+            diagnostics.Add($"ConstructionProgressBillingService: {contract.ContractId} cancellation settled on day {dayIndex} — {FormatMoney(totalMoveCents)} moved owner-to-builder (released obligations {FormatMoney(releasedTotal)} + retainage {FormatMoney(retainedCents)}); unearned obligations voided.");
+            return null;
+        }
+
+        /// <summary>
         /// D4H: records the explicit binding between a payment milestone and
         /// the acceptance stage that earns it. <see cref="RecordMilestone"/>
         /// bills only through a recorded link — this is that record. Refuses

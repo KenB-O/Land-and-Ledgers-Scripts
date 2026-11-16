@@ -122,6 +122,11 @@ namespace LandLedgers.Economy
         // charge; the revenue scan is idempotent via this flag. Legacy saves
         // read false (uncollected).
         [SerializeField] public bool freightRevenueCollected;
+        // DEF-071 (Decision 14): consecutive failed delivery attempts
+        // without a forward move. Incremented by MarkDelayed, cleared by
+        // every forward move (see ResetDelayCycles). Additive field;
+        // legacy saves read 0.
+        [SerializeField] public int delayCycles;
         [SerializeField] public float loadingDurationGameSeconds = 30f;
         [SerializeField] public float transitDurationGameSeconds = 120f;
         [SerializeField] public float unloadingDurationGameSeconds = 30f;
@@ -152,6 +157,12 @@ namespace LandLedgers.Economy
         public int FreightChargeCents => Mathf.Max(0, freightChargeCents);
         /// <summary>G-02: true once the freight charge was collected (idempotent revenue).</summary>
         public bool FreightRevenueCollected => freightRevenueCollected;
+        /// <summary>
+        /// DEF-071 (Decision 14): consecutive failed delivery attempts
+        /// without a forward move. Zero after any forward move or on a
+        /// fresh shipment.
+        /// </summary>
+        public int DelayCycles => Mathf.Max(0, delayCycles);
         public float EstimatedRemainingGameSeconds => Mathf.Max(0f, ResolveCurrentStageDuration() - stageElapsedGameSeconds);
 
         /// <summary>
@@ -216,6 +227,23 @@ namespace LandLedgers.Economy
             resumeStateAfterDelay = resumeState;
             state = LogisticsShipmentStatus.Delayed;
             stageElapsedGameSeconds = 0f;
+            // DEF-071 (Decision 14): one more consecutive failed attempt.
+            // Only a forward move clears this (see ResetDelayCycles); a
+            // resume is a retry, not progress.
+            delayCycles++;
+        }
+
+        /// <summary>
+        /// DEF-071 (Decision 14): clears the consecutive-delay count.
+        /// Called by every forward move — AdvanceToNextStage (the legacy /
+        /// company-runtime path) and the detailed driver's service moves
+        /// (load applied, dispatch, arrival, delivery resolution). A resume
+        /// from delay is a retry, not progress, so ResumeFromDelay
+        /// deliberately does NOT call this.
+        /// </summary>
+        public void ResetDelayCycles()
+        {
+            delayCycles = 0;
         }
 
         public void ResumeFromDelay()
@@ -268,6 +296,7 @@ namespace LandLedgers.Economy
                 loadApplied = loadApplied,
                 deliveryApplied = deliveryApplied,
                 freightRevenueCollected = freightRevenueCollected,
+                delayCycles = DelayCycles,
                 loadingDurationGameSeconds = Mathf.Max(0f, loadingDurationGameSeconds),
                 transitDurationGameSeconds = Mathf.Max(0f, transitDurationGameSeconds),
                 unloadingDurationGameSeconds = Mathf.Max(0f, unloadingDurationGameSeconds),
@@ -328,6 +357,7 @@ namespace LandLedgers.Economy
             state.loadApplied = dto.loadApplied;
             state.deliveryApplied = dto.deliveryApplied;
             state.freightRevenueCollected = dto.freightRevenueCollected;
+            state.delayCycles = Mathf.Max(0, dto.delayCycles);
             state.loadingDurationGameSeconds = Mathf.Max(0f, dto.loadingDurationGameSeconds);
             state.transitDurationGameSeconds = Mathf.Max(0f, dto.transitDurationGameSeconds);
             state.unloadingDurationGameSeconds = Mathf.Max(0f, dto.unloadingDurationGameSeconds);
@@ -441,6 +471,10 @@ namespace LandLedgers.Economy
             }
 
             stageElapsedGameSeconds = 0f;
+            // DEF-071 (Decision 14): a forward stage move clears the
+            // consecutive-delay count — the bound only bites on consecutive
+            // failures without progress.
+            ResetDelayCycles();
             state = state switch
             {
                 LogisticsShipmentStatus.Loading => LogisticsShipmentStatus.InTransit,

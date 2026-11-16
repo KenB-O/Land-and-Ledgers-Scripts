@@ -663,6 +663,10 @@ namespace LandLedgers.Persistence
         // G-02 additive: freight revenue collection marker. Legacy saves
         // without this field restore false (uncollected).
         public bool freightRevenueCollected;
+        // DEF-071 additive: consecutive failed delivery attempts without a
+        // forward move. Legacy saves without this field restore 0
+        // (clear-then-load stays valid).
+        public int delayCycles;
         public float loadingDurationGameSeconds;
         public float transitDurationGameSeconds;
         public float unloadingDurationGameSeconds;

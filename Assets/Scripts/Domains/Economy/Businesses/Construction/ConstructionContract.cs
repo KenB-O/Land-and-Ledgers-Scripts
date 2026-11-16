@@ -52,6 +52,13 @@ namespace LandLedgers.Economy
         public int FormedDayIndex = -1;
         public int WorkStartedDayIndex = -1;
         public int FinalAcceptedDayIndex = -1;
+        // DEF-071 (Decision 14, D4): the cancellation record. A contract
+        // cancel without a recorded cause leaves the record unexplained, so
+        // Cancel requires a reason (mirroring CancelAgreement). Persisted
+        // in ConstructionContractSaveDto; unset on a live contract.
+        public string CancellationReason = string.Empty;
+        public string CancelledByDisplayName = string.Empty;
+        public int CancelledDayIndex = -1;
 
         private int nextChangeOrderNumber = 1;
         private int nextDefectNumber = 1;
@@ -412,13 +419,28 @@ namespace LandLedgers.Economy
             return null;
         }
 
-        public string Cancel(int dayIndex, List<string> diag)
+        /// <summary>
+        /// DEF-071 (Decision 14, D4): cancels the contract and records the
+        /// cancellation — the cause, who cancelled it, and the day. A reason
+        /// is required: cancelling without one refuses, mirroring
+        /// CancelAgreement. Settling the money (released obligations paid,
+        /// retainage released, unearned obligations voided) is
+        /// ConstructionProgressBillingService.SettleCancellation, which
+        /// requires the contract to be Cancelled first — cancel, then
+        /// settle, always in that order. A second cancel is refused.
+        /// </summary>
+        public string Cancel(int dayIndex, List<string> diag, string reason = null, string cancelledBy = null)
         {
             diag = diag ?? new List<string>();
             if (IsTerminal)
                 return $"ConstructionContract: {ContractId} is {Status} — nothing to cancel.";
+            if (string.IsNullOrWhiteSpace(reason))
+                return $"ConstructionContract: {ContractId} — cancelling requires its cause.";
             Status = ConstructionContractStatus.Cancelled;
-            diag.Add($"ConstructionContract: {ContractId} cancelled on day {dayIndex}.");
+            CancellationReason = reason.Trim();
+            CancelledByDisplayName = string.IsNullOrWhiteSpace(cancelledBy) ? string.Empty : cancelledBy.Trim();
+            CancelledDayIndex = dayIndex;
+            diag.Add($"ConstructionContract: {ContractId} cancelled on day {dayIndex} by {CancelledByDisplayName} — {CancellationReason}.");
             return null;
         }
 
@@ -535,6 +557,11 @@ namespace LandLedgers.Economy
             public int FormedDayIndex = -1;
             public int WorkStartedDayIndex = -1;
             public int FinalAcceptedDayIndex = -1;
+            // DEF-071 additive: the cancellation record. Old saves without
+            // these fields restore empty / -1 (a live contract).
+            public string CancellationReason = string.Empty;
+            public string CancelledByDisplayName = string.Empty;
+            public int CancelledDayIndex = -1;
             public int NextChangeOrderNumber = 1;
             public int NextDefectNumber = 1;
             public int NextObligationNumber = 1;
@@ -567,6 +594,9 @@ namespace LandLedgers.Economy
                 FormedDayIndex = FormedDayIndex,
                 WorkStartedDayIndex = WorkStartedDayIndex,
                 FinalAcceptedDayIndex = FinalAcceptedDayIndex,
+                CancellationReason = CancellationReason ?? string.Empty,
+                CancelledByDisplayName = CancelledByDisplayName ?? string.Empty,
+                CancelledDayIndex = CancelledDayIndex,
                 NextChangeOrderNumber = nextChangeOrderNumber,
                 NextDefectNumber = nextDefectNumber,
                 NextObligationNumber = nextObligationNumber,
@@ -601,6 +631,9 @@ namespace LandLedgers.Economy
                 FormedDayIndex = dto.FormedDayIndex,
                 WorkStartedDayIndex = dto.WorkStartedDayIndex,
                 FinalAcceptedDayIndex = dto.FinalAcceptedDayIndex,
+                CancellationReason = dto.CancellationReason ?? string.Empty,
+                CancelledByDisplayName = dto.CancelledByDisplayName ?? string.Empty,
+                CancelledDayIndex = dto.CancelledDayIndex,
                 nextChangeOrderNumber = Math.Max(1, dto.NextChangeOrderNumber),
                 nextDefectNumber = Math.Max(1, dto.NextDefectNumber),
                 nextObligationNumber = Math.Max(1, dto.NextObligationNumber),

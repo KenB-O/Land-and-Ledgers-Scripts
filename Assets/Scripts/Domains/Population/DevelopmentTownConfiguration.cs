@@ -170,6 +170,15 @@ namespace LandLedgers.Population
             // landing to the mill; 0 = none authored, and the haul driver
             // refuses loudly until the authoring lands.
             [Min(0)] public float milesToMill;
+            // DEF-072 (Decision 15): the mature stock this site can hold.
+            // 0 = unset, and the registry defaults it to
+            // standingTimberUnits at registration (an authored stand
+            // starts at its capacity).
+            [Min(0)] public int carryingCapacityUnits;
+            // DEF-072 (Decision 15): 0..1 environmental conditions for
+            // this site. 0 = unset, and the registry defaults it to 1
+            // (productive site).
+            [Range(0f, 1f)] public float siteQuality01;
         }
 
         /// <summary>

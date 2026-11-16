@@ -28,7 +28,96 @@ namespace LandLedgers.Economy.Farming.Timber
         public int StandingTimberUnits; // logs still standing
         public int LastFelledDayIndex = -1;
 
+        // DEF-072 (Decision 15): timber regrowth state. New growth is
+        // young, not fellable; it becomes merchantable only after the
+        // species maturity years (see TimberSpecies). The model counts
+        // stems, not volume — conservative: residual trees' volume
+        // growth is not modelled.
+        // CarryingCapacityUnits: the mature stock the site can hold.
+        // 0 = unset; the registry defaults it to StandingTimberUnits
+        // at registration and at load (an authored stand starts at
+        // its capacity).
+        public int CarryingCapacityUnits;
+        // SiteQuality01: 0..1 environmental conditions for this site.
+        // 0 = unset; defaults to 1 (productive site).
+        public float SiteQuality01;
+        // LastRegrowthDayIndex: last day the regrowth driver ran on
+        // this stand; -1 = never driven. Makes the driver idempotent
+        // per day and lets it catch up after skipped days.
+        public int LastRegrowthDayIndex = -1;
+        // MatureAccrual: fractional remainder from maturing cohorts;
+        // whole units move to StandingTimberUnits, the remainder
+        // carries. Without it a 0.5-unit-per-year cohort would floor
+        // to zero forever.
+        public float MatureAccrual;
+        // YoungCohorts: immature growth, one cohort per establishment
+        // year (same-year accrual merges). Young units are future
+        // mature trees (survivors-to-maturity).
+        public List<RegrowthCohort> YoungCohorts = new List<RegrowthCohort>();
+
+        // YoungGrowthUnits: total immature growth on the stand.
+        public float YoungGrowthUnits
+        {
+            get
+            {
+                float total = 0f;
+                if (YoungCohorts == null) return total;
+                foreach (RegrowthCohort cohort in YoungCohorts)
+                {
+                    if (cohort == null) continue;
+                    total += Math.Max(0f, cohort.Units);
+                }
+                return total;
+            }
+        }
+
         public TimberStand() { }
+    }
+
+    /// <summary>
+    /// DEF-072 (Decision 15): one establishment year's young growth on
+    /// a timber stand. A cohort becomes merchantable MaturityYears
+    /// after establishment (see TimberSpecies).
+    /// </summary>
+    [Serializable]
+    public sealed class RegrowthCohort
+    {
+        public int EstablishDayIndex;
+        public float Units;
+
+        public RegrowthCohort() { }
+    }
+
+    /// <summary>
+    /// DEF-072 (Decision 15): years for a seedling cohort to reach
+    /// merchantable sawlog maturity, by species, on a productive site.
+    /// White pine 80 is the decided baseline (Owner Decision 15); the
+    /// rest are provisional researched first calibrations for Kennedy
+    /// to correct. Unknown species fall back to 80 with a diagnostic,
+    /// never a refusal — refusing would break stands with unlisted
+    /// species. Substring match, same pattern as
+    /// SawmillConversionData.DefaultForSpecies.
+    /// </summary>
+    public static class TimberSpecies
+    {
+        public const int DefaultMaturityYears = 80;
+
+        public static int MaturityYears(string species, List<string> diagnostics = null)
+        {
+            if (string.IsNullOrWhiteSpace(species))
+            {
+                if (diagnostics != null)
+                    diagnostics.Add("TimberSpecies: no species named — 80-year white-pine baseline used.");
+                return DefaultMaturityYears;
+            }
+            if (species.IndexOf("white pine", StringComparison.OrdinalIgnoreCase) >= 0) return 80;
+            if (species.IndexOf("oak", StringComparison.OrdinalIgnoreCase) >= 0) return 100;
+            if (species.IndexOf("ash", StringComparison.OrdinalIgnoreCase) >= 0) return 70;
+            if (species.IndexOf("birch", StringComparison.OrdinalIgnoreCase) >= 0) return 60;
+            if (diagnostics != null)
+                diagnostics.Add($"TimberSpecies: no maturity calibration for '{species}' — 80-year white-pine baseline used.");
+            return DefaultMaturityYears;
+        }
     }
 
     /// <summary>

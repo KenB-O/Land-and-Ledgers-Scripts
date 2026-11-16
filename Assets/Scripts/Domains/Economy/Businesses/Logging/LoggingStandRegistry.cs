@@ -39,10 +39,17 @@ namespace LandLedgers.Economy.Businesses.Logging
     ///   loudly for unknown stands, rights violations, and exhausted stands
     ///   (the rights check itself stays owned by T1E TimberHarvest — no
     ///   rewrite, no second gate);
-    /// - explicit regrowth: stands never regrow on their own. ApplyRegrowth
-    ///   takes a caller-supplied rate — the calibration is an open design
-    ///   question for Kennedy, so no rate is guessed here (Canon §7.4C:
-    ///   regrowth is slow and explicit, never assumed).
+    /// - explicit regrowth: stands never regrow on their own. DriveRegrowth
+    ///   (DEF-072, Decision 15) applies the calibrated age-class model —
+    ///   species maturity years, site quality, seed source, carrying
+    ///   capacity — one year-step at a time, driven once per day from the
+    ///   daily simulation boundary. New growth is young, never instantly
+    ///   merchantable; a clear-cut stand with no seed source establishes
+    ///   nothing. See TimberSpecies for the maturity table.
+    ///
+    /// Produced LogLots always carry StandId provenance, which is exactly
+    /// what the W4A sawmill intake requires (anonymous logs are refused
+    /// loudly by SawmillLogStock.ReceiveLogLot).
     ///
     /// Produced LogLots always carry StandId provenance, which is exactly
     /// what the W4A sawmill intake requires (anonymous logs are refused
@@ -71,6 +78,29 @@ namespace LandLedgers.Economy.Businesses.Logging
         public bool NeedsFellingConfigReapply(int authoredStandCount) =>
             StandCount == 0 && authoredStandCount > 0;
 
+        /// <summary>
+        /// DEF-072 (Decision 15): regrowth defaults for a stand whose
+        /// fields were never authored — capacity is the standing stock
+        /// at registration (an authored stand starts at its capacity),
+        /// site quality is 1 (productive site). Called at registration
+        /// and at load, so old saves and direct construction both get
+        /// valid state.
+        /// </summary>
+        private static void NormalizeStand(TimberStand stand)
+        {
+            if (stand == null) return;
+            if (stand.CarryingCapacityUnits <= 0)
+                stand.CarryingCapacityUnits = Math.Max(0, stand.StandingTimberUnits);
+            if (stand.SiteQuality01 <= 0f)
+                stand.SiteQuality01 = 1f;
+            else if (stand.SiteQuality01 > 1f)
+                stand.SiteQuality01 = 1f;
+            if (stand.YoungCohorts == null)
+                stand.YoungCohorts = new List<RegrowthCohort>();
+            if (stand.MatureAccrual < 0f)
+                stand.MatureAccrual = 0f;
+        }
+
         /// <summary>Registers an authored stand. Duplicates and blank ids are refused loudly.</summary>
         public string RegisterStand(TimberStand stand)
         {
@@ -81,6 +111,7 @@ namespace LandLedgers.Economy.Businesses.Logging
             if (stands.ContainsKey(stand.StandId))
                 return $"LoggingStandRegistry.RegisterStand: stand '{stand.StandId}' is already registered — stand ids are never reused.";
 
+            NormalizeStand(stand);
             stands[stand.StandId] = stand;
             diagnostics.Add($"LoggingStandRegistry: registered stand '{stand.StandId}' " +
                 $"({stand.DisplayName}, {stand.Species}, {stand.StandingTimberUnits} logs standing).");
@@ -197,22 +228,137 @@ namespace LandLedgers.Economy.Businesses.Logging
         }
 
         /// <summary>
-        /// Explicit stand regrowth — caller supplies the rate. Never called
-        /// with an invented calibration: timber regrowth pacing is an open
-        /// design question for Kennedy (Canon §7.4C: regrowth is slow and
-        /// explicit, never assumed). Passing 0 is a no-op, recorded.
+        /// DEF-072 (Decision 15): calibrated stand regrowth, driven once
+        /// per day from the daily simulation boundary. Age-class cohorts:
+        /// new growth is young, never instantly merchantable; a cohort
+        /// becomes merchantable MaturityYears after establishment
+        /// (TimberSpecies table — white pine 80 years is the decided
+        /// baseline). Establishment each year is (capacity / maturity
+        /// years) x seed fraction x site quality, where the seed
+        /// fraction is the remaining mature stock — the mature trees
+        /// left standing ARE the seed trees, so a clear-cut stand
+        /// establishes nothing and planting is the only return (no
+        /// planting system exists yet). Establishment is capped so
+        /// mature + young + pending accrual never exceeds capacity
+        /// (competition — a full canopy admits no new seedlings).
+        /// Year-stepped: each year boundary in (last driven day, today]
+        /// is processed in order, so a long jump (Continue after a long
+        /// absence, or a test driving 80 years at once) accrues and
+        /// matures correctly. A same-day re-call is a no-op (idempotent);
+        /// the first drive starts the clock at day 0 (stands are
+        /// authored at scenario start). One diagnostic line per stand
+        /// per drive, only when establishment or maturation happened —
+        /// silent on days with no year boundary crossed.
         /// </summary>
-        public void ApplyRegrowth(int unitsPerStand, int dayIndex, List<string> diag)
+        public void DriveRegrowth(int dayIndex, List<string> diag)
         {
             diag = diag ?? diagnostics;
-            int applied = Math.Max(0, unitsPerStand);
             foreach (var stand in stands.Values)
             {
                 if (stand == null) continue;
-                stand.StandingTimberUnits += applied;
+                NormalizeStand(stand);
+                if (stand.CarryingCapacityUnits <= 0) continue; // degenerate stand: no capacity, no regrowth
+                if (dayIndex <= stand.LastRegrowthDayIndex) continue; // already driven today (or earlier): idempotent
+                int startDay = stand.LastRegrowthDayIndex < 0 ? 0 : stand.LastRegrowthDayIndex;
+                int maturityYears = TimberSpecies.MaturityYears(stand.Species, diag);
+                int maturityDays = maturityYears * 365;
+                int firstYearEnd = ((startDay / 365) + 1) * 365;
+                for (int yearEnd = firstYearEnd; yearEnd <= dayIndex; yearEnd += 365)
+                {
+                    DriveRegrowthYear(stand, yearEnd, maturityYears, maturityDays, diag);
+                }
+                stand.LastRegrowthDayIndex = dayIndex;
             }
-            diag.Add($"LoggingStandRegistry: explicit regrowth applied — +{applied} standing-log units " +
-                $"per stand (day {dayIndex}). Rate supplied by the caller; nothing regrows on its own.");
+        }
+
+        /// <summary>
+        /// DEF-072: one regrowth year on one stand. Matures due cohorts
+        /// first (so the seed fraction for this year's establishment
+        /// counts the newly matured trees), then establishes this
+        /// year's cohort. Returns nothing; diagnostics carry the story.
+        /// </summary>
+        private static void DriveRegrowthYear(TimberStand stand, int yearEnd,
+            int maturityYears, int maturityDays, List<string> diag)
+        {
+            float matureBefore = stand.StandingTimberUnits;
+            float youngBefore = stand.YoungGrowthUnits;
+
+            // 1. Mature due cohorts (established MaturityYears ago or more).
+            float maturing = 0f;
+            for (int i = stand.YoungCohorts.Count - 1; i >= 0; i--)
+            {
+                RegrowthCohort cohort = stand.YoungCohorts[i];
+                if (cohort == null) { stand.YoungCohorts.RemoveAt(i); continue; }
+                if (yearEnd - cohort.EstablishDayIndex >= maturityDays)
+                {
+                    maturing += Math.Max(0f, cohort.Units);
+                    stand.YoungCohorts.RemoveAt(i);
+                }
+            }
+            int maturedWhole = 0;
+            int maturedDiscarded = 0;
+            if (maturing > 0f)
+            {
+                stand.MatureAccrual += maturing;
+                int whole = (int)Math.Floor(stand.MatureAccrual);
+                if (whole > 0)
+                {
+                    int room = stand.CarryingCapacityUnits - stand.StandingTimberUnits;
+                    int added = Math.Min(whole, Math.Max(0, room));
+                    stand.StandingTimberUnits += added;
+                    stand.MatureAccrual -= whole;
+                    maturedWhole = added;
+                    maturedDiscarded = whole - added;
+                }
+            }
+
+            // 2. Establish this year's cohort. Seed trees are the mature
+            // trees left standing; a clear-cut stand has no seed source.
+            float established = 0f;
+            float seedSource01 = stand.CarryingCapacityUnits > 0
+                ? (float)stand.StandingTimberUnits / stand.CarryingCapacityUnits
+                : 0f;
+            if (seedSource01 > 0f)
+            {
+                float annual = (stand.CarryingCapacityUnits / (float)maturityYears)
+                    * seedSource01 * stand.SiteQuality01;
+                if (annual > 0f)
+                {
+                    // The deficit MUST count MatureAccrual: maturation
+                    // moves young into the accrual before the units enter
+                    // the stand, and without counting it the establishment
+                    // step would refill the gap maturation just opened and
+                    // the stand would overfill past capacity.
+                    float deficit = stand.CarryingCapacityUnits
+                        - stand.StandingTimberUnits - stand.YoungGrowthUnits - stand.MatureAccrual;
+                    established = Math.Min(annual, Math.Max(0f, deficit));
+                    if (established > 0f)
+                    {
+                        RegrowthCohort cohort = null;
+                        foreach (var existing in stand.YoungCohorts)
+                        {
+                            if (existing != null && existing.EstablishDayIndex == yearEnd) { cohort = existing; break; }
+                        }
+                        if (cohort == null)
+                        {
+                            cohort = new RegrowthCohort { EstablishDayIndex = yearEnd, Units = 0f };
+                            stand.YoungCohorts.Add(cohort);
+                        }
+                        cohort.Units += established;
+                    }
+                }
+            }
+
+            if (maturedWhole > 0 || established > 0f || maturedDiscarded > 0)
+            {
+                string line = $"LoggingStandRegistry: stand '{stand.StandId}' regrowth year ending day {yearEnd} — " +
+                    $"mature {matureBefore} -> {stand.StandingTimberUnits}, young {youngBefore:0.##} -> {stand.YoungGrowthUnits:0.##}" +
+                    (maturedWhole > 0 ? $", matured {maturedWhole}" : string.Empty) +
+                    (established > 0f ? $", established {established:0.##}" : string.Empty) +
+                    (maturedDiscarded > 0 ? $", {maturedDiscarded} matured units lost to competition (capacity)" : string.Empty) +
+                    $" (last felled day {stand.LastFelledDayIndex}).";
+                diag.Add(line);
+            }
         }
 
         /// <summary>W4C save contract: lives inside the owning registry class.</summary>
@@ -229,6 +375,19 @@ namespace LandLedgers.Economy.Businesses.Logging
             foreach (var stand in stands.Values)
             {
                 if (stand == null) continue;
+                var copiedCohorts = new List<RegrowthCohort>();
+                if (stand.YoungCohorts != null)
+                {
+                    foreach (var cohort in stand.YoungCohorts)
+                    {
+                        if (cohort == null) continue;
+                        copiedCohorts.Add(new RegrowthCohort
+                        {
+                            EstablishDayIndex = cohort.EstablishDayIndex,
+                            Units = cohort.Units,
+                        });
+                    }
+                }
                 dto.Stands.Add(new TimberStand
                 {
                     StandId = stand.StandId,
@@ -240,6 +399,13 @@ namespace LandLedgers.Economy.Businesses.Logging
                     MilesToMill = stand.MilesToMill,
                     StandingTimberUnits = stand.StandingTimberUnits,
                     LastFelledDayIndex = stand.LastFelledDayIndex,
+                    // DEF-072: regrowth state — every field must be copied
+                    // here or it silently drops on save.
+                    CarryingCapacityUnits = stand.CarryingCapacityUnits,
+                    SiteQuality01 = stand.SiteQuality01,
+                    LastRegrowthDayIndex = stand.LastRegrowthDayIndex,
+                    MatureAccrual = stand.MatureAccrual,
+                    YoungCohorts = copiedCohorts,
                 });
             }
             foreach (var grant in rightsGrants)
@@ -267,6 +433,10 @@ namespace LandLedgers.Economy.Businesses.Logging
                 foreach (var stand in dto.Stands)
                 {
                     if (stand == null || string.IsNullOrWhiteSpace(stand.StandId)) continue;
+                    // DEF-072: old saves carry none of the regrowth fields
+                    // (capacity 0, quality 0, cohorts null) — normalize to
+                    // the same defaults registration applies.
+                    NormalizeStand(stand);
                     stands[stand.StandId] = stand;
                 }
             }

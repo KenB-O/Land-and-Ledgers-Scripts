@@ -1017,6 +1017,31 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// DEF-072 (Decision 15): the daily timber-regrowth driver. Runs
+        /// the stand registry's calibrated age-class regrowth once per
+        /// day. Deliberately separate from DriveFelling and with NO
+        /// mill/camp/crew/rights gates — regrowth is a natural process
+        /// and runs even when felling is skipped (no mill, no camp, no
+        /// crew, exhausted stand). Called from the daily driver right
+        /// after DriveFelling, so the day order stays fell, regrow, haul,
+        /// saw, transfer. Source-reviewed only: this file is
+        /// harness-excluded, so Unity compilation is owed from Codex.
+        /// </summary>
+        private void DriveTimberRegrowth(int absoluteDayIndex)
+        {
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null) return; // no Pass 9 state: no stands to regrow
+
+            LoggingStandRegistry registry = pass9.StandRegistry;
+            if (registry == null) return; // no registry wired: nothing to regrow
+
+            var diag = new List<string>();
+            registry.DriveRegrowth(absoluteDayIndex, diag);
+            foreach (string line in diag) Debug.Log($"[TimberRegrowth] {line}", this);
+        }
+
+        /// <summary>
         /// A2 plan 28 (2026-11-14, note 113): the daily log-haul driver.
         /// Dispatches every lot waiting at the landing to the first Sawmill
         /// business, then advances all active hauls by the working day
@@ -3677,6 +3702,11 @@ namespace LandLedgers.Orchestration.Systems
             // one-day-once, so the daily call IS the re-attempt: a
             // refused day is retried tomorrow.
             DriveFelling(absoluteDayIndex);
+            // DEF-072 (Decision 15): timber regrowth runs right after
+            // felling, with no mill/camp/crew gates — a natural process,
+            // not a labour drive. Day order is fell, regrow, haul, saw,
+            // transfer.
+            DriveTimberRegrowth(absoluteDayIndex);
             // Plan 28 (log-haul dispatch/advance driver): the day's lots
             // are dispatched and advanced after felling and before sawing,
             // so a haul arriving in today's advance is delivered and sawn

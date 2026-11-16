@@ -300,6 +300,8 @@ MonoBehaviour:
     kilogramsPerLog: 600
     standingTimberUnits: 120
     milesToMill: 2
+    carryingCapacityUnits: 120
+    siteQuality01: 1
   - standId: stand-pine-east
     displayName: East Pine Stand
     locationId: stand-pine-east
@@ -307,6 +309,8 @@ MonoBehaviour:
     kilogramsPerLog: 600
     standingTimberUnits: 80
     milesToMill: 4
+    carryingCapacityUnits: 80
+    siteQuality01: 1
   wholesaleAccounts:
   - sellerBusinessKey: bakery
     buyerBusinessKey: general-store

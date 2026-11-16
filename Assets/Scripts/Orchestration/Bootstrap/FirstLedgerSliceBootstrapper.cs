@@ -2596,6 +2596,11 @@ namespace LandLedgers.FirstLedger
                         KilogramsPerLog = standEntry.kilogramsPerLog,
                         MilesToMill = standEntry.milesToMill,
                         StandingTimberUnits = standEntry.standingTimberUnits,
+                        // DEF-072 (Decision 15): regrowth calibration; 0 =
+                        // unset, and the registry defaults capacity to the
+                        // standing stock and site quality to 1 (productive).
+                        CarryingCapacityUnits = standEntry.carryingCapacityUnits,
+                        SiteQuality01 = standEntry.siteQuality01,
                     });
                     if (!string.IsNullOrWhiteSpace(standRefusal))
                         Debug.LogWarning($"[SawmillProduction] {standRefusal}", this);

@@ -463,20 +463,35 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void Regrowth_ExplicitRateOnly_NothingRegrowsOnItsOwn()
+        public void Regrowth_DriveRegrowth_YoungGrowthOnly_NoInstantMatureTimber()
         {
+            // DEF-072 (Decision 15) REWRITE of
+            // Regrowth_ExplicitRateOnly_NothingRegrowsOnItsOwn. The old
+            // test pinned ApplyRegrowth's flat caller-supplied rate
+            // (+3 mature units to every stand, uncapped, instantly
+            // fellable). That API is removed: its semantics were the
+            // defect — species-, site-, and history-blind, uncapped,
+            // and instant mature timber. The calibrated model replaces
+            // it: DriveRegrowth establishes young cohorts that become
+            // merchantable only after the species maturity years.
+            // Capacity 10 white pine, fell 5 -> seed 0.5 -> establishment
+            // (10/80) x 0.5 x 1.0 = 0.0625 young/year; nothing matures
+            // before year 81.
             var diagnostics = new List<string>();
-            var registry = new LoggingStandRegistry();
-            Assert.IsNull(registry.RegisterStand(AuthoredStand("stand-1", 10)));
+            var registry = RegistryWithGrantedStand("stand-1", "logging-1", 10, diagnostics);
+            var ids = new EntityIdRegistry();
+            LogLot lot = TimberHarvest.FellLogs(ids, registry.GetStand("stand-1"),
+                "logging-1", 5, EntityId.For(EntityKind.Person, 3), 200, diagnostics);
+            Assert.NotNull(lot);
+            Assert.AreEqual(5, registry.GetStand("stand-1").StandingTimberUnits);
 
-            // No regrowth call, no regrowth — never assumed.
-            Assert.AreEqual(10, registry.GetStand("stand-1").StandingTimberUnits);
+            registry.DriveRegrowth(365, diagnostics);
+            Assert.AreEqual(5, registry.GetStand("stand-1").StandingTimberUnits);
+            Assert.AreEqual(0.0625f, registry.GetStand("stand-1").YoungGrowthUnits, 0.001f);
 
-            // The caller supplies the rate explicitly (calibration is
-            // Kennedy's open design question; no rate is guessed here).
-            registry.ApplyRegrowth(3, 300, diagnostics);
-            Assert.AreEqual(13, registry.GetStand("stand-1").StandingTimberUnits);
-            Assert.IsTrue(diagnostics.Exists(d => d.Contains("nothing regrows on its own")));
+            registry.DriveRegrowth(80 * 365, diagnostics);
+            Assert.AreEqual(5, registry.GetStand("stand-1").StandingTimberUnits);
+            Assert.AreEqual(5.0f, registry.GetStand("stand-1").YoungGrowthUnits, 0.001f);
         }
 
         [Test]

@@ -5297,41 +5297,39 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
+            // D-13 (F-D11-1): the build action queues the order with the weekly
+            // construction queue instead of building instantly. No shell exists
+            // yet, so there is no building to select; the queued project is
+            // visible through the weekly review and completes after its weeks.
+            // (The upgrade branch above is untouched: the queue has no method for
+            // HouseholdUpgrade, a dead kind — see F-D11-3.)
             string message;
-            PlacedBuilding building;
-            bool constructed;
+            bool queued;
             if (selectedOwnedLandDevelopmentIntent == OwnedLandDevelopmentIntent.Business)
             {
-                constructed = acquisitionMarket.TryConstructBusinessShellOnOwnedPlot(
+                queued = acquisitionMarket.TryQueueConstructBusinessShellOnOwnedPlot(
                     selected.PlotId,
                     selectedBusinessActivationIndex,
                     selectedBusinessBuildOptionIndex,
-                    out building,
                     out message);
             }
             else
             {
-                constructed = acquisitionMarket.TryConstructHouseOnOwnedPlot(
+                queued = acquisitionMarket.TryQueueConstructHouseOnOwnedPlot(
                     selected.PlotId,
                     selectedBuildOptionIndex,
-                    out building,
                     out message);
             }
 
-            if (constructed)
+            if (queued)
             {
                 panelStatus = !string.IsNullOrWhiteSpace(message)
                     ? message
-                    : (building != null ? $"Built shell on Plot {selected.PlotId:000}." : "Building shell constructed.");
+                    : $"Construction queued on Plot {selected.PlotId:000}.";
                 selectedBuildOptionIndex = 0;
                 selectedBusinessBuildOptionIndex = 0;
                 selectedBusinessDevelopmentPlotId = -1;
                 ownedSignature = string.Empty;
-                if (building != null)
-                {
-                    RebuildOwnedRowsIfNeeded();
-                    SelectOwnedBuildingIfPresent(building.id);
-                }
             }
             else
             {

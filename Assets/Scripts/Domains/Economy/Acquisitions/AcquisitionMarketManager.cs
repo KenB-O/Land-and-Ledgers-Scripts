@@ -1786,6 +1786,45 @@ namespace LandLedgers.Economy
             return TryQueueResolvedShellConstruction(plotId, definition, null, out message);
         }
 
+        // D-13 (F-D11-1): queue entry for the store panel's HOUSE build action.
+        // Resolves the selected plan through the same house resolver the instant
+        // wrapper used, so the queued shell is exactly the plan the player picked.
+        // The panel cannot call TryQueueConstructOnOwnedPlot with the house option
+        // index: that method indexes state.buildOptions (the general catalog list),
+        // which is a DIFFERENT list from the house list
+        // (BuildHouseShellOptions), in a different order — the wrong shell could
+        // be queued. No queue mechanics change here; the resolved method below
+        // still owns durations, prepay, capacity, and the weekly review.
+        public bool TryQueueConstructHouseOnOwnedPlot(int plotId, int optionIndex, out string message)
+        {
+            if (!TryResolveHouseBuildOption(plotId, optionIndex, out BuildingDefinition definition, out TownPlot _, out message))
+            {
+                return false;
+            }
+
+            return TryQueueResolvedShellConstruction(plotId, definition, null, out message);
+        }
+
+        // D-13 (F-D11-1): queue entry for the store panel's BUSINESS shell build
+        // action. Resolves the business candidate and shell plan through the same
+        // resolver the instant wrapper used, and carries the business intent into
+        // the queued project (TryQueueResolvedShellConstruction records
+        // hasBusinessIntent / businessIntent). TryQueueConstructOnOwnedPlot cannot
+        // serve this call: it always queues with a null business intent.
+        public bool TryQueueConstructBusinessShellOnOwnedPlot(
+            int plotId,
+            int businessOptionIndex,
+            int shellOptionIndex,
+            out string message)
+        {
+            if (!TryResolveBusinessBuildOption(plotId, businessOptionIndex, shellOptionIndex, out BusinessType businessType, out BuildingDefinition definition, out TownPlot _, out message))
+            {
+                return false;
+            }
+
+            return TryQueueResolvedShellConstruction(plotId, definition, businessType, out message);
+        }
+
         public bool ResolveWeeklyConstructionQueue(out string summary)
         {
             AutoWire();
@@ -4814,6 +4853,10 @@ namespace LandLedgers.Economy
             return true;
         }
 
+        // D-13 (F-D11-1): UNCALLED IN PRODUCTION. The store panel's build action
+        // now routes through the weekly queue (TryQueueConstructHouseOnOwnedPlot).
+        // Retained because ConstructionInputSupportTests still exercises the
+        // immediate path directly; do not re-wire a production caller to this.
         public bool TryConstructHouseOnOwnedPlot(int plotId, int optionIndex, out PlacedBuilding building, out string message)
         {
             building = null;
@@ -4825,6 +4868,11 @@ namespace LandLedgers.Economy
             return TryConstructResolvedShellOnOwnedPlot(plotId, definition, null, out building, out message);
         }
 
+        // D-13 (F-D11-1): UNCALLED IN PRODUCTION. The store panel's build action
+        // now routes through the weekly queue
+        // (TryQueueConstructBusinessShellOnOwnedPlot). Retained because
+        // ConstructionInputSupportTests still exercises the immediate path
+        // directly; do not re-wire a production caller to this.
         public bool TryConstructBusinessShellOnOwnedPlot(
             int plotId,
             int businessOptionIndex,

@@ -94,6 +94,19 @@ namespace LandLedgers.Economy.Financing
         public CreditOffer LenderOffer;
         public int LenderLoanCents;
         /// <summary>
+        /// D-7: the building instance whose contents the selection covers.
+        /// The plan must name the same building the contents selection
+        /// does (ValidatePlan enforces it) — this binds the contents to
+        /// the sale. -1 = unbound (a plan with contents terms and no
+        /// building instance is refused). The parcel-side check (this
+        /// building sits on this parcel) is the driver's job: the driver
+        /// supplies this id from the scene building authority it owns
+        /// (Building has no int instance id; the int lives on
+        /// BuildingFootprintAuthority), and the service has no
+        /// parcel-to-instance lookup.
+        /// </summary>
+        public int BuildingInstanceId = -1;
+        /// <summary>
         /// D-6: the itemized contents contract agreed at plan time (B6
         /// PropertyContentsSelection — D defines NO second selection type).
         /// Null = no contents terms (a bare-land sale, or a sale agreed
@@ -130,6 +143,15 @@ namespace LandLedgers.Economy.Financing
         public string LenderObligationId = string.Empty;
         public string SaleAgreementId = string.Empty;
         public List<string> OccupancyIds = new List<string>();
+        /// <summary>
+        /// D-7: the contents that stand transferred after the close
+        /// (asset ids, post-rollback on failure). Empty on a deal with
+        /// no contents terms, and empty on a failed transfer whose
+        /// rollback was clean.
+        /// </summary>
+        public List<string> TransferredContentsAssetIds = new List<string>();
+        public List<string> RemovedContentsAssetIds = new List<string>();
+        public List<string> HeldInPlaceContentsAssetIds = new List<string>();
         public bool CashConserved;
         public List<string> ConservationNotes = new List<string>();
 
@@ -364,6 +386,23 @@ namespace LandLedgers.Economy.Financing
             if (buyerStore.ReadBalanceCents() + plan.LenderLoanCents < cashToSeller)
                 return $"the buyer holds {buyerStore.ReadBalanceCents()}c and borrows {plan.LenderLoanCents}c — short of the {cashToSeller}c cash portion.";
 
+            // ---- Contents binding (D-7): the plan names the building
+            // whose contents are sold. The selection's BuildingInstanceId
+            // is the building the contract covers; the plan must name the
+            // same building, or the contents are not bound to this sale.
+            // This runs at plan time AND at close (CloseAcquisition calls
+            // ValidatePlan with contentsAgreementCheck false, but this
+            // block is outside that gate). The parcel-side check (the
+            // named building actually sits on the named parcel) is the
+            // driver's job — see the BuildingInstanceId field doc.
+            if (plan.Contents != null)
+            {
+                if (plan.BuildingInstanceId < 0)
+                    return "the plan carries contents terms but names no building instance — the contents cannot be bound to the parcel.";
+                if (plan.BuildingInstanceId != plan.Contents.BuildingInstanceId)
+                    return $"the plan names building {plan.BuildingInstanceId} but the contents selection covers building {plan.Contents.BuildingInstanceId} — the contents are not bound to this sale.";
+            }
+
             // ---- Contents leg (D-6): the itemized contents contract agreed
             // at plan time. Validated here against the seller's furnishing
             // register; re-validated at close by CloseAcquisition, because
@@ -406,15 +445,28 @@ namespace LandLedgers.Economy.Financing
         /// <summary>
         /// Executes a validated plan. Order: lender leg first (so a loan
         /// failure leaves nothing behind), then the seller-note leg, then
-        /// the cash movement, then title, then occupancy. Any mid-deal
-        /// failure unwinds what already closed through the real payment
-        /// machinery and fails LOUDLY.
+        /// the cash movement, then the contents transfer, then title,
+        /// then occupancy. Any mid-deal failure unwinds what already
+        /// closed through the real payment machinery and fails LOUDLY.
         /// D-6: sellerFurnishings is the seller's household furnishing
         /// register as it stands at close (null = no register supplied);
         /// structureValueCents is the structural valuation WITHOUT the
         /// value of included fixtures (Agent F's split — null = not
         /// supplied). Both are forwarded to ValidatePlan; the contents
         /// are then re-validated here before any leg moves.
+        /// D-7: buyerFurnishings is the buyer's household furnishing
+        /// register (null = no register supplied — a deal with contents
+        /// terms then refuses loudly before any leg moves, because the
+        /// transfer has nowhere to install the contents); placementResolver
+        /// resolves the scene placements for the transfer (null = same
+        /// loud refusal); sellerStoves / sellerHousehold settle stove
+        /// fuel before a stove leaves the register (null = settlement
+        /// skipped with a loud note — the driver must wire them, G
+        /// wiring). The contents transfer runs after the cash legs and
+        /// before title, so a transfer failure can still unwind the
+        /// money legs; the pre-flight (CanTransfer) runs before leg 1,
+        /// so a predictable transfer failure fails the deal before any
+        /// money moves at all.
         /// </summary>
         public NpcAcquisitionResult CloseAcquisition(
             EntityIdRegistry ids,
@@ -432,7 +484,11 @@ namespace LandLedgers.Economy.Financing
             CreditEventLog events,
             List<string> diag,
             HouseholdFurnishingRegister sellerFurnishings = null,
-            int? structureValueCents = null)
+            int? structureValueCents = null,
+            HouseholdFurnishingRegister buyerFurnishings = null,
+            IContentsPlacementResolver placementResolver = null,
+            HouseholdStoveRegistry sellerStoves = null,
+            HouseholdState sellerHousehold = null)
         {
             diag = diag ?? diagnostics;
             var result = new NpcAcquisitionResult
@@ -476,6 +532,59 @@ namespace LandLedgers.Economy.Financing
                         plan, dayIndex, events, diag);
                 }
                 diag.Add($"NpcPropertyAcquisition: contents re-validated at close — {plan.Contents.Lines.Count} lines, {plan.Contents.TotalContentsValueCents}c of the {plan.AgreedPriceCents}c price.");
+
+                // ---- Contents transfer inputs (D-7): the buyer register
+                // and the placement resolver must be wired before any leg
+                // moves — a deal with contents terms and nowhere to
+                // install them refuses loudly, never silently drops the
+                // transfer. Conservation is re-checked here with the
+                // close-time structure value (the close does not re-run
+                // agreement-time Validate; the split may have changed
+                // since the plan was agreed). The transfer itself is
+                // pre-flighted here too (CanTransfer), so a reserved
+                // asset, an unresolvable placement, or a buyer-register
+                // conflict fails the deal before any money moves.
+                if (buyerFurnishings == null)
+                {
+                    result.UnwoundCleanly = true;
+                    return Fail(result, NpcAcquisitionFailureKind.ContentsRefused,
+                        "the deal carries contents terms but no buyer furnishing register was supplied at close — the transfer has nowhere to install the contents; nothing moved.",
+                        plan, dayIndex, events, diag);
+                }
+                if (placementResolver == null)
+                {
+                    result.UnwoundCleanly = true;
+                    return Fail(result, NpcAcquisitionFailureKind.ContentsRefused,
+                        "the deal carries contents terms but no placement resolver was supplied at close — the transfer cannot find the scene placements; nothing moved.",
+                        plan, dayIndex, events, diag);
+                }
+                if (structureValueCents.HasValue)
+                {
+                    string closeConservation = PropertyContentsSelection.CheckConservation(
+                        structureValueCents.Value, plan.Contents.TotalContentsValueCents, plan.AgreedPriceCents);
+                    if (closeConservation != null)
+                    {
+                        result.UnwoundCleanly = true;
+                        return Fail(result, NpcAcquisitionFailureKind.ContentsRefused,
+                            "contents conservation failed at close: " + closeConservation + " — the deal fails; no item is silently dropped.",
+                            plan, dayIndex, events, diag);
+                    }
+                }
+                else
+                {
+                    diag.Add("NpcPropertyAcquisition: contents conservation (price == structure + contents) not re-checked at close — no structure value supplied at close.");
+                }
+                List<string> transferProblems = PropertyContentsTransfer.CanTransfer(
+                    plan.Contents, sellerFurnishings, buyerFurnishings, placementResolver, out List<string> transferNotes);
+                foreach (string note in transferNotes)
+                    diag.Add("NpcPropertyAcquisition: contents transfer — " + note);
+                if (transferProblems.Count > 0)
+                {
+                    result.UnwoundCleanly = true;
+                    return Fail(result, NpcAcquisitionFailureKind.ContentsRefused,
+                        "contents transfer cannot run at close: " + string.Join("; ", transferProblems) + " — the deal fails before any money moves.",
+                        plan, dayIndex, events, diag);
+                }
             }
 
             IRealCashStore buyerStore0 = cash.FindStore(plan.BuyerName);
@@ -574,6 +683,48 @@ namespace LandLedgers.Economy.Financing
                         plan, dayIndex, events, diag);
                 }
                 result.CashToSellerCents += cashToSeller;
+            }
+
+            // ---- Contents transfer leg (D-7): after the cash legs, before
+            // title, so a transfer failure can still unwind the money
+            // legs. The pre-flight already ran before leg 1, so this is
+            // the execution — a failure here is a mid-transfer defect,
+            // and the transfer rolls its own completed items back before
+            // the deal unwinds the note, the loan, and the cash.
+            if (plan.Contents != null)
+            {
+                PropertyContentsTransferResult transfer = PropertyContentsTransfer.TransferAtClose(
+                    plan.Contents, sellerFurnishings, buyerFurnishings, placementResolver,
+                    "property-acquisition:" + (string.IsNullOrWhiteSpace(plan.PlanId) ? plan.ParcelId : plan.PlanId),
+                    dayIndex, sellerStoves, sellerHousehold, diag);
+                result.TransferredContentsAssetIds.AddRange(transfer.TransferredAssetIds);
+                result.RemovedContentsAssetIds.AddRange(transfer.RemovedBySellerAssetIds);
+                result.HeldInPlaceContentsAssetIds.AddRange(transfer.HeldInPlaceAssetIds);
+                foreach (string note in transfer.Notes)
+                    diag.Add("NpcPropertyAcquisition: contents transfer — " + note);
+                if (!transfer.Succeeded)
+                {
+                    string unwindNote = UnwindNoteLeg(ids, workflow, authority, cash, result,
+                        plan.BuyerName, plan.SellerName, dayIndex, diag);
+                    string unwindLoan = loan != null
+                        ? UnwindLoan(ids, workflow, authority, cash, loan,
+                            plan.BorrowerProfile.Name, plan.LenderProfile.Name, dayIndex, diag)
+                        : null;
+                    string unwindCash = result.CashToSellerCents > 0
+                        ? MoveCash(cash, plan.SellerName, plan.BuyerName, result.CashToSellerCents, dayIndex,
+                            $"acquisition unwound — contents transfer failed on '{plan.ParcelId}'", diag)
+                        : null;
+                    result.UnwoundCleanly = unwindNote == null && unwindLoan == null && unwindCash == null
+                        && transfer.RollbackProblems.Count == 0;
+                    return Fail(result, NpcAcquisitionFailureKind.ContentsRefused,
+                        "contents transfer failed at close: " + string.Join("; ", transfer.Problems) +
+                        (transfer.RollbackProblems.Count > 0
+                            ? " ROLLBACK INCOMPLETE: " + string.Join("; ", transfer.RollbackProblems)
+                            : " The contents were rolled back.") +
+                        $" Cash returned: {(unwindCash ?? "clean")}; note unwind: {(unwindNote ?? "clean")}; loan unwind: {(unwindLoan ?? "clean")}.",
+                        plan, dayIndex, events, diag);
+                }
+                diag.Add($"NpcPropertyAcquisition: contents transferred at close — {transfer.TransferredAssetIds.Count} item(s) to the buyer, {transfer.RemovedBySellerAssetIds.Count} removed by the seller, {transfer.HeldInPlaceAssetIds.Count} held in place.");
             }
 
             // ---- Leg 4: title. REQUIRED — a closing without title is not a closing. ----

@@ -480,10 +480,57 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         }
 
         /// <summary>
+        /// Reverses one trip's fare in full: the carrier is debited the
+        /// fare it was credited, the buyer is credited back, and the
+        /// order's fare record is cleared. Returns the note to append on
+        /// success; on any refusal returns null and sets the dispute
+        /// text, leaving the money where it is (never half-moved: if the
+        /// buyer credit fails after the carrier debit, the carrier is
+        /// re-credited so no money is created or destroyed). The C-7
+        /// shape, shared by both refund sites in this service — a
+        /// one-legged refund would create money (buyer refunded AND
+        /// carrier keeping the fare).
+        /// </summary>
+        private string RefundTripFare(
+            LumberYardDeliveryOrder order,
+            int tripIndex,
+            int perTripCharge,
+            LumberYardRetailDeliveryExecution execution,
+            LumberYardSaleRecord sale,
+            string tripLabel,
+            out string dispute)
+        {
+            dispute = null;
+            string carrierDebitRefusal = execution.CarrierCash.TryDebit(perTripCharge,
+                $"yard retail delivery {tripLabel} fare refund (sale '{sale.SaleId}')");
+            if (carrierDebitRefusal != null)
+            {
+                dispute = $" The carrier fare-reversal debit ALSO failed — {carrierDebitRefusal}; " +
+                    $"the carrier keeps {perTripCharge}c and the buyer is short it; reconcile before retrying.";
+                return null;
+            }
+            string buyerRefundRefusal = execution.BuyerCash.Credit(perTripCharge,
+                $"yard retail delivery {tripLabel} refund (sale '{sale.SaleId}')");
+            if (buyerRefundRefusal != null)
+            {
+                string restoreRefusal = execution.CarrierCash.Credit(perTripCharge,
+                    $"yard retail delivery {tripLabel} refund restore (sale '{sale.SaleId}')");
+                dispute = $" The buyer refund ALSO failed — {buyerRefundRefusal}; " +
+                    (restoreRefusal == null
+                        ? $"the carrier was re-credited {perTripCharge}c, so no money was created or destroyed; reconcile before retrying."
+                        : $"the carrier re-credit ALSO failed — {restoreRefusal}; reconcile before retrying.");
+                return null;
+            }
+            SetTripFarePaid(order, tripIndex, -1);
+            return $" Freight refunded ({perTripCharge}c returned to the buyer; the carrier's fare reversed).";
+        }
+
+        /// <summary>
         /// A trip that never departed (no shipment, or a shipment blocked
-        /// pre-load): refund the fare in full and clear the fare record, so
-        /// a retry pays exactly once. A refund failure is named loudly —
-        /// the money is then in dispute, not silently kept.
+        /// pre-load): reverse the fare in full (two-legged — carrier
+        /// debited, buyer credited) and clear the fare record, so a retry
+        /// pays exactly once. A refund failure is named loudly — the money
+        /// is then in dispute, not silently kept.
         /// </summary>
         private string RefundAndFail(
             LumberYardDeliveryOrder order,
@@ -494,14 +541,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             LumberYardSaleRecord sale,
             string tripLabel)
         {
-            string refundRefusal = execution.BuyerCash.Credit(perTripCharge,
-                $"yard retail delivery {tripLabel} refund (sale '{sale.SaleId}')");
-            if (refundRefusal == null)
-            {
-                SetTripFarePaid(order, tripIndex, -1);
-                return failure + " The buyer was refunded the trip fare in full; the trip never departed.";
-            }
-            return failure + $" The buyer refund ALSO failed — {refundRefusal}; reconcile before retrying.";
+            string refundNote = RefundTripFare(order, tripIndex, perTripCharge, execution, sale, tripLabel, out string dispute);
+            if (refundNote != null)
+                return failure + refundNote + " The trip never departed.";
+            return failure + dispute;
         }
 
         /// <summary>
@@ -509,6 +552,8 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         /// shipment (releasing the wagon hold; goods stay quarantined on
         /// the failed shipment) and refund the fare only when the shipment
         /// never departed. A departed trip's fare stands for the attempt.
+        /// The refund is two-legged (carrier debited, buyer credited) —
+        /// see RefundTripFare.
         /// </summary>
         private string FailTripDisposition(
             LumberYardDeliveryOrder order,
@@ -529,17 +574,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             string refundNote = string.Empty;
             if (neverDeparted && perTripCharge > 0)
             {
-                string refundRefusal = execution.BuyerCash.Credit(perTripCharge,
-                    $"yard retail delivery {tripLabel} refund (sale '{sale.SaleId}')");
-                if (refundRefusal == null)
-                {
-                    SetTripFarePaid(order, tripIndex, -1);
-                    refundNote = $" Freight refunded ({perTripCharge}c returned to the buyer).";
-                }
-                else
-                {
-                    refundNote = $" Freight refund FAILED — {refundRefusal} (the carrier keeps {perTripCharge}c; in dispute).";
-                }
+                refundNote = RefundTripFare(order, tripIndex, perTripCharge, execution, sale, tripLabel, out string dispute) ?? dispute;
             }
             if (shipment != null)
             {

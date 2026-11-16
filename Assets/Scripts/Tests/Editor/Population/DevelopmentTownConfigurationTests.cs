@@ -97,14 +97,18 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsNotNull(configuration);
             // C-1 (expanded campaign, Phase 1 forestry): two felling axes
             // for the two-person crew, seven cover days of camp provisions,
-            // and the mill hand's opening employment.
+            // and the mill hand's opening employment. C-2b: the log wagon
+            // (1200 kg two-horse logging wagon, OD-C4) the mill teamster
+            // hauls with, beside the axes.
             DevelopmentTownConfiguration.BusinessOpeningEquipment millEquipment =
                 configuration.OpeningEquipment.Single(item => item.businessKey == "sawmill");
-            Assert.AreEqual(2, millEquipment.assetEntries.Length);
+            Assert.AreEqual(3, millEquipment.assetEntries.Length);
             Assert.AreEqual("felling-axe-1", millEquipment.assetEntries[0].assetId);
             Assert.AreEqual("felling-axe", millEquipment.assetEntries[0].kind);
             Assert.AreEqual("felling-axe-2", millEquipment.assetEntries[1].assetId);
             Assert.AreEqual("felling-axe", millEquipment.assetEntries[1].kind);
+            Assert.AreEqual("log-wagon-1", millEquipment.assetEntries[2].assetId);
+            Assert.AreEqual("log-wagon", millEquipment.assetEntries[2].kind);
             Assert.AreEqual(7, configuration.OpeningLoggingCampProvisionCoverDays);
             Assert.AreEqual(1, configuration.OpeningEmployees.Count);
             DevelopmentTownConfiguration.BusinessEmployeeDefinition millHand = configuration.OpeningEmployees[0];

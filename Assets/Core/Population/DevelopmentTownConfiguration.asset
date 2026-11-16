@@ -315,6 +315,8 @@ MonoBehaviour:
       kind: felling-axe
     - assetId: felling-axe-2
       kind: felling-axe
+    - assetId: log-wagon-1
+      kind: log-wagon
   openingEmployees:
   - businessKey: sawmill
     personKey: silas

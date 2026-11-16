@@ -13,6 +13,7 @@ using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Transport;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Postal;
+using LandLedgers.Economy.Storage;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.FuelDealer;
 using LandLedgers.Economy.Businesses.GeneralStore;
@@ -3941,6 +3942,39 @@ namespace LandLedgers.Orchestration.Systems
             // prerequisite guards in TaskAuthority.PruneTerminalTasks; saves then grow
             // with live state, not with total tasks ever created.
             DriveTaskPruning(absoluteDayIndex);
+
+            // B8 (Agent B, expanded campaign 2026-11-16): the
+            // day-boundary furnishing-storage poll (B5) — recompute shelf
+            // displays from the live inventory once per day, after every
+            // drive has run, so a day's placements and consumptions are
+            // reflected before the next day's planning reads them.
+            DriveFurnishingStorageDay(absoluteDayIndex);
+        }
+
+        /// <summary>
+        /// B8: one furnishing-storage refresh per household per day.
+        /// RefreshInventory re-points the registry at the live household
+        /// inventory and recomputes every binding's display allocations
+        /// from it (closed fixtures allocate nothing; shelves allocate
+        /// only what the inventory authority holds, pooled per SKU,
+        /// capped at 12 meshes). Bounded: one registry call per
+        /// household, and an empty registry (no bindings yet — nothing
+        /// binds storage fixtures in production until the install path
+        /// does) is a no-op. The poll never creates inventory, moves
+        /// lots, or changes stock — placement is a reference, not a
+        /// transfer (B5). Null-safe end to end: no hub, no households,
+        /// or no inventory means the household is skipped, never a throw.
+        /// </summary>
+        private void DriveFurnishingStorageDay(int absoluteDayIndex)
+        {
+            if (hub == null || populationManager?.State?.households == null) return;
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null) continue;
+                FurnishingStorageRegistry storage = hub.FurnishingStorageRegistryFor(household.id);
+                if (storage == null) continue;
+                storage.RefreshInventory(hub.HouseholdInventories?.Get(household.id));
+            }
         }
 
         // Campaign C (DEF-049 follow-on, E-06): sticky flag for the
@@ -4045,6 +4079,27 @@ namespace LandLedgers.Orchestration.Systems
         /// payee therefore refuses the payment rather than losing tenant cash.
         /// </summary>
         /// <summary>
+        /// B8 (Agent B, expanded campaign 2026-11-16): the household's
+        /// stove registry for the domestic drive, hub-owned and derived
+        /// from the furnishing register (HouseholdStoveRegistryFor
+        /// creates + re-derives it on first use). The home building id
+        /// is stamped here because the registry reads it as the fallback
+        /// SpaceId for the stove workstation instance when no stove is
+        /// installed (HouseholdStoveRegistry, workstation holder); the
+        /// installed stoves themselves carry their own building ids from
+        /// their B0 bindings. Null-safe end to end: no hub means no
+        /// registry, and the driver then plans meal-prep exactly as
+        /// before (Unspecified mode, legacy behaviour).
+        /// </summary>
+        private HouseholdStoveRegistry ResolveHouseholdStoves(HouseholdState household)
+        {
+            if (hub == null || household == null) return null;
+            HouseholdStoveRegistry stoves = hub.HouseholdStoveRegistryFor(household.id);
+            if (stoves != null) stoves.HomeBuildingInstanceId = household.homeBuildingId;
+            return stoves;
+        }
+
+        /// <summary>
         /// Pass V drive-by: daily domestic labor. Each household's
         /// need-driven tasks (meals for members at home, fuel when the
         /// household burns fuel and has fuel on hand, animal care when the
@@ -4117,22 +4172,24 @@ namespace LandLedgers.Orchestration.Systems
                     CleaningNeeded = hub.DomesticLaborDriver.CleaningNeeded(household.id),
                     ColdSeason = coldSeason,
                     HasAnimals = HouseholdOwnsAnimals(household.id, members),
-                    // B3 (Agent B, expanded campaign 2026-11-16): the
+                    // B8 (Agent B, expanded campaign 2026-11-16): the
                     // cooking/fuel context the driver settles against.
                     // The household state (fuel reserve + heating
                     // forecast) and the inventory (flour) come from the
                     // hub; the meal service is constructed per use from
-                    // the meal log, as DailyNeedsService does. Stoves is
-                    // NOT passed here — the per-household stove registry
-                    // does not exist in the hub yet; Agent G creates it
-                    // under W-G1/W-G2 and passes it with the real
-                    // FuelWoodReserveUnits. Until then the mode stays
-                    // Unspecified, the fuel trip's pickup refuses loudly,
-                    // and cooking settles nothing — never worse than
-                    // today's behaviour, and the failure names the gap.
+                    // the meal log, as DailyNeedsService does. The stove
+                    // registry comes from the hub (one per household,
+                    // derived from the furnishing register); its home
+                    // building id locates the workstation instance, and
+                    // the real fuel-wood reserve units feed the stove
+                    // gate's fuel support check (0 when the household
+                    // holds no fuel-wood reserve — only fuel already in
+                    // the stove stores counts then, never a guess).
                     Household = household,
                     Inventory = hub.HouseholdInventories.Get(household.id),
                     MealService = new HouseholdMealService(hub.MealLog),
+                    Stoves = ResolveHouseholdStoves(household),
+                    FuelWoodReserveUnits = household.GetReserve(HouseholdReserveCatalog.FuelWoodCategoryId)?.currentUnits ?? 0,
                 };
                 hub.DomesticLaborDriver.DriveDay(inputs, absoluteDayIndex, hub.Tasks,
                     hub.WorkTimeBudgets, hub.PersonSchedules, hub.DomesticLabor,

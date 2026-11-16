@@ -16,6 +16,7 @@ using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Transport;
+using LandLedgers.Economy.Storage;
 using LandLedgers.Orchestration.Bootstrap;
 using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.Orchestration.Scenarios.Development;
@@ -856,6 +857,49 @@ namespace LandLedgers.FirstLedger
             // restores empty (old saves carry no section).
             SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
             drivers?.RestoreOffMapJourneys(saveLoadManager?.Series2Pass9State?.OffMapJourneys);
+            // B8 (Agent B, expanded campaign 2026-11-16): re-mirror the
+            // derived furnishing registries after Continue. The furnishing
+            // registers were just re-attached above, so the registries
+            // derived from them see the restored assets. Stoves: rebuild
+            // the installed stoves from the restored bindings, then
+            // restore the saved fuel stores on top (save data is
+            // authoritative for fuel at load time; entries for another
+            // household are skipped, and a household with no saved fuel
+            // keeps empty stores). Storage: re-point the registry at the
+            // live household inventory, so the day-boundary poll reads the
+            // restored lots. This hook sits AFTER RefreshRestoreDiagnostics
+            // on purpose: W-G2's sleeping-place rebuild hook sits directly
+            // after the furnishing re-registration loop above, and keeping
+            // the two hooks on opposite sides of the S9 block keeps the
+            // B8 and W-G2 bootstrapper edits on disjoint anchors.
+            // LIMITS, stated plainly: the fuel restore only returns fuel
+            // a save actually carried — the state's HouseholdStoveFuelStores
+            // list is still empty in production until Agent G lands the
+            // fuel-store sync (B2's item, W-G1 follow-up), so this hook
+            // restores nothing until then and must NOT be read as the sync
+            // itself. Storage bindings do NOT survive Continue (no save
+            // seam for bind parameters — B5 follow-up); the hook re-points
+            // the inventory only, and bindings re-bind from the install
+            // path when fixtures are bound again.
+            if (systemsHub != null && saveLoadManager?.Series2Pass9State?.HouseholdFurnishingRegisters != null)
+                foreach (HouseholdFurnishingRegister restored in saveLoadManager.Series2Pass9State.HouseholdFurnishingRegisters)
+                {
+                    if (restored == null) continue;
+                    HouseholdStoveRegistry stoves = systemsHub.HouseholdStoveRegistryFor(restored.HouseholdId);
+                    if (stoves != null)
+                    {
+                        stoves.RebuildFromRegister();
+                        var savedFuel = new List<HouseholdStoveFuelStoreDto>();
+                        if (saveLoadManager.Series2Pass9State.HouseholdStoveFuelStores != null)
+                            foreach (HouseholdStoveFuelStoreDto store in saveLoadManager.Series2Pass9State.HouseholdStoveFuelStores)
+                                if (store != null && store.HouseholdId == restored.HouseholdId)
+                                    savedFuel.Add(store);
+                        stoves.RestoreFuelStores(savedFuel);
+                    }
+                    FurnishingStorageRegistry storage = systemsHub.FurnishingStorageRegistryFor(restored.HouseholdId);
+                    if (storage != null)
+                        storage.RefreshInventory(systemsHub.HouseholdInventories?.Get(restored.HouseholdId));
+                }
             RefreshRestoreDiagnostics();
             if (logBootstrapSummary)
             {

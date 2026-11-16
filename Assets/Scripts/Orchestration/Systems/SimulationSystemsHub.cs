@@ -18,6 +18,7 @@ using LandLedgers.Economy.Farming.Risk;
 using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Recruitment;
 using LandLedgers.Economy.Labor;
+using LandLedgers.Economy.Storage;
 using LandLedgers.Economy.Delegation;
 using LandLedgers.Persistence;
 using LandLedgers.Orchestration.Scenarios.Generation;
@@ -183,6 +184,22 @@ namespace LandLedgers.Orchestration.Systems
         // register holds no equipment — the gate still refuses loudly.
         private Dictionary<string, BusinessEquipmentRegister> equipmentRegisters;
 
+        // B8 (Agent B, expanded campaign 2026-11-16): hub-owned
+        // per-household stove and storage registries, keyed by household
+        // id, parallel to the furnishing registers below. Both derive
+        // from the furnishing register (stoves and storage fixtures are
+        // installed furniture), so they need no Pass 9 list of their
+        // own: the furnishing register persists via W-G1 and these
+        // rebuild from it (stove instances via RebuildFromRegister;
+        // storage bindings re-bind from the install path — see the
+        // B8 record in the B plan). These fields sit BEFORE the
+        // furnishing-registers field on purpose: W-G2's
+        // householdSleepingPlaceRegistries field sits directly AFTER it,
+        // and keeping the two additions on opposite sides of the field
+        // keeps the B8 and W-G2 hub edits on disjoint anchors.
+        private Dictionary<int, HouseholdStoveRegistry> householdStoveRegistries;
+        private Dictionary<int, FurnishingStorageRegistry> householdStorageRegistries;
+
         // B0 (Agent B, expanded campaign 2026-11-16): hub-owned
         // per-household furnishing registers, keyed by household id
         // (the int id from HouseholdState / HouseholdLedger). The
@@ -318,6 +335,114 @@ namespace LandLedgers.Orchestration.Systems
             if (runtime == null || string.IsNullOrWhiteSpace(runtime.BusinessInstanceId)) return;
             sawmillRuntimes ??= new Dictionary<string, SawmillShopRuntime>(StringComparer.Ordinal);
             sawmillRuntimes[runtime.BusinessInstanceId] = runtime;
+        }
+
+        /// <summary>
+        /// B8 (Agent B, expanded campaign 2026-11-16): the stove
+        /// registry for one household, created on first use and derived
+        /// from the household's furnishing register via
+        /// HouseholdStoveRegistry.CreateDerived (installed stoves are
+        /// re-derived from the B0 bindings at creation, so the registry
+        /// never reads empty when a stove is installed). Hub-owned, one
+        /// per household, parallel to the furnishing registers. The
+        /// registry is NOT a Pass 9 list of its own: the furnishing
+        /// register is the persisted truth, and the stove registry
+        /// re-mirrors from it after Continue (see
+        /// FirstLedgerSliceBootstrapper, B8 hook). Fuel stores persist
+        /// through the Pass 9 HouseholdStoveFuelStores section once
+        /// Agent G lands the fuel-store sync (B2's item, W-G1 follow-up);
+        /// until then a save carries no stove fuel. This section sits
+        /// after RegisterSawmillRuntime on purpose: W-G2's sleeping-place
+        /// accessors sit directly after RegisterHouseholdFurnishings,
+        /// and keeping the two additions on opposite sides of the
+        /// lumber-yard/sawmill runtime methods keeps the B8 and W-G2
+        /// hub edits on disjoint anchors.
+        /// </summary>
+        public HouseholdStoveRegistry HouseholdStoveRegistryFor(int householdId)
+        {
+            householdStoveRegistries ??= new Dictionary<int, HouseholdStoveRegistry>();
+            if (!householdStoveRegistries.TryGetValue(householdId, out HouseholdStoveRegistry registry) || registry == null)
+            {
+                registry = HouseholdStoveRegistry.CreateDerived(householdId, FurnishingRegisterFor(householdId));
+                householdStoveRegistries[householdId] = registry;
+            }
+            return registry;
+        }
+
+        /// <summary>
+        /// B8: read-only snapshot of the hub's live stove registries, for
+        /// the fuel-store sync (Agent G) and the daily drives. A new list
+        /// each call, never the live dictionary, so callers cannot add or
+        /// remove hub holders. Empty when no registry has been created yet.
+        /// </summary>
+        public IReadOnlyList<HouseholdStoveRegistry> AllStoveRegistries =>
+            householdStoveRegistries != null
+                ? new List<HouseholdStoveRegistry>(householdStoveRegistries.Values)
+                : new List<HouseholdStoveRegistry>();
+
+        /// <summary>
+        /// B8: adopts a registry (e.g. one rebuilt from the Pass 9
+        /// furnishing registers after Continue) as the hub's live holder
+        /// for its household. Replaces by household id, never merges —
+        /// the re-mirrored data is authoritative, and re-registering the
+        /// same registry is idempotent.
+        /// </summary>
+        public void RegisterStoveRegistry(HouseholdStoveRegistry registry)
+        {
+            if (registry == null) return;
+            householdStoveRegistries ??= new Dictionary<int, HouseholdStoveRegistry>();
+            householdStoveRegistries[registry.HouseholdId] = registry;
+        }
+
+        /// <summary>
+        /// B8: the storage registry for one household, created on first
+        /// use and bound to the household's furnishing register and live
+        /// inventory (both may be empty; a null inventory means the
+        /// binding's lot lookups refuse loudly until the daily drive or
+        /// the Continue hook re-points it via RefreshInventory). Hub-owned,
+        /// one per household, parallel to the furnishing registers. The
+        /// registry is NOT a Pass 9 list of its own and its bindings do
+        /// NOT survive Continue (no save seam for bind parameters — B5
+        /// follow-up, documented in the B8 record): after a load the
+        /// registry is empty until the install path binds fixtures again,
+        /// and the day-boundary poll only recomputes live bindings.
+        /// </summary>
+        public FurnishingStorageRegistry FurnishingStorageRegistryFor(int householdId)
+        {
+            householdStorageRegistries ??= new Dictionary<int, FurnishingStorageRegistry>();
+            if (!householdStorageRegistries.TryGetValue(householdId, out FurnishingStorageRegistry registry) || registry == null)
+            {
+                registry = new FurnishingStorageRegistry
+                {
+                    HouseholdId = householdId,
+                    Furnishings = FurnishingRegisterFor(householdId),
+                    Inventory = HouseholdInventories?.Get(householdId),
+                };
+                householdStorageRegistries[householdId] = registry;
+            }
+            return registry;
+        }
+
+        /// <summary>
+        /// B8: read-only snapshot of the hub's live storage registries,
+        /// for the day-boundary display poll. A new list each call, never
+        /// the live dictionary. Empty when no registry has been created yet.
+        /// </summary>
+        public IReadOnlyList<FurnishingStorageRegistry> AllStorageRegistries =>
+            householdStorageRegistries != null
+                ? new List<FurnishingStorageRegistry>(householdStorageRegistries.Values)
+                : new List<FurnishingStorageRegistry>();
+
+        /// <summary>
+        /// B8: adopts a registry as the hub's live holder for its
+        /// household. Replaces by household id, never merges, and
+        /// re-registering the same registry is idempotent.
+        /// </summary>
+        public void RegisterStorageRegistry(FurnishingStorageRegistry registry)
+        {
+            if (registry == null) return;
+            householdStorageRegistries ??= new Dictionary<int, FurnishingStorageRegistry>();
+            householdStorageRegistries[registry.HouseholdId] = registry;
         }
 
         /// <summary>

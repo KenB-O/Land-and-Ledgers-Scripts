@@ -31,6 +31,25 @@ namespace LandLedgers.Economy.Businesses.LumberYard
 
         public LumberYardDeliveryPolicy() { }
 
+        /// <summary>
+        /// C-6: builds a policy from a DEF-016 cargo-aware quote. The
+        /// delivery charge IS the quote: the card prices per trip (a base
+        /// fee plus round-trip mileage), not per unit-mile, so the flat
+        /// field carries the quoted total and the per-unit-mile and discount
+        /// fields stay zero — no second charge is invented on top of the
+        /// quote. The recorded order's ChargeCents is then exactly the
+        /// quote's total, so the ledger posts one number, once.
+        /// </summary>
+        public static LumberYardDeliveryPolicy FromQuotedCharge(int totalChargeCents)
+        {
+            return new LumberYardDeliveryPolicy
+            {
+                FlatChargeCents = Math.Max(0, totalChargeCents),
+                PerUnitMileCents = 0,
+                BuyerUnloadDiscountCents = 0,
+            };
+        }
+
         public int ComputeChargeCents(int lumberUnits, int miles, bool buyerProvidesUnloading)
         {
             int units = Math.Max(0, lumberUnits);
@@ -71,10 +90,41 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         public bool BuyerProvidesUnloading;         // Canon VI §6.2: the buyer may provide unloading
         public int ScheduledDayIndex;
         public int DeliveredDayIndex = -1;
+        /// <summary>
+        /// C-6: freight shipment ids, one per trip, in trip order. Empty
+        /// until a trip creates its shipment; a retry reuses the recorded
+        /// id and refuses to re-ship a cargo-carrying shipment.
+        /// </summary>
+        public List<string> ShipmentIds = new List<string>();
+        /// <summary>
+        /// C-6: per-trip delivery fare settled, in trip order, parallel to
+        /// ShipmentIds. -1 means the trip's fare has not been paid yet.
+        /// The fare is paid once per trip, before that trip runs.
+        /// </summary>
+        public List<int> TripFaresPaidCents = new List<int>();
 
         public LumberYardDeliveryOrder() { }
 
         public bool IsDelivered => DeliveredDayIndex >= 0;
+
+        /// <summary>
+        /// C-6: the delivery charge actually settled so far — the sum of
+        /// the per-trip fares paid, ignoring unpaid (-1) entries. Derived,
+        /// never stored, so it cannot drift from the fare record.
+        /// </summary>
+        public int SettledDeliveryCents
+        {
+            get
+            {
+                int total = 0;
+                if (TripFaresPaidCents == null) return total;
+                foreach (int fare in TripFaresPaidCents)
+                {
+                    if (fare > 0) total += fare;
+                }
+                return total;
+            }
+        }
     }
 
     /// <summary>
@@ -205,6 +255,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                     BuyerProvidesUnloading = o.BuyerProvidesUnloading,
                     ScheduledDayIndex = o.ScheduledDayIndex,
                     DeliveredDayIndex = o.DeliveredDayIndex,
+                    // C-6: the per-trip freight record persists with the order,
+                    // so a retry after a load never re-ships or re-charges.
+                    ShipmentIds = o.ShipmentIds == null ? new List<string>() : new List<string>(o.ShipmentIds),
+                    TripFaresPaidCents = o.TripFaresPaidCents == null ? new List<int>() : new List<int>(o.TripFaresPaidCents),
                 });
             }
             return dto;

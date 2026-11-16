@@ -217,8 +217,16 @@ namespace LandLedgers.EditorTests.Economy
 
             public void OccupyHousehold(int householdId, List<int> personIds, int sleepingCapacity)
             {
+                // D-15: the home building sits on its own unheld fixture
+                // parcel, NOT on a parcel the household holds — under the
+                // D-15 vacancy preference a household whose only held parcel
+                // is its home parcel skips (no vacant parcel), so the
+                // design-selection tests below need a vacant held parcel to
+                // reach their intended path. The occupied-home-parcel case
+                // is pinned explicitly by the D-15 tests in
+                // NpcConstructionNeedEvaluatorDiagnosticsTests.
                 var hdiag = new List<string>();
-                Assert.IsNotNull(Housing.RegisterBuilding("bld-h" + householdId, "parcel-9",
+                Assert.IsNotNull(Housing.RegisterBuilding("bld-h" + householdId, "parcel-home-" + householdId,
                     "house", 0, "test", hdiag), string.Join("; ", hdiag));
                 AccommodationSpace space = Housing.DefineSpace("bld-h" + householdId, sleepingCapacity, hdiag);
                 Assert.IsNotNull(space, string.Join("; ", hdiag));

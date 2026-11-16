@@ -5166,8 +5166,12 @@ namespace LandLedgers.FirstLedger
 
             if (selected.Kind == OwnedKind.Holding)
             {
+                // D-16 (F-D11-3): the upgrade action queues with the weekly
+                // construction queue instead of completing instantly. No
+                // upgrade is applied yet; the queued project is visible through
+                // the weekly review and completes after its week.
                 string upgradeMessage = "Acquisitions unavailable.";
-                if (acquisitionMarket != null && acquisitionMarket.TryBuildHouseholdUpgrade(selected.BuildingId, selectedHouseholdUpgradeIndex, out _, out upgradeMessage))
+                if (acquisitionMarket != null && acquisitionMarket.TryQueueHouseholdUpgrade(selected.BuildingId, selectedHouseholdUpgradeIndex, out upgradeMessage))
                 {
                     panelStatus = upgradeMessage;
                     selectedHouseholdUpgradeIndex = WrapIndex(selectedHouseholdUpgradeIndex, GetHouseholdUpgradeOptionCount());
@@ -5276,12 +5280,17 @@ namespace LandLedgers.FirstLedger
                     return;
                 }
 
+                // D-16 (F-D11-3): the business activation action queues the
+                // fit-out with the weekly construction queue instead of
+                // starting the business instantly. No business exists yet; the
+                // queued project is visible through the weekly review and the
+                // business opens when the fit-out completes after its week.
                 string activationMessage;
-                if (acquisitionMarket.TryStartBusinessFromOwnedShell(selected.BuildingId, selectedBusinessActivationIndex, out BusinessInstanceState business, out activationMessage))
+                if (acquisitionMarket.TryQueueStartBusinessFromOwnedShell(selected.BuildingId, selectedBusinessActivationIndex, out activationMessage))
                 {
                     panelStatus = !string.IsNullOrWhiteSpace(activationMessage)
                         ? activationMessage
-                        : (business != null ? $"{business.RuntimeDisplayName} opened." : "Business opened.");
+                        : "Business fit-out queued.";
                     selectedBusinessActivationIndex = 0;
                     selectedBusinessActivationBuildingId = -1;
                     selectedWorkerCandidateIndex = 0;
@@ -5297,41 +5306,41 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
+            // D-13 (F-D11-1): the build action queues the order with the weekly
+            // construction queue instead of building instantly. No shell exists
+            // yet, so there is no building to select; the queued project is
+            // visible through the weekly review and completes after its weeks.
+            // (D-16 / F-D11-3: the upgrade and business-activation branches
+            // above queue as well now — TryQueueHouseholdUpgrade and
+            // TryQueueStartBusinessFromOwnedShell — so no instant player build,
+            // upgrade, or activation remains in the panel.)
             string message;
-            PlacedBuilding building;
-            bool constructed;
+            bool queued;
             if (selectedOwnedLandDevelopmentIntent == OwnedLandDevelopmentIntent.Business)
             {
-                constructed = acquisitionMarket.TryConstructBusinessShellOnOwnedPlot(
+                queued = acquisitionMarket.TryQueueConstructBusinessShellOnOwnedPlot(
                     selected.PlotId,
                     selectedBusinessActivationIndex,
                     selectedBusinessBuildOptionIndex,
-                    out building,
                     out message);
             }
             else
             {
-                constructed = acquisitionMarket.TryConstructHouseOnOwnedPlot(
+                queued = acquisitionMarket.TryQueueConstructHouseOnOwnedPlot(
                     selected.PlotId,
                     selectedBuildOptionIndex,
-                    out building,
                     out message);
             }
 
-            if (constructed)
+            if (queued)
             {
                 panelStatus = !string.IsNullOrWhiteSpace(message)
                     ? message
-                    : (building != null ? $"Built shell on Plot {selected.PlotId:000}." : "Building shell constructed.");
+                    : $"Construction queued on Plot {selected.PlotId:000}.";
                 selectedBuildOptionIndex = 0;
                 selectedBusinessBuildOptionIndex = 0;
                 selectedBusinessDevelopmentPlotId = -1;
                 ownedSignature = string.Empty;
-                if (building != null)
-                {
-                    RebuildOwnedRowsIfNeeded();
-                    SelectOwnedBuildingIfPresent(building.id);
-                }
             }
             else
             {

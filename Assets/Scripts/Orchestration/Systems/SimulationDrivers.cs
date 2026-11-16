@@ -829,6 +829,244 @@ namespace LandLedgers.Orchestration.Systems
         /// but no logs appear.
         /// </summary>
         /// <summary>
+        /// C-7 (expanded campaign 2026-11-16): the logging camp's daily
+        /// supply order. Runs immediately BEFORE DriveFelling in the day
+        /// order, so the flour arrives before felling consumes the day's
+        /// provisions. The camp orders flour sacks from the General Store
+        /// at the store's live selling price, pays goods + freight from
+        /// mill cash, hauls them through the real freight chain, and
+        /// records the delivery into the camp ledger with the store named
+        /// as supplier. Dormant where values are absent: no camp, no
+        /// mill, no store, no carrier, no wagon, no rate card, no live
+        /// flour price, or an unregistered stand each refuse loudly and
+        /// order nothing — the slice never invents suppliers, prices,
+        /// routes, or provisions. A camp that is already supplied is a
+        /// quiet no-op: the balance gate is the idempotency.
+        /// </summary>
+        private void DriveLoggingCampSupply(int absoluteDayIndex)
+        {
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-business-runtime", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: shared business runtime is missing.");
+                return;
+            }
+            if (hub == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-hub", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: simulation hub is missing.");
+                return;
+            }
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-pass9", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: Pass 9 save state is missing.");
+                return;
+            }
+            LoggingCampSite camp = pass9.LoggingCamp;
+            if (camp == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-camp", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: no logging camp is wired on the Pass 9 state.");
+                return;
+            }
+            if (!LoggingCampSupplyService.ShouldOrder(camp)) return;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            BusinessInstanceState millBusiness = null;
+            BusinessInstanceState storeBusiness = null;
+            BusinessInstanceState carrierBusiness = null;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (millBusiness == null && business.BusinessType == BusinessType.Sawmill) millBusiness = business;
+                if (storeBusiness == null && business.BusinessType == BusinessType.GeneralStore) storeBusiness = business;
+            }
+            if (millBusiness == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-mill", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: no Sawmill business is present in the shared runtime.");
+                return;
+            }
+            if (!string.Equals(camp.BusinessInstanceId, millBusiness.InstanceId, System.StringComparison.Ordinal))
+            {
+                LogRefusalDayKeyed("camp-supply:camp-mill-mismatch", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: camp '" + camp.CampId + "' belongs to business '" + camp.BusinessInstanceId + "', not the mill '" + millBusiness.InstanceId + "'.");
+                return;
+            }
+            if (storeBusiness == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-store", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: no General Store business is present in the shared runtime.");
+                return;
+            }
+            if (storeBusiness.RuntimeState == null || millBusiness.RuntimeState == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-cash", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: no formed business runtime state for the store or the mill — the order settles from real cash, never unpaid.");
+                return;
+            }
+            if (!FreightBusinessResolver.TryResolveFreightBusiness(businesses, out carrierBusiness))
+            {
+                LogRefusalDayKeyed("camp-supply:no-carrier", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: no freight business to carry flour to the camp.");
+                return;
+            }
+            if (carrierBusiness.RuntimeState == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-carrier-cash", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: no formed business runtime state for the carrier — the delivery charge settles to real cash, never dropped.");
+                return;
+            }
+            DevelopmentTownConfiguration.BusinessDefinition carrierDefinition = null;
+            if (developmentTownConfiguration == null
+                || !developmentTownConfiguration.TryGetBusiness(developmentTownConfiguration.FreightBusinessKey, out carrierDefinition)
+                || carrierDefinition?.freightRateCard == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-rate-card", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: the freight business has no configured rate card.");
+                return;
+            }
+            LoggingStandRegistry registry = pass9.StandRegistry;
+            if (registry == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-registry", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: no timber stand registry is wired on the Pass 9 state.");
+                return;
+            }
+            TimberStand stand = registry.GetStand(camp.StandId);
+            if (stand == null)
+            {
+                LogRefusalDayKeyed("camp-supply:stand-not-registered", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: stand '" + camp.StandId + "' is not registered — stands are authored, never conjured.");
+                return;
+            }
+            if (stand.MilesToMill <= 0)
+            {
+                LogRefusalDayKeyed("camp-supply:no-miles", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: stand '" + camp.StandId + "' names no positive distance to the mill — the freight quote refuses zero miles.");
+                return;
+            }
+            LandLedgers.FirstLedger.GeneralStoreRuntimeManager storeManager =
+                FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+            if (storeManager == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-store-manager", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: no GeneralStoreRuntimeManager to read the flour price from.");
+                return;
+            }
+            int flourPriceCents = storeManager.GetItemSellingPriceCents(LoggingCampSupplyService.FlourItemId);
+            if (flourPriceCents <= 0)
+            {
+                LogRefusalDayKeyed("camp-supply:no-flour-price", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: the General Store names no price for flour.");
+                return;
+            }
+            EquipmentAsset wagon = hub.TransportAssets != null ? hub.TransportAssets.Get("opening-freight-wagon") : null;
+            if (wagon == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-wagon", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: wagon 'opening-freight-wagon' does not exist — no phantom transport.");
+                return;
+            }
+            if (!string.Equals(wagon.OwnerKind, "business", System.StringComparison.Ordinal)
+                || !string.Equals(wagon.OwnerId, carrierBusiness.InstanceId, System.StringComparison.Ordinal))
+            {
+                LogRefusalDayKeyed("camp-supply:wagon-owner", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: wagon 'opening-freight-wagon' is not owned by freight business '" + carrierBusiness.InstanceId + "'.");
+                return;
+            }
+            if (FreightProduction == null || FreightProduction.Service == null)
+            {
+                LogRefusalDayKeyed("camp-supply:no-freight-service", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: no freight shipment service is bound.");
+                return;
+            }
+            int driverPersonId = carrierBusiness.Owner != null ? carrierBusiness.Owner.PersonId : -1;
+            if (driverPersonId < 0)
+            {
+                LogRefusalDayKeyed("camp-supply:no-driver", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: freight business '" + carrierBusiness.InstanceId + "' has no owner person — no driver.");
+                return;
+            }
+            int loaderPersonId = storeBusiness.Owner != null ? storeBusiness.Owner.PersonId : -1;
+            if (loaderPersonId < 0)
+            {
+                LogRefusalDayKeyed("camp-supply:no-loader", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: General Store '" + storeBusiness.InstanceId + "' has no owner person — no loader.");
+                return;
+            }
+            int unloaderPersonId = millBusiness.Owner != null ? millBusiness.Owner.PersonId : -1;
+            if (unloaderPersonId < 0)
+            {
+                LogRefusalDayKeyed("camp-supply:no-unloader", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: mill '" + millBusiness.InstanceId + "' has no owner person — no unloader.");
+                return;
+            }
+            if (loaderPersonId == driverPersonId || loaderPersonId == unloaderPersonId || driverPersonId == unloaderPersonId)
+            {
+                LogRefusalDayKeyed("camp-supply:crew-collision", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: the loader, driver and unloader must be distinct people.");
+                return;
+            }
+            var draftAnimals = new List<EntityId>();
+            if (hub.Animals != null && hub.Animals.ActiveAnimals != null)
+            {
+                foreach (AnimalState candidate in hub.Animals.ActiveAnimals)
+                {
+                    if (candidate != null && candidate.IsActive && candidate.Species == AnimalSpecies.Horse
+                        && candidate.OwnerKind == AnimalOwnerKind.Business
+                        && string.Equals(candidate.OwnerId, carrierBusiness.InstanceId, System.StringComparison.Ordinal))
+                        draftAnimals.Add(candidate.AnimalId);
+                }
+            }
+            if (draftAnimals.Count == 0)
+            {
+                LogRefusalDayKeyed("camp-supply:no-animals", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply skipped: freight business '" + carrierBusiness.InstanceId + "' has no active horse — no draft animals.");
+                return;
+            }
+
+            var service = new LoggingCampSupplyService(camp, FreightProduction.Service, new List<string>());
+            var diag = new List<string>();
+            var request = new LoggingCampSupplyRequest
+            {
+                StoreBusinessId = storeBusiness.InstanceId,
+                MillBusinessId = millBusiness.InstanceId,
+                Miles = stand.MilesToMill,
+                TransitGameSeconds = 10000f,
+                ConditionMultiplier = 0f,
+                CarrierLabel = carrierBusiness.InstanceId,
+            };
+            var execution = new LoggingCampSupplyExecution
+            {
+                StoreRuntime = storeBusiness.RuntimeState,
+                RateCard = carrierDefinition.freightRateCard,
+                Wagon = wagon,
+                MillCash = new Series2BusinessRuntimeCashPort(millBusiness.RuntimeState),
+                CarrierCash = new Series2BusinessRuntimeCashPort(carrierBusiness.RuntimeState),
+                LoaderId = EntityId.For(EntityKind.Person, loaderPersonId),
+                DriverId = EntityId.For(EntityKind.Person, driverPersonId),
+                DraftAnimalIds = draftAnimals,
+                UnloaderId = EntityId.For(EntityKind.Person, unloaderPersonId),
+                Tasks = hub.Tasks,
+                Budgets = hub.WorkTimeBudgets,
+                Schedules = hub.PersonSchedules,
+                UnitPriceCents = flourPriceCents,
+            };
+            string refusal = service.ExecuteSupplyOrder(request, execution, absoluteDayIndex, diag);
+            if (refusal == null)
+                Debug.Log("[SimulationDrivers] camp supply: camp '" + camp.CampId + "' supplied (ledger balance " + camp.SupplyLedger.Balance + ").", this);
+            else
+                LogRefusalDayKeyed("camp-supply:refused", absoluteDayIndex,
+                    "[SimulationDrivers] camp supply refused: " + refusal);
+            foreach (string line in diag) Debug.Log(line, this);
+        }
+
+        /// <summary>
         /// A2 plan 27 (P10 live felling driver, note 110): drives the
         /// logging camp's daily felling from OnDayChanged, before the
         /// sawmill production driver. The camp is the designed daily
@@ -4247,6 +4485,10 @@ namespace LandLedgers.Orchestration.Systems
             // boundary. This is execution of an already-started physical process;
             // it does not grant capability or create output from a policy alone.
             DriveGenericProduction(absoluteDayIndex);
+            // C-7: the camp's flour arrives before felling consumes
+            // the day's provisions — supply runs first, so a low
+            // camp is fed before the crew works, not after.
+            DriveLoggingCampSupply(absoluteDayIndex);
             // P10 (live felling driver): the day's logs are felled
             // before the mill saws, so the day's output is in the
             // landing stock before the mill reads it. The camp is

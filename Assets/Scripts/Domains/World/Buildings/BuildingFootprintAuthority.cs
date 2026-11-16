@@ -26,7 +26,9 @@ namespace LandLedgers.World
         Firewood = 10,
         Water = 11,
         Loading = 12,
-        HitchCandidate = 13
+        HitchCandidate = 13,
+        /// <summary>B4 (Agent B, expanded campaign 2026-11-16): dining locations — the "dining" approach point and one "dining-chair-N" location per chair (plan §9.2 instruction 5). Append-only: existing values are untouched.</summary>
+        Dining = 14
     }
 
     [System.Serializable]

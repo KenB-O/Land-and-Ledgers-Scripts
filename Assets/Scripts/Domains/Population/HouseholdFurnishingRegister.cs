@@ -40,6 +40,8 @@ namespace LandLedgers.Population
         DiningSeat = 3,
         StorageZone = 4,
         WorkSurface = 5,
+        /// <summary>B4: a dining table — installed, it makes the building's chairs dining seats.</summary>
+        DiningTable = 6,
     }
 
     /// <summary>

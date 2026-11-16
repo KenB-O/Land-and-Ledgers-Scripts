@@ -278,6 +278,22 @@ namespace LandLedgers.EditorTests.Integration
             // driver (SimulationDrivers), the records gain production
             // callers outside the directory and should leave the baseline.
             "SleepingPlace", "SleepingPlaceReservation",
+            // B4 (Agent B, expanded campaign 2026-11-16): the dining
+            // records of DiningPlaceRegistry.cs. They are data carriers
+            // of the wired dining feature — constructed and consumed
+            // inside DiningPlaceRegistry and read by
+            // DailyActivityPlanner (the meal loop records the seat id
+            // and mode on the meal activities). The registry itself has
+            // no reference outside Domains/Population yet (its only
+            // production caller is the planner, in the same directory),
+            // so the registry and its records are classified
+            // feature-internal here, the same precedent as the B1
+            // sleeping-place records above. DiningArrival is a static
+            // class and needs no entry. When Agent G wires the dining
+            // driver (SimulationDrivers), the registry gains production
+            // callers outside the directory and the records should
+            // leave the baseline with it.
+            "DiningPlaceRegistry", "DiningSeat", "DiningTable", "DiningSeatReservation",
             "SkillTaskDurationEstimator",
             "SmithingRecipe", "SocietyReconciliation", "StageLaborBaseline", "StagedBakeryBatch",
             "StagedBakeryBatchSaveDto", "StandingInstruction", "StandingInstructionRegister", "StandingInstructionSaveDto",

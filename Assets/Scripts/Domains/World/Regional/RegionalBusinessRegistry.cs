@@ -27,12 +27,14 @@ namespace LandLedgers.World.Regional
     /// MillbrookGrainCo.asset (230 sacks, 40–80/week, reserve 460) and are
     /// preserved exactly. Only Millbrook's NEW store-flour offer is here.
     ///
-    /// Coverage (checked by test): Ashford 19/27, Redfield 20/27, union
-    /// 26/27. The 27th, bread, comes from the home bakery, not a regional
+    /// Coverage (checked by test): Ashford 27/35, Redfield 20/35, union
+    /// 34/35. The 35th, bread, comes from the home bakery, not a regional
     /// town. The 10 essentials in both towns are flour, potatoes, salt,
     /// sugar, soap, candles, lamp oil, beef, bacon, and cheese. Coffee is
-    /// Ashford-only; tea is Redfield-only. The register below is the
-    /// authority; the test pins the exact lists.
+    /// Ashford-only; tea is Redfield-only. Furniture is Ashford-only (the
+    /// F5 off-map supplier, O-F2): Ashford General Mercantile is the one
+    /// merchant that offers the eight first-wave furniture items. The
+    /// register below is the authority; the test pins the exact lists.
     /// </summary>
     public static class RegionalBusinessRegistry
     {
@@ -77,7 +79,7 @@ namespace LandLedgers.World.Regional
             };
         }
 
-        // ---- Ashford (19 items) ----
+        // ---- Ashford (27 items) ----
 
         public static readonly RegionalBusinessDefinition MillbrookGrainCo = new RegionalBusinessDefinition
         {
@@ -113,6 +115,38 @@ namespace LandLedgers.World.Regional
                 Offer("candles", "bundle", 4, 72, 24, 48, 144),
                 Offer("lamp_oil", "quart", 10, 48, 24, 48, 96),
                 Offer("thread", "spool", 3, 60, 20, 40, 120),
+                // Agent F, slice F5 (expanded campaign 2026-11-16, O-F2
+                // authorized 2026-11-16): the one off-map furniture
+                // supplier. Ashford General Mercantile is the plan's
+                // natural first candidate (a general store already sells
+                // household goods); it now offers the eight first-wave
+                // furniture items, so the store's weekly reorder can name
+                // a supplier for the "furniture" category (F7 finding F4).
+                // Prices are 60% of the store asset's retail baseline —
+                // inside the registry's ~55-65% band, below every band
+                // floor, exactly as the other offers are priced — except
+                // the shelf at 50c (62.5%): 48c is pinned by
+                // CampaignBShelfFlourReorderTests as the bakery flour
+                // term, and no registry offer may quote it. Stock
+                // follows the registry rule: StartingUnits is 2x the store
+                // asset's starting stock (bed/table/cabinets 2 -> 4,
+                // chair/shelf/crate/bedroll 4 -> 8); weekly max is 4x the
+                // store's reorder lot (min half of max); the target
+                // reserve is 2x starting stock. Bounded and auditable: the
+                // mercantile sells out and stays out until its next weekly
+                // production, exactly like every other regional offer.
+                // The stove line via Redfield Ironworks is NOT authored
+                // here: the stove has no authored price in the carpentry
+                // wave (F6 leaves stove/counter/barrel unpriced, 0c, never
+                // guessed), so no stove offer is invented.
+                Offer("furniture.bed", "each", 180, 4, 2, 4, 8),
+                Offer("furniture.table", "each", 135, 4, 2, 4, 8),
+                Offer("furniture.chair", "each", 75, 8, 4, 8, 16),
+                Offer("furniture.cabinet-small", "each", 195, 4, 2, 4, 8),
+                Offer("furniture.cabinet-large", "each", 255, 4, 2, 4, 8),
+                Offer("furniture.shelf", "each", 50, 8, 4, 8, 16),
+                Offer("furniture.crate", "each", 45, 8, 4, 8, 16),
+                Offer("furniture.bedroll", "each", 36, 8, 4, 8, 16),
             },
         };
 

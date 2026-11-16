@@ -19,6 +19,16 @@ namespace LandLedgers.Tests.World
             { "thread", 5 }, { "buttons", 5 }, { "nails_hardware_lot", 25 },
             { "hand_tool", 100 }, { "farm_tool", 250 }, { "patent_remedy", 50 },
             { "medicine_bottle", 75 },
+            // F5 (Agent F, expanded campaign 2026-11-16, O-F2): the eight
+            // first-wave furniture baselines, from
+            // GeneralStoreBusinessDefinition.asset (F2). The mercantile's
+            // wholesale prices (180/135/75/195/255/50/45/36) are 60% of
+            // these baselines, except the shelf at 50c (62.5% — 48c is the
+            // pinned bakery flour term).
+            { "furniture.bed", 300 }, { "furniture.table", 225 },
+            { "furniture.chair", 125 }, { "furniture.cabinet-small", 325 },
+            { "furniture.cabinet-large", 425 }, { "furniture.shelf", 80 },
+            { "furniture.crate", 75 }, { "furniture.bedroll", 60 },
         };
 
         private static readonly string[] EssentialsInBothTowns =
@@ -28,17 +38,21 @@ namespace LandLedgers.Tests.World
         };
 
         [Test]
-        public void Coverage_AshfordNineteen_RedfieldTwenty_UnionTwentySix()
+        public void Coverage_AshfordTwentySeven_RedfieldTwenty_UnionThirtyFour()
         {
             HashSet<string> ashford = RegionalBusinessRegistry.ItemsCoveredInTown("ashford");
             HashSet<string> redfield = RegionalBusinessRegistry.ItemsCoveredInTown("redfield");
             HashSet<string> union = RegionalBusinessRegistry.ItemsCoveredInRegion();
-            Assert.AreEqual(19, ashford.Count, "Ashford must cover 19 of 27 store items (~70%).");
-            Assert.AreEqual(20, redfield.Count, "Redfield must cover 20 of 27 store items (~74%).");
-            Assert.AreEqual(26, union.Count, "The two towns together must cover 26 of 27 store items.");
+            // F5 (Agent F, expanded campaign 2026-11-16, O-F2): Ashford
+            // gains the eight furniture items via Ashford General
+            // Mercantile (19 + 8 = 27); Redfield is unchanged at 20; the
+            // union is 34 of 35 store items (bread stays home-bakery).
+            Assert.AreEqual(27, ashford.Count, "Ashford must cover 27 of 35 store items.");
+            Assert.AreEqual(20, redfield.Count, "Redfield must cover 20 of 35 store items.");
+            Assert.AreEqual(34, union.Count, "The two towns together must cover 34 of 35 store items.");
             Assert.IsTrue(!union.Contains("bread"),
                 "Bread is supplied by the home bakery, not a regional town.");
-            Assert.AreEqual(27, RetailBaselineCents.Count, "Test table must list all 27 store items.");
+            Assert.AreEqual(35, RetailBaselineCents.Count, "Test table must list all 35 store items.");
             foreach (string item in RetailBaselineCents.Keys)
                 if (item != "bread") Assert.IsTrue(union.Contains(item), $"No regional source for {item}.");
         }

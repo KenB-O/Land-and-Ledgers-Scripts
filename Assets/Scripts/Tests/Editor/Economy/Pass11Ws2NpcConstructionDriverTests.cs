@@ -301,6 +301,8 @@ namespace LandLedgers.EditorTests.Economy
                     ParcelId = "parcel-9",
                     MemberPersonIds = new List<int> { 101 },
                     Arrangement = AccommodationArrangement.OwnerOccupied,
+                    Reason = NpcConstructionReason.Overcrowding,
+                    ReasonNotes = "test fixture: household of 1 in a cabin sleeping 4",
                 };
             }
 

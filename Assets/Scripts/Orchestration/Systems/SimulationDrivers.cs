@@ -1851,6 +1851,19 @@ namespace LandLedgers.Orchestration.Systems
             npcConstructionPricePort = port;
         }
 
+        /// <summary>
+        /// DEF-011: binds the construction design catalog. Sets ONLY
+        /// npcConstructionCatalog; it does not touch prices, materials,
+        /// procurement, parcel authority, or labor. The driver re-reads
+        /// the field on every drive (DriveNpcConstruction), so the next
+        /// drive picks it up. Do NOT route this through
+        /// ConfigureNpcConstruction — that would clear the other fields.
+        /// </summary>
+        public void BindConstructionDesignCatalog(BuildingDesignCatalog catalog)
+        {
+            npcConstructionCatalog = catalog;
+        }
+
         /// <summary>Queues an explicit household request; no autonomous build decision is made here.</summary>
         public string QueueNpcConstructionRequest(NpcConstructionRequest request)
         {
@@ -1891,6 +1904,40 @@ namespace LandLedgers.Orchestration.Systems
         /// advance, complete, occupy, cancel via the driver API) and
         /// commissions queued requests when the parcel authority is bound.
         /// </summary>
+        /// <summary>
+        /// DEF-011: true when the household has a construction project that
+        /// is neither cancelled nor complete — the need evaluator never
+        /// queues a second build for such a household.
+        /// </summary>
+        private bool HasLiveConstructionProject(int householdId)
+        {
+            if (hub?.ConstructionProjects == null) return false;
+            foreach (ConstructionProject project in hub.ConstructionProjects)
+            {
+                if (project == null || project.HouseholdId != householdId) continue;
+                if (project.Status != ConstructionProjectStatus.Cancelled
+                    && project.Status != ConstructionProjectStatus.Complete) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// DEF-011: true when the household already has a queued commission
+        /// request, either waiting in npcConstructionRequests or refused and
+        /// still sitting in the driver's pending list — the need evaluator
+        /// never queues a duplicate.
+        /// </summary>
+        private bool HasPendingConstructionRequest(int householdId)
+        {
+            if (npcConstructionRequests != null)
+                foreach (NpcConstructionRequest request in npcConstructionRequests)
+                    if (request != null && request.HouseholdId == householdId) return true;
+            if (npcConstructionDriver != null && npcConstructionDriver.PendingRequests != null)
+                foreach (NpcConstructionRequest request in npcConstructionDriver.PendingRequests)
+                    if (request != null && request.HouseholdId == householdId) return true;
+            return false;
+        }
+
         private void DriveNpcConstruction(int absoluteDayIndex)
         {
             if (hub == null) return;
@@ -1915,6 +1962,35 @@ namespace LandLedgers.Orchestration.Systems
                     : new List<int>());
             driver.MaterialSourceByHousehold = CreateHouseholdConstructionMaterialSource;
             var diag = new List<string>();
+            // DEF-011: the commissioning trigger — queue explicit requests
+            // for households with an evidenced need (overcrowding,
+            // household formation) before the pending requests are
+            // commissioned below. The evaluator only queues; every request
+            // still passes the driver's full commission gates.
+            if (npcConstructionCatalog != null && npcConstructionPricePort != null
+                && populationManager?.State?.households != null)
+            {
+                AcquisitionMarketManager needMarket = FindAnyObjectByType<AcquisitionMarketManager>();
+                var needTitles = needMarket != null ? needMarket.Titles : null;
+                var peopleById = new Dictionary<int, PersonState>();
+                if (populationManager.State.people != null)
+                    foreach (PersonState person in populationManager.State.people)
+                        if (person != null && !peopleById.ContainsKey(person.id))
+                            peopleById[person.id] = person;
+                var needEvaluator = new NpcConstructionNeedEvaluator(
+                    hub.NpcConstructionCommissioner, npcConstructionCatalog, npcConstructionPricePort,
+                    hub.CreditCash, hub.Housing, needTitles,
+                    householdId => householdMemberships != null
+                        ? householdMemberships.GetActiveMembers(householdId)
+                        : new List<int>(),
+                    personId => peopleById.TryGetValue(personId, out PersonState found) ? found : null,
+                    householdId => HasLiveConstructionProject(householdId),
+                    householdId => HasPendingConstructionRequest(householdId));
+                List<NpcConstructionRequest> freshRequests = needEvaluator.EvaluateDay(
+                    populationManager.State.households, absoluteDayIndex, driver.MaxUnitsPerTrip, diag);
+                foreach (NpcConstructionRequest fresh in freshRequests)
+                    if (fresh != null) npcConstructionRequests.Add(fresh);
+            }
             if (npcConstructionParcelAuthority == null)
             {
                 AcquisitionMarketManager market = FindAnyObjectByType<AcquisitionMarketManager>();

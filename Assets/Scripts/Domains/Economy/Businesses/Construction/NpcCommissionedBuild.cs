@@ -104,6 +104,15 @@ namespace LandLedgers.Economy
         public string DesignId = string.Empty;
         public string ParcelId = string.Empty;
         public string ContractId = string.Empty;
+        /// <summary>
+        /// DEF-011 (Decision 7): the legitimate reason the build was
+        /// commissioned for. Additive; old saves read Unspecified.
+        /// </summary>
+        public NpcConstructionReason Reason = NpcConstructionReason.Unspecified;
+        /// <summary>Free-text evidence for the reason, as stated on the request.</summary>
+        public string ReasonNotes = string.Empty;
+        /// <summary>One-line affordability / benefit / shipment evaluation, as recorded at commission.</summary>
+        public string EvaluationSummary = string.Empty;
         public int TotalEstimatedCostCents;
         public int TotalActualCostCents;
         public List<NpcBuildPackageFunding> PackageFundings = new List<NpcBuildPackageFunding>();
@@ -128,6 +137,35 @@ namespace LandLedgers.Economy
                 if (overrun != null && !overrun.Resolved) return true;
             return false;
         }
+    }
+
+    /// <summary>
+    /// DEF-011 (Decision 7): the recorded evaluation behind one commission
+    /// — affordability, benefit, alternatives and shipment feasibility,
+    /// with the numbers. The evaluation itself is not persisted; its
+    /// plain-language lines go onto the record's Decisions and its summary
+    /// onto the record's EvaluationSummary at commission time. A non-viable
+    /// evaluation carries the refusal reason instead of a design.
+    /// </summary>
+    public sealed class NpcConstructionEvaluation
+    {
+        public bool IsViable;
+        public string RefusalReason = string.Empty;
+        public BuildingDesign ChosenDesign;
+        public string ChosenDesignId = string.Empty;
+        public int EstimateCents;
+        public int FundsCents;
+        public int MarginCents;
+        public int RequiredPlaces;
+        public int CapacityPlaces;
+        public string Benefit = string.Empty;
+        public List<string> Alternatives = new List<string>();
+        public bool ShipmentFeasible = true;
+        public string ShipmentNotes = string.Empty;
+        public List<string> Lines = new List<string>();
+        public string Summary = string.Empty;
+
+        public NpcConstructionEvaluation() { }
     }
 
     /// <summary>
@@ -207,6 +245,160 @@ namespace LandLedgers.Economy
             }
             diag.Add($"NpcCommissioner.SelectDesign: H design '{designId}' selected (~{estimate}c materials, sleeps {capacity}).");
             return design;
+        }
+
+        /// <summary>
+        /// DEF-011 (Decision 7): the full commission evaluation for one
+        /// design — the decision behind the commission, with numbers. The
+        /// design must exist, sleep the household, have a computable cost
+        /// from the price list, and fit the funds the NPC actually holds;
+        /// every package must fit the single-trip bound when one is
+        /// supplied. Alternatives are priced and recorded, never vetoed: a
+        /// funded preference for a dearer adequate design is legitimate.
+        /// Returns a non-viable evaluation (never null) with the refusal
+        /// reason on any failure — the NPC never builds a design it cannot
+        /// price, fund, or physically receive.
+        /// </summary>
+        public NpcConstructionEvaluation EvaluateCommission(
+            BuildingDesignCatalog catalog,
+            string designId,
+            int requiredSleepingPlaces,
+            IConstructionMaterialPricePort pricePort,
+            int fundsAvailableCents,
+            int? maxUnitsPerTrip,
+            NpcConstructionReason reason,
+            string reasonNotes,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            var evaluation = new NpcConstructionEvaluation
+            {
+                ChosenDesignId = designId ?? string.Empty,
+                FundsCents = fundsAvailableCents,
+                RequiredPlaces = Math.Max(1, requiredSleepingPlaces),
+            };
+            if (catalog == null)
+            {
+                evaluation.RefusalReason = "NpcCommissioner.EvaluateCommission: no design catalog.";
+                diag.Add(evaluation.RefusalReason);
+                return evaluation;
+            }
+            BuildingDesign design = catalog.FindDesign(designId);
+            if (design == null)
+            {
+                evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: unknown design '{designId}' — the NPC builds catalog designs only.";
+                diag.Add(evaluation.RefusalReason);
+                return evaluation;
+            }
+            evaluation.ChosenDesign = design;
+            int capacity = 0;
+            foreach (BuildingDesignSpaceSpec spec in design.SpaceSpecs ?? new List<BuildingDesignSpaceSpec>())
+                capacity += Math.Max(0, spec != null ? spec.SleepingCapacity : 0);
+            evaluation.CapacityPlaces = capacity;
+            if (capacity < evaluation.RequiredPlaces)
+            {
+                evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' sleeps {capacity}, the household needs {evaluation.RequiredPlaces}.";
+                diag.Add(evaluation.RefusalReason);
+                return evaluation;
+            }
+            if (pricePort == null)
+            {
+                evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' has no price port — its materials are unpriced, cost unknowable, refused.";
+                diag.Add(evaluation.RefusalReason);
+                return evaluation;
+            }
+            int estimate = 0;
+            foreach (BuildingDesignPhase phase in design.Phases ?? new List<BuildingDesignPhase>())
+            {
+                if (phase == null) continue;
+                foreach (ConstructionMaterialRequirement requirement in phase.Materials ?? new List<ConstructionMaterialRequirement>())
+                {
+                    if (requirement == null || !requirement.IsCoherent)
+                    {
+                        evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' has an incoherent material requirement — cost unknowable, refused.";
+                        diag.Add(evaluation.RefusalReason);
+                        return evaluation;
+                    }
+                    int unitPrice = pricePort.UnitPriceCents(requirement);
+                    if (unitPrice < 0)
+                    {
+                        evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' material '{requirement.MaterialDisplayName}' has no price — cost unknowable, refused.";
+                        diag.Add(evaluation.RefusalReason);
+                        return evaluation;
+                    }
+                    estimate += unitPrice * Math.Max(0, requirement.RequiredUnits);
+                }
+            }
+            evaluation.EstimateCents = estimate;
+            evaluation.MarginCents = fundsAvailableCents - estimate;
+            if (estimate > fundsAvailableCents)
+            {
+                evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' costs ~{estimate}c against {fundsAvailableCents}c available — the NPC cannot fund it.";
+                diag.Add(evaluation.RefusalReason);
+                return evaluation;
+            }
+            foreach (BuildingDesign other in catalog.AllDesigns())
+            {
+                if (other == null || string.Equals(other.DesignId, designId, StringComparison.Ordinal)) continue;
+                int otherCapacity = 0;
+                foreach (BuildingDesignSpaceSpec spec in other.SpaceSpecs ?? new List<BuildingDesignSpaceSpec>())
+                    otherCapacity += Math.Max(0, spec != null ? spec.SleepingCapacity : 0);
+                if (otherCapacity < evaluation.RequiredPlaces) continue;
+                int otherEstimate = World.Property.NpcPropertyDecisionEngine.EstimateBuildCostCents(other, pricePort);
+                if (otherEstimate < 0) continue;
+                evaluation.Alternatives.Add(otherEstimate < estimate
+                    ? $"{other.DesignId} ~{otherEstimate}c (cheaper, sleeps {otherCapacity})"
+                    : $"{other.DesignId} ~{otherEstimate}c (sleeps {otherCapacity})");
+            }
+            if (maxUnitsPerTrip.HasValue)
+            {
+                foreach (BuildingDesignPhase phase in design.Phases ?? new List<BuildingDesignPhase>())
+                {
+                    if (phase == null) continue;
+                    int units = 0;
+                    foreach (ConstructionMaterialRequirement requirement in phase.Materials ?? new List<ConstructionMaterialRequirement>())
+                        if (requirement != null) units += Math.Max(0, requirement.RequiredUnits);
+                    if (units > maxUnitsPerTrip.Value)
+                    {
+                        evaluation.ShipmentFeasible = false;
+                        evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' phase '{phase.PhaseName}' needs {units} units in one trip, over the {maxUnitsPerTrip.Value}-unit single-trip bound — split-load is a DEF-016 follow-up, so the design cannot be commissioned as drawn.";
+                        diag.Add(evaluation.RefusalReason);
+                        return evaluation;
+                    }
+                }
+                evaluation.ShipmentNotes = $"every package fits the {maxUnitsPerTrip.Value}-unit single-trip bound.";
+            }
+            else
+            {
+                evaluation.ShipmentNotes = "no trip bound supplied — shipment feasibility not evaluated at commission; the shipment service still refuses over-capacity loads pre-load.";
+            }
+            evaluation.Benefit = BenefitFor(reason, reasonNotes);
+            evaluation.Lines.Add($"day {dayIndex}: evaluated '{designId}' for {reason} — {evaluation.Benefit}.");
+            evaluation.Lines.Add($"day {dayIndex}: estimate ~{estimate}c materials against {fundsAvailableCents}c available (margin {evaluation.MarginCents}c); sleeps {capacity} for {evaluation.RequiredPlaces} needed.");
+            evaluation.Lines.Add(evaluation.Alternatives.Count > 0
+                ? $"day {dayIndex}: alternatives considered — {string.Join("; ", evaluation.Alternatives)}."
+                : $"day {dayIndex}: no other priced adequate design in the catalog.");
+            evaluation.Lines.Add($"day {dayIndex}: shipment — {evaluation.ShipmentNotes}");
+            evaluation.Summary = $"day {dayIndex}: '{designId}' ~{estimate}c vs {fundsAvailableCents}c (margin {evaluation.MarginCents}c), sleeps {capacity}/{evaluation.RequiredPlaces}, {reason}, {evaluation.ShipmentNotes}";
+            evaluation.IsViable = true;
+            diag.Add($"NpcCommissioner.EvaluateCommission: '{designId}' selected (~{estimate}c, margin {evaluation.MarginCents}c, sleeps {capacity}).");
+            return evaluation;
+        }
+
+        private static string BenefitFor(NpcConstructionReason reason, string reasonNotes)
+        {
+            string notes = string.IsNullOrWhiteSpace(reasonNotes) ? "no further detail recorded" : reasonNotes.Trim();
+            switch (reason)
+            {
+                case NpcConstructionReason.Overcrowding: return "relieves overcrowding — " + notes;
+                case NpcConstructionReason.HouseholdFormation: return "houses a new household — " + notes;
+                case NpcConstructionReason.BusinessExpansion: return "expands the business — " + notes;
+                case NpcConstructionReason.Replacement: return "replaces a lost or damaged building — " + notes;
+                case NpcConstructionReason.Relocation: return "houses the household at its new site — " + notes;
+                case NpcConstructionReason.NewEnterprise: return "houses a new enterprise — " + notes;
+                default: return notes;
+            }
         }
 
         /// <summary>
@@ -931,6 +1123,9 @@ namespace LandLedgers.Economy
                     DesignId = record.DesignId ?? string.Empty,
                     ParcelId = record.ParcelId ?? string.Empty,
                     ContractId = record.ContractId ?? string.Empty,
+                    Reason = record.Reason,
+                    ReasonNotes = record.ReasonNotes ?? string.Empty,
+                    EvaluationSummary = record.EvaluationSummary ?? string.Empty,
                     TotalEstimatedCostCents = record.TotalEstimatedCostCents,
                     TotalActualCostCents = record.TotalActualCostCents,
                 };

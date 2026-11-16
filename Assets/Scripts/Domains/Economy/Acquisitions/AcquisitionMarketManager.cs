@@ -9139,6 +9139,91 @@ namespace LandLedgers.Economy
         public IContentsPlacementResolver ContentsPlacementResolver { get; set; }
 
         /// <summary>
+        /// D-9: the player physical-presence contract the player
+        /// contents selection API (PlayerContentsSelectionApi) is
+        /// gated through. Null = no presence contract is wired (the
+        /// production binding is Agent G wiring): a player contents
+        /// selection then refuses to open, because the player must be
+        /// present at the property (or act through an authorized
+        /// agent) before its contents are chosen. The selection API
+        /// itself is harness-compiled and harness-tested; this seam and
+        /// the factory below are source-reviewed only, with Codex Unity
+        /// proof owed.
+        /// </summary>
+        public PlayerFurnishingPresenceContract ContentsPresenceContract { get; set; }
+
+        /// <summary>
+        /// D-9: opens a player contents selection session for one
+        /// property, through B7's presence contract. The seller's
+        /// register is resolved here (the one input only the manager
+        /// holds); every other input is the caller's — the building
+        /// instance id, the seller's authority, the replacement-cost
+        /// function (Agent F's prices in production), the property's
+        /// location, and the player's household. The building instance
+        /// id and the location are never derived here: the parcel-side
+        /// building binding is driver/G work (Building carries no int
+        /// instance id). The returned API is driven by the caller
+        /// (the Codex UI): AdvancePending per tick until the session
+        /// is active, SetMode / ToggleItem to choose, ConfirmSelection
+        /// with an executor that sets the confirmed selection on the
+        /// deal — the executor is where deal.Contents is assigned, so
+        /// a selection confirmed anywhere else never reaches the deal.
+        /// Returns the contract's verdict for the open request;
+        /// Refused when nothing is wired to open with.
+        /// </summary>
+        public DirectedActionVerdict BeginPlayerContentsSelection(
+            int buildingInstanceId,
+            string sellerOwnerKind,
+            string sellerOwnerId,
+            Func<string, int> replacementCostCentsForKind,
+            string householdId,
+            string targetLocationId,
+            int agentPersonId,
+            out PlayerContentsSelectionApi api,
+            out string reason)
+        {
+            api = null;
+            reason = null;
+            if (ContentsPresenceContract == null)
+            {
+                reason = "the player contents selection cannot open: no presence contract is bound — the player must be present at the property before its contents are chosen.";
+                return DirectedActionVerdict.Refused;
+            }
+            if (buildingInstanceId < 0)
+            {
+                reason = "the player contents selection cannot open: buildingInstanceId " + buildingInstanceId + " is not a building.";
+                return DirectedActionVerdict.Refused;
+            }
+            if (replacementCostCentsForKind == null)
+            {
+                reason = "the player contents selection cannot open: no replacement-cost data was supplied — the contents cannot be valued.";
+                return DirectedActionVerdict.Refused;
+            }
+            if (string.IsNullOrWhiteSpace(sellerOwnerKind) || string.IsNullOrWhiteSpace(sellerOwnerId)
+                || string.IsNullOrWhiteSpace(householdId) || string.IsNullOrWhiteSpace(targetLocationId))
+            {
+                reason = "the player contents selection cannot open: the seller, the player's household, and the property's location must all be named.";
+                return DirectedActionVerdict.Refused;
+            }
+            if (SellerFurnishingRegisterForBuilding == null)
+            {
+                reason = "the player contents selection cannot open: no seller furnishing register is available — seller authority cannot be validated.";
+                return DirectedActionVerdict.Refused;
+            }
+            HouseholdFurnishingRegister sellerRegister = SellerFurnishingRegisterForBuilding.Invoke(buildingInstanceId);
+            if (sellerRegister == null)
+            {
+                reason = "the player contents selection cannot open: no seller furnishing register is available for building " + buildingInstanceId + ".";
+                return DirectedActionVerdict.Refused;
+            }
+            api = new PlayerContentsSelectionApi(
+                ContentsPresenceContract, sellerRegister, buildingInstanceId,
+                sellerOwnerKind, sellerOwnerId, replacementCostCentsForKind,
+                GetCurrentDayIndex(), householdId, targetLocationId);
+            return api.BeginSelection(agentPersonId, out _, out reason);
+        }
+
+        /// <summary>
         /// DEF-069: marks a held earnest escrow disputed. The funds are
         /// preserved in the ledger — no release, no refund — until the
         /// dispute is resolved through TryResolveEarnestEscrowDispute.

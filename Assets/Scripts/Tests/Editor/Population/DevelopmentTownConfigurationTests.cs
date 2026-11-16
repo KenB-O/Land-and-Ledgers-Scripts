@@ -20,7 +20,7 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(9, configuration.People.Count);
             Assert.AreEqual(5, configuration.Households.Count);
             Assert.AreEqual(5, configuration.Relationships.Count);
-            Assert.AreEqual(4, configuration.Businesses.Count);
+            Assert.AreEqual(6, configuration.Businesses.Count);
             Assert.IsTrue(configuration.TryGetPerson("ethan", out DevelopmentTownConfiguration.PersonDefinition ethan));
             Assert.AreEqual("Ethan", ethan.firstName);
             Assert.AreEqual(7, configuration.ResolveRuntimePersonId("ethan"));
@@ -28,6 +28,15 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual("A0", configuration.OpeningHorseId);
             Assert.AreEqual("opening-freight-wagon", configuration.OpeningWagonId);
             Assert.AreEqual("freight-company", configuration.FreightBusinessKey);
+            // DEF-004: the dev scenario carries a sawmill, a lumber yard, and two legally accessible timber stands.
+            Assert.AreEqual(2, configuration.TimberStands.Count);
+            Assert.IsTrue(configuration.TimberStands.All(stand =>
+                !string.IsNullOrWhiteSpace(stand.standId)
+                && stand.standingTimberUnits > 0
+                && stand.kilogramsPerLog > 0
+                && stand.milesToMill > 0));
+            Assert.AreEqual("stand-pine-north", configuration.TimberStands[0].standId);
+            Assert.AreEqual("stand-pine-east", configuration.TimberStands[1].standId);
         }
 
         [Test]
@@ -39,7 +48,11 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual("base:2", configuration.Businesses.Single(item => item.key == "bakery").ownerPersonKey);
             Assert.AreEqual("base:4", configuration.Businesses.Single(item => item.key == "fuel-dealer").ownerPersonKey);
             Assert.AreEqual("ethan", configuration.Businesses.Single(item => item.key == "freight-company").ownerPersonKey);
-            Assert.AreEqual(4, configuration.BusinessCashTargets.Count);
+            Assert.AreEqual("shane", configuration.Businesses.Single(item => item.key == "sawmill").ownerPersonKey);
+            Assert.AreEqual("base:5", configuration.Businesses.Single(item => item.key == "lumber-yard").ownerPersonKey);
+            Assert.AreEqual(6, configuration.BusinessCashTargets.Count);
+            Assert.AreEqual(15000, configuration.BusinessCashTargets.Single(item => item.businessKey == "sawmill").targetCashCents);
+            Assert.AreEqual(12000, configuration.BusinessCashTargets.Single(item => item.businessKey == "lumber-yard").targetCashCents);
             Assert.AreEqual(5, configuration.HouseholdCashTargets.Count);
             Assert.IsTrue(configuration.OpeningInventory.Any(item => item.businessKey == "general-store"));
             Assert.IsTrue(configuration.OpeningInventory.All(item => configuration.TryGetBusiness(item.businessKey, out _)));

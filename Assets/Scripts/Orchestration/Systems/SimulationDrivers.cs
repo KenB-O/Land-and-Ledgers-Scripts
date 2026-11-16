@@ -1849,6 +1849,132 @@ namespace LandLedgers.Orchestration.Systems
             npcConstructionPricePort = port;
         }
 
+        /// <summary>
+        /// DEF-004 (Decision 4, C4): lazily binds the NPC construction
+        /// procurement port the first time a lumber yard, a price port, a
+        /// supplier directory, a freight business, and a freight rate card
+        /// are all present. The sale adapter sells real yard lots, the plan
+        /// factory builds freight plans from the real journey model, wagon,
+        /// horses, and crew, and the coordinator freights through the real
+        /// shipment chain. Until every authority is present the port stays
+        /// null and the driver keeps waiting loudly on Ready packages —
+        /// never bind a port that cannot procure (C3 precedent).
+        /// Idempotent: a second call keeps the existing adapter.
+        /// </summary>
+        private void TryBindConstructionProcurement(int absoluteDayIndex)
+        {
+            if (npcConstructionProcurement != null) return;
+            if (hub == null) return;
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime != null ? sharedBusinessRuntime.Businesses : null;
+            if (businesses == null)
+            {
+                LogRefusalDayKeyed("construction-procurement-binding:no-businesses", absoluteDayIndex,
+                    "[SimulationDrivers] npc construction: procurement waits — no shared business runtime, no businesses to resolve.");
+                return;
+            }
+            BusinessInstanceState yardBusiness = null;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState candidate = businesses[i];
+                if (candidate != null && candidate.BusinessType == BusinessType.LumberYard) { yardBusiness = candidate; break; }
+            }
+            if (yardBusiness == null)
+            {
+                LogRefusalDayKeyed("construction-procurement-binding:no-yard", absoluteDayIndex,
+                    "[SimulationDrivers] npc construction: procurement waits — no lumber yard business in the town.");
+                return;
+            }
+            LumberYardShopRuntime yard = hub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+            if (yard == null)
+            {
+                LogRefusalDayKeyed("construction-procurement-binding:no-yard-runtime", absoluteDayIndex,
+                    "[SimulationDrivers] npc construction: procurement waits — no live lumber yard runtime for '" + yardBusiness.InstanceId + "'.");
+                return;
+            }
+            if (npcConstructionPricePort == null)
+            {
+                LogRefusalDayKeyed("construction-procurement-binding:no-price-port", absoluteDayIndex,
+                    "[SimulationDrivers] npc construction: procurement waits — no construction price port bound.");
+                return;
+            }
+            if (supplierDirectory == null)
+            {
+                LogRefusalDayKeyed("construction-procurement-binding:no-suppliers", absoluteDayIndex,
+                    "[SimulationDrivers] npc construction: procurement waits — no supplier directory (the yard has not registered its suppliers).");
+                return;
+            }
+            if (!FreightBusinessResolver.TryResolveFreightBusiness(businesses, out BusinessInstanceState carrier))
+            {
+                LogRefusalDayKeyed("construction-procurement-binding:no-carrier", absoluteDayIndex,
+                    "[SimulationDrivers] npc construction: procurement waits — no freight business to carry lumber.");
+                return;
+            }
+            DevelopmentTownConfiguration.BusinessDefinition carrierDefinition = null;
+            if (developmentTownConfiguration == null
+                || !developmentTownConfiguration.TryGetBusiness(developmentTownConfiguration.FreightBusinessKey, out carrierDefinition)
+                || carrierDefinition?.freightRateCard == null)
+            {
+                LogRefusalDayKeyed("construction-procurement-binding:no-rate-card", absoluteDayIndex,
+                    "[SimulationDrivers] npc construction: procurement waits — the freight business has no configured rate card.");
+                return;
+            }
+
+            var factory = new ConstructionFreightPlanFactory(
+                projectId =>
+                {
+                    foreach (ConstructionProject project in hub.ConstructionProjects)
+                        if (project != null && string.Equals(project.ProjectId, projectId, StringComparison.Ordinal)) return project;
+                    return null;
+                },
+                yardBusiness.InstanceId,
+                "opening-freight-wagon",
+                () => Journeys ?? hub.Journeys,
+                () =>
+                {
+                    IReadOnlyList<BusinessInstanceState> current = sharedBusinessRuntime != null ? sharedBusinessRuntime.Businesses : null;
+                    if (current == null) return null;
+                    return FreightBusinessResolver.TryResolveFreightBusiness(current, out BusinessInstanceState resolved) ? resolved : null;
+                },
+                carrierDefinition.freightRateCard.baseServiceFeeCents,
+                carrierDefinition.freightRateCard.ratePerMileCents,
+                carrierDefinition.freightRateCard.chargeRoundTrip,
+                assetId => hub.TransportAssets.Get(assetId),
+                () => hub.Animals.ActiveAnimals,
+                householdId => householdMemberships != null
+                    ? householdMemberships.GetActiveMembers(householdId)
+                    : new List<int>(),
+                personId =>
+                {
+                    PersonState person = populationManager != null && populationManager.State != null
+                        ? populationManager.State.GetPerson(personId)
+                        : null;
+                    return person != null ? person.homeBuildingId : -1;
+                },
+                FreightProduction.Service,
+                hub.Tasks,
+                hub.WorkTimeBudgets,
+                hub.PersonSchedules,
+                hub.CreditCash);
+            var salePort = new LumberYardConstructionSaleAdapter(yard);
+            var procurementService = new ConstructionProcurementService();
+            var freightCoordinator = new ConstructionMaterialFreightCoordinator();
+            npcConstructionProcurement = new NpcConstructionProcurementAdapter(
+                hub.NpcConstructionCommissioner,
+                procurementService,
+                salePort,
+                npcConstructionPricePort,
+                supplierDirectory,
+                freightCoordinator,
+                package => factory.Build(package),
+                hub.ConstructionExecutor,
+                hub.CreditCash,
+                hub.FinancialObligations,
+                hub.Ids);
+            Debug.Log("[SimulationDrivers] npc construction: procurement bound — lumber yard '" + yardBusiness.InstanceId
+                + "' sells through the real freight chain (25c dispatch plus 1c per mile, round trip, provisional).", this);
+        }
+
         /// <summary>Queues an explicit household request; no autonomous build decision is made here.</summary>
         public string QueueNpcConstructionRequest(NpcConstructionRequest request)
         {
@@ -1892,6 +2018,7 @@ namespace LandLedgers.Orchestration.Systems
         private void DriveNpcConstruction(int absoluteDayIndex)
         {
             if (hub == null) return;
+            if (npcConstructionProcurement == null) TryBindConstructionProcurement(absoluteDayIndex);
             ConstructionProjectExecutor executor = hub.ConstructionExecutor;
             if (executor != null && executor.EquipmentReservations == null)
                 executor.EquipmentReservations = hub.Reservations;

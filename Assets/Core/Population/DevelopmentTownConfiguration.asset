@@ -188,6 +188,28 @@ MonoBehaviour:
       baseServiceFeeCents: 25
       ratePerMileCents: 1
       chargeRoundTrip: 1
+  - key: sawmill
+    operationId: sawmill
+    ownerPersonKey: shane
+    businessId: 
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 15000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
+  - key: lumber-yard
+    operationId: lumber-yard
+    ownerPersonKey: base:5
+    businessId: 
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 12000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
   businessCashTargets:
   - businessKey: general-store
     targetCashCents: 50000
@@ -197,6 +219,10 @@ MonoBehaviour:
     targetCashCents: 20000
   - businessKey: freight-company
     targetCashCents: 20000
+  - businessKey: sawmill
+    targetCashCents: 15000
+  - businessKey: lumber-yard
+    targetCashCents: 12000
   householdCashTargets:
   - anchorPersonKey: base:2
     targetCashCents: 40000
@@ -266,6 +292,21 @@ MonoBehaviour:
       - bake-peels-1
     kitIds:
     - baker-hand-kit
+  timberStands:
+  - standId: stand-pine-north
+    displayName: North Pine Stand
+    locationId: stand-pine-north
+    species: eastern white pine
+    kilogramsPerLog: 600
+    standingTimberUnits: 120
+    milesToMill: 2
+  - standId: stand-pine-east
+    displayName: East Pine Stand
+    locationId: stand-pine-east
+    species: eastern white pine
+    kilogramsPerLog: 600
+    standingTimberUnits: 80
+    milesToMill: 4
   wholesaleAccounts:
   - sellerBusinessKey: bakery
     buyerBusinessKey: general-store

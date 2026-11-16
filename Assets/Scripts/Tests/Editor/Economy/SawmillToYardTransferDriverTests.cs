@@ -1,6 +1,7 @@
 using EntityId = LandLedgers.Primitives.EntityId;
 
 using System.Collections.Generic;
+using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.Logging;
 using LandLedgers.Economy.Businesses.LumberYard;
 using LandLedgers.Economy.Businesses.Sawmill;
@@ -34,6 +35,51 @@ namespace LandLedgers.Editor.Economy
             public LumberYardShopRuntime Yard;
             public List<string> Diagnostics = new List<string>();
             public SawmillToYardTransferDriver Driver;
+            public TestBusinessCashPort YardCash;
+            public TestBusinessCashPort MillCash;
+        }
+
+        /// <summary>
+        /// C-4: in-memory business cash port for the settlement tests.
+        /// Mirrors the production Series2BusinessRuntimeCashPort contract:
+        /// Credit cannot fail for a non-negative amount on a bound port;
+        /// TryDebit is atomic (refuses when short, moving nothing) and
+        /// returns null on success, a diagnostic on failure.
+        /// </summary>
+        private sealed class TestBusinessCashPort : IBusinessIdentityCashPort
+        {
+            public string BusinessId { get; }
+            public int BalanceCents { get; private set; }
+            public bool RefuseCredit { get; set; }
+            public bool RefuseDebit { get; set; }
+
+            public TestBusinessCashPort(string businessId, int openingBalanceCents)
+            {
+                BusinessId = businessId;
+                BalanceCents = openingBalanceCents;
+            }
+
+            public void SetBalance(int balanceCents)
+            {
+                BalanceCents = balanceCents;
+            }
+
+            public string TryDebit(int amountCents, string reason)
+            {
+                if (RefuseDebit) return "TestBusinessCashPort: debit refused by the test double.";
+                if (amountCents < 0) return "TestBusinessCashPort: negative debit.";
+                if (BalanceCents < amountCents) return $"TestBusinessCashPort: insufficient funds ({BalanceCents}c for {amountCents}c).";
+                BalanceCents -= amountCents;
+                return null;
+            }
+
+            public string Credit(int amountCents, string reason)
+            {
+                if (RefuseCredit) return "TestBusinessCashPort: credit refused by the test double.";
+                if (amountCents < 0) return "TestBusinessCashPort: negative credit.";
+                BalanceCents += amountCents;
+                return null;
+            }
         }
 
         private static World NewWorld()
@@ -42,7 +88,16 @@ namespace LandLedgers.Editor.Economy
             var yard = new LumberYardShopRuntime("yard-1", new EntityIdRegistry());
             var diagnostics = new List<string>();
             var driver = new SawmillToYardTransferDriver(mill, yard, diagnostics);
-            return new World { Mill = mill, Yard = yard, Diagnostics = diagnostics, Driver = driver };
+            // C-4: the fixture binds real cash ports, as the production
+            // caller does each drive. The yard opens flush (1,000,000c)
+            // so the pre-C-4 transfer tests settle without an
+            // affordability refusal; the mill opens at 0c and is only
+            // ever credited. C-4 tests override the balances.
+            var yardCash = new TestBusinessCashPort("yard-1", 1000000);
+            var millCash = new TestBusinessCashPort("mill-1", 0);
+            driver.YardCash = yardCash;
+            driver.MillCash = millCash;
+            return new World { Mill = mill, Yard = yard, Diagnostics = diagnostics, Driver = driver, YardCash = yardCash, MillCash = millCash };
         }
 
         private static SawmillLumberLot DocumentedMillLot(int lotNumber, int units,
@@ -284,25 +339,22 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void B8_BeginTransfer_ZeroCost_SucceedsLoudly_AndQuotesOneCent()
+        public void B8_BeginTransfer_ZeroCost_Refused_NeverQuotesOneCent()
         {
             World world = NewWorld();
             ReceiveMillLot(world, DocumentedMillLot(9301, 40));
 
             SawmillToYardTransferJob job = world.Driver.BeginTransfer(LotId(9301), "merchantable", 0, Day, out string refusal);
 
-            Assert.IsNotNull(job);
-            Assert.IsNull(refusal);
-            Assert.AreEqual(0, job.UnitCostCents);
-            Assert.IsTrue(string.Join(" ", world.Diagnostics).Contains("ZERO"),
-                "A zero unit cost must be recorded loudly, never silently.");
-
-            Assert.IsTrue(world.Driver.RunTransfer(job.JobId, TransferDay, out string runRefusal));
-            Assert.IsNull(runRefusal);
-            Assert.AreEqual(40, world.Yard.LumberStock.TotalLumberUnits);
+            Assert.IsNull(job, "C-4: a zero unit cost is refused at begin — a transfer is a wholesale purchase at a real price, never a free gift.");
+            Assert.IsNotNull(refusal);
+            Assert.AreEqual(0, world.Driver.TransferJobCount);
+            Assert.AreEqual(40, world.Mill.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(0, world.Yard.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(1000000, world.YardCash.BalanceCents, "No cash moved on a refused begin.");
 
             int quote = world.Yard.QuoteRetailLumberPrice(null, "merchantable", PricedPolicy(), world.Diagnostics);
-            Assert.AreEqual(1, quote, "A yard holding only a 0-cost lot quotes 1c/unit.");
+            Assert.AreEqual(-1, quote, "A yard holding no lumber has no price to quote — never 1c for a free lot.");
         }
 
         // ---- RunTransfer success and conservation (6: T1-T6) ----
@@ -459,6 +511,10 @@ namespace LandLedgers.Editor.Economy
             var yard = new LumberYardShopRuntime("yard-1", null);
             var diagnostics = new List<string>();
             var driver = new SawmillToYardTransferDriver(mill, yard, diagnostics);
+            // C-4: ports bound so the test reaches the intake refusal
+            // (the null-registry yard), not the settlement gate.
+            driver.YardCash = new TestBusinessCashPort("yard-1", 1000000);
+            driver.MillCash = new TestBusinessCashPort("mill-1", 0);
             Assert.IsNull(mill.LumberStock.ReceiveLot(DocumentedMillLot(9301, 40), diagnostics));
 
             // BeginTransfer still succeeds — the registry is consumed only at intake.
@@ -548,6 +604,9 @@ namespace LandLedgers.Editor.Economy
             var dto = world.Driver.ToSaveDto();
             var freshDiagnostics = new List<string>();
             var fresh = new SawmillToYardTransferDriver(world.Mill, world.Yard, freshDiagnostics);
+            // C-4: the fresh driver settles through the same ports.
+            fresh.YardCash = world.YardCash;
+            fresh.MillCash = world.MillCash;
             fresh.LoadFromSaveDto(dto);
 
             Assert.AreEqual(1, fresh.TransferJobCount);

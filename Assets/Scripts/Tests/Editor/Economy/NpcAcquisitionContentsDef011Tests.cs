@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using LandLedgers.Economy.Blacksmith;
@@ -35,6 +36,18 @@ namespace LandLedgers.EditorTests.Financing
     /// fails loudly with a full unwind — nothing moved on failure.
     /// The plan must name the building the selection covers
     /// (BuildingInstanceId binding, D-7).
+    ///
+    /// D-8 (Agent D, expanded campaign 2026-11-16): NPC contents
+    /// negotiation — the buyer asks for a selection (wanted kinds in
+    /// priority order, total capital, moving cost) through the B6 contract,
+    /// the seller answers through the extended seller policy (accept /
+    /// counter / walk, optionally with a different selection), and the
+    /// agreed price respects the F6 anchor (structure-only plus contents)
+    /// with the structure absorbing the discount, so D-6 conservation
+    /// holds by construction. A refused or failed negotiation leaves cash
+    /// and title untouched, because the negotiation never touches them:
+    /// the caller builds the plan from the agreed result and closes it
+    /// through the D-6/D-7 path.
     ///
     /// Prices and the structure value here are TEST-LOCAL calibration only
     /// (the price func is the caller's real price data in production —
@@ -340,6 +353,81 @@ namespace LandLedgers.EditorTests.Financing
                 f.Ids, plan, f.Authority, f.Registry, f.Cash, f.Titles, f.Housing,
                 f.Negotiations, f.ClosingService, f.CreditEngine, f.Workflow, Day, f.Events, f.Diag,
                 seller, structureCents, buyer, resolver, sellerStoves, sellerHousehold);
+        }
+
+        /// <summary>D-8: the seller side of a contents negotiation, configurable per test.</summary>
+        private sealed class TestContentsSellerPolicy : INpcPropertySellerPolicy
+        {
+            public int ReservationBps = 9000; // of asking
+            public bool AlwaysWalk;
+            public int? CounterPriceCents; // explicit counter price; null = asking * CounterBps / 10000
+            public int CounterBps = 9500;
+            public PropertyContentsSelection CounterSelection; // null = price-only counter
+            public bool WalkAfterCounter; // counter once, then walk whatever the buyer raises
+            private bool countered;
+
+            public int ReservationPriceCents(string parcelId, int askingPriceCents)
+            {
+                // Long math: asking * bps overflows int32 at these prices
+                // (235000c * 10000 = 2.35 billion), which wraps the
+                // reservation negative and makes the seller accept anything.
+                return (int)((long)askingPriceCents * ReservationBps / 10000);
+            }
+
+            public NpcSellerResponse RespondToOffer(string parcelId, int askingPriceCents,
+                int buyerOfferCents, int round, int maxRounds, List<string> diag)
+            {
+                return RespondToContentsOffer(parcelId, askingPriceCents, buyerOfferCents, null, round, maxRounds, diag);
+            }
+
+            public NpcSellerResponse RespondToContentsOffer(string parcelId, int askingPriceCents,
+                int buyerOfferCents, PropertyContentsSelection requestedSelection,
+                int round, int maxRounds, List<string> diag)
+            {
+                if (AlwaysWalk)
+                    return new NpcSellerResponse { Kind = NpcSellerResponseKind.WalkAway, Reason = "the seller will not sell to this buyer." };
+                int reservation = ReservationPriceCents(parcelId, askingPriceCents);
+                if (countered)
+                {
+                    if (WalkAfterCounter)
+                        return new NpcSellerResponse { Kind = NpcSellerResponseKind.WalkAway, Reason = "the seller will not go lower." };
+                    if (buyerOfferCents >= reservation)
+                        return new NpcSellerResponse { Kind = NpcSellerResponseKind.Accept, Reason = "meets the reservation." };
+                    return new NpcSellerResponse { Kind = NpcSellerResponseKind.WalkAway, Reason = "the seller will not go lower." };
+                }
+                if (buyerOfferCents >= reservation)
+                    return new NpcSellerResponse { Kind = NpcSellerResponseKind.Accept, Reason = "meets the reservation." };
+                countered = true;
+                return new NpcSellerResponse
+                {
+                    Kind = NpcSellerResponseKind.Counter,
+                    // Long math, same overflow as the reservation above.
+                    CounterPriceCents = CounterPriceCents ?? (int)((long)askingPriceCents * CounterBps / 10000),
+                    CounterSelection = CounterSelection,
+                    Reason = "first and only counter.",
+                };
+            }
+        }
+
+        /// <summary>D-8: one contents negotiation against the test house (structure 200000c, day 100).</summary>
+        private static NpcContentsNegotiationResult NegotiateContents(
+            Fixture f, TestContentsSellerPolicy seller, HouseholdFurnishingRegister register,
+            NpcContentsBuyerRequest request, Func<string, int> priceFunc = null, int maxRounds = 3)
+        {
+            return f.Acquisition.NegotiateContents(seller, "parcel-farm", register, BuildingInstanceId,
+                "household", SellerHouseholdId.ToString(), StructureValueCents, request,
+                priceFunc ?? PriceForKind, maxRounds, Day, f.Diag);
+        }
+
+        private static NpcContentsBuyerRequest BuyerRequest(List<string> wantedKinds, int buyerMaxCents, int movingCostCents = 5000)
+        {
+            return new NpcContentsBuyerRequest
+            {
+                WantedKinds = wantedKinds,
+                BuyerMaxCents = buyerMaxCents,
+                MovingCostCents = movingCostCents,
+                DayIndex = Day,
+            };
         }
 
         [Test]
@@ -1049,6 +1137,339 @@ namespace LandLedgers.EditorTests.Financing
             Assert.AreEqual(5, register.Bindings.Count);
             Assert.AreEqual(0, register.Validate().Count);
             Assert.AreEqual(0, buyerRegister.Assets.Count);
+        }
+
+        // ---- D-8: NPC contents negotiation ----
+
+        [Test]
+        public void Negotiation_BuyerWantsBedAndTable_AcceptsOpeningOffer()
+        {
+            var f = MakeDealFixture();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            var seller = new TestContentsSellerPolicy { ReservationBps = 9000 };
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string> { "furniture.bed", "furniture.table" }, 300000));
+            Assert.IsTrue(result.Agreed, result.FailureReason);
+            // Fixtures 14000 + bed 10000 + table 8000 = 32000 contents;
+            // asking 232000; the opening offer discounts the structure
+            // 10%: 32000 + 180000 = 212000.
+            Assert.AreEqual(212000, result.AgreedPriceCents);
+            Assert.AreEqual(32000, result.AgreedSelection.TotalContentsValueCents);
+            Assert.AreEqual(180000, result.ImpliedStructureValueCents);
+            Assert.AreEqual(ContentsSelectionMode.Custom, result.AgreedSelection.Mode);
+            // The agreed price respects the F6 anchor and D-6 conservation:
+            // the structure absorbs the discount, the contents keep their
+            // frozen agreed values.
+            Assert.IsNull(PropertyContentsSelection.CheckConservation(180000, 32000, 212000));
+            Assert.IsTrue(result.AgreedPriceCents < 232000, "the agreed price must stay below the anchor.");
+            FurnishingContentsLine bed = result.AgreedSelection.Lines.Find(l => l.AssetId == "bed-1");
+            Assert.NotNull(bed);
+            Assert.IsTrue(bed.Included);
+            FurnishingContentsLine chair = result.AgreedSelection.Lines.Find(l => l.AssetId == "chair-1");
+            Assert.NotNull(chair);
+            Assert.IsFalse(chair.Included);
+            Assert.AreEqual(ExcludedItemDisposition.RemovedBySeller, chair.Disposition);
+        }
+
+        [Test]
+        public void Negotiation_CapitalCapsSelection_SkipsUnaffordableKinds()
+        {
+            var f = MakeDealFixture();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            var seller = new TestContentsSellerPolicy { ReservationBps = 9000 };
+            // Capital 220000: structure 200000 + fixtures 14000 = 214000
+            // floor. Bed 10000 -> 224000 (skip), table 8000 -> 222000
+            // (skip), chair 3000 -> 217000 (fits).
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string> { "furniture.bed", "furniture.table", "furniture.chair" }, 220000));
+            Assert.IsTrue(result.Agreed, result.FailureReason);
+            Assert.AreEqual(17000, result.AgreedSelection.TotalContentsValueCents);
+            Assert.AreEqual(197000, result.AgreedPriceCents);
+            Assert.AreEqual(180000, result.ImpliedStructureValueCents);
+            Assert.IsTrue(result.AgreedSelection.Lines.Find(l => l.AssetId == "chair-1").Included);
+            Assert.IsFalse(result.AgreedSelection.Lines.Find(l => l.AssetId == "bed-1").Included);
+            Assert.IsFalse(result.AgreedSelection.Lines.Find(l => l.AssetId == "table-1").Included);
+            Assert.IsTrue(result.Rounds.Exists(r => r.Contains("bed-1") && r.Contains("does not fit")),
+                "the skipped bed must be recorded, not silently dropped.");
+        }
+
+        [Test]
+        public void Negotiation_BuyerCannotAffordFixtures_WalksAwayBeforeBidding()
+        {
+            var f = MakeDealFixture();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            var seller = new TestContentsSellerPolicy();
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string>(), 205000));
+            Assert.IsFalse(result.Agreed);
+            Assert.IsTrue(result.FailureReason.Contains("214000"), result.FailureReason);
+            Assert.AreEqual(0, result.Rounds.Count);
+        }
+
+        [Test]
+        public void Negotiation_SellerCountersWithReducedSelection_BuyerAcceptsWithinCeiling()
+        {
+            var f = MakeDealFixture();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            List<FurnishingContentsItem> items = PropertyContentsSelection.ListEligibleContents(register, BuildingInstanceId);
+            PropertyContentsSelection noMovable = PropertyContentsSelection.BuildNoMovable(items, "household",
+                SellerHouseholdId.ToString(), BuildingInstanceId, Day, PriceForKind);
+            // The buyer opens at 215000 for everything; the seller counters
+            // fixtures-only at the same 215000. The buyer accepts: 215000 is
+            // inside their capital, and the contents premium over the
+            // structure (15000c) stays within replacement (14000c) plus
+            // moving (5000c).
+            var seller = new TestContentsSellerPolicy
+            {
+                ReservationBps = 10000,
+                CounterPriceCents = 215000,
+                CounterSelection = noMovable,
+            };
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string>(), 300000));
+            Assert.IsTrue(result.Agreed, result.FailureReason);
+            Assert.AreEqual(215000, result.AgreedPriceCents);
+            Assert.AreEqual(ContentsSelectionMode.NoMovable, result.AgreedSelection.Mode);
+            Assert.AreEqual(14000, result.AgreedSelection.TotalContentsValueCents);
+            Assert.AreEqual(201000, result.ImpliedStructureValueCents);
+            Assert.IsNull(PropertyContentsSelection.CheckConservation(201000, 14000, 215000));
+        }
+
+        [Test]
+        public void Negotiation_SellerCountersAboveReplacementPlusMoving_BuyerRefuses()
+        {
+            var f = MakeDealFixture();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            // The buyer opens at 215000 for everything; the seller counters
+            // at 245000. The contents premium over the structure would be
+            // 45000c, above replacement (35000c) plus moving (5000c) — the
+            // buyer would rather bring their own furniture. They raise to
+            // the anchor and the seller walks.
+            var seller = new TestContentsSellerPolicy
+            {
+                ReservationBps = 10000,
+                CounterPriceCents = 245000,
+                WalkAfterCounter = true,
+            };
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string>(), 300000));
+            Assert.IsFalse(result.Agreed);
+            Assert.IsTrue(result.FailureReason.Contains("walked away"), result.FailureReason);
+            Assert.IsTrue(result.Rounds.Exists(r => r.Contains("raises to 235000c")),
+                "the buyer must raise to the anchor before the seller walks.");
+        }
+
+        [Test]
+        public void Negotiation_SellerCountersBelowContentsValue_FailsLoudly()
+        {
+            var f = MakeDealFixture();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            // A counter at 30000c for contents worth 35000c would imply a
+            // negative structure value: not a price, a loud failure.
+            var seller = new TestContentsSellerPolicy { ReservationBps = 10000, CounterPriceCents = 30000 };
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string>(), 300000));
+            Assert.IsFalse(result.Agreed);
+            Assert.IsTrue(result.FailureReason.Contains("below the contents value"), result.FailureReason);
+        }
+
+        [Test]
+        public void Negotiation_SellerCountersWithWrongBuildingSelection_FailsLoudly()
+        {
+            var f = MakeDealFixture();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            List<FurnishingContentsItem> items = PropertyContentsSelection.ListEligibleContents(register, BuildingInstanceId);
+            PropertyContentsSelection wrongBuilding = PropertyContentsSelection.BuildAll(items, "household",
+                SellerHouseholdId.ToString(), 999, Day, PriceForKind);
+            var seller = new TestContentsSellerPolicy
+            {
+                ReservationBps = 10000,
+                CounterPriceCents = 235000,
+                CounterSelection = wrongBuilding,
+            };
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string>(), 300000));
+            Assert.IsFalse(result.Agreed);
+            Assert.IsTrue(result.FailureReason.Contains("building 999"), result.FailureReason);
+        }
+
+        [Test]
+        public void Negotiation_UnpricedStove_ExcludedHeldInPlace()
+        {
+            var f = MakeDealFixture();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            // F6-realistic pricing: the stove has no replacement cost, so
+            // it is excluded (HeldInPlace) instead of breaking the deal.
+            // Shelf + all movables included: contents 23000, asking 223000,
+            // opening 23000 + 180000 = 203000.
+            Func<string, int> noStovePrice = kind =>
+                kind == "furniture.cooking-stove" ? 0 : PriceForKind(kind);
+            var seller = new TestContentsSellerPolicy { ReservationBps = 9000 };
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string>(), 300000), noStovePrice);
+            Assert.IsTrue(result.Agreed, result.FailureReason);
+            Assert.AreEqual(23000, result.AgreedSelection.TotalContentsValueCents);
+            Assert.AreEqual(203000, result.AgreedPriceCents);
+            Assert.AreEqual(180000, result.ImpliedStructureValueCents);
+            Assert.AreEqual(ContentsSelectionMode.Custom, result.AgreedSelection.Mode);
+            Assert.AreEqual(0, result.AgreedSelection.UnpricedIncludedAssetIds.Count);
+            FurnishingContentsLine stove = result.AgreedSelection.Lines.Find(l => l.AssetId == "stove-1");
+            Assert.NotNull(stove);
+            Assert.IsFalse(stove.Included);
+            Assert.AreEqual(ExcludedItemDisposition.HeldInPlace, stove.Disposition);
+            Assert.IsTrue(result.Rounds.Exists(r => r.Contains("stove-1") && r.Contains("no replacement cost")),
+                "the stove exclusion must be recorded, not silent.");
+        }
+
+        [Test]
+        public void Negotiation_WreckedBed_ExcludedAsSalvageCandidate()
+        {
+            var f = MakeDealFixture();
+            // The bed is wrecked (condition 0): B6 records it unpriced, so
+            // the buyer excludes it as a salvage candidate, not a contents
+            // item. Table + chair + fixtures included: contents 25000,
+            // asking 225000, opening 25000 + 180000 = 205000.
+            HouseholdFurnishingRegister register = MakeRegister();
+            Assert.IsNull(register.TryRegisterAsset(MakeAsset("bed-1", "furniture.bed", 0f)));
+            Assert.IsNull(register.TryRegisterAsset(MakeAsset("table-1", "furniture.table")));
+            Assert.IsNull(register.TryRegisterAsset(MakeAsset("chair-1", "furniture.chair")));
+            Assert.IsNull(register.TryRegisterAsset(MakeAsset("stove-1", "furniture.cooking-stove")));
+            Assert.IsNull(register.TryRegisterAsset(MakeAsset("shelf-1", "furniture.shelf")));
+            BuildingFootprintAuthority building = MakeBuilding("seller-house");
+            InstallAsset(register, building, "bed-1");
+            InstallAsset(register, building, "table-1");
+            InstallAsset(register, building, "chair-1");
+            InstallAsset(register, building, "stove-1");
+            InstallAsset(register, building, "shelf-1");
+            var seller = new TestContentsSellerPolicy { ReservationBps = 9000 };
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string>(), 300000));
+            Assert.IsTrue(result.Agreed, result.FailureReason);
+            Assert.AreEqual(25000, result.AgreedSelection.TotalContentsValueCents);
+            Assert.AreEqual(205000, result.AgreedPriceCents);
+            Assert.AreEqual(180000, result.ImpliedStructureValueCents);
+            FurnishingContentsLine bed = result.AgreedSelection.Lines.Find(l => l.AssetId == "bed-1");
+            Assert.NotNull(bed);
+            Assert.IsFalse(bed.Included);
+            Assert.AreEqual(ExcludedItemDisposition.RemovedBySeller, bed.Disposition);
+            Assert.IsTrue(result.Rounds.Exists(r => r.Contains("bed-1") && r.Contains("salvage")),
+                "the wrecked bed must be recorded as a salvage candidate.");
+        }
+
+        [Test]
+        public void Negotiation_NoContents_BareSaleAtStructureValue()
+        {
+            var f = MakeDealFixture();
+            HouseholdFurnishingRegister register = MakeRegister(SellerHouseholdId);
+            var seller = new TestContentsSellerPolicy();
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string>(), 300000));
+            Assert.IsTrue(result.Agreed);
+            Assert.AreEqual(StructureValueCents, result.AgreedPriceCents);
+            Assert.IsNull(result.AgreedSelection);
+            Assert.AreEqual(StructureValueCents, result.ImpliedStructureValueCents);
+        }
+
+        [Test]
+        public void Negotiation_UnclassifiableItem_FailsLoudly()
+        {
+            var f = MakeDealFixture();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            Assert.IsNull(register.TryRegisterAsset(MakeAsset("whatsit-1", "furniture.whatsit")));
+            InstallAsset(register, building, "whatsit-1");
+            var seller = new TestContentsSellerPolicy();
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string>(), 300000));
+            Assert.IsFalse(result.Agreed);
+            Assert.IsTrue(result.FailureReason.Contains("whatsit-1"), result.FailureReason);
+        }
+
+        [Test]
+        public void Negotiation_FirmSeller_BuyerRaisesToAnchor()
+        {
+            var f = MakeDealFixture();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            // The seller counters above the anchor at 245000; the buyer
+            // refuses (above replacement + moving) and raises to the anchor
+            // 235000, which the seller accepts: agreed at the anchor, with
+            // the implied structure exactly the structure-only value.
+            var seller = new TestContentsSellerPolicy { ReservationBps = 10000, CounterPriceCents = 245000 };
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string>(), 300000));
+            Assert.IsTrue(result.Agreed, result.FailureReason);
+            Assert.AreEqual(235000, result.AgreedPriceCents);
+            Assert.AreEqual(35000, result.AgreedSelection.TotalContentsValueCents);
+            Assert.AreEqual(200000, result.ImpliedStructureValueCents);
+            Assert.AreEqual(ContentsSelectionMode.All, result.AgreedSelection.Mode);
+            Assert.IsTrue(result.Rounds.Exists(r => r.Contains("raises to 235000c")),
+                "the buyer must raise to the anchor before the seller accepts.");
+        }
+
+        [Test]
+        public void Negotiation_EndToEnd_NegotiatedPlan_ValidatesAndCloses()
+        {
+            var f = MakeDealFixture();
+            string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            var seller = new TestContentsSellerPolicy { ReservationBps = 9000 };
+            NpcContentsNegotiationResult negotiated = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string> { "furniture.bed", "furniture.table" }, 300000));
+            Assert.IsTrue(negotiated.Agreed, negotiated.FailureReason);
+            // Bed + table + fixtures: contents 32000, agreed 212000,
+            // implied structure 180000 — the plan is built from the
+            // negotiation result, not from the anchor.
+            NpcAcquisitionPlan plan = f.BasePlan("parcel-farm", spaceId, negotiated.AgreedPriceCents);
+            plan.Contents = negotiated.AgreedSelection;
+            Assert.IsNull(f.Acquisition.ValidatePlan(plan, f.Titles, f.Negotiations, f.Cash, f.Diag, register, negotiated.ImpliedStructureValueCents));
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            var resolver = new FakePlacementResolver(placements, building);
+            // The close re-checks conservation against the same structure
+            // value the plan was validated with: the implied structure
+            // (180000c), not the F6 anchor (200000c).
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, buyerRegister, resolver, negotiated.ImpliedStructureValueCents);
+            Assert.IsTrue(result.Closed, result.FailureReason);
+            Assert.AreEqual("household:" + BuyerHouseholdId, f.Titles.CurrentHolder("parcel-farm"));
+            Assert.AreEqual(300000 - 212000, f.Cash.FindStore("household:" + BuyerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual(5000 + 212000, f.Cash.FindStore("household:" + SellerHouseholdId).ReadBalanceCents());
+            Assert.IsTrue(result.CashConserved);
+            // Bed, table, stove, shelf transferred; the chair the buyer
+            // did not want was removed by the seller.
+            Assert.AreEqual(4, result.TransferredContentsAssetIds.Count);
+            Assert.AreEqual(1, result.RemovedContentsAssetIds.Count);
+            Assert.IsTrue(result.RemovedContentsAssetIds.Contains("chair-1"));
+            Assert.AreEqual(0, result.HeldInPlaceContentsAssetIds.Count);
+            Assert.AreEqual(4, buyerRegister.Assets.Count);
+            Assert.AreEqual(0, register.Validate().Count);
+            Assert.AreEqual(0, buyerRegister.Validate().Count);
+        }
+
+        [Test]
+        public void Negotiation_FailedNegotiation_LeavesCashAndTitleUntouched()
+        {
+            var f = MakeDealFixture();
+            f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            var seller = new TestContentsSellerPolicy { AlwaysWalk = true };
+            NpcContentsNegotiationResult result = NegotiateContents(f, seller, register,
+                BuyerRequest(new List<string>(), 300000));
+            Assert.IsFalse(result.Agreed);
+            // The negotiation is pure computation: no plan was built, no
+            // cash moved, no title moved.
+            Assert.AreEqual(300000, f.Cash.FindStore("household:" + BuyerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual(5000, f.Cash.FindStore("household:" + SellerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual("household:" + SellerHouseholdId, f.Titles.CurrentHolder("parcel-farm"));
         }
     }
 }

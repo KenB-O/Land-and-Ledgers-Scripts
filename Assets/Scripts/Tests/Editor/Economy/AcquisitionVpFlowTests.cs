@@ -35,8 +35,13 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(0, context.PlayerPortfolio.OwnerCashCents);
         }
 
+        // DEF-069 (Decision 12): the old business-earnest refusal waited
+        // on an escrow record; the record now exists, so business earnest
+        // commits through the same escrow-recorded path as land. The
+        // deposit is held in the ledger with its terms, not spent as
+        // revenue, and the deal advances to EarnestCommitted.
         [Test]
-        public void BusinessAcquisition_StopsBeforeEarnestWhenSellerTermsAndEscrowAreMissing()
+        public void BusinessAcquisition_CommitsEarnestThroughEscrowRecord()
         {
             using TestWorld context = TestWorld.Create(10000000);
             AcquisitionListing listing = context.AcquisitionMarket.BusinessListings[0];
@@ -47,14 +52,23 @@ namespace LandLedgers.Editor.Economy
                 buildingId, out AcquisitionMarketSection section, out _));
             Assert.IsTrue(context.AcquisitionMarket.TryPurchaseSelected(section, out string inquiry), inquiry);
             Assert.IsTrue(context.AcquisitionMarket.TryPresentProofOfFunds(listing.listingId, out string proof), proof);
-            Assert.IsFalse(context.AcquisitionMarket.TryPurchaseSelected(section, out string refusal));
+            Assert.IsTrue(context.AcquisitionMarket.TryPurchaseSelected(section, out string earnestMessage), earnestMessage);
 
-            StringAssert.Contains("Earnest blocked", refusal);
-            StringAssert.Contains("no escrow record", refusal);
-            Assert.AreEqual(ownerCashBefore, context.PlayerPortfolio.OwnerCashCents);
+            AcquisitionDealState deal = context.GetDeal(listing.listingId);
+            Assert.NotNull(deal);
+            Assert.AreEqual(AcquisitionDealStage.EarnestCommitted, deal.stage);
+            Assert.Greater(deal.earnestMoneyCents, 0);
+            Assert.AreEqual(ownerCashBefore - deal.earnestMoneyCents, context.PlayerPortfolio.OwnerCashCents);
             Assert.IsFalse(context.TownWorld.Buildings[buildingId].playerOwned);
-            Assert.AreNotEqual(BusinessOwnerKind.Player,
-                context.SharedBusinessRuntime.FindByBuildingId(buildingId).Owner.OwnerKind);
+
+            EarnestEscrowRecord escrow = context.AcquisitionMarket.EscrowLedger.FindOpenForListing(listing.listingId);
+            Assert.NotNull(escrow, "the committed earnest is held in an escrow record.");
+            Assert.AreEqual(EarnestEscrowState.Held, escrow.State);
+            Assert.AreEqual(deal.earnestMoneyCents, escrow.AmountCents);
+            Assert.AreEqual("Player", escrow.BuyerLabel);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(escrow.SellerLabel));
+            Assert.IsFalse(string.IsNullOrWhiteSpace(escrow.ForfeitTermsSummary));
+            Assert.AreEqual("Business", escrow.KindLabel);
         }
 
         [Test]

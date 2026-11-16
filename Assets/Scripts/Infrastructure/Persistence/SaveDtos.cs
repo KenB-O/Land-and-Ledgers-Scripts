@@ -1282,6 +1282,10 @@ namespace LandLedgers.Persistence
         // lands, on NPC distress sales through the same service). Old
         // saves load this as null and start with an empty claim record.
         public PropertyDisputeService.PropertyDisputeSaveDto propertyDisputes;
+        // DEF-069 (Decision 12, additive): the earnest escrow ledger —
+        // the distinct traceable escrow liability ledger. Old saves load
+        // this as null and start with an empty ledger.
+        public EarnestEscrowSaveDto earnestEscrow = new();
     }
 
     [Serializable]

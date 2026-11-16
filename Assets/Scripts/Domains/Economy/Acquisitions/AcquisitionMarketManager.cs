@@ -1171,6 +1171,10 @@ namespace LandLedgers.Economy
             // from the same service the acquisition choke point records
             // through, so player-path claims survive a save round trip.
             dto.propertyDisputes = PropertyDisputes.CaptureSaveDto();
+            // DEF-069: persist the earnest escrow ledger beside the deals
+            // it belongs to, so held and disputed earnest survives a save
+            // round trip and can never be lost to a reload.
+            dto.earnestEscrow = EscrowLedger.CaptureSaveDto();
 
             return dto;
         }
@@ -1206,6 +1210,8 @@ namespace LandLedgers.Economy
             {
                 titleAuthority.LoadFromSaveDto(new TitleAuthority.TitleSaveDto());
                 PropertyDisputes.LoadFromSaveDto(new PropertyDisputeService.PropertyDisputeSaveDto());
+                // DEF-069: a true new game starts with an empty escrow book.
+                EscrowLedger.LoadFromSaveDto(null, new List<string>());
                 EnsureConstructionSupportNodesLoaded();
                 marketBuilt = false;
                 RebuildMarket();
@@ -1232,6 +1238,12 @@ namespace LandLedgers.Economy
             // Pass XI WS3 (PASS9-003): restore the dispute-claim record
             // (null-guarded for pre-Pass-XI saves, which start empty).
             if (dto.propertyDisputes != null) PropertyDisputes.LoadFromSaveDto(dto.propertyDisputes);
+            // DEF-069: restore the earnest escrow ledger (null-guarded for
+            // pre-DEF-069 saves, which start empty). Duplicate ids are
+            // reported by the ledger, never silently dropped.
+            var escrowLoadDiag = new List<string>();
+            EscrowLedger.LoadFromSaveDto(dto.earnestEscrow, escrowLoadDiag);
+            foreach (string line in escrowLoadDiag) Debug.LogWarning($"[Acquisitions] {line}", this);
 
             if (dto.ownedPlotIds != null)
             {
@@ -7972,6 +7984,23 @@ namespace LandLedgers.Economy
             return false;
         }
 
+        /// <summary>
+        /// DEF-069: the forfeit terms written onto an escrow record at
+        /// commit, from the deal state. The fractions are the existing
+        /// FinancingFailureEvaluator rules, recorded not re-decided: 0%
+        /// forfeited before a tentative agreement, 25% on a protected
+        /// failure, 100% on an unprotected failure.
+        /// </summary>
+        private static string BuildEarnestForfeitTerms(AcquisitionDealState deal)
+        {
+            const string rule = "forfeit per FinancingFailureEvaluator: 0% before tentative agreement, 25% on a protected failure, 100% on an unprotected failure.";
+            if (deal == null) return rule;
+            string contingency = deal.financingContingencyPresent ? "financing contingency present" : "no financing contingency";
+            string option = deal.optionDeadlineDayIndex >= 0 ? $"option through day {deal.optionDeadlineDayIndex}" : "no option deadline";
+            string closing = deal.closingDeadlineDayIndex >= 0 ? $"closing by day {deal.closingDeadlineDayIndex}" : "no closing deadline";
+            return $"{contingency}; {option}; {closing}; {rule}";
+        }
+
         private bool CommitEarnest(AcquisitionListing listing, AcquisitionDealState deal, out string message)
         {
             if (IsDealExpired(deal))
@@ -7989,21 +8018,13 @@ namespace LandLedgers.Economy
                 return false;
             }
 
-            if (listing.kind == AcquisitionListingKind.Business)
-            {
-                // Do not move money using a calculated earnest percentage. The
-                // live business listing has no seller-authored earnest amount or
-                // refund/forfeit conditions, and FinancialObligationAuthority is
-                // a debt ledger rather than an escrow book. Refuse before cash
-                // moves instead of claiming a refundable deposit exists.
-                message = "Earnest blocked: this business listing has no seller-agreed earnest amount or refund/forfeit conditions, and the current financial obligation authority has no escrow record. No money moved. The seller must supply those terms before this acquisition can proceed.";
-                deal.statusText = message;
-                marketStatus = message;
-                lastPurchaseSummary = message;
-                RefreshDealWorkflowReadouts(listing, deal);
-                return false;
-            }
-
+            // DEF-069 (Decision 12): earnest commits through the escrow
+            // ledger, for business listings the same as land. The old
+            // business refusal waited on an escrow record; the record now
+            // exists, with the deal-derived forfeit terms written on it at
+            // commit (see BuildEarnestForfeitTerms). The deposit is real
+            // and traceable before cash moves, so there is nothing left
+            // for the old guard to protect.
             int earnest = Mathf.Clamp(deal.earnestMoneyCents <= 0 ? CalculateEarnestMoneyCents(listing, new SellerPressureEvaluator().Evaluate(BuildSellerProfile(listing))) : deal.earnestMoneyCents, 0, listing.askingPriceCents);
             if (!TrySpend(earnest, $"{listing.title} earnest money", out message))
             {
@@ -8014,6 +8035,21 @@ namespace LandLedgers.Economy
             }
 
             deal.earnestMoneyCents = earnest;
+            string sellerLabel = string.IsNullOrWhiteSpace(listing.ownerDisplayName) ? "Town" : listing.ownerDisplayName;
+            var escrowDiag = new List<string>();
+            EarnestEscrowRecord escrow = EscrowLedger.RecordCommit(
+                deal.listingId, deal.title, "Player", sellerLabel, listing.kind.ToString(),
+                earnest, GetCurrentDayIndex(), BuildEarnestForfeitTerms(deal), escrowDiag);
+            foreach (string line in escrowDiag) Debug.Log($"[Acquisitions] {line}", this);
+            if (escrow == null)
+            {
+                // Never hold unrecorded earnest: give it straight back.
+                RefundSpend(earnest, $"{listing.title} earnest money (escrow record refused)");
+                deal.statusText = $"Earnest blocked: the escrow ledger refused the deposit, so {FormatMoney(earnest)} was refunded. No money moved.";
+                marketStatus = deal.statusText;
+                lastPurchaseSummary = deal.statusText;
+                return false;
+            }
             MarkDealProgress(deal, AcquisitionDealStage.EarnestCommitted, GetCurrentDayIndex());
             deal.seriousness = EscalateSeriousness(deal.seriousness, deal.financingNeedCents <= 0 ? AcquisitionBuyerSeriousness.Ready : AcquisitionBuyerSeriousness.Active);
             deal.financingNeedCents = Mathf.Max(0, listing.askingPriceCents - earnest - GetAvailableCashCents());
@@ -8201,6 +8237,24 @@ namespace LandLedgers.Economy
             {
                 RefundSpend(finalDueCents, $"{listing.title} closing balance");
                 return false;
+            }
+
+            // DEF-069 (Decision 12): the earnest is part of the price. The
+            // close message has always claimed "Earnest credited"; the
+            // ledger now makes it true. A refusal is logged loudly and
+            // never voids the close (the deal already closed).
+            EarnestEscrowRecord openEscrow = EscrowLedger.FindOpenForListing(deal.listingId);
+            if (openEscrow != null)
+            {
+                var escrowDiag = new List<string>();
+                string applyProblem = EscrowLedger.ApplyToPrice(
+                    openEscrow.EscrowId, GetCurrentDayIndex(),
+                    $"applied to the {FormatMoney(finalPriceCents)} closing price for '{listing.title}'", escrowDiag);
+                foreach (string line in escrowDiag) Debug.Log($"[Acquisitions] {line}", this);
+                if (applyProblem != null)
+                {
+                    Debug.LogWarning($"[Acquisitions] Earnest apply-to-price refused: {applyProblem} Escrow {openEscrow.EscrowId} stays {openEscrow.State}; {FormatMoney(openEscrow.AmountCents)} preserved.", this);
+                }
             }
 
             MarkDealProgress(deal, AcquisitionDealStage.Closed, GetCurrentDayIndex());
@@ -8855,6 +8909,84 @@ namespace LandLedgers.Economy
         /// a hub-bound instance (mirroring into the hub PropertyInterestStore).
         /// </summary>
         public PropertyDisputeService PropertyDisputes => propertyDisputes ??= new PropertyDisputeService();
+
+        // DEF-069 (Decision 12): the earnest escrow book. Lazily created
+        // like PropertyDisputes above; persisted through AcquisitionSaveDto.
+        // The ledger is the single book for earnest — cash moves through
+        // the existing cash writer (TrySpend/RefundSpend), the ledger only
+        // records custody. A release to the seller is recorded as a claim
+        // owed to the named seller and held in the ledger until a
+        // seller-ledger path exists to settle it into; it is never swept
+        // into any treasury balance and never destroyed.
+        private EarnestEscrowLedger escrowLedger;
+
+        public EarnestEscrowLedger EscrowLedger => escrowLedger ??= new EarnestEscrowLedger();
+
+        /// <summary>
+        /// DEF-069: marks a held earnest escrow disputed. The funds are
+        /// preserved in the ledger — no release, no refund — until the
+        /// dispute is resolved through TryResolveEarnestEscrowDispute.
+        /// The legal/negotiated process that decides the split is not
+        /// built here; these are its entry points.
+        /// </summary>
+        public bool TryDisputeEarnestEscrow(string listingId, string reason, out string message)
+        {
+            EarnestEscrowRecord escrow = EscrowLedger.FindOpenForListing(listingId);
+            if (escrow == null)
+            {
+                message = $"No open earnest escrow for '{listingId}' to dispute.";
+                return false;
+            }
+
+            var diag = new List<string>();
+            string problem = EscrowLedger.Dispute(escrow.EscrowId, GetCurrentDayIndex(), reason, diag);
+            foreach (string line in diag) Debug.Log($"[Acquisitions] {line}", this);
+            if (problem != null)
+            {
+                message = problem;
+                return false;
+            }
+
+            message = $"Earnest escrow {escrow.EscrowId} disputed — {FormatMoney(escrow.AmountCents)} preserved in escrow pending resolution.";
+            marketStatus = message;
+            return true;
+        }
+
+        /// <summary>
+        /// DEF-069: resolves a disputed earnest escrow through the legal or
+        /// negotiated process. The caller supplies the decided split; the
+        /// ledger enforces seller + buyer == held amount and records the
+        /// outcome. The buyer portion is refunded to owner cash after the
+        /// ledger accepts; the seller portion is recorded as released to
+        /// the named seller and held in the ledger (see EscrowLedger).
+        /// </summary>
+        public bool TryResolveEarnestEscrowDispute(string listingId, int sellerCents, int buyerCents, string resolution, out string message)
+        {
+            EarnestEscrowRecord escrow = EscrowLedger.FindOpenForListing(listingId);
+            if (escrow == null)
+            {
+                message = $"No open earnest escrow for '{listingId}' to resolve.";
+                return false;
+            }
+
+            var diag = new List<string>();
+            string problem = EscrowLedger.ResolveDispute(escrow.EscrowId, sellerCents, buyerCents, GetCurrentDayIndex(), resolution, diag);
+            foreach (string line in diag) Debug.Log($"[Acquisitions] {line}", this);
+            if (problem != null)
+            {
+                message = problem;
+                return false;
+            }
+
+            if (buyerCents > 0)
+            {
+                RefundSpend(buyerCents, $"{escrow.DealTitle} disputed earnest refund");
+            }
+
+            message = $"Earnest escrow {escrow.EscrowId} resolved — {FormatMoney(sellerCents)} to {escrow.SellerLabel}, {FormatMoney(buyerCents)} refunded to the buyer. {resolution}";
+            marketStatus = message;
+            return true;
+        }
 
         private void RefundSpend(int cents, string label)
         {
@@ -9685,8 +9817,39 @@ namespace LandLedgers.Economy
                 daysUntilClosingDeadline = deal.closingDeadlineDayIndex >= 0 ? deal.closingDeadlineDayIndex - currentDay : 0
             });
 
-            int forfeited = Mathf.Clamp(result.ForfeitedEarnestMoneyCents, 0, Mathf.Max(0, deal.earnestMoneyCents));
-            int refundable = Mathf.Max(0, deal.earnestMoneyCents - forfeited);
+            // DEF-069 (Decision 12): settle from the escrow record — cash
+            // actually committed — never from deal.earnestMoneyCents, which
+            // is the EXPECTED earnest set at inquiry. A deal failing before
+            // earnest was committed has no escrow, so committed is 0 and
+            // nothing moves (previously the full expected earnest was
+            // refunded although the buyer never paid it). The forfeited
+            // portion is released to the named seller in the ledger; it is
+            // never destroyed and never swept into any treasury balance.
+            EarnestEscrowRecord escrow = EscrowLedger.FindOpenForListing(deal.listingId);
+            int committed = escrow != null ? Mathf.Max(0, escrow.AmountCents) : 0;
+            int forfeited = Mathf.Clamp(result.ForfeitedEarnestMoneyCents, 0, committed);
+            int refundable = Mathf.Max(0, committed - forfeited);
+            string escrowRead = string.Empty;
+            if (escrow != null)
+            {
+                var escrowDiag = new List<string>();
+                string settleProblem = EscrowLedger.SettleFailure(escrow.EscrowId, forfeited, refundable, currentDay, reason ?? string.Empty, escrowDiag);
+                foreach (string line in escrowDiag) Debug.Log($"[Acquisitions] {line}", this);
+                if (settleProblem != null)
+                {
+                    // The ledger refused: the funds stay held and nothing
+                    // is refunded. Loud, never silent.
+                    Debug.LogWarning($"[Acquisitions] Earnest settlement refused: {settleProblem} Escrow {escrow.EscrowId} stays Held; {FormatMoney(committed)} preserved.", this);
+                    escrowRead = $" Escrow {escrow.EscrowId} settlement refused — {FormatMoney(committed)} stays held.";
+                    refundable = 0;
+                    forfeited = 0;
+                }
+                else
+                {
+                    escrowRead = $" Escrow {escrow.EscrowId}: {FormatMoney(forfeited)} released to {escrow.SellerLabel}, {FormatMoney(refundable)} refunded to the buyer.";
+                }
+            }
+
             if (refundable > 0)
             {
                 RefundSpend(refundable, $"{deal.title} protected earnest refund");
@@ -9708,7 +9871,7 @@ namespace LandLedgers.Economy
             {
                 deal.closingFailureCause = AcquisitionClosingFailureCause.LenderRetreat;
             }
-            deal.statusText = $"{reason} {result.Summary} Earnest forfeited: {FormatMoney(forfeited)}. Cooldown: {result.CooldownDays} days.";
+            deal.statusText = $"{reason} {result.Summary} Earnest forfeited: {FormatMoney(forfeited)}. Cooldown: {result.CooldownDays} days.{escrowRead}";
             marketStatus = deal.statusText;
             lastPurchaseSummary = deal.statusText;
             message = deal.statusText;

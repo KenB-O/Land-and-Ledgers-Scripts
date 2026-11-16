@@ -307,6 +307,27 @@ namespace LandLedgers.EditorTests.Integration
             // (SimulationDrivers), the registry gains production callers
             // outside the directory and these should leave the baseline.
             "FurnishingStorageBinding", "FurnishingStorageRegistry", "FurnishingDisplayAllocation",
+            // B6 (Agent B, expanded campaign 2026-11-16): the contents
+            // selection and furnishing-decision records of
+            // PropertyContentsSelection.cs and
+            // HouseholdFurnishingEvaluator.cs. They are the working
+            // records of the contents/evaluator feature — constructed
+            // and consumed inside those files and read by the tests;
+            // they have no reference outside Domains/Population yet, so
+            // they are classified feature-internal here, the same
+            // precedent as the B1 sleeping-place, B4 dining and B5
+            // storage records above. FurnishingClassification and
+            // HouseholdFurnishingEvaluator are static classes and the
+            // enums (FurnishingFixtureKind, ContentsSelectionMode,
+            // ExcludedItemDisposition, FurnishingWantReason,
+            // FurnishingWantChannel, FurnishingResaleReason) need no
+            // entry. When Agent D wires the contents contract (D-6/D-7,
+            // Domains/Economy/Businesses/Construction) and Agent G wires
+            // the furnishing drivers (SimulationDrivers), these gain
+            // production callers outside the directory and should leave
+            // the baseline.
+            "FurnishingContentsItem", "FurnishingContentsLine", "PropertyContentsSelection",
+            "FurnishingWant", "FurnishingResaleLine", "HouseholdFurnishingEvaluationInputs",
             "SkillTaskDurationEstimator",
             "SmithingRecipe", "SocietyReconciliation", "StageLaborBaseline", "StagedBakeryBatch",
             "StagedBakeryBatchSaveDto", "StandingInstruction", "StandingInstructionRegister", "StandingInstructionSaveDto",

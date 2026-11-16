@@ -618,5 +618,194 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(815, windows[0].EndMinuteOfDay, "The 95-min trip ends at 815.");
             Assert.AreEqual(0, f.ShoppingWindows(2).Count, "Anna holds no shopping reservation.");
         }
+
+        // ---------- Package 19 (B-16 residuals): batch pre-check false-reject ----------
+
+        [Test]
+        public void ExecuteBatch_Member0RemoteMember1HomeLateDeparture_HomeMemberShops()
+        {
+            // E-35 residual 1: the batch pre-check priced supplier
+            // viability from member-0's location only. Tomas (member-0)
+            // is at the forest camp and the requested departure is 720, so
+            // the pre-check arrival from the camp is 720 + 360 = 1080 =
+            // close, and the supplier was wrongly rejected even though
+            // Anna (member-1, home) arrives at 720 + 40 = 760, inside
+            // hours. The batch must shop from the home member's actual
+            // location instead of failing the need as unservable.
+            Fixture f = Fixture.Create();
+            f.Fund(5000);
+            f.PersonLocations[1] = "forest-camp"; // Tomas (member-0) is remote; Anna stays home.
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 2);
+            ShoppingLoopOptions options = f.Options();
+            options.DepartureMinuteOfDay = 720;
+            List<HouseholdErrandPlan> plans = f.Coordinator.PlanDay(f.HouseholdId, f.Day, f.Context(), f.Diagnostics);
+            Assert.AreEqual(1, plans.Count, "One plan claims the one open need.");
+            HouseholdShoppingLoop.BatchShoppingResult batch =
+                f.Coordinator.ExecutePlan(plans[0], f.Day, f.Context(), f.Loop, options, f.Diagnostics);
+            Assert.IsTrue(batch.TripExecuted, "The batch trip executes from the home member's location. Reason: " + batch.FailureReason);
+            Assert.AreEqual(2, batch.ShopperPersonId, "The home member (Anna) shops, not the remote member-0.");
+            List<PersonActivityReservation> windows = f.ShoppingWindows(2);
+            Assert.AreEqual(1, windows.Count, "Anna holds exactly one shopping window.");
+            Assert.AreEqual(720, windows[0].StartMinuteOfDay, "The trip departs at 720.");
+            Assert.AreEqual(815, windows[0].EndMinuteOfDay, "The 95-min trip from home ends at 815.");
+            Assert.AreEqual(0, f.ShoppingWindows(1).Count, "Tomas holds no shopping reservation.");
+            Assert.AreEqual("forest-camp", f.PersonLocations[1], "Tomas never moved from the camp.");
+        }
+
+        // ---------- Package 19 (B-16 residuals): "cannot trade at arrival" reason text ----------
+
+        [Test]
+        public void WindowSearch_ClosedAtArrival_NamesCannotTradeAtArrival_DepartureLevel()
+        {
+            // E-35 residual 3 (no-delegate branch): when the store cannot
+            // trade at any arrival, the window search's reason must name
+            // "cannot trade at arrival" so a wording regression is caught.
+            // The trading lambda returns a closure reason for every
+            // arrival (a reason-text pin, not a store-hours test — the
+            // store-hours logic is covered by the 735-min test).
+            Fixture f = Fixture.Create();
+            int departure;
+            string reason;
+            int shopper = ShopperAssignmentPolicy.ChooseShopperWithWindowSearch(
+                f.Population, f.MemberIds(), f.Day, 480, 95, 40, 15,
+                arrival => "closed: closed at minute 1080, now " + arrival,
+                f.Tracker, f.Budgets, f.PersonEntityId(), out departure, out reason);
+            Assert.AreEqual(-1, shopper, "No window works when the store cannot trade at any arrival.");
+            Assert.AreEqual(-1, departure);
+            StringAssert.Contains("cannot trade at arrival", reason,
+                "The reason must pin the trading-failure wording. Reason: " + reason);
+        }
+
+        [Test]
+        public void WindowSearch_ClosedAtArrival_NamesCannotTradeAtArrival_PerCandidate()
+        {
+            // E-35 residual 3 (per-candidate branch, delegate supplied):
+            // the per-candidate arrival check must name "cannot trade at
+            // arrival" per candidate, so a wording regression is caught.
+            Fixture f = Fixture.Create();
+            int departure;
+            string reason;
+            int shopper = ShopperAssignmentPolicy.ChooseShopperWithWindowSearch(
+                f.Population, f.MemberIds(), f.Day, 480, 95, 40, 15,
+                arrival => "closed: closed at minute 1080, now " + arrival,
+                f.Tracker, f.Budgets, f.PersonEntityId(), out departure, out reason,
+                null, pid => pid == 1 ? 40 : 360);
+            Assert.AreEqual(-1, shopper, "No window works when the store cannot trade at any arrival.");
+            Assert.AreEqual(-1, departure);
+            StringAssert.Contains("cannot trade at arrival", reason,
+                "The reason must pin the trading-failure wording. Reason: " + reason);
+        }
+
+        // ---------- Package 19 (B-16 residuals): errand-coordinator reassignment delegate ----------
+
+        [Test]
+        public void ReassignIfUnavailable_TravelDelegate_NearerReplacementWins()
+        {
+            // E-35 residual 2: with a travel delegate wired into the
+            // coordinator context, the reassignment breaks availability
+            // ties by one-way travel from the candidate's actual
+            // location (QA-15/OD-2 — never sex, never an assumed home
+            // position). P1 (the executor) goes off-map; P2 is remote
+            // (forest camp, 360 min) and precedes P3 (home, 40 min) in
+            // member order, so without the delegate P2 would win — with
+            // it, the nearer P3 is reassigned.
+            Fixture f = Fixture.Create();
+            var thirdAdult = new PersonState { id = 3, firstName = "Ana", lastName = "Morrow", age = 29, ageBand = AgeBand.Adult18Plus, isFemale = true };
+            f.Population.people.Add(thirdAdult);
+            string regProblem = f.Membership.Register(new HouseholdMembership { MembershipId = 3, PersonId = 3, HouseholdId = 7, StartDayIndex = 0 });
+            Assert.IsNull(regProblem, regProblem);
+            f.PersonLocations[2] = "forest-camp"; // P2 remote; P3 stays home.
+            f.PersonLocations[3] = "home";
+            OffMapJourneyAuthority authority = DepartFirstAdultOffMap(f, 1);
+
+            var coordinator = new HouseholdErrandCoordinator();
+            var ctx = new HouseholdErrandCoordinator.CoordinatorContext
+            {
+                Population = f.Population,
+                Memberships = f.Membership,
+                Schedules = f.Tracker,
+                Budgets = f.Budgets,
+                PersonEntityId = pid => EntityId.For(EntityKind.Person, pid),
+                Needs = f.Needs,
+                OffMapJourneys = authority,
+                OneWayMinutesFor = pid => pid == 2 ? 360 : 40,
+            };
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 5);
+            HouseholdErrandPlan plan = coordinator.Plans.Create(7, 0);
+            Assert.IsTrue(coordinator.Plans.Claim(plan.PlanId, 7, need.NeedSequence), "The need must claim cleanly.");
+            string refusal = f.Tracker.TryReserve(1, PersonActivityKind.Shopping, 0, 0, 30, "test plan window");
+            Assert.IsNull(refusal, refusal);
+            List<PersonActivityReservation> active = f.Tracker.ActiveFor(1, 0);
+            Assert.AreEqual(1, active.Count, "The plan window reservation must exist before reassignment is tested.");
+            plan.Assign(1, new List<string> { need.NeedSequence.ToString() }, active[0].ReservationId);
+            Assert.IsTrue(authority.IsOffMapPerson(1), "P1 must still read off-map when reassignment is tested.");
+
+            string result = coordinator.ReassignIfUnavailable(plan.PlanId, 0, ctx, f.Diagnostics);
+
+            Assert.IsTrue(result != null, "Reassignment must report the move, not return a no-op null.");
+            Assert.AreEqual(3, plan.ResponsiblePersonId,
+                "With the travel delegate the nearer replacement (P3, home) is reassigned over the remote P2. Result: " + result);
+        }
+
+        [Test]
+        public void ReassignIfUnavailable_NoTravelDelegate_FirstInMemberOrderWins()
+        {
+            // E-35 residual 2, control: without a travel delegate the
+            // reassignment keeps today's behaviour — among equally
+            // available adults the first in member order wins. P1 (the
+            // executor) goes off-map; P2 (remote, forest camp) precedes
+            // P3 (home) in member order, so P2 is reassigned.
+            Fixture f = Fixture.Create();
+            var thirdAdult = new PersonState { id = 3, firstName = "Ana", lastName = "Morrow", age = 29, ageBand = AgeBand.Adult18Plus, isFemale = true };
+            f.Population.people.Add(thirdAdult);
+            string regProblem = f.Membership.Register(new HouseholdMembership { MembershipId = 3, PersonId = 3, HouseholdId = 7, StartDayIndex = 0 });
+            Assert.IsNull(regProblem, regProblem);
+            f.PersonLocations[2] = "forest-camp"; // P2 remote; P3 stays home.
+            f.PersonLocations[3] = "home";
+            OffMapJourneyAuthority authority = DepartFirstAdultOffMap(f, 1);
+
+            var coordinator = new HouseholdErrandCoordinator();
+            var ctx = new HouseholdErrandCoordinator.CoordinatorContext
+            {
+                Population = f.Population,
+                Memberships = f.Membership,
+                Schedules = f.Tracker,
+                Budgets = f.Budgets,
+                PersonEntityId = pid => EntityId.For(EntityKind.Person, pid),
+                Needs = f.Needs,
+                OffMapJourneys = authority,
+            };
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 5);
+            HouseholdErrandPlan plan = coordinator.Plans.Create(7, 0);
+            Assert.IsTrue(coordinator.Plans.Claim(plan.PlanId, 7, need.NeedSequence), "The need must claim cleanly.");
+            string refusal = f.Tracker.TryReserve(1, PersonActivityKind.Shopping, 0, 0, 30, "test plan window");
+            Assert.IsNull(refusal, refusal);
+            List<PersonActivityReservation> active = f.Tracker.ActiveFor(1, 0);
+            Assert.AreEqual(1, active.Count, "The plan window reservation must exist before reassignment is tested.");
+            plan.Assign(1, new List<string> { need.NeedSequence.ToString() }, active[0].ReservationId);
+            Assert.IsTrue(authority.IsOffMapPerson(1), "P1 must still read off-map when reassignment is tested.");
+
+            string result = coordinator.ReassignIfUnavailable(plan.PlanId, 0, ctx, f.Diagnostics);
+
+            Assert.IsTrue(result != null, "Reassignment must report the move, not return a no-op null.");
+            Assert.AreEqual(2, plan.ResponsiblePersonId,
+                "Without a travel delegate the first member in member order (P2, remote) is reassigned. Result: " + result);
+        }
+
+        private static OffMapJourneyAuthority DepartFirstAdultOffMap(Fixture f, int personId)
+        {
+            // ReserveCreditTests.DepartFirstAdultOffMap precedent: P1
+            // departs through the off-map gateway, so CheckUnavailable
+            // reports the executor off-map and the plan reassigns.
+            f.Journeys.RegisterLocation(new JourneyLocation("gateway", JourneyLocationKind.OffMapGateway, "Depot", 4f, 0f));
+            f.Journeys.AddEdge("home", "gateway", 4.0f, "depot road");
+            var authority = new OffMapJourneyAuthority(f.Journeys);
+            OffMapJourneyRecord record = authority.DepartPerson(
+                personId, "home", "Millbrook", 1, 2, "freight",
+                null, null, 0, _ => 0, null, f.Diagnostics);
+            Assert.IsNotNull(record, "DepartPerson must create the journey record: " + string.Join("; ", f.Diagnostics));
+            Assert.IsTrue(authority.IsOffMapPerson(personId), $"P{personId} must read off-map while the journey is active.");
+            return authority;
+        }
     }
 }

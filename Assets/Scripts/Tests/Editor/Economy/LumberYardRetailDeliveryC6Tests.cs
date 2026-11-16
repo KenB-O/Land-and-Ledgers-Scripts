@@ -524,6 +524,57 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void C6_WagonConflict_ShipmentNotCreated_FareRefundedInFull_RetryChargesOnce()
+        {
+            World world = NewWorld();
+            StockYard(world);
+            LumberYardSaleRecord sale = SellRetail(world, 28);
+            world.Freight.RegisterWagon(world.Wagon);
+            var blockerHooks = new FreightShipmentHooks
+            {
+                Tasks = world.Tasks,
+                Budgets = world.Budgets,
+                Schedules = world.Schedules,
+                DayIndex = DeliveryDay,
+                Diagnostics = world.Diagnostics,
+            };
+            LogisticsShipmentState blocker = world.Freight.CreateShipment(
+                "blocker-1", "yard-1", "carpenter-shop", 1, LumberCargoSpec.Spec,
+                world.Wagon.AssetId, blockerHooks, out string blockerReason);
+            Assert.IsNotNull(blocker, "The blocker shipment is live on the wagon: " + blockerReason);
+            var service = NewService(world);
+
+            string refusal = service.ExecuteRetailDelivery(
+                sale, MakeRequest(world, sale), MakeExecution(world), DeliveryDay, world.Diagnostics);
+
+            Assert.IsNotNull(refusal, "A wagon already hauling refuses the trip before it runs.");
+            Assert.IsTrue(refusal.Contains("refunded"), "The refusal names the fare refund: " + refusal);
+            Assert.AreEqual(10000, world.BuyerCash.BalanceCents, "The fare is refunded in full — the trip never departed.");
+            Assert.AreEqual(0, world.CarrierCash.BalanceCents, "The carrier keeps nothing for a trip that never departed.");
+            Assert.AreEqual(1, world.Freight.TrackedShipments.Count, "Only the blocker shipment exists — no yard shipment.");
+            Assert.AreEqual("blocker-1", world.Freight.TrackedShipments[0].ShipmentId);
+            LumberYardDeliveryOrder order = OrderForSale(world, sale);
+            Assert.IsNotNull(order);
+            Assert.IsTrue(!order.IsDelivered);
+            Assert.AreEqual(0, order.SettledDeliveryCents, "The fare record is cleared for the retry.");
+            Assert.AreEqual(0, order.ShipmentIds.Count, "No shipment id is recorded for the failed trip.");
+            Assert.AreEqual(0, world.ReceivedUnits);
+            Assert.AreEqual(12, world.Yard.LumberStock.TotalLumberUnits, "The lumber stays at the yard.");
+
+            world.Freight.FailAbandonedShipment(blocker, "test releases the wagon for the retry", blockerHooks);
+            Assert.IsNull(service.ExecuteRetailDelivery(
+                sale, MakeRequest(world, sale), MakeExecution(world), DeliveryDay + 1, world.Diagnostics),
+                string.Join("; ", world.Diagnostics));
+            Assert.IsTrue(order.IsDelivered);
+            Assert.AreEqual(SixMileTripChargeCents, order.SettledDeliveryCents, "The delivery charge settles once, on the retry.");
+            Assert.AreEqual(10000 - SixMileTripChargeCents, world.BuyerCash.BalanceCents);
+            Assert.AreEqual(SixMileTripChargeCents, world.CarrierCash.BalanceCents);
+            Assert.AreEqual(28, world.ReceivedUnits);
+            Assert.AreEqual(2, world.Freight.TrackedShipments.Count, "Blocker (abandoned) plus the retry's shipment.");
+            Assert.AreEqual("ydship-1", order.ShipmentIds[0], "The failed attempt consumed ydship-0; the retry ships as ydship-1.");
+        }
+
+        [Test]
         public void C6_BuyerHaulage_RecordsObligation_NoChargeNoFreightNoCash()
         {
             World world = NewWorld();

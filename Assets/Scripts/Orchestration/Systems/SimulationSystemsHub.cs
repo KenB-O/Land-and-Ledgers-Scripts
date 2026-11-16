@@ -254,6 +254,19 @@ namespace LandLedgers.Orchestration.Systems
             return register;
         }
 
+        /// <summary>
+        /// W-G1 (Agent G, expanded campaign 2026-11-16): read-only
+        /// snapshot of the hub's live equipment registers, for the
+        /// Pass 9 save sync (Series2Pass9SaveState.
+        /// SyncRegistersFromHub). A new list each call, never the live
+        /// dictionary, so callers cannot add or remove hub holders.
+        /// Empty when no register has been created yet.
+        /// </summary>
+        public IReadOnlyList<BusinessEquipmentRegister> AllEquipmentRegisters =>
+            equipmentRegisters != null
+                ? new List<BusinessEquipmentRegister>(equipmentRegisters.Values)
+                : new List<BusinessEquipmentRegister>();
+
         /// <summary>C2: the lumber yard runtime for one business, created on first use (empty).</summary>
         public LumberYardShopRuntime LumberYardRuntimeFor(string businessInstanceId)
         {
@@ -291,6 +304,19 @@ namespace LandLedgers.Orchestration.Systems
             }
             return register;
         }
+
+        /// <summary>
+        /// W-G1 (Agent G, expanded campaign 2026-11-16): read-only
+        /// snapshot of the hub's live furnishing registers, for the
+        /// Pass 9 save sync (Series2Pass9SaveState.
+        /// SyncRegistersFromHub). A new list each call, never the live
+        /// dictionary, so callers cannot add or remove hub holders.
+        /// Empty when no register has been created yet.
+        /// </summary>
+        public IReadOnlyList<HouseholdFurnishingRegister> AllFurnishingRegisters =>
+            householdFurnishingRegisters != null
+                ? new List<HouseholdFurnishingRegister>(householdFurnishingRegisters.Values)
+                : new List<HouseholdFurnishingRegister>();
 
         /// <summary>
         /// B0: adopts a register (e.g. one restored from the Pass 9 save

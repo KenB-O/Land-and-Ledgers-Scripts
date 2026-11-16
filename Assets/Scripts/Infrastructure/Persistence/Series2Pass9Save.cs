@@ -672,6 +672,150 @@ namespace LandLedgers.Persistence
             return null;
         }
 
+        /// <summary>
+        /// W-G1 (Agent G, expanded campaign 2026-11-16): adopts
+        /// hub-owned equipment/furnishing registers created mid-game
+        /// into the Pass 9 state lists, so the next Capture persists
+        /// them. The state lists are the ONLY persistence path for
+        /// registers (the hub DTO does not include them) and the
+        /// bootstrap seeds them only at NewGame, so a register created
+        /// after NewGame — lumber yard, carpenter business, household
+        /// furnishings — exists only in the hub dictionary until this
+        /// sync runs. Called from SaveLoadManager.BuildSaveDto
+        /// immediately before the coordinator Capture snapshots the
+        /// state lists. Takes enumerables, not the hub, so it stays
+        /// Unity-free and directly testable, the same pattern as the
+        /// coordinator. Rules, per list independently: a hub register
+        /// with no state entry of the same id is ADOPTED (the live hub
+        /// object is added, so later hub mutations stay visible to
+        /// Capture's deep copy) only when non-empty — business:
+        /// Assets or Kits; furnishing: Assets or Bindings — so
+        /// read-created empties never pollute saves; a hub register
+        /// whose id already exists in the state list REPLACES it
+        /// by id (live hub data is authoritative at SAVE time, the
+        /// inverse of Restore, where save data is authoritative at
+        /// LOAD time); a state entry missing from the hub is NEVER
+        /// deleted — a missing hub entry could be a load-order
+        /// artifact, and deleting would destroy saved data — it is
+        /// kept and named in the diagnostic. Null-safe end to end:
+        /// null enumerables or a null state list skip that list with
+        /// a diagnostic; null register entries and blank business ids
+        /// are skipped; never throws. Idempotent: adopt-missing plus
+        /// replace-by-id, so calling sync twice before a save
+        /// produces the same state, and syncing after Restore
+        /// produces no duplicates. One summary line is appended to
+        /// diag per call.
+        /// </summary>
+        public void SyncRegistersFromHub(IEnumerable<BusinessEquipmentRegister> equipment, IEnumerable<HouseholdFurnishingRegister> furnishings, List<string> diag)
+        {
+            diag = diag ?? new List<string>();
+            int adoptedEquipment = 0;
+            int replacedEquipment = 0;
+            int skippedEmptyEquipment = 0;
+            int keptStateOnlyEquipment = 0;
+            var adoptedEquipmentIds = new List<string>();
+            var keptStateOnlyEquipmentIds = new List<string>();
+            int adoptedFurnishings = 0;
+            int replacedFurnishings = 0;
+            int skippedEmptyFurnishings = 0;
+            int keptStateOnlyFurnishings = 0;
+            var adoptedFurnishingIds = new List<string>();
+            var keptStateOnlyFurnishingIds = new List<string>();
+
+            if (EquipmentRegisters == null)
+            {
+                diag.Add("Series2Pass9SaveState.SyncRegistersFromHub: EquipmentRegisters list is null; equipment sync skipped.");
+            }
+            else if (equipment == null)
+            {
+                diag.Add("Series2Pass9SaveState.SyncRegistersFromHub: no hub equipment registers supplied; equipment sync skipped.");
+            }
+            else
+            {
+                var seenEquipmentIds = new HashSet<string>(StringComparer.Ordinal);
+                foreach (BusinessEquipmentRegister register in equipment)
+                {
+                    if (register == null) continue;
+                    if (string.IsNullOrWhiteSpace(register.BusinessInstanceId)) continue;
+                    seenEquipmentIds.Add(register.BusinessInstanceId);
+                    int index = EquipmentRegisters.FindIndex(state =>
+                        state != null && string.Equals(state.BusinessInstanceId, register.BusinessInstanceId, StringComparison.Ordinal));
+                    if (index >= 0)
+                    {
+                        EquipmentRegisters[index] = register;
+                        replacedEquipment++;
+                    }
+                    else if ((register.Assets != null && register.Assets.Count > 0)
+                        || (register.Kits != null && register.Kits.Count > 0))
+                    {
+                        EquipmentRegisters.Add(register);
+                        adoptedEquipment++;
+                        adoptedEquipmentIds.Add(register.BusinessInstanceId);
+                    }
+                    else
+                    {
+                        skippedEmptyEquipment++;
+                    }
+                }
+                foreach (BusinessEquipmentRegister stateRegister in EquipmentRegisters)
+                {
+                    if (stateRegister == null || string.IsNullOrWhiteSpace(stateRegister.BusinessInstanceId)) continue;
+                    if (!seenEquipmentIds.Contains(stateRegister.BusinessInstanceId))
+                    {
+                        keptStateOnlyEquipment++;
+                        keptStateOnlyEquipmentIds.Add(stateRegister.BusinessInstanceId);
+                    }
+                }
+            }
+
+            if (HouseholdFurnishingRegisters == null)
+            {
+                diag.Add("Series2Pass9SaveState.SyncRegistersFromHub: HouseholdFurnishingRegisters list is null; furnishing sync skipped.");
+            }
+            else if (furnishings == null)
+            {
+                diag.Add("Series2Pass9SaveState.SyncRegistersFromHub: no hub furnishing registers supplied; furnishing sync skipped.");
+            }
+            else
+            {
+                var seenFurnishingIds = new HashSet<int>();
+                foreach (HouseholdFurnishingRegister register in furnishings)
+                {
+                    if (register == null) continue;
+                    seenFurnishingIds.Add(register.HouseholdId);
+                    int index = HouseholdFurnishingRegisters.FindIndex(state =>
+                        state != null && state.HouseholdId == register.HouseholdId);
+                    if (index >= 0)
+                    {
+                        HouseholdFurnishingRegisters[index] = register;
+                        replacedFurnishings++;
+                    }
+                    else if ((register.Assets != null && register.Assets.Count > 0)
+                        || (register.Bindings != null && register.Bindings.Count > 0))
+                    {
+                        HouseholdFurnishingRegisters.Add(register);
+                        adoptedFurnishings++;
+                        adoptedFurnishingIds.Add(register.HouseholdId.ToString());
+                    }
+                    else
+                    {
+                        skippedEmptyFurnishings++;
+                    }
+                }
+                foreach (HouseholdFurnishingRegister stateRegister in HouseholdFurnishingRegisters)
+                {
+                    if (stateRegister == null) continue;
+                    if (!seenFurnishingIds.Contains(stateRegister.HouseholdId))
+                    {
+                        keptStateOnlyFurnishings++;
+                        keptStateOnlyFurnishingIds.Add(stateRegister.HouseholdId.ToString());
+                    }
+                }
+            }
+
+            diag.Add($"Series2Pass9SaveState.SyncRegistersFromHub: equipment adopted {adoptedEquipment} ({string.Join(", ", adoptedEquipmentIds)}), replaced {replacedEquipment}, skipped-empty {skippedEmptyEquipment}, state-only kept {keptStateOnlyEquipment} ({string.Join(", ", keptStateOnlyEquipmentIds)}); furnishings adopted {adoptedFurnishings} ({string.Join(", ", adoptedFurnishingIds)}), replaced {replacedFurnishings}, skipped-empty {skippedEmptyFurnishings}, state-only kept {keptStateOnlyFurnishings} ({string.Join(", ", keptStateOnlyFurnishingIds)}).");
+        }
+
         public Series2Pass9SaveDto Capture(List<string> diag)
         {
             diag = diag ?? new List<string>();

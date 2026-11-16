@@ -69,6 +69,15 @@ namespace LandLedgers.Skills
         public const string Cooking = "cooking";
         public const string Cleaning = "cleaning";
         public const string BasicRepair = "basic-repair";
+        /// <summary>
+        /// F1 (expanded campaign 2026-11-16): carpentry — the furniture-making
+        /// trade skill. The construction builder/carpenter crew is a different
+        /// thing (it builds buildings); this id is the workshop trade that
+        /// makes furniture. Used as the PerformanceSkillId of the furniture
+        /// recipes and as the operator-skill support requirement of the
+        /// carpenter workstation.
+        /// </summary>
+        public const string Carpentry = "carpentry";
     }
 
     /// <summary>

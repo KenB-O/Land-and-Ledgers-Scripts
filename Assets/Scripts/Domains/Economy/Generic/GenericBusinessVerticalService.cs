@@ -26,6 +26,29 @@ namespace LandLedgers.Economy
             business.TryConfigureGenericRetailLine(new GenericRetailProductLine("bread", "display", 12f, 24f, 6f, 15), 12f);
         }
 
+        /// <summary>
+        /// F1 (expanded campaign 2026-11-16): installs the furniture methods
+        /// and make-to-stock policies on the CALLER's business. It creates no
+        /// equipment, premises, stock, workers or operating state — those
+        /// remain ordinary acquisition and runtime paths, per this service's
+        /// contract. It does NOT decide which business makes furniture
+        /// (O-F3, open): any business the owner (or a later binding) chooses
+        /// calls this. No retail lines are configured here — furniture retail
+        /// is F2. Policy targets are test-scale defaults for slow durables
+        /// (one unit, or one chair batch, on hand; at most two); the
+        /// producing business sets its own targets.
+        /// </summary>
+        public static void ConfigureCarpentry(BusinessInstanceState business)
+        {
+            if (business == null) return;
+            foreach (ProductionMethodDefinition method in GenericVerticalCatalog.Furniture())
+            {
+                business.RegisterGenericProductionMethod(method);
+                business.RegisterGenericProductionPolicy(GenericVerticalCatalog.StockPolicy(
+                    method.MethodId, target: 1f, maximum: 2f, priority: 10));
+            }
+        }
+
         public static void ConfigurePrairieForkSmithy(BusinessInstanceState business)
         {
             if (business == null) return;

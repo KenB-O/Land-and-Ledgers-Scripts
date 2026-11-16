@@ -72,6 +72,28 @@ namespace LandLedgers.Economy
             return methods;
         }
 
+        /// <summary>
+        /// F1 (expanded campaign 2026-11-16): the furniture methods, derived
+        /// from FurnitureRecipePresets — the recipes stay the one authority,
+        /// these methods are their runtime projection. A business must still
+        /// own the referenced equipment/workspace and pass the physical
+        /// evaluator at execution time. Which business runs these methods is
+        /// NOT decided here (O-F3, open); this catalog entry is the seam the
+        /// future carpenter binding (or a diversifying business) calls.
+        /// One run of the chair method makes 4 chairs (batch of 4 per one
+        /// nails_hardware_lot); every other method makes 1 unit per run.
+        /// </summary>
+        public static IReadOnlyList<ProductionMethodDefinition> Furniture()
+        {
+            var methods = new List<ProductionMethodDefinition>();
+            foreach (LandLedgers.Economy.GenericBusiness.ProductionRecipeDetail recipe
+                in LandLedgers.Economy.GenericBusiness.FurnitureRecipePresets.All())
+            {
+                methods.Add(recipe.ToMethodDefinition());
+            }
+            return methods;
+        }
+
         public static GenericProductionPolicy StockPolicy(string methodId, float target, float maximum, int priority = 0)
         {
             return new GenericProductionPolicy

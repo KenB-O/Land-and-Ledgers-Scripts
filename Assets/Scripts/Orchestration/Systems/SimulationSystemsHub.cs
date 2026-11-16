@@ -8,6 +8,7 @@ using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.DraftPower;
 using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Economy.Farming;
 using LandLedgers.Economy.Farming.Integration;
 using LandLedgers.Economy.Freight;
@@ -183,6 +184,29 @@ namespace LandLedgers.Orchestration.Systems
         // register holds no equipment — the gate still refuses loudly.
         private Dictionary<string, BusinessEquipmentRegister> equipmentRegisters;
 
+        // C-3 (expanded campaign): hub-owned per-business workstation
+        // registries, keyed by holder id (not just business — the shape
+        // serves future household workstations too, e.g. stoves).
+        // Mirrors equipmentRegisters above. The registries are the live
+        // holders; the bootstrapper re-derives the mill's saw-line station
+        // from the equipment register on every boot, so no Pass 9 save
+        // seam exists for them in this slice — if workstation instances
+        // ever gain mutable runtime state, add the seam (and an adopt
+        // method) then. A holder with no registry holds no workstation —
+        // the gate still refuses loudly.
+        private Dictionary<string, BusinessWorkstations> workstationRegisters;
+
+        // C-3: hub-owned per-business support contexts (Canon 5.2: fuel
+        // and consumable stocks, trained operator skills, repair
+        // capabilities, compatible infrastructure), keyed by business
+        // instance id. The gate's SupportSupplier is holder-blind, so the
+        // hub merges every registered context into one (CollectGateSupport
+        // below); only the mill has authored support state today, so the
+        // merge cannot leak one business's stock into another's check yet
+        // — a holder-parameterized supplier is the follow-up if a second
+        // business ever needs a conflicting support requirement.
+        private Dictionary<string, SupportContext> businessSupport;
+
         // C2: one live lumber yard runtime per LumberYard business,
         // mirroring the per-business equipment registers above. The Pass 9
         // save seam persists the first yard only (single holder field);
@@ -246,6 +270,54 @@ namespace LandLedgers.Orchestration.Systems
             if (register == null || string.IsNullOrWhiteSpace(register.BusinessInstanceId)) return;
             equipmentRegisters ??= new Dictionary<string, BusinessEquipmentRegister>(StringComparer.Ordinal);
             equipmentRegisters[register.BusinessInstanceId] = register;
+        }
+
+        /// <summary>
+        /// C-3: the workstation registry for one holder, created on first use
+        /// (empty). Mirrors EquipmentRegisterFor. A holder with no registry
+        /// holds no workstation — the gate refuses "not established".
+        /// </summary>
+        public BusinessWorkstations WorkstationRegisterFor(string holderId)
+        {
+            if (string.IsNullOrWhiteSpace(holderId)) return null;
+            workstationRegisters ??= new Dictionary<string, BusinessWorkstations>(StringComparer.Ordinal);
+            if (!workstationRegisters.TryGetValue(holderId, out BusinessWorkstations registry) || registry == null)
+            {
+                registry = new BusinessWorkstations(holderId);
+                workstationRegisters[holderId] = registry;
+            }
+            return registry;
+        }
+
+        /// <summary>
+        /// C-3: the support context for one business, created on first use
+        /// (empty). Mirrors EquipmentRegisterFor. The bootstrapper registers
+        /// the mill's authored support (saw-filing capability, lubrication
+        /// store) into the context it returns here.
+        /// </summary>
+        public SupportContext SupportContextFor(string businessInstanceId)
+        {
+            if (string.IsNullOrWhiteSpace(businessInstanceId)) return null;
+            businessSupport ??= new Dictionary<string, SupportContext>(StringComparer.Ordinal);
+            if (!businessSupport.TryGetValue(businessInstanceId, out SupportContext context) || context == null)
+            {
+                context = new SupportContext();
+                businessSupport[businessInstanceId] = context;
+            }
+            return context;
+        }
+
+        /// <summary>
+        /// C-3: adopts a support context (e.g. one restored from a save seam)
+        /// as the hub's live holder for its business. Replaces by business
+        /// id, never merges — the adopted data is authoritative, and
+        /// re-registering the same context is idempotent.
+        /// </summary>
+        public void RegisterBusinessSupport(string businessInstanceId, SupportContext support)
+        {
+            if (string.IsNullOrWhiteSpace(businessInstanceId) || support == null) return;
+            businessSupport ??= new Dictionary<string, SupportContext>(StringComparer.Ordinal);
+            businessSupport[businessInstanceId] = support;
         }
 
         /// <summary>
@@ -426,6 +498,18 @@ namespace LandLedgers.Orchestration.Systems
                 ReservationsSupplier = () => Reservations,
                 NowGameSecondsSupplier = nowGameSeconds,
                 HandOccupancySupplier = PersonHands.SnapshotFor,
+                // C-3: the workstation suppliers. Before this slice the
+                // production gate never set them, so every workstation-coded
+                // check refused "no workstation registry supplied" — only
+                // the ThreeBusinessSlice fixture set them, on its own local
+                // gate. The registry is keyed by holder id (the holder kind
+                // is ignored); definitions come from the catalog; components
+                // resolve from the gate's own asset collection; support is
+                // the merge of every registered per-business context.
+                WorkstationsFor = (holderKind, holderId) => WorkstationRegisterFor(holderId),
+                FindWorkstationDefinition = WorkstationCatalog.Find,
+                FindComponent = FindGateComponent,
+                SupportSupplier = CollectGateSupport,
             };
             installedEquipmentTaskGate = gate;
             Tasks.SetExecutionGate(gate);
@@ -469,6 +553,72 @@ namespace LandLedgers.Orchestration.Systems
                         if (kit != null) kits.Add(kit);
                 }
             return kits;
+        }
+
+        /// <summary>
+        /// C-3: resolves a workstation component asset id to the lightweight
+        /// view the gate evaluates against — the wagon asset registry plus
+        /// every hub-owned per-business equipment register, mirroring
+        /// CollectGateAssets. Null when no asset carries the id, so the
+        /// station evaluation counts it as not present.
+        /// </summary>
+        private WorkstationComponentView? FindGateComponent(string assetId)
+        {
+            if (string.IsNullOrWhiteSpace(assetId)) return null;
+            var asset = TransportAssets.Get(assetId);
+            if (asset == null && equipmentRegisters != null)
+                foreach (var register in equipmentRegisters.Values)
+                {
+                    if (register?.Assets == null) continue;
+                    foreach (var candidate in register.Assets)
+                        if (candidate != null && candidate.AssetId == assetId) { asset = candidate; break; }
+                    if (asset != null) break;
+                }
+            if (asset == null) return null;
+            return new WorkstationComponentView
+            {
+                AssetId = asset.AssetId,
+                Kind = asset.Kind,
+                Condition01 = asset.Condition01,
+                IsUsable = asset.IsUsable,
+            };
+        }
+
+        /// <summary>
+        /// C-3: merges every registered per-business support context into
+        /// one — consumable units summed, skills/capabilities/infrastructure
+        /// unioned — for the gate's holder-blind SupportSupplier. Returns a
+        /// fresh context (never a registered one), so the gate cannot mutate
+        /// a business's authored state. Empty when nothing is registered.
+        /// </summary>
+        private SupportContext CollectGateSupport()
+        {
+            var merged = new SupportContext();
+            if (businessSupport == null) return merged;
+            foreach (var context in businessSupport.Values)
+            {
+                if (context == null) continue;
+                if (context.ConsumableUnits != null)
+                    foreach (var pair in context.ConsumableUnits)
+                    {
+                        if (string.IsNullOrWhiteSpace(pair.Key)) continue;
+                        merged.ConsumableUnits.TryGetValue(pair.Key, out int onHand);
+                        merged.ConsumableUnits[pair.Key] = onHand + Math.Max(0, pair.Value);
+                    }
+                if (context.AvailableOperatorSkills != null)
+                    foreach (string skill in context.AvailableOperatorSkills)
+                        if (!string.IsNullOrWhiteSpace(skill) && !merged.AvailableOperatorSkills.Contains(skill))
+                            merged.AvailableOperatorSkills.Add(skill);
+                if (context.AvailableRepairCapabilities != null)
+                    foreach (string capability in context.AvailableRepairCapabilities)
+                        if (!string.IsNullOrWhiteSpace(capability) && !merged.AvailableRepairCapabilities.Contains(capability))
+                            merged.AvailableRepairCapabilities.Add(capability);
+                if (context.AvailableInfrastructure != null)
+                    foreach (string infrastructure in context.AvailableInfrastructure)
+                        if (!string.IsNullOrWhiteSpace(infrastructure) && !merged.AvailableInfrastructure.Contains(infrastructure))
+                            merged.AvailableInfrastructure.Add(infrastructure);
+            }
+            return merged;
         }
         public FarmFlowLedger FarmFlows => farmFlows ??= new FarmFlowLedger();
         public BusinessCapabilityRegistry Capabilities => capabilityRegistry ??= new BusinessCapabilityRegistry();

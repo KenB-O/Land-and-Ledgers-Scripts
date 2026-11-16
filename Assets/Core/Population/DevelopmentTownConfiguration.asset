@@ -317,6 +317,12 @@ MonoBehaviour:
       kind: felling-axe
     - assetId: log-wagon-1
       kind: log-wagon
+    - assetId: saw-line-1
+      kind: saw-line
+    - assetId: log-carriage-1
+      kind: log-carriage
+    - assetId: drive-system-1
+      kind: drive-system
   openingEmployees:
   - businessKey: sawmill
     personKey: silas

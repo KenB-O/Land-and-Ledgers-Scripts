@@ -34,6 +34,8 @@ namespace LandLedgers.EditorTests.Population
                 "Day 12: shopping FAILED: no available stock.", day));
             Assert.IsTrue(HouseholdShoppingLoop.IsRoutineSummaryDiagnostic(
                 "[FoodEconomy] shopping summary day 12: 1 purchase(s), 12c spent; still open: none"));
+            Assert.IsTrue(HouseholdShoppingLoop.IsRoutineSummaryDiagnostic(
+                "[FoodEconomy] charge reconciliation day 12: H4 legacy=0u/0c phaseC=2u/12c"));
         }
 
         [Test]

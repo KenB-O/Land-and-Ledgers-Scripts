@@ -139,6 +139,9 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(context.AcquisitionMarket.TryPurchaseSelected(AcquisitionMarketSection.Land, out string closeMessage), closeMessage);
             Assert.IsTrue(context.TownWorld.Plots[plotId].playerOwned);
             Assert.IsNull(context.GetDeal(listing.listingId));
+            EarnestEscrowRecord settledEscrow = context.AcquisitionMarket.EscrowLedger.Records.Single(record => record.ListingId == listing.listingId);
+            Assert.AreEqual(EarnestEscrowState.AppliedToPrice, settledEscrow.State);
+            Assert.AreEqual(settledEscrow.AmountCents, settledEscrow.AppliedToPriceCents);
             Assert.GreaterOrEqual(context.AcquisitionMarket.OwnedLandCount, 1);
             Assert.That(context.TownWorld.Plots.Count - initialPlotCount, Is.InRange(1, 2));
             Assert.IsTrue(context.AcquisitionMarket.LandListings.Any(candidate => candidate.plotId >= initialPlotCount));

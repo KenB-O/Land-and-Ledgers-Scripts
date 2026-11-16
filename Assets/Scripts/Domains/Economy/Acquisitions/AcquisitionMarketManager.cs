@@ -8249,7 +8249,7 @@ namespace LandLedgers.Economy
                 var escrowDiag = new List<string>();
                 string applyProblem = EscrowLedger.ApplyToPrice(
                     openEscrow.EscrowId, GetCurrentDayIndex(),
-                    $"applied to the {FormatMoney(finalPriceCents)} closing price for '{listing.title}'", escrowDiag);
+                    $"applied to the {FormatMoney(finalPrice)} closing price for '{listing.title}'", escrowDiag);
                 foreach (string line in escrowDiag) Debug.Log($"[Acquisitions] {line}", this);
                 if (applyProblem != null)
                 {

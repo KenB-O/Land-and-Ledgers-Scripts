@@ -65,7 +65,8 @@ namespace LandLedgers.Population
 
         public static bool IsRoutineSummaryDiagnostic(string message) =>
             !string.IsNullOrWhiteSpace(message)
-            && message.StartsWith("[FoodEconomy] shopping summary day ", StringComparison.Ordinal);
+            && (message.StartsWith("[FoodEconomy] shopping summary day ", StringComparison.Ordinal)
+                || message.StartsWith("[FoodEconomy] charge reconciliation day ", StringComparison.Ordinal));
 
         private PopulationState population;
         private HouseholdMembershipRegistry membership;

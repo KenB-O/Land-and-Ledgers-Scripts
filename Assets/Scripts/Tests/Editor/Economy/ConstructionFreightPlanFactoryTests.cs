@@ -29,6 +29,7 @@ using LandLedgers.World.Journeys;
 using LandLedgers.World.Property;
 using NUnit.Framework;
 using UnityEngine;
+using EntityId = LandLedgers.Primitives.EntityId;
 
 namespace LandLedgers.EditorTests.Economy
 {

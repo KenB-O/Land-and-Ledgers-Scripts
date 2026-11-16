@@ -7,6 +7,7 @@ using LandLedgers.Persistence;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace LandLedgers.EditorTests.Economy
 {

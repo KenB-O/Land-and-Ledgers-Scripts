@@ -262,7 +262,73 @@ namespace LandLedgers.EditorTests.Integration
             "ScenarioPropertyGrant", "ScenarioSeedPropertyGrant", "SecurityInterestRecord", "SeizedCollateralRecord",
             "SellerFinanceDecision", "SellerFinanceDecisionInput", "SellerFinanceDecisionService", "SellerFinanceNegotiationEvent",
             "SellerFinancePolicy", "SettledWeekMarker", "ShelfUnitsEntry", "ShoppingDiagnosticEvent",
-            "ShoppingTripDriver", "SimpleDueEventScheduler", "SimpleDueEventSchedulerSaveDto", "SkillTaskDurationEstimator",
+            "ShoppingTripDriver", "SimpleDueEventScheduler", "SimpleDueEventSchedulerSaveDto",
+            // B1 (Agent B, expanded campaign 2026-11-16): the sleeping-place
+            // records of SleepingPlaceRegistry.cs. They are data carriers of
+            // the wired sleeping feature — constructed and consumed inside
+            // SleepingPlaceRegistry and read by DailyActivityPlanner
+            // (ReserveSleep records the place id and rest quality on the
+            // sleep activities). The registry itself escapes the scan
+            // because HouseholdShelterSuitabilityEvaluator.Evaluate
+            // (Domains/World/Property, outside the owning directory) takes
+            // it; its records have no reference outside Domains/Population
+            // yet, so they are classified feature-internal here, the same
+            // precedent as the construction cluster and
+            // HouseholdShelterSuitability. When Agent G wires the sleep
+            // driver (SimulationDrivers), the records gain production
+            // callers outside the directory and should leave the baseline.
+            "SleepingPlace", "SleepingPlaceReservation",
+            // B4 (Agent B, expanded campaign 2026-11-16): the dining
+            // records of DiningPlaceRegistry.cs. They are data carriers
+            // of the wired dining feature — constructed and consumed
+            // inside DiningPlaceRegistry and read by
+            // DailyActivityPlanner (the meal loop records the seat id
+            // and mode on the meal activities). The registry itself has
+            // no reference outside Domains/Population yet (its only
+            // production caller is the planner, in the same directory),
+            // so the registry and its records are classified
+            // feature-internal here, the same precedent as the B1
+            // sleeping-place records above. DiningArrival is a static
+            // class and needs no entry. When Agent G wires the dining
+            // driver (SimulationDrivers), the registry gains production
+            // callers outside the directory and the records should
+            // leave the baseline with it.
+            "DiningPlaceRegistry", "DiningSeat", "DiningTable", "DiningSeatReservation",
+            // B5 (Agent B, expanded campaign 2026-11-16): the storage
+            // binding, registry and display allocation of
+            // FurnishingStorageBinding.cs. They are the working records
+            // of the wired storage feature — constructed and consumed
+            // inside FurnishingStorageBinding and read by the tests;
+            // they have no reference outside Domains/Economy/Storage
+            // yet, so they are classified feature-internal here, the
+            // same precedent as the B1 sleeping-place and B4 dining
+            // records above. StorageVisibility is an enum and needs no
+            // entry. When Agent G wires the storage driver
+            // (SimulationDrivers), the registry gains production callers
+            // outside the directory and these should leave the baseline.
+            "FurnishingStorageBinding", "FurnishingStorageRegistry", "FurnishingDisplayAllocation",
+            // B6 (Agent B, expanded campaign 2026-11-16): the contents
+            // selection and furnishing-decision records of
+            // PropertyContentsSelection.cs and
+            // HouseholdFurnishingEvaluator.cs. They are the working
+            // records of the contents/evaluator feature — constructed
+            // and consumed inside those files and read by the tests;
+            // they have no reference outside Domains/Population yet, so
+            // they are classified feature-internal here, the same
+            // precedent as the B1 sleeping-place, B4 dining and B5
+            // storage records above. FurnishingClassification and
+            // HouseholdFurnishingEvaluator are static classes and the
+            // enums (FurnishingFixtureKind, ContentsSelectionMode,
+            // ExcludedItemDisposition, FurnishingWantReason,
+            // FurnishingWantChannel, FurnishingResaleReason) need no
+            // entry. When Agent D wires the contents contract (D-6/D-7,
+            // Domains/Economy/Businesses/Construction) and Agent G wires
+            // the furnishing drivers (SimulationDrivers), these gain
+            // production callers outside the directory and should leave
+            // the baseline.
+            "FurnishingContentsItem", "FurnishingContentsLine", "PropertyContentsSelection",
+            "FurnishingWant", "FurnishingResaleLine", "HouseholdFurnishingEvaluationInputs",
+            "SkillTaskDurationEstimator",
             "SmithingRecipe", "SocietyReconciliation", "StageLaborBaseline", "StagedBakeryBatch",
             "StagedBakeryBatchSaveDto", "StandingInstruction", "StandingInstructionRegister", "StandingInstructionSaveDto",
             "StartingWorldConfiguration", "StockProvenanceRecord", "StoreCategoryOffer", "StoreTradingHours",

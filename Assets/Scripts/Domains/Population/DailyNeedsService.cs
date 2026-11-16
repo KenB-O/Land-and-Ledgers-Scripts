@@ -35,8 +35,14 @@ namespace LandLedgers.Population
         /// employment record but loses usable minutes — disability bites as
         /// real lost capacity, which flows through task assignment, attendance,
         /// wages, and household decisions. Returns 0..1.
+        /// B1: rest quality multiplies in the same way (bed 1.0, bedroll 0.8,
+        /// floor 0.6, O-1 defaults, from the night's sleeping place via the
+        /// sleeping-place registry). It is suppressed together with the other
+        /// condition debuffs under development immortality, and defaults to
+        /// 1.0, so existing callers are unchanged. No new debuff system: the
+        /// only rest effect is this multiplier.
         /// </summary>
-        public static float WorkCapacityFactor(PersonState person, bool conditionDebuffsSuppressed = false)
+        public static float WorkCapacityFactor(PersonState person, bool conditionDebuffsSuppressed = false, float restQuality01 = 1f)
         {
             if (person == null || conditionDebuffsSuppressed)
             {
@@ -52,7 +58,8 @@ namespace LandLedgers.Population
             {
                 health = Math.Max(0, Math.Min(100, person.health.laborCapacityPercent)) / 100f;
             }
-            return Math.Max(0f, Math.Min(1f, nutrition * health));
+            float rest = Math.Max(0f, Math.Min(1f, restQuality01));
+            return Math.Max(0f, Math.Min(1f, nutrition * health * rest));
         }
 
         public sealed class DayReport

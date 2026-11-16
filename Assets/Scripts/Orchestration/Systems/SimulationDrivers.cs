@@ -4191,6 +4191,22 @@ namespace LandLedgers.Orchestration.Systems
                     CleaningNeeded = hub.DomesticLaborDriver.CleaningNeeded(household.id),
                     ColdSeason = coldSeason,
                     HasAnimals = HouseholdOwnsAnimals(household.id, members),
+                    // B3 (Agent B, expanded campaign 2026-11-16): the
+                    // cooking/fuel context the driver settles against.
+                    // The household state (fuel reserve + heating
+                    // forecast) and the inventory (flour) come from the
+                    // hub; the meal service is constructed per use from
+                    // the meal log, as DailyNeedsService does. Stoves is
+                    // NOT passed here — the per-household stove registry
+                    // does not exist in the hub yet; Agent G creates it
+                    // under W-G1/W-G2 and passes it with the real
+                    // FuelWoodReserveUnits. Until then the mode stays
+                    // Unspecified, the fuel trip's pickup refuses loudly,
+                    // and cooking settles nothing — never worse than
+                    // today's behaviour, and the failure names the gap.
+                    Household = household,
+                    Inventory = hub.HouseholdInventories.Get(household.id),
+                    MealService = new HouseholdMealService(hub.MealLog),
                 };
                 hub.DomesticLaborDriver.DriveDay(inputs, absoluteDayIndex, hub.Tasks,
                     hub.WorkTimeBudgets, hub.PersonSchedules, hub.DomesticLabor,
@@ -4220,6 +4236,46 @@ namespace LandLedgers.Orchestration.Systems
                 activityLocationId = "stove";
             else if (string.Equals(flight.DefinitionId, DomesticTaskCatalog.ChoresId, StringComparison.Ordinal))
                 activityLocationId = (flight.DayIndex & 1) == 0 ? "cleaning" : "porch-dropoff";
+            else if (string.Equals(flight.DefinitionId, DomesticTaskCatalog.FuelHandlingId, StringComparison.Ordinal))
+            {
+                // B3 (Agent B, expanded campaign 2026-11-16): the
+                // two-leg fuel-handling arrival. Leg 0 is the firewood
+                // pile — the first Firewood-type activity location
+                // authored on the home (the exterior pile, not a built
+                // interior route, so TryFindReachableActivityLocation
+                // does not apply). Leg 1 is the stove, the same
+                // location meal-prep uses. No firewood location authored
+                // on the home refuses loudly (Codex scene authoring),
+                // and the driver defers the trip without completion or
+                // labour credit. Animal-care stays Unsupported (the
+                // animal location is a pen/pasture question, out of B
+                // scope per the plan).
+                if (flight.FuelHandlingLeg > 0)
+                {
+                    activityLocationId = "stove";
+                }
+                else
+                {
+                    string firewoodLocationId = null;
+                    if (home.runtimeFootprintAuthority.ActivityLocations != null)
+                    {
+                        foreach (BuildingActivityLocationAuthoring location in home.runtimeFootprintAuthority.ActivityLocations)
+                        {
+                            if (location != null && location.type == BuildingActivityLocationType.Firewood)
+                            {
+                                firewoodLocationId = location.id;
+                                break;
+                            }
+                        }
+                    }
+                    if (string.IsNullOrWhiteSpace(firewoodLocationId))
+                    {
+                        flight.ActivityLocationId = "firewood: no firewood storage is authored on the home.";
+                        return DomesticActivityMovementResult.Unsupported;
+                    }
+                    activityLocationId = firewoodLocationId;
+                }
+            }
             else
                 return DomesticActivityMovementResult.Unsupported;
 

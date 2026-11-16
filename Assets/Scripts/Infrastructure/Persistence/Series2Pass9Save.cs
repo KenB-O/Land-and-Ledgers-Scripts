@@ -411,6 +411,26 @@ namespace LandLedgers.Persistence
         /// </summary>
         public List<BusinessEquipmentRegister> EquipmentRegisters = new List<BusinessEquipmentRegister>();
 
+        /// <summary>
+        /// B0 (Agent B, expanded campaign 2026-11-16): per-household
+        /// furnishing registers (household-owned furniture/equipment
+        /// assets + placement bindings). Additive; old saves leave this
+        /// empty and load with empty registers — homes start empty
+        /// unless the scenario explicitly authors an endowment (O-2).
+        /// </summary>
+        public List<HouseholdFurnishingRegister> HouseholdFurnishingRegisters = new List<HouseholdFurnishingRegister>();
+
+        /// <summary>
+        /// B2 (Agent B, expanded campaign 2026-11-16): stove fuel
+        /// stores — the fuel physically in each household stove
+        /// (HouseholdStoveFuelStoreDto). Additive; old saves leave this
+        /// empty and load with empty stores — the honest old-save
+        /// default (fuel that was never tracked was never in a stove).
+        /// The stove instances themselves are derived from the B0
+        /// registers on load and need no saved section.
+        /// </summary>
+        public List<HouseholdStoveFuelStoreDto> HouseholdStoveFuelStores = new List<HouseholdStoveFuelStoreDto>();
+
         /// <summary>Additive person-hand snapshots; older saves deserialize this as an empty list.</summary>
         public List<Pass9PersonHandOccupancyDto> PersonHands = new List<Pass9PersonHandOccupancyDto>();
 
@@ -545,6 +565,23 @@ namespace LandLedgers.Persistence
         /// on NewGame seeding and re-registers restored ones after a load.
         /// </summary>
         public List<BusinessEquipmentRegister> EquipmentRegisters = new List<BusinessEquipmentRegister>();
+
+        /// <summary>
+        /// B0 (Agent B): live per-household furnishing registers, held
+        /// here so the Pass 9 seam persists them. The hub owns the live
+        /// dictionary; the bootstrap re-registers restored ones after a
+        /// load. A household with no register holds no furniture.
+        /// </summary>
+        public List<HouseholdFurnishingRegister> HouseholdFurnishingRegisters = new List<HouseholdFurnishingRegister>();
+
+        /// <summary>
+        /// B2 (Agent B): live stove fuel stores, held here so the Pass
+        /// 9 seam persists them. The hub/state owns the per-household
+        /// stove registries; the bootstrap restores the saved stores
+        /// into them after a load. A household with no entry holds no
+        /// fuel in any stove.
+        /// </summary>
+        public List<HouseholdStoveFuelStoreDto> HouseholdStoveFuelStores = new List<HouseholdStoveFuelStoreDto>();
 
         /// <summary>Live person hand authority; bound by SimulationDrivers and restored in place.</summary>
         public PersonHandOccupancyRegistry PersonHands;
@@ -928,6 +965,36 @@ namespace LandLedgers.Persistence
             else if (diag != null)
             {
                 diag.Add("Series2Pass9Save: no business equipment registers supplied; equipment section saved empty.");
+            }
+
+            // B0: household furnishing registers. Deep-copied, so later
+            // live mutation cannot rewrite the saved section.
+            if (HouseholdFurnishingRegisters != null && HouseholdFurnishingRegisters.Count > 0)
+            {
+                foreach (HouseholdFurnishingRegister register in HouseholdFurnishingRegisters)
+                {
+                    if (register == null) continue;
+                    dto.HouseholdFurnishingRegisters.Add(CopyHouseholdFurnishingRegister(register));
+                }
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no household furnishing registers supplied; furnishing section saved empty.");
+            }
+
+            // B2: stove fuel stores. Deep-copied, so later live mutation
+            // cannot rewrite the saved section.
+            if (HouseholdStoveFuelStores != null && HouseholdStoveFuelStores.Count > 0)
+            {
+                foreach (HouseholdStoveFuelStoreDto store in HouseholdStoveFuelStores)
+                {
+                    if (store == null) continue;
+                    dto.HouseholdStoveFuelStores.Add(CopyHouseholdStoveFuelStore(store));
+                }
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no stove fuel stores supplied; stove fuel section saved empty.");
             }
 
             if (PersonHands != null)
@@ -1406,6 +1473,28 @@ namespace LandLedgers.Persistence
                 EquipmentRegisters.Add(CopyEquipmentRegister(saved));
             }
 
+            // B0: household furnishing registers — clear-then-load,
+            // idempotent. Old saves carry no section and restore as empty
+            // registers; restoring twice rebuilds the same registers,
+            // never duplicates. The bootstrap re-registers these into the
+            // hub after a load.
+            HouseholdFurnishingRegisters.Clear();
+            foreach (HouseholdFurnishingRegister saved in dto.HouseholdFurnishingRegisters ?? new List<HouseholdFurnishingRegister>())
+            {
+                if (saved == null) continue;
+                HouseholdFurnishingRegisters.Add(CopyHouseholdFurnishingRegister(saved));
+            }
+
+            // B2: stove fuel stores — clear-then-load, idempotent. Old
+            // saves carry no section and restore as empty stores;
+            // restoring twice rebuilds the same stores, never duplicates.
+            HouseholdStoveFuelStores.Clear();
+            foreach (HouseholdStoveFuelStoreDto saved in dto.HouseholdStoveFuelStores ?? new List<HouseholdStoveFuelStoreDto>())
+            {
+                if (saved == null) continue;
+                HouseholdStoveFuelStores.Add(CopyHouseholdStoveFuelStore(saved));
+            }
+
             if (PersonHands != null)
             {
                 var restoredHands = new List<HandOccupancy>();
@@ -1570,6 +1659,57 @@ namespace LandLedgers.Persistence
                     });
                 }
             return copy;
+        }
+
+        private static HouseholdStoveFuelStoreDto CopyHouseholdStoveFuelStore(HouseholdStoveFuelStoreDto source)
+        {
+            return new HouseholdStoveFuelStoreDto
+            {
+                HouseholdId = source.HouseholdId,
+                StoveAssetId = source.StoveAssetId ?? string.Empty,
+                FuelWoodUnits = source.FuelWoodUnits,
+            };
+        }
+
+        private static HouseholdFurnishingRegister CopyHouseholdFurnishingRegister(HouseholdFurnishingRegister source)
+        {
+            var copy = new HouseholdFurnishingRegister
+            {
+                HouseholdId = source.HouseholdId,
+            };
+            if (source.Assets != null)
+                foreach (EquipmentAsset asset in source.Assets)
+                {
+                    if (asset == null) continue;
+                    copy.Assets.Add(CopyEquipmentAsset(asset));
+                }
+            if (source.Bindings != null)
+                foreach (FurnishingPlacementBinding binding in source.Bindings)
+                {
+                    if (binding == null) continue;
+                    copy.Bindings.Add(CopyFurnishingPlacementBinding(binding));
+                }
+            return copy;
+        }
+
+        private static FurnishingPlacementBinding CopyFurnishingPlacementBinding(FurnishingPlacementBinding source)
+        {
+            return new FurnishingPlacementBinding
+            {
+                BindingId = source.BindingId ?? string.Empty,
+                AssetId = source.AssetId ?? string.Empty,
+                BuildingInstanceId = source.BuildingInstanceId,
+                PlacementId = source.PlacementId ?? string.Empty,
+                FloorIndex = source.FloorIndex,
+                LocalPosition = source.LocalPosition,
+                LocalRotation = source.LocalRotation,
+                DefinitionId = source.DefinitionId ?? string.Empty,
+                CapabilityKind = source.CapabilityKind,
+                CapabilityReferenceId = source.CapabilityReferenceId ?? string.Empty,
+                AcquisitionSource = source.AcquisitionSource,
+                AcquisitionSourceId = source.AcquisitionSourceId ?? string.Empty,
+                ReservationId = source.ReservationId ?? string.Empty,
+            };
         }
 
         private static EquipmentAsset CopyEquipmentAsset(EquipmentAsset source)

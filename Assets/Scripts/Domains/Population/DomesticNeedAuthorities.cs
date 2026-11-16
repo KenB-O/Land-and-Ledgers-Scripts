@@ -52,10 +52,18 @@ namespace LandLedgers.Population
         /// at home and gets no meal-prep task: the shortfall is a shopping
         /// need, not a cooking task.
         ///
-        /// Cooking equipment: every household has a stove (HouseholdState.
-        /// stoveTier is Basic or Efficient; there is no stove-less tier),
-        /// so no separate equipment gate is needed here — the stove tier
-        /// already shapes heating fuel use in HouseholdHeatingEvaluator.
+        /// Cooking equipment: B2 (Agent B, expanded campaign 2026-11-16)
+        /// made the stove a real object — the meal-prep gate lives in
+        /// HouseholdStoveRegistry.CheckMealPrep, which the domestic
+        /// driver consults at plan time (a ready household-stove
+        /// workstation cooks on the stove; anything else falls back to
+        /// cold food from stores, never blocking eating). This count is
+        /// unaffected by the stove: the stove changes HOW the meal is
+        /// prepared, not whether the household eats at home. The tier
+        /// itself is now a derived view of the installed stove instance
+        /// (owner decision O-3, HouseholdStoveRegistry.DeriveStoveTier),
+        /// with HouseholdState.stoveTier kept as the legacy fallback
+        /// for households with no installed stove.
         /// </summary>
         public static int MealsAtHomeToday(HouseholdMealLogRegistry mealLog, int householdId, int dayIndex)
         {

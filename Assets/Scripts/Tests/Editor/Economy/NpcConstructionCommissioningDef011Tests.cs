@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Blacksmith;
+using LandLedgers.Economy.Businesses.LumberYard;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -61,6 +63,18 @@ namespace LandLedgers.EditorTests.Economy
                 Stock[requirement.MaterialDisplayName] = have - units;
                 provenanceLabel = $"lot '{requirement.MaterialDisplayName}' x{units} ({projectLabel}, day {dayIndex})";
                 return null;
+            }
+        }
+
+        private sealed class FakeProcurementPort : INpcConstructionProcurementPort
+        {
+            public string Refusal = "procurement refused, nothing sold.";
+            public int Calls;
+            public string ProcureAndStage(ConstructionProject project, WorkPackage package,
+                NpcConstructionRecord record, int dayIndex, List<string> diag)
+            {
+                Calls++;
+                return Refusal;
             }
         }
 
@@ -315,20 +329,133 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void Commission_ShipmentBound_RefusesOversizedPhase()
+        public void TripBound_BindsFromProductionWagon_28Units()
+        {
+            var c = new Fixture();
+            var driver = c.NewDriver();
+            var wagon = new EquipmentAsset
+            {
+                AssetId = "opening-freight-wagon", Kind = "wagon",
+                PayloadMassCapacityKg = 450f, CargoVolumeCapacityM3 = 4f,
+            };
+
+            driver.BindTripBoundFromWagon(wagon, LumberCargoSpec.Spec);
+
+            Assert.AreEqual(28, driver.MaxUnitsPerTrip,
+                "the production wagon carries 28 lumber units per trip (mass binds: 450 kg / 16 kg)");
+        }
+
+        [Test]
+        public void TripBound_NullWagonOrSpec_LeavesBoundUnset()
+        {
+            var c = new Fixture();
+            var driver = c.NewDriver(maxUnitsPerTrip: 28);
+            var wagon = new EquipmentAsset
+            {
+                AssetId = "opening-freight-wagon", Kind = "wagon",
+                PayloadMassCapacityKg = 450f, CargoVolumeCapacityM3 = 4f,
+            };
+
+            driver.BindTripBoundFromWagon(null, LumberCargoSpec.Spec);
+            Assert.IsNull(driver.MaxUnitsPerTrip, "no wagon means no bound can be computed");
+
+            driver.BindTripBoundFromWagon(wagon, null);
+            Assert.IsNull(driver.MaxUnitsPerTrip, "no cargo spec means no bound can be computed");
+
+            var flatbed = new EquipmentAsset
+            {
+                AssetId = "wagon-0", Kind = "wagon",
+                PayloadMassCapacityKg = 0f, CargoVolumeCapacityM3 = 0f,
+            };
+            driver.BindTripBoundFromWagon(flatbed, LumberCargoSpec.Spec);
+            Assert.AreEqual(0, driver.MaxUnitsPerTrip,
+                "a wagon that cannot carry the cargo yields a zero bound, not a skipped check");
+        }
+
+        [Test]
+        public void Commission_Bound28_MultiTripPhaseCommissionsWithTripsRecorded()
         {
             var c = new Fixture();
             c.RegisterCabin();
             c.FundHousehold(7, 100000);
-            var driver = c.NewDriver(maxUnitsPerTrip: 400);
+            var driver = c.NewDriver(maxUnitsPerTrip: 28);
+
+            ConstructionProject project = driver.Commission(
+                c.CabinRequest(NpcConstructionReason.Overcrowding), c.Parcels, 10, c.Diag);
+
+            Assert.IsNotNull(project, string.Join("; ", c.Diag));
+            NpcConstructionRecord record = c.Commissioner.FindRecordForProject(project.ProjectId);
+            Assert.IsNotNull(record);
+            Assert.IsTrue(record.EvaluationSummary.Contains("28-unit"),
+                "the summary names the bound: " + record.EvaluationSummary);
+            Assert.IsFalse(record.EvaluationSummary.Contains("no trip bound supplied"),
+                "the check evaluated, it was not skipped: " + record.EvaluationSummary);
+            string allDecisions = string.Join(" | ", record.Decisions);
+            Assert.IsTrue(allDecisions.Contains("'Foundation' 40 units in 2 trips"),
+                "the foundation ships in 2 trips at the 28-unit bound: " + allDecisions);
+            Assert.IsTrue(allDecisions.Contains("'Framing' 600 units in 22 trips"),
+                "the framing ships in 22 trips at the 28-unit bound: " + allDecisions);
+        }
+
+        [Test]
+        public void Commission_BoundZero_RefusesUnshippablePhase()
+        {
+            var c = new Fixture();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var driver = c.NewDriver(maxUnitsPerTrip: 0);
 
             ConstructionProject project = driver.Commission(
                 c.CabinRequest(NpcConstructionReason.Overcrowding), c.Parcels, 10, c.Diag);
 
             Assert.IsNull(project, string.Join("; ", c.Diag));
             string diag = string.Join("; ", c.Diag);
-            Assert.IsTrue(diag.Contains("Framing") && diag.Contains("600") && diag.Contains("400"),
-                "the refusal names the phase, its units and the bound: " + diag);
+            Assert.IsTrue(diag.Contains("Foundation") && diag.Contains("40") && diag.Contains("cannot carry"),
+                "the refusal names the phase, its units and the unshippable wagon: " + diag);
+        }
+
+        [Test]
+        public void BlockedProcurement_ZeroMaterialRefusal_NamesRecordedReasonNotPaidForLot()
+        {
+            var c = new Fixture();
+            c.RegisterCabin();
+            c.FundHousehold(7, 100000);
+            var procurement = new FakeProcurementPort
+            {
+                Refusal = "NpcConstructionProcurementAdapter: the freight plan factory returned no plan for package 'pkg-1' — procurement refused, nothing sold.",
+            };
+            var driver = new NpcConstructionDriver(c.Commissioner, c.Executor, c.Catalog, c.Projects,
+                c.Cash, c.Obligations, c.Ids, c.Housing, c.Prices, c.Source, "business:lumber-yard",
+                procurement, null,
+                householdId => householdId == 7 ? new List<int> { 101 } : new List<int>());
+
+            ConstructionProject project = driver.Commission(
+                c.CabinRequest(NpcConstructionReason.Overcrowding), c.Parcels, 10, c.Diag);
+            Assert.IsNotNull(project, string.Join("; ", c.Diag));
+            WorkPackage package = project.WorkPackages[0];
+
+            var day10 = new List<string>();
+            Assert.AreEqual(0, driver.Drive(10, day10),
+                "the refused package does not advance: " + string.Join("; ", day10));
+            Assert.AreEqual(1, procurement.Calls, "the procurement leg ran once");
+            NpcConstructionRecord record = c.Commissioner.FindRecordForProject(project.ProjectId);
+            NpcBuildPackageFunding funding = record.FindFunding(package.PackageId);
+            Assert.IsNotNull(funding, "the package has a funding line");
+            Assert.IsTrue(funding.Stranded, "the refused package is stranded");
+            Assert.IsTrue(funding.StrandedReason.Contains("nothing sold"),
+                "the funding line records the zero-material refusal: " + funding.StrandedReason);
+
+            var day11 = new List<string>();
+            Assert.AreEqual(0, driver.Drive(11, day11),
+                "the blocked package still does not advance: " + string.Join("; ", day11));
+            Assert.AreEqual(1, procurement.Calls, "a blocked package is never re-procured");
+            string blocked = string.Join("; ", day11);
+            Assert.IsTrue(blocked.Contains("nothing sold"),
+                "the blocked message names the recorded refusal: " + blocked);
+            Assert.IsFalse(blocked.Contains("paid-for"),
+                "the blocked message must not claim a paid-for lot when nothing was sold: " + blocked);
+            Assert.IsTrue(blocked.Contains("retry is blocked until AllowProcurementRetry is called"),
+                "the retry block is still stated: " + blocked);
         }
 
         [Test]
@@ -585,7 +712,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(1, requests.Count, string.Join("; ", f.Diag));
             Assert.AreEqual(7, requests[0].HouseholdId);
             Assert.AreEqual("cabin-small", requests[0].DesignId,
-                "the 600-unit cabin-a framing exceeds the 400-unit bound, so the fitting design wins");
+                "cabin-small is the cheapest adequate design and ships in 1 trip at the 400-unit bound, so it wins on price; cabin-a would also ship, in 2 trips, but costs more");
             Assert.AreEqual("parcel-9", requests[0].ParcelId);
             Assert.AreEqual(NpcConstructionReason.Overcrowding, requests[0].Reason);
             Assert.IsTrue(requests[0].ReasonNotes.Contains("overcrowded by 1"),
@@ -749,7 +876,7 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void Evaluator_Bound400_BlocksOversizedDesign()
+        public void Evaluator_Bound28_MultiTripDesignQueues()
         {
             var f = new EvaluatorFixture();
             f.RegisterCabinOnly();
@@ -761,10 +888,30 @@ namespace LandLedgers.EditorTests.Economy
             var evaluator = f.NewEvaluator();
 
             List<NpcConstructionRequest> requests = evaluator.EvaluateDay(
-                new List<HouseholdState> { EvaluatorFixture.Household(7, 5) }, 10, 400, f.Diag);
+                new List<HouseholdState> { EvaluatorFixture.Household(7, 5) }, 10, 28, f.Diag);
+
+            Assert.AreEqual(1, requests.Count, string.Join("; ", f.Diag));
+            Assert.AreEqual("cabin-a", requests[0].DesignId,
+                "the 600-unit framing ships in 22 trips at the 28-unit bound, so the design queues");
+        }
+
+        [Test]
+        public void Evaluator_BoundZero_BlocksUnshippableDesign()
+        {
+            var f = new EvaluatorFixture();
+            f.RegisterCabinOnly();
+            f.AddAdult(101); f.AddAdult(102); f.AddAdult(103);
+            f.MembersByHousehold[7] = new List<int> { 101, 102, 103 };
+            f.OccupyHousehold(7, new List<int> { 101, 102, 103 }, 2);
+            f.RegisterParcel("parcel-9", 7);
+            f.FundHousehold(7, 30000);
+            var evaluator = f.NewEvaluator();
+
+            List<NpcConstructionRequest> requests = evaluator.EvaluateDay(
+                new List<HouseholdState> { EvaluatorFixture.Household(7, 5) }, 10, 0, f.Diag);
 
             Assert.AreEqual(0, requests.Count,
-                "the only adequate design has a 600-unit phase over the 400-unit bound: "
+                "the only adequate design cannot ship at all when the wagon carries nothing: "
                 + string.Join("; ", f.Diag));
             Assert.IsTrue(string.Join("; ", f.Diag).Contains("shipment-blocked 1"),
                 "the summary counts the shipment block: " + string.Join("; ", f.Diag));

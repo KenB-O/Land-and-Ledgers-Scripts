@@ -2116,6 +2116,21 @@ namespace LandLedgers.Orchestration.Systems
                     : new List<int>());
             driver.MaterialSourceByHousehold = CreateHouseholdConstructionMaterialSource;
             var diag = new List<string>();
+            // D-1 (F-M1): wire the commission-time trip bound from the real
+            // production wagon (opening-freight-wagon, 450 kg / 4 m3) and the
+            // lumber cargo spec (one board 16 kg / 0.04 m3 — 28 units per
+            // trip), so the shipment check evaluates instead of being skipped.
+            // Set before the evaluator runs: the evaluator probes designs
+            // through the same bound. When the wagon is not registered yet
+            // the bound stays null and the check is skipped and recorded, as
+            // before — a missing wagon never newly blocks a commission.
+            // Source-reviewed only: SimulationDrivers.cs is harness-excluded,
+            // so Unity compilation proof is owed from Codex.
+            EquipmentAsset constructionWagon = hub.TransportAssets?.Get("opening-freight-wagon");
+            if (constructionWagon != null)
+                driver.BindTripBoundFromWagon(constructionWagon, LumberCargoSpec.Spec);
+            else
+                diag.Add("[SimulationDrivers] npc construction: trip bound not set — opening-freight-wagon is not registered yet; the commission-time shipment check is skipped.");
             // DEF-011: the commissioning trigger — queue explicit requests
             // for households with an evidenced need (overcrowding,
             // household formation) before the pending requests are

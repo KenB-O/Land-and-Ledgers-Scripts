@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
@@ -115,12 +117,16 @@ namespace LandLedgers.Economy
         private Func<int, IReadOnlyList<int>> householdMembers;
         private readonly List<string> diagnostics = new List<string>();
         /// <summary>
-        /// Packages whose procurement leg failed after the sale stood: the
-        /// paid-for lot sits with the supplier (service semantic), so a
-        /// blind retry would buy the materials a second time. A blocked
-        /// package waits until <see cref="AllowProcurementRetry"/> is called
-        /// explicitly, so the stranded lot is reconciled by an operator
-        /// decision, never silently double-bought.
+        /// Packages whose procurement leg failed: the sale may have stood
+        /// with the paid-for lot sitting with the supplier, or the
+        /// procurement may have been refused before anything was sold (for
+        /// example a zero-material refusal, where nothing was paid).
+        /// Either way a blind retry is blocked — it could buy the materials
+        /// a second time, or re-attempt a refused procurement. The recorded
+        /// StrandedReason on the funding line names the actual failure. A
+        /// blocked package waits until <see cref="AllowProcurementRetry"/>
+        /// is called explicitly, so the strand is reconciled by an operator
+        /// decision, never silently double-bought or silently retried.
         /// </summary>
         private readonly HashSet<string> blockedProcurementPackages = new HashSet<string>(StringComparer.Ordinal);
 
@@ -165,6 +171,29 @@ namespace LandLedgers.Economy
         /// service still refuses over-capacity loads pre-load.
         /// </summary>
         public int? MaxUnitsPerTrip { get; set; }
+
+        /// <summary>
+        /// D-1 (F-M1): derives the commission-time single-trip bound from
+        /// the real wagon and the cargo spec, so the commission-time
+        /// shipment check evaluates against real capacity instead of being
+        /// skipped. The wagon and the spec are the caller's — the
+        /// construction layer does not own the wagon and never hardcodes
+        /// the bound here. In production the caller passes the
+        /// opening-freight-wagon and the lumber spec (28 units per trip
+        /// at 450 kg / 4 m3). A null wagon or null spec means no bound
+        /// can be computed, so the bound stays null and the check is
+        /// skipped and recorded, as before. A wagon that cannot carry
+        /// the cargo at all yields 0, and the check then refuses the
+        /// design as unshippable. The shipment service remains the
+        /// backstop: it refuses over-capacity loads pre-load regardless
+        /// of this bound.
+        /// </summary>
+        public void BindTripBoundFromWagon(EquipmentAsset wagon, FreightCargoSpec cargo)
+        {
+            MaxUnitsPerTrip = wagon == null || cargo == null
+                ? (int?)null
+                : FreightCargoCapacity.MaxUnitsPerTrip(cargo, wagon);
+        }
 
         public NpcConstructionDriver(
             NpcConstructionCommissioner commissioner,
@@ -504,7 +533,19 @@ namespace LandLedgers.Economy
             {
                 string key = project.ProjectId + "|" + package.PackageId;
                 if (blockedProcurementPackages.Contains(key))
-                    return $"procurement previously failed for package '{package.PackageId}' — the paid-for lot sits with the supplier; retry is blocked until AllowProcurementRetry is called.";
+                {
+                    // D-1 (F-M2): name the recorded failure, never assert a
+                    // paid-for lot — the procurement may have been refused
+                    // before anything was sold (a zero-material refusal pays
+                    // nothing), and the old text was wrong for exactly that
+                    // case. The funding line's StrandedReason is the record.
+                    NpcBuildPackageFunding blockedFunding = record.FindFunding(package.PackageId);
+                    string recordedReason = blockedFunding != null
+                        && !string.IsNullOrWhiteSpace(blockedFunding.StrandedReason)
+                        ? blockedFunding.StrandedReason
+                        : "the procurement leg failed and no reason was recorded";
+                    return $"procurement previously failed for package '{package.PackageId}' — {recordedReason}; retry is blocked until AllowProcurementRetry is called.";
+                }
                 string problem = procurement.ProcureAndStage(project, package, record, dayIndex, diag);
                 if (problem != null)
                 {

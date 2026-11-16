@@ -58,11 +58,14 @@ namespace LandLedgers.Economy
         public int FreightCostCents;
         public string Notes = string.Empty;
         /// <summary>
-        /// Plan 26 (Q30b): the package's procurement leg failed after the
-        /// sale stood — the paid-for lot sits with the supplier, so the
-        /// driver blocks a blind retry until AllowProcurementRetry is called.
-        /// Persisted through the commissioner's deep-copy; the driver
-        /// re-derives its retry-block set from this marker.
+        /// Plan 26 (Q30b): the package's procurement leg failed — either
+        /// after the sale stood, with the paid-for lot sitting with the
+        /// supplier, or refused before anything was sold (for example a
+        /// zero-material refusal, where nothing was paid). The recorded
+        /// StrandedReason names the actual failure. The driver blocks a
+        /// blind retry until AllowProcurementRetry is called. Persisted
+        /// through the commissioner's deep-copy; the driver re-derives its
+        /// retry-block set from this marker.
         /// </summary>
         public bool Stranded;
         public string StrandedReason = string.Empty;
@@ -252,9 +255,12 @@ namespace LandLedgers.Economy
         /// design — the decision behind the commission, with numbers. The
         /// design must exist, sleep the household, have a computable cost
         /// from the price list, and fit the funds the NPC actually holds;
-        /// every package must fit the single-trip bound when one is
-        /// supplied. Alternatives are priced and recorded, never vetoed: a
-        /// funded preference for a dearer adequate design is legitimate.
+        /// every package must be shippable by multi-trip freight at the
+        /// single-trip bound when one is supplied (D-1: the wagon must be
+        /// able to carry the cargo at all — the trip count is recorded,
+        /// never a refusal by itself). Alternatives are priced and
+        /// recorded, never vetoed: a funded preference for a dearer
+        /// adequate design is legitimate.
         /// Returns a non-viable evaluation (never null) with the refusal
         /// reason on any failure — the NPC never builds a design it cannot
         /// price, fund, or physically receive.
@@ -353,21 +359,40 @@ namespace LandLedgers.Economy
             }
             if (maxUnitsPerTrip.HasValue)
             {
-                foreach (BuildingDesignPhase phase in design.Phases ?? new List<BuildingDesignPhase>())
+                // D-1 (F-M1): multi-trip freight is real (DEF-016 split-load),
+                // so a phase is feasible whenever the wagon can carry the cargo
+                // at all — the trip count is recorded, never a refusal by itself.
+                // Only a zero bound refuses: no trip can move the cargo.
+                if (maxUnitsPerTrip.Value <= 0)
                 {
-                    if (phase == null) continue;
-                    int units = 0;
-                    foreach (ConstructionMaterialRequirement requirement in phase.Materials ?? new List<ConstructionMaterialRequirement>())
-                        if (requirement != null) units += Math.Max(0, requirement.RequiredUnits);
-                    if (units > maxUnitsPerTrip.Value)
+                    foreach (BuildingDesignPhase phase in design.Phases ?? new List<BuildingDesignPhase>())
                     {
+                        if (phase == null) continue;
+                        int units = 0;
+                        foreach (ConstructionMaterialRequirement requirement in phase.Materials ?? new List<ConstructionMaterialRequirement>())
+                            if (requirement != null) units += Math.Max(0, requirement.RequiredUnits);
+                        if (units <= 0) continue;
                         evaluation.ShipmentFeasible = false;
-                        evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' phase '{phase.PhaseName}' needs {units} units in one trip, over the {maxUnitsPerTrip.Value}-unit single-trip bound — split-load is a DEF-016 follow-up, so the design cannot be commissioned as drawn.";
+                        evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' phase '{phase.PhaseName}' needs {units} units, but the wagon cannot carry this cargo at all ({maxUnitsPerTrip.Value}-unit single-trip bound) — no trip can move it, so the design cannot be commissioned as drawn.";
                         diag.Add(evaluation.RefusalReason);
                         return evaluation;
                     }
+                    evaluation.ShipmentNotes = $"no materials to ship ({maxUnitsPerTrip.Value}-unit single-trip bound).";
                 }
-                evaluation.ShipmentNotes = $"every package fits the {maxUnitsPerTrip.Value}-unit single-trip bound.";
+                else
+                {
+                    var tripNotes = new List<string>();
+                    foreach (BuildingDesignPhase phase in design.Phases ?? new List<BuildingDesignPhase>())
+                    {
+                        if (phase == null) continue;
+                        int units = 0;
+                        foreach (ConstructionMaterialRequirement requirement in phase.Materials ?? new List<ConstructionMaterialRequirement>())
+                            if (requirement != null) units += Math.Max(0, requirement.RequiredUnits);
+                        int trips = units <= 0 ? 0 : (int)((units + (long)maxUnitsPerTrip.Value - 1) / maxUnitsPerTrip.Value);
+                        tripNotes.Add($"'{phase.PhaseName}' {units} units in {trips} trip{(trips == 1 ? string.Empty : "s")}");
+                    }
+                    evaluation.ShipmentNotes = $"every package ships by multi-trip freight at the {maxUnitsPerTrip.Value}-unit single-trip bound — {string.Join("; ", tripNotes)}.";
+                }
             }
             else
             {

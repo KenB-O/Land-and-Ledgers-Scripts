@@ -169,6 +169,22 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
+        /// C-5 (expanded campaign, Phase 1 forestry): one scenario-authored
+        /// opening spare saw blade — a blade id for a named business, received
+        /// once at New Game into the mill's blade inventory with BOOTSTRAP
+        /// provenance (see ScenarioMillOpeningSpareBladeEndowment). Zero by
+        /// default: a business with no entry here stocks no spare. One spare
+        /// is the natural number for a one-saw-line mill; Canon Part V says
+        /// the filer keeps "replacement saws". Blade ids are Kennedy-authored.
+        /// </summary>
+        [Serializable]
+        public sealed class BusinessSpareBladeDefinition
+        {
+            public string businessKey = string.Empty;
+            public string bladeId = string.Empty;
+        }
+
+        /// <summary>
         /// A2 plan 27 (P10 live felling driver): one scenario-authored
         /// timber stand — the felling source the bootstrapper registers
         /// into the stand registry and grants timber rights over. Zero
@@ -239,6 +255,8 @@ namespace LandLedgers.Population
         [SerializeField] private BusinessOpeningEquipment[] openingEquipment = Array.Empty<BusinessOpeningEquipment>();
         [SerializeField, Tooltip("C-1 (expanded campaign, Phase 1 forestry): scenario-authored opening employments, applied once at New Game. Zero by default: no entry means no opening hire. The wage is provisional scenario calibration.")]
         private BusinessEmployeeDefinition[] openingEmployees = Array.Empty<BusinessEmployeeDefinition>();
+        [SerializeField, Tooltip("C-5 (expanded campaign, Phase 1 forestry): scenario-authored opening spare saw blades, received once at New Game. Zero by default: no entry means no spare stocked. One spare is the natural number for a one-saw-line mill.")]
+        private BusinessSpareBladeDefinition[] openingSpareBlades = Array.Empty<BusinessSpareBladeDefinition>();
         [SerializeField] private TimberStandEntry[] timberStands = Array.Empty<TimberStandEntry>();
         [SerializeField, Min(0), Tooltip("A2 plan 27 (P10): cover days of opening provisions for the logging camp crew, endowed once at New Game from the bootstrap endowment. Zero by default means no endowment. The cover-days value is Kennedy's; no number is invented here.")]
         private int openingLoggingCampProvisionCoverDays;
@@ -283,6 +301,8 @@ namespace LandLedgers.Population
         public IReadOnlyList<BusinessOpeningEquipment> OpeningEquipment => openingEquipment ?? Array.Empty<BusinessOpeningEquipment>();
         /// <summary>C-1: the scenario-authored opening employments; empty by default (no opening hires).</summary>
         public IReadOnlyList<BusinessEmployeeDefinition> OpeningEmployees => openingEmployees ?? Array.Empty<BusinessEmployeeDefinition>();
+        /// <summary>C-5: the scenario-authored opening spare saw blades; empty by default (no spare stocked).</summary>
+        public IReadOnlyList<BusinessSpareBladeDefinition> OpeningSpareBlades => openingSpareBlades ?? Array.Empty<BusinessSpareBladeDefinition>();
         /// <summary>A2 plan 27 (P10): the scenario-authored timber stands; empty by default (no stands, no felling).</summary>
         public IReadOnlyList<TimberStandEntry> TimberStands => timberStands ?? Array.Empty<TimberStandEntry>();
         /// <summary>A2 plan 27 (P10): cover days of opening logging-camp provisions; 0 = no endowment.</summary>
@@ -498,6 +518,17 @@ namespace LandLedgers.Population
                     || string.Equals(employee.personKey, business.ownerPersonKey, StringComparison.OrdinalIgnoreCase)
                     || !openingEmployeePersons.Add(employee.personKey))
                 { error = "Opening employees must reference a configured business and person, a non-blank role, a positive weekly wage, and a person who is not that business's owner and holds no other opening job."; return false; }
+            }
+            // C-5: opening spare blades are optional and zero by default.
+            // When present, every entry must name a configured business and
+            // a non-blank unique blade id (case-insensitive).
+            var openingSpareBladeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (BusinessSpareBladeDefinition spare in OpeningSpareBlades)
+            {
+                if (spare == null || !TryGetBusiness(spare.businessKey, out _)
+                    || string.IsNullOrWhiteSpace(spare.bladeId)
+                    || !openingSpareBladeIds.Add(spare.bladeId.Trim()))
+                { error = "Opening spare blades must reference a configured business and a non-blank unique blade id."; return false; }
             }
             // A2 plan 27 (P10): timber stands are optional and zero by
             // default. When present, every stand needs a unique non-blank

@@ -416,7 +416,7 @@ namespace LandLedgers.Editor.Economy
             }
             Assert.IsTrue(inAll,
                 "CarpenterWorkshop must be in WorkstationCatalog.All (the catalog builds a fresh instance per access, so compare by id, not by reference).");
-            Assert.AreEqual(18, WorkstationCatalog.All.Count, "17 catalogued stations + the carpenter workshop.");
+            Assert.AreEqual(19, WorkstationCatalog.All.Count, "17 catalogued stations + the carpenter workshop + the household stove.");
         }
 
         private static WorkstationComponentView? FindIn(

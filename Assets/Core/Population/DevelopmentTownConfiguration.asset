@@ -328,6 +328,9 @@ MonoBehaviour:
     personKey: silas
     role: logger
     weeklyWageCents: 750
+  openingSpareBlades:
+  - businessKey: sawmill
+    bladeId: sawmill-spare-blade-1
   timberStands:
   - standId: stand-pine-north
     displayName: North Pine Stand

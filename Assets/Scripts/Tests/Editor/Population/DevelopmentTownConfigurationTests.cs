@@ -101,7 +101,8 @@ namespace LandLedgers.EditorTests.Population
             // (1200 kg two-horse logging wagon, OD-C4) the mill teamster
             // hauls with, beside the axes. C-3: the saw-line components
             // (saw-line, log-carriage, drive-system) the bootstrapper wires
-            // into the mill's saw-line workstation.
+            // into the mill's saw-line workstation. C-5: the one spare saw
+            // blade the filer fits when the fitted blade retires.
             DevelopmentTownConfiguration.BusinessOpeningEquipment millEquipment =
                 configuration.OpeningEquipment.Single(item => item.businessKey == "sawmill");
             Assert.AreEqual(6, millEquipment.assetEntries.Length);
@@ -124,6 +125,10 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual("silas", millHand.personKey);
             Assert.AreEqual("logger", millHand.role);
             Assert.AreEqual(750, millHand.weeklyWageCents);
+            Assert.AreEqual(1, configuration.OpeningSpareBlades.Count);
+            DevelopmentTownConfiguration.BusinessSpareBladeDefinition spareBlade = configuration.OpeningSpareBlades[0];
+            Assert.AreEqual("sawmill", spareBlade.businessKey);
+            Assert.AreEqual("sawmill-spare-blade-1", spareBlade.bladeId);
         }
 
         [Test]

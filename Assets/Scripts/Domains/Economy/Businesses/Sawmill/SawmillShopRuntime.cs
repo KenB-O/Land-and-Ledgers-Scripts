@@ -3,6 +3,7 @@ using EntityId = LandLedgers.Primitives.EntityId;
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
@@ -74,6 +75,21 @@ namespace LandLedgers.Economy.Businesses.Sawmill
         private readonly SawmillTollLogStock tollLogStock = new SawmillTollLogStock();
         private readonly SawmillTollPickupRegister tollPickup = new SawmillTollPickupRegister();
 
+        // C-5 (expanded campaign, Phase 1 forestry): the mill's lubrication
+        // store, in units (1 quart lamp oil = 1 unit, 1 unit per completed
+        // sawing day). This field is the single source of truth for the
+        // store; the hub support context's key is derived from it at boot
+        // (SawmillLubrication.SyncSupportFromMill) because the context has
+        // no save seam and resets to the opening value on every Continue.
+        // Fresh runtimes open at the C-3 opening store (30 units).
+        public int MillLubricationUnits = SawmillWorkstationEstablishment.OpeningMillLubricationUnits;
+
+        // C-5: transaction ids of lubrication purchases already applied, for
+        // duplicate-safe restocking (the BakeryFlourLocalPurchase bin-lot
+        // pattern, but the mill's "bin" is an integer store, so the record
+        // lives here and is persisted in the save DTO).
+        private readonly List<string> lubricationPurchaseTransactionIds = new List<string>();
+
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public string BusinessInstanceId => businessInstanceId;
         public SawmillLogStock LogStock => logStock;
@@ -83,6 +99,24 @@ namespace LandLedgers.Economy.Businesses.Sawmill
         public SawmillBladeInventory BladeInventory => bladeInventory;
         public SawmillTollLogStock TollLogStock => tollLogStock;
         public SawmillTollPickupRegister TollPickup => tollPickup;
+        public IReadOnlyList<string> LubricationPurchaseTransactionIds => lubricationPurchaseTransactionIds;
+
+        /// <summary>
+        /// C-5: records a lubrication purchase transaction id as applied.
+        /// Returns true when newly recorded, false when the id was already
+        /// applied (the duplicate-purchase guard reads this first).
+        /// </summary>
+        public bool RecordLubricationPurchaseTransaction(string transactionId)
+        {
+            if (string.IsNullOrWhiteSpace(transactionId)) return false;
+            if (lubricationPurchaseTransactionIds.Contains(transactionId)) return false;
+            lubricationPurchaseTransactionIds.Add(transactionId);
+            return true;
+        }
+
+        /// <summary>C-5: true when this lubrication purchase transaction id was already applied.</summary>
+        public bool HasAppliedLubricationPurchase(string transactionId) =>
+            !string.IsNullOrWhiteSpace(transactionId) && lubricationPurchaseTransactionIds.Contains(transactionId);
 
         public SawmillShopRuntime(string businessInstanceId, EntityIdRegistry idRegistry, string bladeId = null)
         {
@@ -645,6 +679,12 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             public SawmillBladeInventory.SawmillBladeInventorySaveDto BladeInventory = new SawmillBladeInventory.SawmillBladeInventorySaveDto();
             public SawmillTollLogStock.SawmillTollLogStockSaveDto TollLogStock = new SawmillTollLogStock.SawmillTollLogStockSaveDto();
             public SawmillTollPickupRegister.SawmillTollPickupRegisterSaveDto TollPickup = new SawmillTollPickupRegister.SawmillTollPickupRegisterSaveDto();
+            // C-5: -1 is the "unset" sentinel. JsonUtility leaves absent
+            // fields at their initialized value, so a pre-C-5 save (which has
+            // no such field) deserializes as -1 and loads as the opening
+            // store; a saved 0 is a genuinely empty store and loads as 0.
+            public int MillLubricationUnits = -1;
+            public List<string> LubricationPurchaseTransactionIds = new List<string>();
         }
 
         public SawmillShopRuntimeSaveDto CaptureSaveDto()
@@ -658,6 +698,8 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                 BladeInventory = bladeInventory.CaptureSaveDto(),
                 TollLogStock = tollLogStock.CaptureSaveDto(),
                 TollPickup = tollPickup.CaptureSaveDto(),
+                MillLubricationUnits = MillLubricationUnits,
+                LubricationPurchaseTransactionIds = new List<string>(lubricationPurchaseTransactionIds),
             };
             foreach (var lot in byproductStock)
             {
@@ -693,6 +735,23 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             bladeInventory.LoadFromSaveDto(dto != null ? dto.BladeInventory : null);
             tollLogStock.LoadFromSaveDto(dto != null ? dto.TollLogStock : null);
             tollPickup.LoadFromSaveDto(dto != null ? dto.TollPickup : null);
+            // C-5: a pre-C-5 save deserializes MillLubricationUnits as -1
+            // (the sentinel, since nothing ever consumed it there); load
+            // that as the opening store. A saved 0 is a genuinely empty
+            // store and loads as 0.
+            MillLubricationUnits = dto != null && dto.MillLubricationUnits >= 0
+                ? dto.MillLubricationUnits
+                : SawmillWorkstationEstablishment.OpeningMillLubricationUnits;
+            lubricationPurchaseTransactionIds.Clear();
+            if (dto != null && dto.LubricationPurchaseTransactionIds != null)
+            {
+                foreach (string transactionId in dto.LubricationPurchaseTransactionIds)
+                {
+                    if (string.IsNullOrWhiteSpace(transactionId)) continue;
+                    if (!lubricationPurchaseTransactionIds.Contains(transactionId))
+                        lubricationPurchaseTransactionIds.Add(transactionId);
+                }
+            }
         }
     }
 }

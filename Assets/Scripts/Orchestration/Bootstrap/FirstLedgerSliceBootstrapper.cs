@@ -2763,6 +2763,34 @@ namespace LandLedgers.FirstLedger
                 Debug.Log($"[SawmillProduction] {axeReport}", this);
                 foreach (string line in axeDiag) Debug.Log($"[SawmillProduction] {line}", this);
 
+                // C-5 (expanded campaign): receive the scenario-authored
+                // opening spare blade(s) into the mill's blade inventory,
+                // right after the equipment endowment — so the filer loop's
+                // spare-fitting branch has a real spare when the fitted
+                // blade retires. A refusal warns (the fitted blade is still
+                // stamped BOOTSTRAP when blank) and the station wiring below
+                // proceeds; sawing stays gated only when a blade actually
+                // retires with no spare on hand.
+                if (pass9.Sawmill != null)
+                {
+                    var spareDiag = new List<string>();
+                    if (!ScenarioMillOpeningSpareBladeEndowment.TryApply(configuration, millKey,
+                            millBusiness.InstanceId, millBusiness.RuntimeState, pass9.Sawmill,
+                            dayIndex, spareDiag, out string spareReport, out string spareError))
+                    {
+                        Debug.LogWarning($"[SawmillProduction] {spareError}", this);
+                    }
+                    else
+                    {
+                        Debug.Log($"[SawmillProduction] {spareReport}", this);
+                        foreach (string line in spareDiag) Debug.Log($"[SawmillProduction] {line}", this);
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning("[SawmillProduction] Opening spare blades were not received: no live mill runtime is registered in the Pass 9 state.", this);
+                }
+
                 // C-3 (expanded campaign): establish the mill's saw-line
                 // workstation in the hub-owned workstation registry, from
                 // the register the endowment just filled (the endowment
@@ -2782,6 +2810,19 @@ namespace LandLedgers.FirstLedger
                 foreach (string line in stationDiag) Debug.Log($"[SawmillProduction] {line}", this);
                 SupportContext millSupport = systemsHub.SupportContextFor(millBusiness.InstanceId);
                 SawmillWorkstationEstablishment.RegisterMillSupport(millSupport);
+                // C-5 (expanded campaign): the support context has no save
+                // seam of its own, so sync its lubrication key FROM the
+                // mill runtime's persisted field on every boot — otherwise a
+                // Continue resets a drawn-down store to the opening 30.
+                // RegisterMillSupport above only sets the key when absent.
+                if (pass9.Sawmill != null)
+                {
+                    var lubricationDiag = new List<string>();
+                    string lubricationSyncRefusal = SawmillLubrication.SyncSupportFromMill(pass9.Sawmill, millSupport, lubricationDiag);
+                    if (!string.IsNullOrWhiteSpace(lubricationSyncRefusal))
+                        Debug.LogWarning($"[SawmillProduction] {lubricationSyncRefusal}", this);
+                    foreach (string line in lubricationDiag) Debug.Log($"[SawmillProduction] {line}", this);
+                }
             }
         }
 #endif

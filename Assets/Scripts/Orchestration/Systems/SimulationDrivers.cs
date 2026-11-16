@@ -1470,7 +1470,92 @@ namespace LandLedgers.Orchestration.Systems
 
             // 11. Byproducts stay in mill.ByproductStock for the D1 daily
             // transfer that follows this method. No new transfer call here.
+            // C-5 (expanded campaign, Phase 1 forestry): lubrication — 1
+            // unit per completed sawing day (not per run), then a restock
+            // from the General Store when the store is low. Both legs are
+            // harness-testable helpers (SawmillLubrication /
+            // SawmillLubricationPurchase); this call site only binds the
+            // live runtimes. A day with no completed job burns nothing.
+            if (completedCount > 0)
+            {
+                SupportContext millSupport = hub.SupportContextFor(mill.BusinessInstanceId);
+                string consumeRefusal = SawmillLubrication.TryConsumeDay(mill, millSupport, absoluteDayIndex, diag);
+                if (!string.IsNullOrWhiteSpace(consumeRefusal))
+                    Debug.LogWarning("[SawmillProduction] Day " + absoluteDayIndex + ": " + consumeRefusal, this);
+                if (SawmillLubrication.ShouldRestock(mill))
+                    RestockMillLubrication(mill, millSupport, millBusiness, absoluteDayIndex, diag);
+            }
             Debug.Log($"[SawmillProduction] Day {absoluteDayIndex}: delivered {deliveredLotIds.Count} lot(s), re-attempted {reattemptedCount} open job(s), began {begunCount} new job(s), {completedCount} job(s) complete. {string.Join(" | ", diag)}", this);
+        }
+
+        /// <summary>
+        /// C-5 (expanded campaign, Phase 1 forestry): tops the mill
+        /// lubrication store up to the reorder target with lamp oil from the
+        /// General Store at the store's live selling price (never a hardcoded
+        /// price). Loud skips, never a silent no-op: no store business, no
+        /// store runtime, no store manager, an unknown/zero price, or a mill
+        /// that cannot pay all leave the store low and say so. The purchase
+        /// itself is SawmillLubricationPurchase (the flour-purchase shape);
+        /// freight is NOT built here — the store is in-town and C-7 (camp
+        /// supply line) owns the mill-buys-from-store freight pattern.
+        /// </summary>
+        private void RestockMillLubrication(SawmillShopRuntime mill, SupportContext millSupport, BusinessInstanceState millBusiness, int absoluteDayIndex, List<string> diag)
+        {
+            if (mill == null || millSupport == null || millBusiness?.RuntimeState == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Day " + absoluteDayIndex + ": mill lubrication restock skipped — no mill runtime, support context, or mill cash state.", this);
+                return;
+            }
+            int quarts = SawmillLubrication.QuartsToRestock(mill);
+            if (quarts <= 0) return;
+
+            BusinessInstanceState storeBusiness = null;
+            if (sharedBusinessRuntime != null)
+            {
+                foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+                {
+                    if (business == null || business.BusinessType != BusinessType.GeneralStore) continue;
+                    storeBusiness = business;
+                    break;
+                }
+            }
+            if (storeBusiness?.RuntimeState == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Day " + absoluteDayIndex + ": mill lubrication restock skipped — no formed General Store business to buy lamp oil from.", this);
+                return;
+            }
+            LandLedgers.FirstLedger.GeneralStoreRuntimeManager storeManager =
+                FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+            if (storeManager == null)
+            {
+                Debug.LogWarning("[SawmillProduction] Day " + absoluteDayIndex + ": mill lubrication restock skipped — no GeneralStoreRuntimeManager to read the lamp-oil price from.", this);
+                return;
+            }
+            int lampOilPriceCents = storeManager.GetItemSellingPriceCents(SawmillLubricationPurchase.LampOilItemId);
+            if (lampOilPriceCents <= 0)
+            {
+                Debug.LogWarning("[SawmillProduction] Day " + absoluteDayIndex + ": mill lubrication restock skipped — the General Store names no price for lamp oil.", this);
+                return;
+            }
+            var inputs = new SawmillLubricationPurchaseInputs
+            {
+                StoreRuntime = storeBusiness.RuntimeState,
+                MillRuntime = mill,
+                MillSupport = millSupport,
+                MillCashPort = new Series2BusinessRuntimeCashPort(millBusiness.RuntimeState),
+                StoreCashPort = new Series2BusinessRuntimeCashPort(storeBusiness.RuntimeState),
+                MillBusinessId = mill.BusinessInstanceId,
+                StoreBusinessId = storeBusiness.InstanceId,
+                UnitPriceCents = lampOilPriceCents,
+                QuartsRequested = quarts,
+                DayIndex = absoluteDayIndex,
+                TransactionId = SawmillLubrication.TransactionIdFor(mill.BusinessInstanceId, absoluteDayIndex, mill.LubricationPurchaseTransactionIds.Count + 1),
+            };
+            SawmillLubricationPurchaseResult result = SawmillLubricationPurchase.PurchaseQuarts(inputs, diag);
+            if (!result.Succeeded)
+                Debug.LogWarning("[SawmillProduction] Day " + absoluteDayIndex + ": mill lubrication restock refused — " + result.Refusal, this);
+            else if (!result.Duplicate)
+                Debug.Log($"[SawmillProduction] Day {absoluteDayIndex}: mill lubrication restocked {result.QuartsPurchased} quart(s) of lamp oil for {result.TotalCostCents}c.", this);
         }
 
         /// <summary>

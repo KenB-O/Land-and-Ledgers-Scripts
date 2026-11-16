@@ -68,41 +68,26 @@ namespace LandLedgers.EditorTests.Economy
         private const string HelperPath =
             "Assets/Scripts/Domains/Economy/Core/BusinessCashClampDiagnostics.cs";
 
-        /// <summary>
-        /// The harness shim's Debug.LogWarning writes to Console, so capture
-        /// Console.Out around the action and return everything written.
-        /// </summary>
-        private static string CaptureConsole(Action action)
-        {
-            TextWriter oldOut = Console.Out;
-            var writer = new StringWriter();
-            Console.SetOut(writer);
-            try
-            {
-                action();
-            }
-            finally
-            {
-                Console.SetOut(oldOut);
-            }
-
-            return writer.ToString();
-        }
-
         // ---------- (1) Behavioural: the helper's clamp decision + text ----------
+        //
+        // 2026-11-15 (Unity run): the five positive logging tests used to
+        // capture Console.Out around the Warn* calls. That technique only
+        // works under the Roslyn harness shim, whose Debug.LogWarning writes
+        // to Console. In Unity, Debug.LogWarning writes to the Unity Console,
+        // NOT to Console.Out, so the captured log was empty and all five
+        // tests failed in the Unity run (Campaign B 206/215). The logging
+        // behaviour is now pinned in a way both environments can verify:
+        // the exact message text (pure string functions), the clamp
+        // predicates (pure bool functions), and a structural test that each
+        // Warn* method calls Debug.LogWarning exactly once with its message.
+        // No production change: the helper still logs via Debug.LogWarning.
 
         [Test]
-        public void WarnSpendClamp_OverBalance_LogsWarning()
+        public void SpendClampMessage_NegativeRequest_ExactText()
         {
-            string log = CaptureConsole(() =>
-                BusinessCashClampDiagnostics.WarnSpendClamp(BusinessId, 500, 120, 120));
-            Assert.IsTrue(log.Contains("[BusinessCashClamp]"), "expected a clamp warning, got: " + log);
-            Assert.IsTrue(log.Contains("Business 'general-store'"), "warning must name the business, got: " + log);
-            Assert.IsTrue(log.Contains("SpendCents"), "warning must name the primitive, got: " + log);
-            Assert.IsTrue(log.Contains("500c"), "warning must name the requested amount, got: " + log);
-            Assert.IsTrue(log.Contains("balance 120c"), "warning must name the balance, got: " + log);
-            Assert.IsTrue(log.Contains("spent 120c"), "warning must name the clamped result, got: " + log);
-            Assert.IsTrue(log.Contains("shortfall 380c"), "warning must name the shortfall, got: " + log);
+            Assert.AreEqual(
+                "[BusinessCashClamp] Business 'general-store' SpendCents requested -50c (negative); clamped to 0c, no cash moved (balance 120c).",
+                BusinessCashClampDiagnostics.SpendClampMessage(BusinessId, -50, 120, 0));
         }
 
         [Test]
@@ -114,46 +99,22 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void WarnSpendClamp_ExactBalance_NoWarning()
+        public void WarnSpendClamp_LogsViaDebugLogWarning()
         {
-            string log = CaptureConsole(() =>
-                BusinessCashClampDiagnostics.WarnSpendClamp(BusinessId, 120, 120, 120));
-            Assert.IsFalse(log.Contains("[BusinessCashClamp]"), "exact-balance spend must not warn, got: " + log);
-        }
-
-        [Test]
-        public void WarnSpendClamp_WithinBalance_NoWarning()
-        {
-            string log = CaptureConsole(() =>
-                BusinessCashClampDiagnostics.WarnSpendClamp(BusinessId, 50, 120, 50));
-            Assert.IsFalse(log.Contains("[BusinessCashClamp]"), "in-balance spend must not warn, got: " + log);
-        }
-
-        [Test]
-        public void WarnSpendClamp_ZeroRequest_NoWarning()
-        {
-            string log = CaptureConsole(() =>
-                BusinessCashClampDiagnostics.WarnSpendClamp(BusinessId, 0, 120, 0));
-            Assert.IsFalse(log.Contains("[BusinessCashClamp]"), "zero spend must not warn, got: " + log);
-        }
-
-        [Test]
-        public void WarnSpendClamp_NegativeRequest_LogsWarning()
-        {
-            string log = CaptureConsole(() =>
-                BusinessCashClampDiagnostics.WarnSpendClamp(BusinessId, -50, 120, 0));
-            Assert.IsTrue(log.Contains("[BusinessCashClamp]"), "expected a clamp warning, got: " + log);
-            Assert.IsTrue(log.Contains("(negative)"), "warning must say the request was negative, got: " + log);
-            Assert.IsTrue(log.Contains("no cash moved"), "warning must say no cash moved, got: " + log);
-        }
-
-        [Test]
-        public void WarnSpendClamp_ZeroBalance_LogsWarning()
-        {
-            string log = CaptureConsole(() =>
-                BusinessCashClampDiagnostics.WarnSpendClamp(BusinessId, 10, 0, 0));
-            Assert.IsTrue(log.Contains("[BusinessCashClamp]"), "expected a clamp warning, got: " + log);
-            Assert.IsTrue(log.Contains("shortfall 10c"), "warning must name the shortfall, got: " + log);
+            // Structural pin: WarnSpendClamp logs exactly once, via
+            // Debug.LogWarning, with the SpendClampMessage text, gated on
+            // the SpendClamps predicate. This replaces the Console-capture
+            // tests (see section (1) note): the warning is observable in
+            // Unity through the Unity Console, not through Console.Out.
+            string body = HelperMethodBody(
+                "public static void WarnSpendClamp(string businessId, int requested, int balance, int spent)",
+                "public static bool SetClamps(int requested)");
+            Assert.AreEqual(1, CountOccurrences(body, "Debug.LogWarning("),
+                "WarnSpendClamp must call Debug.LogWarning exactly once. Body: " + body);
+            Assert.IsTrue(body.Contains("SpendClampMessage("),
+                "WarnSpendClamp must log the SpendClampMessage text. Body: " + body);
+            Assert.IsTrue(body.Contains("SpendClamps(requested, balance)"),
+                "WarnSpendClamp must gate on the SpendClamps predicate. Body: " + body);
         }
 
         [Test]
@@ -168,49 +129,63 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void WarnSetClamp_Negative_LogsWarning()
+        public void SetClampMessage_Negative_ExactText()
         {
-            string log = CaptureConsole(() =>
-                BusinessCashClampDiagnostics.WarnSetClamp(BusinessId, -50, 120));
-            Assert.IsTrue(log.Contains("[BusinessCashClamp]"), "expected a clamp warning, got: " + log);
-            Assert.IsTrue(log.Contains("SetCurrentCashCents"), "warning must name the primitive, got: " + log);
-            Assert.IsTrue(log.Contains("-50c"), "warning must name the requested amount, got: " + log);
-            Assert.IsTrue(log.Contains("balance was 120c"), "warning must name the prior balance, got: " + log);
-            Assert.IsTrue(log.Contains("clamped to 0c"), "warning must name the clamped result, got: " + log);
+            Assert.AreEqual(
+                "[BusinessCashClamp] Business 'general-store' SetCurrentCashCents requested -50c (negative); clamped to 0c (balance was 120c).",
+                BusinessCashClampDiagnostics.SetClampMessage(BusinessId, -50, 120));
         }
 
         [Test]
-        public void WarnSetClamp_NormalSet_NoWarning()
+        public void SetClamps_Predicate()
         {
-            string log = CaptureConsole(() =>
-                BusinessCashClampDiagnostics.WarnSetClamp(BusinessId, 80, 120));
-            Assert.IsFalse(log.Contains("[BusinessCashClamp]"), "ordinary set must not warn, got: " + log);
+            Assert.IsTrue(BusinessCashClampDiagnostics.SetClamps(-1));
+            Assert.IsFalse(BusinessCashClampDiagnostics.SetClamps(0));
+            Assert.IsFalse(BusinessCashClampDiagnostics.SetClamps(80));
         }
 
         [Test]
-        public void WarnSetClamp_SetToZero_NoWarning()
+        public void WarnSetClamp_LogsViaDebugLogWarning()
         {
-            string log = CaptureConsole(() =>
-                BusinessCashClampDiagnostics.WarnSetClamp(BusinessId, 0, 120));
-            Assert.IsFalse(log.Contains("[BusinessCashClamp]"), "setting cash to zero is a legitimate set, not a clamp, got: " + log);
+            string body = HelperMethodBody(
+                "public static void WarnSetClamp(string businessId, int requested, int priorBalance)",
+                "public static bool AddClamps(int requested)");
+            Assert.AreEqual(1, CountOccurrences(body, "Debug.LogWarning("),
+                "WarnSetClamp must call Debug.LogWarning exactly once. Body: " + body);
+            Assert.IsTrue(body.Contains("SetClampMessage("),
+                "WarnSetClamp must log the SetClampMessage text. Body: " + body);
+            Assert.IsTrue(body.Contains("SetClamps(requested)"),
+                "WarnSetClamp must gate on the SetClamps predicate. Body: " + body);
         }
 
         [Test]
-        public void WarnAddClamp_Negative_LogsWarning()
+        public void AddClampMessage_Negative_ExactText()
         {
-            string log = CaptureConsole(() =>
-                BusinessCashClampDiagnostics.WarnAddClamp(BusinessId, -30, 120));
-            Assert.IsTrue(log.Contains("[BusinessCashClamp]"), "expected a clamp warning, got: " + log);
-            Assert.IsTrue(log.Contains("AddCashCents"), "warning must name the primitive, got: " + log);
-            Assert.IsTrue(log.Contains("-30c"), "warning must name the requested amount, got: " + log);
+            Assert.AreEqual(
+                "[BusinessCashClamp] Business 'general-store' AddCashCents requested -30c (negative); clamped to 0c, no cash added (balance 120c).",
+                BusinessCashClampDiagnostics.AddClampMessage(BusinessId, -30, 120));
         }
 
         [Test]
-        public void WarnAddClamp_Positive_NoWarning()
+        public void AddClamps_Predicate()
         {
-            string log = CaptureConsole(() =>
-                BusinessCashClampDiagnostics.WarnAddClamp(BusinessId, 30, 120));
-            Assert.IsFalse(log.Contains("[BusinessCashClamp]"), "ordinary add must not warn, got: " + log);
+            Assert.IsTrue(BusinessCashClampDiagnostics.AddClamps(-1));
+            Assert.IsFalse(BusinessCashClampDiagnostics.AddClamps(0));
+            Assert.IsFalse(BusinessCashClampDiagnostics.AddClamps(30));
+        }
+
+        [Test]
+        public void WarnAddClamp_LogsViaDebugLogWarning()
+        {
+            string body = HelperMethodBody(
+                "public static void WarnAddClamp(string businessId, int requested, int balance)",
+                null);
+            Assert.AreEqual(1, CountOccurrences(body, "Debug.LogWarning("),
+                "WarnAddClamp must call Debug.LogWarning exactly once. Body: " + body);
+            Assert.IsTrue(body.Contains("AddClampMessage("),
+                "WarnAddClamp must log the AddClampMessage text. Body: " + body);
+            Assert.IsTrue(body.Contains("AddClamps(requested)"),
+                "WarnAddClamp must gate on the AddClamps predicate. Body: " + body);
         }
 
         // ---------- (2) Structural: the primitives actually call the helper ----------
@@ -330,6 +305,24 @@ namespace LandLedgers.EditorTests.Economy
             return StripNonCode(source.Substring(start, end - start));
         }
 
+        /// <summary>Same as MethodBody, but over the clamp helper file.
+        /// A null end signature reads to the end of the file (for the last
+        /// method in the class).</summary>
+        private static string HelperMethodBody(string startSignature, string endSignature)
+        {
+            string source = ReadRepoFile(HelperPath);
+            int start = source.IndexOf(startSignature, StringComparison.Ordinal);
+            Assert.IsTrue(start >= 0, "method not found: " + startSignature);
+            if (endSignature == null)
+            {
+                return StripNonCode(source.Substring(start));
+            }
+
+            int end = source.IndexOf(endSignature, start, StringComparison.Ordinal);
+            Assert.IsTrue(end > start, "end signature not found after " + startSignature + ": " + endSignature);
+            return StripNonCode(source.Substring(start, end - start));
+        }
+
         private static string FindRepoRoot()
         {
             string fromEnv = Environment.GetEnvironmentVariable("LAND_LEDGERS_REPO");
@@ -389,10 +382,18 @@ namespace LandLedgers.EditorTests.Economy
             string base_ = Path.GetFullPath(root);
             if (full.StartsWith(base_, StringComparison.Ordinal))
             {
-                return full.Substring(base_.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                // 2026-11-15 (Unity run): the repo-relative path is compared
+                // against forward-slash constants (HelperPath, RuntimeStatePath),
+                // so normalize the separator. On Windows Path.GetFullPath returns
+                // backslashes, which never equalled the constants and failed
+                // HelperDefinedExactlyOnce plus the NoOtherProductionCaller
+                // exclusion. Linux behaviour is unchanged (nothing to replace).
+                return full.Substring(base_.Length)
+                    .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    .Replace('\\', '/');
             }
 
-            return full;
+            return full.Replace('\\', '/');
         }
 
         private static IEnumerable<string> ProductionCsFiles()

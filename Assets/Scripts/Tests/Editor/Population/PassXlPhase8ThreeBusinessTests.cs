@@ -183,6 +183,90 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void PaidBakeryFuelSource_FuelUnitsOnHand_IncludesBakeryOwnStock()
+        {
+            // 2026-11-15 (Unity run): the bakery reported 40 fuel units
+            // while its production pre-check reported zero available and
+            // left the batch planned. The paid source's FuelUnitsOnHand
+            // read dealer intake only, so with an empty dealer intake the
+            // gate saw 0u even though the bakery's own store held the 40u
+            // bootstrap lot. The gate must count the store, exactly as
+            // SupplyTo already does — and with the store covering the need,
+            // no dealer movement is required.
+            var ids = new EntityIdRegistry();
+            var intake = new FuelYardByproductIntake();
+            var dealer = new BusinessRuntimeState();
+            dealer.BindBusinessIdentity("fuel-dealer-1");
+            var bakeryBusiness = new BusinessRuntimeState();
+            bakeryBusiness.BindBusinessIdentity("bakery-1");
+            bakeryBusiness.AddCashCents(500);
+            var bakery = new LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime("bakery-1");
+            var diag = new List<string>();
+            LandLedgers.Economy.Businesses.Bakery.BakeryFuelBootstrap.ApplyBootstrapEndowment(
+                bakery.FuelStock, ids, 0, diag);
+            Assert.AreEqual(40, bakery.FuelStock.UnitsOnHand(
+                LandLedgers.Economy.Businesses.Bakery.BakeryBreadCatalog.FuelItemId));
+
+            var source = new Series2PaidDealerBakeryFuelSource(
+                intake, "fuel-dealer-1", dealer, bakery, bakeryBusiness, ids,
+                intakeUnitsPerBakeryUnit: 4, priceCentsPerBakeryUnit: 11);
+            Assert.AreEqual(40, source.FuelUnitsOnHand());
+            Assert.IsNull(source.SupplyTo(bakery, 4, 0, new List<string>()));
+            Assert.AreEqual(0, intake.TotalFuelWoodUnitsFor("fuel-dealer-1"));
+            Assert.AreEqual(500, bakeryBusiness.CurrentCashCents);
+        }
+
+        [Test]
+        public void PaidBakeryFuelSource_FuelUnitsOnHand_SumsDealerAndBakeryStock()
+        {
+            // Dealer holds 8 intake units at factor 2 (= 4 bakery units)
+            // and the bakery store already holds 3u: the gate must see 7u,
+            // not 4u. Supply then buys only the 1u still needed.
+            var ids = new EntityIdRegistry();
+            var intake = new FuelYardByproductIntake();
+            EntityId yardLotId = ids.Allocate(EntityKind.Lot);
+            Assert.IsNull(intake.ReceiveByproductLot("fuel-dealer-1", new SlabOffcutFuelLot
+            {
+                LotId = yardLotId,
+                FuelWoodUnits = 8,
+                SourceMillBusinessId = "mill-1",
+                OwnerId = "mill-1",
+                SourceLogLotId = "log-42",
+                StandId = "stand-7",
+                Species = "white pine",
+                ProducedDayIndex = 3,
+            }, new List<string>()));
+            var dealer = new BusinessRuntimeState();
+            dealer.BindBusinessIdentity("fuel-dealer-1");
+            dealer.AddCashCents(200);
+            var bakeryBusiness = new BusinessRuntimeState();
+            bakeryBusiness.BindBusinessIdentity("bakery-1");
+            bakeryBusiness.AddCashCents(500);
+            var bakery = new LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime("bakery-1");
+            Assert.IsNull(bakery.FuelStock.ReceiveLot(
+                new LandLedgers.Economy.Businesses.Bakery.BakeryFuelLot
+                {
+                    LotId = ids.Allocate(EntityKind.Lot),
+                    FuelName = LandLedgers.Economy.Businesses.Bakery.BakeryBreadCatalog.FuelItemId,
+                    Units = 3,
+                    AcquiredDayIndex = 0,
+                    FuelDealerBusinessId = "fuel-dealer-1",
+                    SourceFuelLotId = yardLotId.ToString(),
+                    OriginName = "FuelDealer fuel-dealer-1 (town fuel yard)",
+                    IsBootstrapEndowment = false,
+                }, new List<string>()));
+
+            var source = new Series2PaidDealerBakeryFuelSource(
+                intake, "fuel-dealer-1", dealer, bakery, bakeryBusiness, ids,
+                intakeUnitsPerBakeryUnit: 2, priceCentsPerBakeryUnit: 28);
+            Assert.AreEqual(7, source.FuelUnitsOnHand());
+            Assert.IsNull(source.SupplyTo(bakery, 5, 4, new List<string>()));
+            Assert.AreEqual(4, intake.TotalFuelWoodUnitsFor("fuel-dealer-1"));
+            Assert.AreEqual(5, bakery.FuelStock.UnitsOnHand(
+                LandLedgers.Economy.Businesses.Bakery.BakeryBreadCatalog.FuelItemId));
+        }
+
+        [Test]
         public void PaidBakeryFuelSource_InsufficientYardOrBakeryFunds_LeavesBothUnchanged()
         {
             var ids = new EntityIdRegistry();

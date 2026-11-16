@@ -168,7 +168,22 @@ namespace LandLedgers.Orchestration.Player
 
         public int FuelUnitsOnHand()
         {
-            return intake.TotalFuelWoodUnitsFor(dealerBusinessId) / intakeUnitsPerBakeryUnit;
+            // 2026-11-15 (Unity run): the production pre-check gate reads
+            // this method, so it must report every unit the bake can
+            // actually use — dealer stock AND fuel already sitting in the
+            // bakery's own store. The old version read dealer stock only,
+            // so with an empty dealer intake and the 40u bootstrap lot in
+            // the store, Precheck refused on "fuel 0u" while the coverage
+            // readout reported 40u, and batches stayed planned forever.
+            // SupplyTo already subtracts on-hand stock before ordering;
+            // this makes the gate agree with it. The in-stock fallback
+            // source reads the same store, so the two sources now agree on
+            // what "on hand" means.
+            int dealerCoverable = intake.TotalFuelWoodUnitsFor(dealerBusinessId) / intakeUnitsPerBakeryUnit;
+            int onHand = bakery != null && bakery.FuelStock != null
+                ? bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId)
+                : 0;
+            return dealerCoverable + onHand;
         }
 
         public string SupplyTo(BakeryShopRuntime target, int unitsNeeded, int dayIndex, List<string> diag)

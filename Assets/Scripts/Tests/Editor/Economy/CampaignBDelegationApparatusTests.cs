@@ -413,9 +413,17 @@ namespace LandLedgers.EditorTests.Economy
             string base_ = Path.GetFullPath(root);
             if (full.StartsWith(base_, StringComparison.OrdinalIgnoreCase))
             {
-                return full.Substring(base_.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                // 2026-11-15 (Unity run): the repo-relative path is compared
+                // against forward-slash constants (DelegationServicePath,
+                // ManagerBrainPath), so normalize the separator. On Windows
+                // Path.GetFullPath returns backslashes, which never equalled
+                // the constants and failed both AreEqual path assertions.
+                // Linux behaviour is unchanged (nothing to replace).
+                return full.Substring(base_.Length)
+                    .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    .Replace('\\', '/');
             }
-            return full;
+            return full.Replace('\\', '/');
         }
 
         private static IEnumerable<string> ProductionCsFiles()

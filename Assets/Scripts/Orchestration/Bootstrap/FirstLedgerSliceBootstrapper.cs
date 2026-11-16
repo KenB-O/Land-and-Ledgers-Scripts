@@ -2155,6 +2155,16 @@ namespace LandLedgers.FirstLedger
             // lot ids. (Catalog needs no pre-creation: Restore replaces it.)
             if (pass9.WholesaleIntake == null)
                 pass9.WholesaleIntake = new LandLedgers.Economy.Ordering.Pass3WholesaleIntake();
+            // DEF-009 follow-on (Decision 5): same window, same rule — the
+            // fuel-yard intake holder must exist before the Pass XL restore
+            // consumes the state. Without this the restore parks the saved
+            // lots as pending and a re-save before any driver runs writes an
+            // empty section, silently dropping them. With it the lots restore
+            // in place, clear-then-load, exactly like the other Pass 9
+            // holders above. Empty holder only; inventory arrives solely
+            // through the sawmill-byproduct custody transfer.
+            if (pass9.FuelIntake == null)
+                pass9.FuelIntake = new FuelYardByproductIntake();
             // Creates/reuses the Bakery runtime + driver when a Bakery business
             // instance exists (binding the owner, attaching the fuel source);
             // warn-returns otherwise, leaving the state + freight driver above

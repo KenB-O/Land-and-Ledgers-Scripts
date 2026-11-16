@@ -2195,6 +2195,15 @@ namespace LandLedgers.Orchestration.Systems
                 householdId => householdMemberships != null
                     ? householdMemberships.GetActiveMembers(householdId)
                     : new List<int>());
+            // D-3: bind the hired-wage settlement authorities so hired
+            // workers are paid when their package completes (driver hook)
+            // and their employments end. Source-reviewed only:
+            // SimulationDrivers.cs is harness-excluded, so Unity
+            // compilation proof is owed from Codex.
+            driver.HiredLaborEmployments = hub.Employments;
+            driver.WorkerHouseholdByPerson = personId => householdMemberships != null
+                ? householdMemberships.GetActiveHouseholdId(personId)
+                : -1;
             driver.MaterialSourceByHousehold = CreateHouseholdConstructionMaterialSource;
             var diag = new List<string>();
             // D-1 (F-M1): wire the commission-time trip bound from the real
@@ -2316,7 +2325,52 @@ namespace LandLedgers.Orchestration.Systems
                     return hub.ConstructionExecutor.WorkCommittedLabor(project, package, taskId,
                         package.LaborMinutesRequired, hub.Tasks, hub.WorkTimeBudgets, dayIndex, diag);
                 }
-                return lastRefusal;
+                // D-3: no own member could work — try hired labour from
+                // other households before the package waits. The helper
+                // hires at the agreed weekly wage and works the committed
+                // task through the real employment and task authorities;
+                // wages are paid by the driver when the package completes.
+                // Source-reviewed only: SimulationDrivers.cs is
+                // harness-excluded, so Unity compilation proof is owed
+                // from Codex.
+                string hiredProblem = NpcConstructionHiredLabor.TryWorkPackage(
+                    hub.NpcConstructionCommissioner, hub.Employments, hub.ConstructionExecutor,
+                    project, record, package, HiredLaborCandidates(project),
+                    personId => drivers.householdMemberships != null
+                        ? drivers.householdMemberships.GetActiveHouseholdId(personId)
+                        : -1,
+                    NpcConstructionHiredLabor.HiredConstructionWeeklyWageCents,
+                    hub.PersonSchedules, custody, hub.Tasks, hub.WorkTimeBudgets,
+                    dayIndex, 360, package.LaborMinutesRequired, diag);
+                if (hiredProblem == null) return null;
+                return lastRefusal + " No hired worker could work the package either — " + hiredProblem;
+            }
+
+            /// <summary>
+            /// D-3: hired-labour candidates for one project — active members
+            /// of every household except the commissioning household and the
+            /// player household, in household order then membership order.
+            /// The player's people are never hired without the player's
+            /// decision. The schedule tracker, work budgets and the hire
+            /// itself still decide whether a candidate can actually work;
+            /// this list is only who may be asked.
+            /// </summary>
+            private List<int> HiredLaborCandidates(ConstructionProject project)
+            {
+                var candidates = new List<int>();
+                if (drivers.populationManager?.State?.households == null
+                    || drivers.householdMemberships == null) return candidates;
+                foreach (var household in drivers.populationManager.State.households)
+                {
+                    if (household == null) continue;
+                    if (household.id == project.HouseholdId) continue;
+                    if (household.isPlayerHousehold) continue;
+                    List<int> members = drivers.householdMemberships.GetActiveMembers(household.id);
+                    if (members == null) continue;
+                    foreach (int personId in members)
+                        if (personId >= 0 && !candidates.Contains(personId)) candidates.Add(personId);
+                }
+                return candidates;
             }
         }
 

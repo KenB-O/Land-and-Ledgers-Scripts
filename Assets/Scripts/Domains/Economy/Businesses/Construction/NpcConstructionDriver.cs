@@ -195,6 +195,23 @@ namespace LandLedgers.Economy
                 : FreightCargoCapacity.MaxUnitsPerTrip(cargo, wagon);
         }
 
+        /// <summary>
+        /// D-3: the employment registry hired workers are registered in.
+        /// Bound by the production driver (SimulationDrivers) from the hub.
+        /// Null means hired wages cannot be settled — the driver records
+        /// that loudly and never treats unpaid wages as paid. Optional:
+        /// existing callers that never hire keep working unchanged.
+        /// </summary>
+        public EmploymentRelationshipRegistry HiredLaborEmployments { get; set; }
+
+        /// <summary>
+        /// D-3: person id to the household their wages are paid to. Bound
+        /// by the production driver from the household membership registry.
+        /// Null means hired wages cannot be settled (see
+        /// <see cref="HiredLaborEmployments"/>).
+        /// </summary>
+        public Func<int, int> WorkerHouseholdByPerson { get; set; }
+
         public NpcConstructionDriver(
             NpcConstructionCommissioner commissioner,
             ConstructionProjectExecutor executor,
@@ -447,10 +464,69 @@ namespace LandLedgers.Economy
                     diag.Add($"NpcConstructionDriver: project '{project.ProjectId}' package '{next.PackageId}' cannot advance — {advanceProblem}");
                     return false;
                 }
+                // D-3: a package that just completed pays its hired wages
+                // now (once, on completion) and ends the package
+                // employments. Own-labour packages owe no wages.
+                SettleHiredWagesIfComplete(project, next, dayIndex, diag);
                 return true;
             }
             diag.Add($"NpcConstructionDriver: project '{project.ProjectId}' package '{next.PackageId}' is {next.Status} — no drive step applies.");
             return false;
+        }
+
+        /// <summary>
+        /// D-3: pays hired wages when a package completes, exactly once.
+        /// Called only after AdvancePackage succeeds, so wages are never
+        /// paid for a package that did not complete. Own-labour packages
+        /// owe no wages and return immediately. The WagesPaidCents guard
+        /// makes the settlement idempotent — a second call never pays
+        /// twice. When the employment registry or the worker-household map
+        /// is not bound, the wages stay UNPAID and are recorded loudly
+        /// (diagnostics + record decisions), never treated as paid, and
+        /// the employments stay active so a later settlement can find
+        /// them. When payment itself is refused (the household cannot
+        /// cover the wages), the same applies: the package still
+        /// completes — the work is real — but the wages are recorded as
+        /// unpaid, and the employments stay active. On success the
+        /// package's employments end (EndedByAgreement): a casual hire
+        /// for one package does not stay employed after it.
+        /// </summary>
+        private void SettleHiredWagesIfComplete(ConstructionProject project, WorkPackage package,
+            int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (commissioner == null || project == null || package == null) return;
+            if (package.Status != WorkPackageStatus.Complete) return;
+            NpcConstructionRecord record = commissioner.FindRecordForProject(project.ProjectId);
+            NpcBuildPackageFunding funding = record != null ? record.FindFunding(package.PackageId) : null;
+            if (funding == null || funding.LaborKind != NpcBuildLaborKind.HiredWorker) return;
+            if (funding.WagesPaidCents > 0) return;
+            if (HiredLaborEmployments == null || WorkerHouseholdByPerson == null)
+            {
+                diag.Add($"NpcConstructionDriver: hired wages for package '{package.PackageId}' cannot be settled — no employment registry or worker-household map bound; the wages stay unpaid and recorded here, never treated as paid.");
+                record.Decisions.Add($"day {dayIndex}: hired wages for '{package.PhaseName}' UNPAID — no employment registry or worker-household map bound; settle them before treating the package as paid.");
+                return;
+            }
+            var workerHouseholds = new Dictionary<int, int>();
+            foreach (int personId in funding.WorkerPersonIds)
+            {
+                if (personId < 0 || workerHouseholds.ContainsKey(personId)) continue;
+                workerHouseholds[personId] = WorkerHouseholdByPerson(personId);
+            }
+            string payProblem = commissioner.PayWorkerForPackage(HiredLaborEmployments, record, package,
+                cash, "household:" + project.HouseholdId, workerHouseholds, dayIndex, diag);
+            if (payProblem != null)
+            {
+                diag.Add($"NpcConstructionDriver: hired wages for package '{package.PackageId}' could not be paid — {payProblem} The wages stay unpaid and recorded; the employments stay active.");
+                record.Decisions.Add($"day {dayIndex}: hired wages for '{package.PhaseName}' UNPAID — {payProblem}");
+                return;
+            }
+            foreach (string employmentId in funding.EmploymentIds)
+            {
+                if (string.IsNullOrWhiteSpace(employmentId)) continue;
+                HiredLaborEmployments.EndEmployment(employmentId, dayIndex, EmploymentEndReason.EndedByAgreement);
+            }
+            record.Decisions.Add($"day {dayIndex}: hired wages for '{package.PhaseName}' paid ({funding.WagesPaidCents}c); the package employments ended.");
         }
 
         /// <summary>

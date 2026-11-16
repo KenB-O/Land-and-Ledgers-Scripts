@@ -821,17 +821,77 @@ namespace LandLedgers.Economy
                 diag.Add($"NpcCommissioner.HireWorker: P{workerPersonId} is hired (employment '{relationship.Id}') but their time was refused: {commitProblem}");
                 return commitProblem;
             }
+            RecordHiredCommit(record, package, workerPersonId, relationship.Id, durationMinutes);
             NpcBuildPackageFunding funding = record.FindFunding(package.PackageId);
             if (funding != null)
-            {
-                funding.LaborKind = NpcBuildLaborKind.HiredWorker;
-                if (!funding.WorkerPersonIds.Contains(workerPersonId)) funding.WorkerPersonIds.Add(workerPersonId);
-                if (!funding.EmploymentIds.Contains(relationship.Id)) funding.EmploymentIds.Add(relationship.Id);
-                funding.WorkerMinutesCommitted += WorkTimeMath.ClampToWholeMinutes(durationMinutes);
                 funding.Notes = $"wages to household:{workerHouseholdId} at {agreedWeeklyWageCents}c/week pro-rated";
-            }
             record.Decisions.Add($"day {dayIndex}: hired P{workerPersonId} (employment '{relationship.Id}', {agreedWeeklyWageCents}c/week) for '{package.PhaseName}'.");
             diag.Add($"NpcCommissioner: P{workerPersonId} hired for '{package.PackageId}' ({agreedWeeklyWageCents}c/week, employment '{relationship.Id}').");
+            return null;
+        }
+
+        /// <summary>
+        /// D-3: the funding-line bookkeeping shared by HireWorker (new
+        /// employment) and CommitHiredLabor (existing employment): the
+        /// package's labour kind, worker list, employment list and
+        /// committed minutes. One bookkeeping authority — the two paths
+        /// never drift apart. The wage/payee note stays with HireWorker,
+        /// which is where the wage is agreed.
+        /// </summary>
+        private static void RecordHiredCommit(NpcConstructionRecord record, WorkPackage package,
+            int workerPersonId, string employmentId, int durationMinutes)
+        {
+            if (record == null || package == null) return;
+            NpcBuildPackageFunding funding = record.FindFunding(package.PackageId);
+            if (funding == null) return;
+            funding.LaborKind = NpcBuildLaborKind.HiredWorker;
+            if (!funding.WorkerPersonIds.Contains(workerPersonId)) funding.WorkerPersonIds.Add(workerPersonId);
+            if (!string.IsNullOrWhiteSpace(employmentId) && !funding.EmploymentIds.Contains(employmentId))
+                funding.EmploymentIds.Add(employmentId);
+            funding.WorkerMinutesCommitted += WorkTimeMath.ClampToWholeMinutes(durationMinutes);
+        }
+
+        /// <summary>
+        /// D-3: commits more time for a worker ALREADY hired on this
+        /// package, under their existing employment — never registers a
+        /// duplicate employment for the same worker and package. Used by
+        /// the hired-labour fallback when a package needs more than one
+        /// day of hired work. Wages are still paid once, on package
+        /// completion, via <see cref="PayWorkerForPackage"/>.
+        /// </summary>
+        public string CommitHiredLabor(
+            EmploymentRelationshipRegistry employments,
+            ConstructionProjectExecutor executor,
+            ConstructionProject project,
+            NpcConstructionRecord record,
+            WorkPackage package,
+            string employmentId,
+            PersonScheduleTracker tracker,
+            IHouseholdToolCustody custody,
+            TaskAuthority tasks,
+            WorkTimeBudgetStore budgets,
+            int dayIndex,
+            int startMinuteOfDay,
+            int durationMinutes,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (employments == null || executor == null || project == null || record == null || package == null
+                || string.IsNullOrWhiteSpace(employmentId))
+                return "NpcCommissioner.CommitHiredLabor: employments, executor, project, record, package and employment id required.";
+            if (!employments.TryGetById(employmentId, out EmploymentRelationship relationship) || relationship == null)
+                return $"NpcCommissioner.CommitHiredLabor: employment '{employmentId}' unknown — cannot commit time under it.";
+            if (!relationship.IsActive)
+                return $"NpcCommissioner.CommitHiredLabor: employment '{employmentId}' is not active — hire again instead of committing under an ended employment.";
+            string commitProblem = executor.CommitLabor(project, package, relationship.EmployeePersonId, tracker, custody, tasks, budgets,
+                dayIndex, startMinuteOfDay, durationMinutes, $"hired labor {employmentId}", diag);
+            if (commitProblem != null)
+            {
+                diag.Add($"NpcCommissioner.CommitHiredLabor: P{relationship.EmployeePersonId} (employment '{employmentId}') time refused: {commitProblem}");
+                return commitProblem;
+            }
+            RecordHiredCommit(record, package, relationship.EmployeePersonId, employmentId, durationMinutes);
+            record.Decisions.Add($"day {dayIndex}: P{relationship.EmployeePersonId} (employment '{employmentId}') committed {durationMinutes} min more to '{package.PhaseName}'.");
             return null;
         }
 

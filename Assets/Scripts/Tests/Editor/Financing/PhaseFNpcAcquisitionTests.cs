@@ -48,6 +48,14 @@ namespace LandLedgers.EditorTests.Financing
                 }
                 return new NpcSellerResponse { Kind = NpcSellerResponseKind.WalkAway, Reason = "the seller will not go lower." };
             }
+
+            /// <summary>D-8: the contents answer delegates to the price behaviour; the fake never counters with a different selection.</summary>
+            public NpcSellerResponse RespondToContentsOffer(string parcelId, int askingPriceCents,
+                int buyerOfferCents, PropertyContentsSelection requestedSelection,
+                int round, int maxRounds, List<string> diag)
+            {
+                return RespondToOffer(parcelId, askingPriceCents, buyerOfferCents, round, maxRounds, diag);
+            }
         }
 
         private sealed class Fixture

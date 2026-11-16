@@ -33,6 +33,14 @@ namespace LandLedgers.Economy.Financing
     {
         public NpcSellerResponseKind Kind = NpcSellerResponseKind.Unspecified;
         public int CounterPriceCents;
+        /// <summary>
+        /// D-8: the contents selection the seller counters with. Null means
+        /// the seller counters on price only and the requested selection
+        /// stands. A counter selection must be for the same building and
+        /// pass Validate (requirePriced: false); the negotiation fails
+        /// loudly otherwise.
+        /// </summary>
+        public PropertyContentsSelection CounterSelection;
         public string Reason = string.Empty;
 
         public NpcSellerResponse() { }
@@ -49,6 +57,18 @@ namespace LandLedgers.Economy.Financing
         int ReservationPriceCents(string parcelId, int askingPriceCents);
         NpcSellerResponse RespondToOffer(string parcelId, int askingPriceCents,
             int buyerOfferCents, int round, int maxRounds, List<string> diag);
+        /// <summary>
+        /// D-8: the seller's answer to a contents offer: the buyer's offered
+        /// price for the requested selection. The seller accepts, counters
+        /// with a price and optionally a different selection, or walks away.
+        /// A counter selection must be for the same building and pass
+        /// Validate (requirePriced: false); the negotiation fails loudly
+        /// otherwise. CounterSelection null means a price-only counter and
+        /// the requested selection stands.
+        /// </summary>
+        NpcSellerResponse RespondToContentsOffer(string parcelId, int askingPriceCents,
+            int buyerOfferCents, PropertyContentsSelection requestedSelection,
+            int round, int maxRounds, List<string> diag);
     }
 
     [Serializable]
@@ -276,6 +296,190 @@ namespace LandLedgers.Economy.Financing
             result.FailureReason = reason;
             if (round > 0) result.Rounds.Add($"negotiation ends: {reason} (last offer {lastOffer}c).");
             diag.Add("NpcPropertyAcquisition.NegotiatePrice: " + reason);
+            return result;
+        }
+
+        #endregion
+
+        #region Contents negotiation
+
+        /// <summary>
+        /// D-8: negotiates the contents selection AND the price for one
+        /// property, in a bounded round protocol that mirrors NegotiatePrice.
+        /// The buyer opens below the F6 anchor (the structure-only value
+        /// plus the requested contents value) by discounting only the
+        /// structure portion: the contents keep their frozen agreed values
+        /// and the structure absorbs the discount, so conservation (D-6)
+        /// holds by construction — the implied structure value is the agreed
+        /// price minus the agreed contents value.
+        ///
+        /// The buyer accepts a seller counter only when the price is inside
+        /// their capital AND the contents premium over the structure value
+        /// stays within replacement cost plus their moving cost: above that
+        /// the buyer would rather bring their own furniture. A counter below
+        /// the contents value, or with a selection for another building, or
+        /// one that fails Validate, fails the negotiation loudly — it is not
+        /// a price the buyer can accept and not a selection that can close.
+        ///
+        /// No cash moves here and no title moves here: the negotiation is
+        /// pure computation. The caller builds the acquisition plan from the
+        /// agreed result (AgreedPriceCents, AgreedSelection,
+        /// ImpliedStructureValueCents as the structure value) and closes it
+        /// through the existing D-6/D-7 path. A failed negotiation leaves
+        /// cash and title untouched because the negotiation never touches
+        /// them.
+        /// </summary>
+        public NpcContentsNegotiationResult NegotiateContents(
+            INpcPropertySellerPolicy sellerPolicy,
+            string parcelId,
+            HouseholdFurnishingRegister sellerFurnishings,
+            int buildingInstanceId,
+            string sellerOwnerKind,
+            string sellerOwnerId,
+            int structureOnlyCents,
+            NpcContentsBuyerRequest buyerRequest,
+            Func<string, int> replacementCostCentsForKind,
+            int maxRounds,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            var result = new NpcContentsNegotiationResult();
+            if (sellerPolicy == null)
+                return FailContentsNegotiation(result, "no seller policy — the seller's side of the negotiation is not wired.", diag);
+            if (sellerFurnishings == null)
+                return FailContentsNegotiation(result, "no seller furnishing register — the buyer cannot see the contents.", diag);
+            if (buyerRequest == null)
+                return FailContentsNegotiation(result, "no buyer request — no wants, no capital, no moving cost.", diag);
+            if (replacementCostCentsForKind == null)
+                return FailContentsNegotiation(result, "no replacement-cost data — the buyer cannot value the contents.", diag);
+            if (structureOnlyCents < 0)
+                return FailContentsNegotiation(result, $"the structure value is {structureOnlyCents}c: a negative structure value cannot anchor a negotiation.", diag);
+            if (maxRounds < 1)
+                return FailContentsNegotiation(result, $"the negotiation allows {maxRounds} rounds: at least one round is required.", diag);
+
+            List<FurnishingContentsItem> eligible =
+                PropertyContentsSelection.ListEligibleContents(sellerFurnishings, buildingInstanceId);
+            if (eligible.Count == 0)
+            {
+                // No contents in the building: the sale is bare, at the
+                // structure value. Nothing to negotiate.
+                result.Agreed = true;
+                result.AgreedPriceCents = structureOnlyCents;
+                result.AgreedSelection = null;
+                result.ImpliedStructureValueCents = structureOnlyCents;
+                result.Rounds.Add($"no eligible contents in building {buildingInstanceId}: bare sale at the structure value {structureOnlyCents}c.");
+                diag.Add("NpcPropertyAcquisition.NegotiateContents: AGREED bare sale at " + structureOnlyCents + "c (no contents).");
+                return result;
+            }
+
+            var requestNotes = new List<string>();
+            PropertyContentsSelection requested = NpcContentsNegotiation.BuildBuyerContentsRequest(
+                sellerFurnishings, buildingInstanceId, sellerOwnerKind, sellerOwnerId,
+                structureOnlyCents, buyerRequest, replacementCostCentsForKind, requestNotes, out string requestFailure);
+            result.Rounds.AddRange(requestNotes);
+            if (requested == null)
+                return FailContentsNegotiation(result, requestFailure ?? "the buyer request could not be built.", diag);
+
+            // The F6 anchor: structure-only plus the requested contents
+            // value. The buyer opens below it by discounting only the
+            // structure portion, capped by their capital.
+            int contentsValue = requested.TotalContentsValueCents;
+            int asking = structureOnlyCents + contentsValue;
+            int structureDiscount = (int)Math.Floor(structureOnlyCents * (Math.Max(0, OpeningOfferDiscountBps) / 10000.0));
+            int buyerOffer = Math.Min(buyerRequest.BuyerMaxCents, contentsValue + (structureOnlyCents - Math.Max(0, structureDiscount)));
+            if (buyerOffer < contentsValue)
+                return FailContentsNegotiation(result,
+                    $"the buyer's maximum {buyerRequest.BuyerMaxCents}c does not cover the contents value {contentsValue}c: any offer would imply a negative structure value.", diag);
+            if (buyerOffer <= 0)
+                return FailContentsNegotiation(result, "the buyer's means do not reach a first offer — they walk away.", diag);
+
+            PropertyContentsSelection currentSelection = requested;
+            int currentAsking = asking;
+            int currentContents = contentsValue;
+
+            for (int round = 1; round <= maxRounds; round++)
+            {
+                NpcSellerResponse response = sellerPolicy.RespondToContentsOffer(
+                    parcelId, currentAsking, buyerOffer, currentSelection, round, maxRounds, diag);
+                if (response == null)
+                    return FailContentsNegotiation(result, $"the seller gave no answer in round {round} — the negotiation stalls and dies.", diag);
+                string roundNote = $"round {round}: buyer offers {buyerOffer}c for {currentSelection.Mode} contents ({currentContents}c) against an asking of {currentAsking}c → seller {response.Kind}" +
+                    (response.Kind == NpcSellerResponseKind.Counter ? $" at {response.CounterPriceCents}c" : "") +
+                    (!string.IsNullOrWhiteSpace(response.Reason) ? $" ({response.Reason})" : "");
+                result.Rounds.Add(roundNote);
+                diag.Add("NpcPropertyAcquisition.NegotiateContents: " + roundNote);
+
+                if (response.Kind == NpcSellerResponseKind.Accept)
+                {
+                    result.Agreed = true;
+                    result.AgreedPriceCents = buyerOffer;
+                    result.AgreedSelection = currentSelection;
+                    result.ImpliedStructureValueCents = buyerOffer - currentContents;
+                    diag.Add($"NpcPropertyAcquisition: AGREED contents at {buyerOffer}c (anchor was {currentAsking}c, contents {currentContents}c, implied structure {result.ImpliedStructureValueCents}c).");
+                    return result;
+                }
+                if (response.Kind == NpcSellerResponseKind.WalkAway)
+                {
+                    return FailContentsNegotiation(result,
+                        $"the seller walked away at {buyerOffer}c — {response.Reason}", diag);
+                }
+                if (response.Kind == NpcSellerResponseKind.Counter)
+                {
+                    PropertyContentsSelection counterSelection = response.CounterSelection ?? currentSelection;
+                    int counterPrice = response.CounterPriceCents;
+                    if (counterSelection.BuildingInstanceId != buildingInstanceId)
+                        return FailContentsNegotiation(result,
+                            $"the seller countered with a selection for building {counterSelection.BuildingInstanceId}, not building {buildingInstanceId}: the counter is not for this house.", diag);
+                    List<string> problems = counterSelection.Validate(sellerFurnishings, requirePriced: false);
+                    if (problems != null && problems.Count > 0)
+                        return FailContentsNegotiation(result,
+                            "the seller countered with an invalid selection: " + string.Join("; ", problems), diag);
+                    int counterContents = counterSelection.TotalContentsValueCents;
+                    if (counterPrice < counterContents)
+                        return FailContentsNegotiation(result,
+                            $"the seller countered at {counterPrice}c, below the contents value {counterContents}c: the implied structure would be negative.", diag);
+                    int replacement = NpcContentsNegotiation.ReplacementValueCents(counterSelection, eligible, replacementCostCentsForKind);
+                    int buyerCeiling = replacement + buyerRequest.MovingCostCents;
+                    if (counterPrice <= buyerRequest.BuyerMaxCents
+                        && counterPrice - structureOnlyCents <= buyerCeiling)
+                    {
+                        result.Agreed = true;
+                        result.AgreedPriceCents = counterPrice;
+                        result.AgreedSelection = counterSelection;
+                        result.ImpliedStructureValueCents = counterPrice - counterContents;
+                        result.Rounds.Add($"buyer accepts the counter at {counterPrice}c.");
+                        diag.Add($"NpcPropertyAcquisition: AGREED contents at {counterPrice}c on the seller's counter (contents {counterContents}c, implied structure {result.ImpliedStructureValueCents}c).");
+                        return result;
+                    }
+                    if (round >= maxRounds)
+                        return FailContentsNegotiation(result,
+                            $"no agreement after {maxRounds} round(s): the seller's counter of {counterPrice}c is above the buyer's contents ceiling of {buyerCeiling}c over the structure value.", diag);
+                    // The buyer raises to the lesser of their capital and
+                    // the asking for the countered selection, and the seller
+                    // gets another round to answer.
+                    int newAsking = structureOnlyCents + counterContents;
+                    buyerOffer = Math.Min(buyerRequest.BuyerMaxCents, newAsking);
+                    if (buyerOffer < counterContents)
+                        return FailContentsNegotiation(result,
+                            $"the buyer's maximum {buyerRequest.BuyerMaxCents}c does not cover the countered contents value {counterContents}c: the buyer walks away.", diag);
+                    currentSelection = counterSelection;
+                    currentAsking = newAsking;
+                    currentContents = counterContents;
+                    result.Rounds.Add($"buyer raises to {buyerOffer}c for {currentSelection.Mode} contents ({currentContents}c).");
+                    continue;
+                }
+                return FailContentsNegotiation(result, $"the seller gave an unreadable answer in round {round}.", diag);
+            }
+            return FailContentsNegotiation(result, "negotiation exhausted without agreement.", diag);
+        }
+
+        private NpcContentsNegotiationResult FailContentsNegotiation(NpcContentsNegotiationResult result,
+            string reason, List<string> diag)
+        {
+            result.Agreed = false;
+            result.FailureReason = reason;
+            diag.Add("NpcPropertyAcquisition.NegotiateContents: " + reason);
             return result;
         }
 

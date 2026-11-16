@@ -2711,6 +2711,25 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
+        /// W-G2 (Agent G, expanded campaign 2026-11-16): rest quality
+        /// from last night's sleep for the nutrition-inspection readout,
+        /// via the hub's per-household sleeping-place registry (the
+        /// membership registry is the sole household authority). 1.0 when
+        /// the hub, the membership, or the person's household is
+        /// unavailable — the readout then matches the budget the service
+        /// computes with no rest effect.
+        /// </summary>
+        private float RestQualityFor(PersonState person)
+        {
+            if (person == null) return 1f;
+            HouseholdMembershipRegistry memberships = Memberships;
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            if (memberships == null || hub == null) return 1f;
+            int householdId = memberships.GetActiveHouseholdId(person.id);
+            return householdId < 0 ? 1f : hub.SleepingPlaceRegistryFor(householdId).LastRestQuality01(person.id);
+        }
+
+        /// <summary>
         /// P2: makes the nutrition → work-capacity teeth OBSERVABLE in the
         /// household inspection (Canon §25: aggregate adequacy, not a
         /// minigame). Empty when every member is adequately nourished.
@@ -2750,9 +2769,14 @@ namespace LandLedgers.Population
                 // retain hunger/health state for diagnosis, but those
                 // conditions do not reduce work capacity. The old readout
                 // showed the raw nutrition multiplier and contradicted the
-                // budget used by DailyNeedsService.
+                // budget used by DailyNeedsService. W-G2 (Agent G, expanded
+                // campaign 2026-11-16): rest quality from last night's
+                // sleep joins the same factor, so the readout still matches
+                // the budget — 1.0 when the hub or the membership is
+                // unavailable (no rest effect, same fail-open as the
+                // service).
                 worstCapacityMultiplier = Mathf.Min(worstCapacityMultiplier,
-                    DailyNeedsService.WorkCapacityFactor(person, ConditionDebuffsSuppressed));
+                    DailyNeedsService.WorkCapacityFactor(person, ConditionDebuffsSuppressed, RestQualityFor(person)));
             }
 
             if (memberCount <= 0 || undernourished <= 0)

@@ -4491,6 +4491,77 @@ namespace LandLedgers.Orchestration.Systems
             return result;
         }
 
+        /// <summary>
+        /// W-G2 (Agent G, expanded campaign 2026-11-16): rest quality
+        /// from last night's sleep for one person, via the hub's
+        /// per-household sleeping-place registry (the membership
+        /// registry is the sole household authority). 1.0 when the
+        /// person has no household or no registry yet (no rest effect).
+        /// </summary>
+        private float RestQualityFor(int personId)
+        {
+            if (hub == null || householdMemberships == null) return 1f;
+            int householdId = householdMemberships.GetActiveHouseholdId(personId);
+            return householdId < 0 ? 1f : hub.SleepingPlaceRegistryFor(householdId).LastRestQuality01(personId);
+        }
+
+        /// <summary>
+        /// W-G2: the building-footprint authority for one person's home,
+        /// for the sleep driver (arrival validation + interior movement).
+        /// Same resolution as ResolveDomesticActivityMovement (person to
+        /// home building to town-world authority); null when the person
+        /// has no home or the authority does not resolve — the driver
+        /// sleeps the person in place and logs loudly instead of failing
+        /// the night.
+        /// </summary>
+        private BuildingFootprintAuthority ResolveSleepAuthority(int personId)
+        {
+            PersonState person = populationManager?.State?.GetPerson(personId);
+            if (person == null || person.homeBuildingId < 0 || townWorld == null)
+                return null;
+            if (!townWorld.TryGetBuildingById(person.homeBuildingId, out PlacedBuilding home)
+                || home?.runtimeFootprintAuthority == null)
+                return null;
+            return home.runtimeFootprintAuthority;
+        }
+
+        /// <summary>
+        /// W-G2: the production movement resolver for the sleep driver.
+        /// A bed with an authored activity location routes through the
+        /// director's domestic-activity movement (interior route to the
+        /// bed anchor — the flight is only a person carrier; the director
+        /// reads PersonId and writes the building and activity location
+        /// back). A floor or bedroll place has no authored anchor, so the
+        /// sleeper is routed to the home building and counts as arrived
+        /// once physically at the building (the arrival check already
+        /// proved the entrance indoor point is walkable). Returns
+        /// Travelling while the route is active, Arrived once the sleeper
+        /// is at the place, Unsupported when no route exists.
+        /// </summary>
+        private DomesticActivityMovementResult ResolveSleepMovement(
+            int personId, SleepingPlace place, BuildingFootprintAuthority authority)
+        {
+            if (place == null || authority == null || populationManager?.State == null)
+                return DomesticActivityMovementResult.Unsupported;
+            PersonState person = populationManager.State.GetPerson(personId);
+            if (person == null || person.homeBuildingId < 0)
+                return DomesticActivityMovementResult.Unsupported;
+            LandLedgers.FirstLedger.PopulationPathingDirector director =
+                FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+            if (director == null) return DomesticActivityMovementResult.Unsupported;
+            if (place.Kind == SleepingPlaceKind.Bed
+                && !string.IsNullOrWhiteSpace(place.ActivityLocationId))
+            {
+                var flight = new DomesticLaborDriver.InFlightDomesticTask { PersonId = personId };
+                return director.TryReachDomesticActivity(flight, place.ActivityLocationId, out _);
+            }
+            if (director.IsPersonPhysicallyAtBuilding(personId, person.homeBuildingId))
+                return DomesticActivityMovementResult.Arrived;
+            return director.TryStartExplicitRoute(personId, person.homeBuildingId, PopulationScheduleState.AtHome)
+                ? DomesticActivityMovementResult.Traveling
+                : DomesticActivityMovementResult.Unsupported;
+        }
+
         private bool HouseholdOwnsAnimals(int householdId, List<int> memberIds)
         {
             if (hub?.Animals == null) return false;
@@ -5313,6 +5384,21 @@ namespace LandLedgers.Orchestration.Systems
                 if (household == null) continue;
                 List<int> members = householdMemberships.GetActiveMembers(household.id);
                 if (members.Count == 0) continue;
+                // W-G2 (Agent G, expanded campaign 2026-11-16): one
+                // sleeping-place registry per household, hub-owned and
+                // derived from the furnishing register (no Pass 9 list of
+                // its own). Night conditions come from the heating
+                // authority: IsColdSeasonMonth is the season gate, and
+                // DomesticNeedAuthorities.FuelHandlingNeeded is the
+                // heating authority's own forecast (burn above zero and
+                // fuel-wood on hand) — never recomputed here. The home
+                // building id locates floor places. The planner assigns
+                // tonight's sleep from this registry, and the sleep tick
+                // driver moves sleepers to the reserved places at 22:00.
+                SleepingPlaceRegistry sleepingPlaces = hub.SleepingPlaceRegistryFor(household.id);
+                sleepingPlaces.HomeBuildingInstanceId = household.homeBuildingId;
+                sleepingPlaces.IsColdSeason = IsColdSeasonMonth();
+                sleepingPlaces.HeatingFuelBurnedToday = DomesticNeedAuthorities.FuelHandlingNeeded(household, absoluteDayIndex);
                 dailyActivityPlanner.PlanHouseholdDay(
                     members,
                     personId =>
@@ -5336,7 +5422,8 @@ namespace LandLedgers.Orchestration.Systems
                     absoluteDayIndex,
                     hub.PersonSchedules,
                     hub.WorkTimeBudgets,
-                    diag);
+                    diag,
+                    sleepingPlaces);
             }
 
             if (diag.Count > 0)
@@ -6362,6 +6449,13 @@ namespace LandLedgers.Orchestration.Systems
             BuildHouseholdShoppingLoop();
 
             dailyNeedsService ??= new DailyNeedsService();
+            // W-G2 (Agent G, expanded campaign 2026-11-16): rest quality
+            // from last night's sleep reaches the work-capacity budget
+            // (DailyNeedsService.WorkCapacityFactor) through the service's
+            // RestQualityForPerson. Null-safe end to end: no household or
+            // no registry yet means 1.0 (no rest effect) — the same
+            // fail-open as a first night.
+            dailyNeedsService.RestQualityForPerson = personId => RestQualityFor(personId);
             consumptionPlanner ??= new HouseholdConsumptionPlanner();
             // DEF-067: construct the charge reconciliation before the
             // executor so the legacy path records from its first drive.
@@ -8179,7 +8273,7 @@ namespace LandLedgers.Orchestration.Systems
                 // no-window stall names its cause instead of returning
                 // silently.
                 float capacityFactor = DailyNeedsService.WorkCapacityFactor(
-                    ethan, populationManager != null && populationManager.ConditionDebuffsSuppressed);
+                    ethan, populationManager != null && populationManager.ConditionDebuffsSuppressed, RestQualityFor(ethan.id));
                 WorkTimeBudget budget = hub.WorkTimeBudgets?.GetOrCreate(EntityId.For(EntityKind.Person, ethan.id));
                 LogRefusalDayKeyed("no-window:" + hitch.TaskId, dayIndex,
                     $"[Hitching] Task '{hitch.TaskId}' has no free work window on day {dayIndex} " +
@@ -10676,7 +10770,7 @@ namespace LandLedgers.Orchestration.Systems
                     else
                     {
                         float capacity = DailyNeedsService.WorkCapacityFactor(
-                            owner, populationManager != null && populationManager.ConditionDebuffsSuppressed);
+                            owner, populationManager != null && populationManager.ConditionDebuffsSuppressed, RestQualityFor(ownerPersonId));
                         callerDailyBudgetMinutes = LandLedgers.Economy.Businesses.Bakery.BakeryPersonTimeBudget.PersonMinutesPerDay(capacity);
 
                     }
@@ -12360,6 +12454,34 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     Debug.LogWarning("[SimulationDrivers] domestic labor failures: " +
                         string.Join(" | ", domesticFailures.Take(20)));
+                }
+
+                // W-G2 (Agent G, expanded campaign 2026-11-16): the sleep
+                // tick driver moves sleepers to their reserved places at
+                // 22:00, holds them through the night, and releases the
+                // reservation at 07:00 with rest quality recorded. Same
+                // forward-motion gate as domestic labor, so a
+                // repeated/paused tick can never re-start a night. The
+                // driver is Unity-free and harness-tested; the movement
+                // resolver below is the production glue over the pathing
+                // director (source-reviewed; Unity compilation proof is
+                // owed from Codex).
+                var sleepDiag = new List<string>();
+                hub.SleepTickDriver.AdvanceTick(
+                    context.Date.AbsoluteDayIndex,
+                    Mathf.FloorToInt(context.TimeOfDay01 * 1440f),
+                    hub.AllSleepingPlaceRegistries,
+                    ResolveSleepAuthority,
+                    SleepingPlaceArrival.TryValidateArrivalPath,
+                    ResolveSleepMovement,
+                    sleepDiag);
+                // The driver's lines are loud by construction (only
+                // failures and stale-night recoveries, once per night),
+                // so they all surface; routine nights stay silent.
+                if (sleepDiag.Count > 0)
+                {
+                    Debug.LogWarning("[SimulationDrivers] sleep: " +
+                        string.Join(" | ", sleepDiag.Take(20)));
                 }
             }
 

@@ -191,6 +191,7 @@ namespace LandLedgers.Orchestration.Systems
         // them and the bootstrap re-registers restored ones after a
         // load. A household with no register holds no furniture.
         private Dictionary<int, HouseholdFurnishingRegister> householdFurnishingRegisters;
+        private Dictionary<int, SleepingPlaceRegistry> householdSleepingPlaceRegistries;
 
         // C-3 (expanded campaign): hub-owned per-business workstation
         // registries, keyed by holder id (not just business — the shape
@@ -349,6 +350,35 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// W-G2 (Agent G, expanded campaign 2026-11-16): the
+        /// sleeping-place registry for one household, created on first use
+        /// and derived from the household's furnishing register (beds and
+        /// bedrolls come from it; the floor fallback needs no assets).
+        /// Hub-owned, one per household, parallel to the furnishing
+        /// registers. The registry is NOT a Pass 9 list of its own: the
+        /// furnishing register is the persisted truth, and the sleep
+        /// registry re-mirrors from it after Continue (see
+        /// FirstLedgerSliceBootstrapper, W-G2 hook). Rotation history is
+        /// deliberately not persisted (E checkpoint 70 ruled it
+        /// acceptable for B1); only fairness, never correctness, resets
+        /// on load, because the asset holds still prevent double-booking.
+        /// </summary>
+        public SleepingPlaceRegistry SleepingPlaceRegistryFor(int householdId)
+        {
+            householdSleepingPlaceRegistries ??= new Dictionary<int, SleepingPlaceRegistry>();
+            if (!householdSleepingPlaceRegistries.TryGetValue(householdId, out SleepingPlaceRegistry registry) || registry == null)
+            {
+                registry = new SleepingPlaceRegistry
+                {
+                    HouseholdId = householdId,
+                    Furnishings = FurnishingRegisterFor(householdId),
+                };
+                householdSleepingPlaceRegistries[householdId] = registry;
+            }
+            return registry;
+        }
+
+        /// <summary>
         /// C-3: the support context for one business, created on first use
         /// (empty). Mirrors EquipmentRegisterFor. The bootstrapper registers
         /// the mill's authored support (saw-filing capability, lubrication
@@ -377,6 +407,31 @@ namespace LandLedgers.Orchestration.Systems
             if (string.IsNullOrWhiteSpace(businessInstanceId) || support == null) return;
             businessSupport ??= new Dictionary<string, SupportContext>(StringComparer.Ordinal);
             businessSupport[businessInstanceId] = support;
+        }
+
+        /// <summary>
+        /// W-G2: read-only snapshot of the hub's live sleeping-place
+        /// registries, for the sleep tick driver. A new list each call,
+        /// never the live dictionary, so callers cannot add or remove hub
+        /// holders. Empty when no registry has been created yet.
+        /// </summary>
+        public IReadOnlyList<SleepingPlaceRegistry> AllSleepingPlaceRegistries =>
+            householdSleepingPlaceRegistries != null
+                ? new List<SleepingPlaceRegistry>(householdSleepingPlaceRegistries.Values)
+                : new List<SleepingPlaceRegistry>();
+
+        /// <summary>
+        /// W-G2: adopts a registry (e.g. one rebuilt from the Pass 9
+        /// furnishing registers after Continue) as the hub's live holder
+        /// for its household. Replaces by household id, never merges —
+        /// the re-mirrored data is authoritative, and re-registering the
+        /// same registry is idempotent.
+        /// </summary>
+        public void RegisterSleepingPlaces(SleepingPlaceRegistry registry)
+        {
+            if (registry == null) return;
+            householdSleepingPlaceRegistries ??= new Dictionary<int, SleepingPlaceRegistry>();
+            householdSleepingPlaceRegistries[registry.HouseholdId] = registry;
         }
 
         /// <summary>
@@ -797,6 +852,7 @@ namespace LandLedgers.Orchestration.Systems
         private DomesticLaborService domesticLaborService;
         private HouseholdAutonomyDriver householdAutonomyDriver;
         private DomesticLaborDriver domesticLaborDriver;
+        private SleepTickDriver sleepTickDriver;
         private HouseholdErrandCoordinator householdErrandCoordinator;
         private HousingSearchNeedRegistry housingSearchNeedRegistry;
         private HousingAuthority housingAuthority;
@@ -1112,6 +1168,17 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public DomesticLaborDriver DomesticLaborDriver =>
             domesticLaborDriver ??= new DomesticLaborDriver();
+
+        /// <summary>
+        /// W-G2 (Agent G, expanded campaign 2026-11-16): the sleep tick
+        /// driver (22:00 movement to the reserved place, hold through the
+        /// night, 07:00 release with rest quality recorded). Hub-owned
+        /// and transient — its per-night phase re-derives from the clock
+        /// and the live reservations, so nothing about it is persisted;
+        /// SimulationDrivers runs it on the short tick.
+        /// </summary>
+        public SleepTickDriver SleepTickDriver =>
+            sleepTickDriver ??= new SleepTickDriver();
 
         /// <summary>
         /// Pass V P2-1: the household errand coordinator — batched shopping

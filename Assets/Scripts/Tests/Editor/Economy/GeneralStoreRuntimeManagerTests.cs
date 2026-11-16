@@ -296,7 +296,7 @@ namespace LandLedgers.EditorTests.Economy
                     "Oracle: some item should compress at the fixed pressure");
                 Assert.IsFalse(OracleAnyCompressed(definition, business.RuntimeState, 0.30f, 0f),
                     "Oracle: no item should compress at no pressure, or the test cannot discriminate");
-                string line = manager.BuildStorePricingLine();
+                string line = BuildStorePricingLineViaReflection(manager);
                 Assert.IsTrue(line.Contains("some prices capped"), $"Expected capped flag at empty stock: {line}");
             }
             finally
@@ -331,7 +331,7 @@ namespace LandLedgers.EditorTests.Economy
                     "Oracle: no item should compress at the fixed pressure");
                 Assert.IsTrue(OracleAnyCompressed(definition, business.RuntimeState, 0.50f, 0f),
                     "Oracle: some item should compress at no pressure, or the test cannot discriminate");
-                string line = manager.BuildStorePricingLine();
+                string line = BuildStorePricingLineViaReflection(manager);
                 Assert.IsFalse(line.Contains("some prices capped"), $"Expected no capped flag at full stock: {line}");
             }
             finally
@@ -361,7 +361,7 @@ namespace LandLedgers.EditorTests.Economy
 
                 Assert.IsTrue(OracleAnyCompressed(definition, business.RuntimeState, 0.50f, null),
                     "Oracle: some item should compress at half stock");
-                string line = manager.BuildStorePricingLine();
+                string line = BuildStorePricingLineViaReflection(manager);
                 Assert.IsTrue(line.Contains("some prices capped"), $"Expected capped flag at half stock: {line}");
             }
             finally
@@ -382,6 +382,18 @@ namespace LandLedgers.EditorTests.Economy
                 "runtimeState", BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(stateField, "GeneralStoreRuntimeManager.runtimeState field missing");
             stateField.SetValue(manager, state);
+        }
+
+        private static string BuildStorePricingLineViaReflection(GeneralStoreRuntimeManager manager)
+        {
+            // Checkpoint-60 follow-up: BuildStorePricingLine is private,
+            // so a direct call is CS0122 in Unity. Invoke it through
+            // reflection, following this file's SetStore /
+            // SetStoreMarginAdjustment pattern.
+            MethodInfo method = typeof(GeneralStoreRuntimeManager).GetMethod(
+                "BuildStorePricingLine", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(method, "GeneralStoreRuntimeManager.BuildStorePricingLine method missing");
+            return (string)method.Invoke(manager, null);
         }
 
         private static void SetStoreMarginAdjustment(GeneralStoreRuntimeManager manager, float adjustment)
@@ -416,7 +428,11 @@ namespace LandLedgers.EditorTests.Economy
                 }
 
                 ItemCategoryDefinition category = definition.FindCategory(item.CategoryId);
-                float categoryMarkup = category != null ? category.DefaultMarkupMultiplier : 1f;
+                // Checkpoint-60 follow-up (footnote 3): the missing-category
+                // fallback mirrors production GetCategoryMarkupMultiplier,
+                // which falls back to the definition's default retail
+                // markup (authored 1.4), not 1f.
+                float categoryMarkup = category != null ? category.DefaultMarkupMultiplier : definition.Business.Economy.DefaultRetailMarkupMultiplier;
                 float markup = Mathf.Max(1f, categoryMarkup + marginAdjustment);
                 float pressure = forcedPressure ?? RetailPricingDefinition.ResolveCategorySupplyDemandPressure01(state, item.CategoryId);
                 if (item.Pricing.IsMarginCompressedByBand(markup, pressure))

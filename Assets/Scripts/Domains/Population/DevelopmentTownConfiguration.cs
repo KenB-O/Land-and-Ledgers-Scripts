@@ -150,6 +150,25 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
+        /// C-1 (expanded campaign, Phase 1 forestry): one scenario-authored
+        /// opening employment — a named person employed by a named business
+        /// from New Game, with a role and an agreed weekly wage. Zero by
+        /// default: a business with no entry here hires nobody at opening.
+        /// The employment is a real EmploymentRelationship in the hub-owned
+        /// registry (see ScenarioOpeningEmploymentEndowment), so the business
+        /// pays the agreed wage through the normal payroll path. The wage is
+        /// provisional scenario calibration, not canon.
+        /// </summary>
+        [Serializable]
+        public sealed class BusinessEmployeeDefinition
+        {
+            public string businessKey = string.Empty;
+            public string personKey = string.Empty;
+            public string role = string.Empty;
+            [Min(0)] public int weeklyWageCents;
+        }
+
+        /// <summary>
         /// A2 plan 27 (P10 live felling driver): one scenario-authored
         /// timber stand — the felling source the bootstrapper registers
         /// into the stand registry and grants timber rights over. Zero
@@ -218,6 +237,8 @@ namespace LandLedgers.Population
         [SerializeField] private HouseholdCashTarget[] householdCashTargets = Array.Empty<HouseholdCashTarget>();
         [SerializeField] private BusinessOpeningInventory[] openingInventory = Array.Empty<BusinessOpeningInventory>();
         [SerializeField] private BusinessOpeningEquipment[] openingEquipment = Array.Empty<BusinessOpeningEquipment>();
+        [SerializeField, Tooltip("C-1 (expanded campaign, Phase 1 forestry): scenario-authored opening employments, applied once at New Game. Zero by default: no entry means no opening hire. The wage is provisional scenario calibration.")]
+        private BusinessEmployeeDefinition[] openingEmployees = Array.Empty<BusinessEmployeeDefinition>();
         [SerializeField] private TimberStandEntry[] timberStands = Array.Empty<TimberStandEntry>();
         [SerializeField, Min(0), Tooltip("A2 plan 27 (P10): cover days of opening provisions for the logging camp crew, endowed once at New Game from the bootstrap endowment. Zero by default means no endowment. The cover-days value is Kennedy's; no number is invented here.")]
         private int openingLoggingCampProvisionCoverDays;
@@ -260,6 +281,8 @@ namespace LandLedgers.Population
         public IReadOnlyList<HouseholdCashTarget> HouseholdCashTargets => householdCashTargets ?? Array.Empty<HouseholdCashTarget>();
         public IReadOnlyList<BusinessOpeningInventory> OpeningInventory => openingInventory ?? Array.Empty<BusinessOpeningInventory>();
         public IReadOnlyList<BusinessOpeningEquipment> OpeningEquipment => openingEquipment ?? Array.Empty<BusinessOpeningEquipment>();
+        /// <summary>C-1: the scenario-authored opening employments; empty by default (no opening hires).</summary>
+        public IReadOnlyList<BusinessEmployeeDefinition> OpeningEmployees => openingEmployees ?? Array.Empty<BusinessEmployeeDefinition>();
         /// <summary>A2 plan 27 (P10): the scenario-authored timber stands; empty by default (no stands, no felling).</summary>
         public IReadOnlyList<TimberStandEntry> TimberStands => timberStands ?? Array.Empty<TimberStandEntry>();
         /// <summary>A2 plan 27 (P10): cover days of opening logging-camp provisions; 0 = no endowment.</summary>
@@ -458,6 +481,23 @@ namespace LandLedgers.Population
                     if (string.Equals(asset.assetId.Trim(), "slice-felling-axe", StringComparison.Ordinal))
                     { error = $"Opening equipment for '{entry.businessKey}' must not reuse the slice fixture id 'slice-felling-axe'."; return false; }
                 }
+            }
+            // C-1: opening employments are optional and zero by default.
+            // When present, every entry must name a configured business and
+            // a configured person, a non-blank role, and a positive weekly
+            // wage (the hiring path refuses a non-positive wage); one
+            // person holds at most one opening job, and a business owner
+            // is never their own opening employee (the owner is rostered
+            // separately wherever a crew is built).
+            var openingEmployeePersons = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (BusinessEmployeeDefinition employee in OpeningEmployees)
+            {
+                if (employee == null || !TryGetBusiness(employee.businessKey, out BusinessDefinition business)
+                    || !TryGetPerson(employee.personKey, out _)
+                    || string.IsNullOrWhiteSpace(employee.role) || employee.weeklyWageCents <= 0
+                    || string.Equals(employee.personKey, business.ownerPersonKey, StringComparison.OrdinalIgnoreCase)
+                    || !openingEmployeePersons.Add(employee.personKey))
+                { error = "Opening employees must reference a configured business and person, a non-blank role, a positive weekly wage, and a person who is not that business's owner and holds no other opening job."; return false; }
             }
             // A2 plan 27 (P10): timber stands are optional and zero by
             // default. When present, every stand needs a unique non-blank

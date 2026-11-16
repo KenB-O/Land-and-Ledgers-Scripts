@@ -780,11 +780,12 @@ namespace LandLedgers.Orchestration.Player
             journey.RegisterLocation(new JourneyLocation("mill-1-yard", JourneyLocationKind.Mill, "Local Sawmill", 0f, 0f) { BusinessId = "slice-mill-1" });
             journey.AddEdge("landing-1", "mill-1-yard", 2f, "river road");
             var mill = new SawmillShopRuntime("slice-mill-1", ids);
-            // One wagon-load moves 1 log (300 kg/log vs 450 kg capacity),
-            // so 4 logs need up to 4 explicit trips. Each successful
-            // dispatch moves >= 1 unit and shrinks the landing lot, so
-            // the loop terminates; the bound of 10 is slack, not a tuned
-            // value. A refused dispatch fails loudly with diagnostics.
+            // One wagon-load moves up to 4 logs at 300 kg/log against the
+            // C-2 1200 kg logging wagon, so 4 logs move in a single trip
+            // here. Each successful dispatch moves >= 1 unit and shrinks
+            // the landing lot, so the loop terminates; the bound of 10 is
+            // slack, not a tuned value. A refused dispatch fails loudly
+            // with diagnostics.
             int haulTrips = 0;
             while (mill.LogStock.TotalLogUnits < 4 && haulTrips < 10)
             {

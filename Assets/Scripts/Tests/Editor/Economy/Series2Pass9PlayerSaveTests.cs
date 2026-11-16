@@ -862,8 +862,9 @@ namespace LandLedgers.Tests.Economy
             Assert.IsNotNull(haul, "dispatch must produce a haul; diag: " + string.Join("; ", diag));
             operation.AdvanceHauls(10, diag);
             Assert.AreEqual(LogHaulStatus.InTransit, haul.Status,
-                "10 minutes covers the 2-minute load and leaves the haul on the road (30-minute transit)");
-            Assert.AreEqual(1, operation.LandingLogUnits);
+                "10 minutes covers the 4-minute load and leaves the haul on the road (30-minute transit)");
+            Assert.AreEqual(0, operation.LandingLogUnits,
+                "C-2 (OD-C4): the whole 2-log lot (600 kg) fits the 1200 kg logging wagon — nothing stays behind.");
 
             var source = NewState();
             source.LoggingOperation = operation;
@@ -877,8 +878,8 @@ namespace LandLedgers.Tests.Economy
             Assert.AreEqual(LogHaulStatus.InTransit, restored.Status,
                 "the in-flight haul must resume in transit, not as delivered or lost");
             Assert.IsNotNull(restored.Lot);
-            Assert.AreEqual(1, restored.Lot.LogUnits);
-            Assert.AreEqual(1, target.LoggingOperation.LandingLogUnits);
+            Assert.AreEqual(2, restored.Lot.LogUnits);
+            Assert.AreEqual(0, target.LoggingOperation.LandingLogUnits);
 
             target.Restore(dto, null, diag);
             Assert.AreEqual(1, target.LoggingOperation.Hauls.Count,

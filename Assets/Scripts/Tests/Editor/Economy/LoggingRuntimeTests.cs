@@ -159,7 +159,7 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void LogHaul_Enforces450KgWagonCapacity_AndOneMatureTreeFits()
+        public void LogHaul_Enforces1200KgLoggingWagonCapacity_AndOneMatureTreeFits()
         {
             var diagnostics = new List<string>();
             var ids = new EntityIdRegistry();
@@ -173,17 +173,19 @@ namespace LandLedgers.Editor.Economy
             Assert.NotNull(operation.DispatchLogHaul(matureTree.LotId, "mill-1", "mill-1-yard",
                 LandingToMillJourney(), "landing-1", 220, diagnostics));
 
-            LoggingStandRegistry overloadRegistry = RegistryWithGrantedStand("stand-overload", "logging-1", 2, diagnostics);
+            // C-2 (OD-C4): the logging wagon carries 1200 kg — four
+            // 300 kg logs. Five trees (1500 kg) split: 4 fit, 1 stays.
+            LoggingStandRegistry overloadRegistry = RegistryWithGrantedStand("stand-overload", "logging-1", 5, diagnostics);
             var overloadedOperation = new LoggingOperationRuntime("logging-1", ids);
-            LogLot twoTrees = overloadedOperation.RunFelling(overloadRegistry, "stand-overload", "logging-1", 2,
+            LogLot fiveTrees = overloadedOperation.RunFelling(overloadRegistry, "stand-overload", "logging-1", 5,
                 EntityId.For(EntityKind.Person, 3), 221, diagnostics, FellingEquipmentGate());
-            Assert.NotNull(twoTrees);
-            Assert.AreEqual(600f, twoTrees.MassKg, 0.01f);
-            LogHaul partialHaul = overloadedOperation.DispatchLogHaul(twoTrees.LotId, "mill-1", "mill-1-yard",
+            Assert.NotNull(fiveTrees);
+            Assert.AreEqual(1500f, fiveTrees.MassKg, 0.01f);
+            LogHaul partialHaul = overloadedOperation.DispatchLogHaul(fiveTrees.LotId, "mill-1", "mill-1-yard",
                 LandingToMillJourney(), "landing-1", 221, diagnostics);
             Assert.NotNull(partialHaul);
-            Assert.AreEqual(1, partialHaul.Lot.LogUnits);
-            Assert.AreEqual(300f, partialHaul.Lot.MassKg, 0.01f);
+            Assert.AreEqual(4, partialHaul.Lot.LogUnits);
+            Assert.AreEqual(1200f, partialHaul.Lot.MassKg, 0.01f);
             Assert.AreEqual(1, overloadedOperation.LandingLogUnits,
                 "The remaining log stays at the landing after one legitimate wagon load.");
         }
@@ -421,23 +423,23 @@ namespace LandLedgers.Editor.Economy
                 LandingToMillJourney(), "landing-1", 221, diagnostics);
             Assert.NotNull(haul);
             Assert.AreEqual(LogHaulStatus.Loading, haul.Status);
-            Assert.AreEqual(3, runtime.LandingLogUnits,
-                "Only the capacity-limited portion leaves the landing.");
+            Assert.AreEqual(0, runtime.LandingLogUnits,
+                "C-2 (OD-C4): the whole 1200 kg lot fits the logging wagon — nothing stays behind.");
             Assert.IsNotNull(haul.Lot, "The haul physically holds the lot in transit.");
 
-            // The wagon carries one 300 kg log; the other logs remain at the landing.
+            // The wagon carries all four 300 kg logs to the mill.
             runtime.AdvanceHauls(1000, diagnostics);
             Assert.AreEqual(LogHaulStatus.Arrived, haul.Status);
 
             runtime.DeliverArrivedHauls(millStock, diagnostics);
             Assert.AreEqual(LogHaulStatus.Delivered, haul.Status);
             Assert.IsNull(haul.Lot, "Custody transferred — the mill owns the lot now.");
-            Assert.AreEqual(1, millStock.TotalLogUnits);
+            Assert.AreEqual(4, millStock.TotalLogUnits);
             Assert.AreEqual("stand-1", millStock.Lots[0].StandId,
                 "Provenance survives the journey: stand -> lot -> haul -> mill intake.");
             Assert.AreEqual("logging-1", millStock.Lots[0].OwnerId,
                 "The timber-rights owner remains attached to the conserved lot through haul and receipt.");
-            Assert.AreEqual(3, runtime.LandingLogUnits, "Unloaded remainder stays in the landing stock.");
+            Assert.AreEqual(0, runtime.LandingLogUnits, "The landing is empty after a whole-lot dispatch.");
         }
 
         [Test]
@@ -454,12 +456,13 @@ namespace LandLedgers.Editor.Economy
                 LandingToMillJourney(), "landing-1", 221, diagnostics);
             Assert.NotNull(haul);
 
-            // Mid-journey: the cargo split conserves the original four log units.
+            // Mid-journey: the whole four-log lot is on the wagon (C-2:
+            // 1200 kg fits the logging wagon) — conservation still holds.
             runtime.AdvanceHauls(10, diagnostics); // still loading/early transit
             Assert.IsTrue(haul.IsActive);
             Assert.AreEqual(4, runtime.LandingLogUnits + (haul.Lot != null ? haul.Lot.LogUnits : 0),
                 "Cargo partitioning conserves the original log quantity.");
-            Assert.AreEqual(300f, haul.Lot.MassKg, 0.01f);
+            Assert.AreEqual(1200f, haul.Lot.MassKg, 0.01f);
         }
 
         [Test]
@@ -518,17 +521,19 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual("town-land-office", restoredRegistry.RightsGrants[0].GrantedBy);
 
             // Round-trip the runtime, including the in-transit haul.
+            // C-2 (OD-C4): the 4-log lot (1200 kg) fits the logging wagon
+            // whole, so nothing stays at the landing.
             var restoredRuntime = new LoggingOperationRuntime("other", new EntityIdRegistry());
             restoredRuntime.LoadFromSaveDto(runtime.CaptureSaveDto());
             Assert.AreEqual("logging-1", restoredRuntime.BusinessInstanceId);
-            Assert.AreEqual(3, restoredRuntime.LandingLogUnits);
+            Assert.AreEqual(0, restoredRuntime.LandingLogUnits);
             Assert.AreEqual(1, restoredRuntime.Hauls.Count);
             LogHaul restoredHaul = restoredRuntime.Hauls[0];
             Assert.AreEqual(LogHaulStatus.Loading, restoredHaul.Status);
             Assert.IsNotNull(restoredHaul.Lot);
             Assert.AreEqual("stand-1", restoredHaul.Lot.StandId);
-            Assert.AreEqual(1, restoredHaul.Lot.LogUnits);
-            Assert.AreEqual(300f, restoredHaul.Lot.MassKg, 0.01f);
+            Assert.AreEqual(4, restoredHaul.Lot.LogUnits);
+            Assert.AreEqual(1200f, restoredHaul.Lot.MassKg, 0.01f);
             Assert.IsTrue(restoredHaul.HaulId.IsValid);
         }
     }

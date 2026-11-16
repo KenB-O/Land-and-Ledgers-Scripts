@@ -247,8 +247,12 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void T5_SplitCargoReRegisteredUnderFreshId()
         {
-            var world = new World(203, withLedger: true);
-            LogLot lot = world.FellViaRuntime(2, 200);
+            // C-2 (OD-C4): three 600 kg logs (1800 kg) against the 1200 kg
+            // logging wagon — 2 fit, 1 stays, so the cargo splits and
+            // carries a fresh id. (At the old 450 kg wagon two 300 kg logs
+            // split; the split behaviour is what this test pins.)
+            var world = new World(203, withLedger: true, kilogramsPerLog: 600f);
+            LogLot lot = world.FellViaRuntime(3, 200);
             string originalLotId = world.LotIdOf(lot);
             LogHaul haul = world.Dispatch(lot, 201);
             string cargoLotId = haul.Lot.LotId.ToString();
@@ -258,15 +262,15 @@ namespace LandLedgers.Editor.Economy
             LogLotCustodyRecord cargo = world.Ledger.GetLot(cargoLotId);
             Assert.IsNotNull(cargo, "The cargo is registered under its fresh id.");
             Assert.AreEqual(LogLotCustodyState.Loaded, cargo.State);
-            Assert.AreEqual(1, cargo.LogUnits);
-            Assert.AreEqual(300f, cargo.MassKg, 0.01f);
+            Assert.AreEqual(2, cargo.LogUnits);
+            Assert.AreEqual(1200f, cargo.MassKg, 0.01f);
             Assert.AreEqual("sawmill-district", cargo.HarvestLocationId);
             Assert.AreEqual("logging-1", cargo.CustodianId);
 
             LogLotCustodyRecord original = world.Ledger.GetLot(originalLotId);
             Assert.IsNotNull(original, "The original felling record still exists.");
             Assert.AreEqual(LogLotCustodyState.Created, original.State);
-            Assert.AreEqual(2, original.LogUnits, "The felling snapshot is unchanged.");
+            Assert.AreEqual(3, original.LogUnits, "The felling snapshot is unchanged.");
 
             Assert.AreEqual(1, world.Runtime.LandingStock.Count);
             Assert.AreEqual(1, world.Runtime.LandingLogUnits, "The balance stays at the landing.");
@@ -335,10 +339,10 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void T8_FullChainEndsProcessed()
         {
-            // Lighter logs (200f) so the 2-log lot (400 kg) fits the 450 kg
-            // wagon intact — at the default 300f/log the lot would split at
-            // dispatch and no single yard lot could ever hold 2 logs for
-            // BeginProduction(2).
+            // Lighter logs (200f): the 2-log lot (400 kg) fits the wagon
+            // intact, so one yard lot holds 2 logs for BeginProduction(2).
+            // (At the default 300f/log the lot is 600 kg — it also fits
+            // the C-2 1200 kg logging wagon; the lighter logs predate C-2.)
             var world = new World(203, withLedger: true, kilogramsPerLog: 200f);
             LogLot lot = world.FellViaRuntime(2, 200);
             world.Dispatch(lot, 201);
@@ -389,10 +393,10 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void T10_RemainderNotRegistered()
         {
-            // Lighter logs (100f) so the 4-log lot (400 kg) fits the wagon
-            // intact — at the default 300f/log the lot would split at
-            // dispatch and the four 1-log runs could never draw from one
-            // yard lot.
+            // Lighter logs (100f): the 4-log lot (400 kg) fits the wagon
+            // intact, so the four 1-log runs can draw from one yard lot.
+            // (At the default 300f/log the lot is 1200 kg — it also fits
+            // the C-2 1200 kg logging wagon; the lighter logs predate C-2.)
             var world = new World(203, withLedger: true, kilogramsPerLog: 100f);
             LogLot lot = world.FellViaRuntime(4, 200);
             string originalLotId = world.LotIdOf(lot);

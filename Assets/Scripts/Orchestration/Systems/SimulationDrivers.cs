@@ -10121,6 +10121,7 @@ namespace LandLedgers.Orchestration.Systems
                 ImportOrderPathExists = false,
                 NotionsSupply = notionsSupply,
                 NotionsRegistration = notionsRegistration,
+                FlourPipelineDepthDays = ImportCatalog.Get(BakeryFlourSupply.FlourMaterialId)?.TransitDays ?? 0,
                 NotionsPipelineDepthDays = ImportCatalog.Get(BakeryFlourSupply.NotionsMaterialId)?.TransitDays ?? 0,
                 CallerDailyBudgetMinutes = callerDailyBudgetMinutes,
                 // Plan 04 Slice 4: thread the running actuals in so the

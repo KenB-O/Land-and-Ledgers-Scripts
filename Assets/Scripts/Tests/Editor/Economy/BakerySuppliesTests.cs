@@ -25,7 +25,7 @@ namespace LandLedgers.Editor.Economy
     /// store 5,000c, bakery 2,000c, staple_food 0/1000, port price 5c)
     /// with BakeryNotionsDailySupplyTests (real market + procurement
     /// service + notions supply; production terms 10c/unit, 14 transit
-    /// days, 30u finite supply).
+    /// days, 30u initial supply under a standing term — DEF-002).
     ///
     /// Fixed-behaviour form: each test asserts the correct end state, so
     /// a passing test means the transition works and a failing test names
@@ -612,10 +612,15 @@ namespace LandLedgers.Editor.Economy
                 Assert.AreEqual(1, o.UnitsOrdered, $"priming order {i + 1} is 1u");
                 Assert.AreEqual(10, o.TotalCostCents, $"priming order {i + 1} costs 10c");
             }
-            // The 30u finite supply leaves 16u after the 14 priming
-            // units are committed: supply pressure, not an ordering
-            // defect (a standing wholesale term is D-1-adjacent).
-            Assert.AreEqual(16, 30 - orderedUnits, "30u finite supply minus 14 priming units leaves 16u");
+            // DEF-002 standing term: the 30u supply is the INITIAL
+            // size, restocked by the order quantity before each order,
+            // so after the 14 priming units the counterparty still
+            // holds its full 30u — no supply pressure, no lifetime cap.
+            ExternalCounterparty notionsCounterparty =
+                s.Market.GetCounterparty(BakeryNotionsDailySupply.NotionsSupplierId);
+            Assert.IsNotNull(notionsCounterparty, "the production notions counterparty must be registered on the market");
+            Assert.AreEqual(30, notionsCounterparty.SupplyUnits[BakeryFlourSupply.NotionsMaterialId],
+                "standing term: counterparty supply restocked to its 30u initial size after 14 priming orders");
 
             for (int day = 15; day <= 28; day++)
             {
@@ -1187,8 +1192,8 @@ namespace LandLedgers.Editor.Economy
         //    parallelises the two pipelines; it is not waste.
         // 4. The committed units are not wasted: they arrive as sellable
         //    store lots and feed the days 15-28 bakes below. The 30u
-        //    finite-supply pressure is a supply-term issue (a standing
-        //    wholesale term is already owed, D-1-adjacent), not an
+        //    finite-supply pressure is a supply-term issue (standing
+        //    wholesale term implemented by DEF-002, 2026-11-15), not an
         //    ordering defect.
         // 5. Tests 2 and 3 therefore stay failing as PLAN-CONFLICT
         //    known failures, not defects: Test 2 expects 1 order where
@@ -1702,13 +1707,13 @@ namespace LandLedgers.Editor.Economy
             // those arrivals feed bakes days 43-56; the second stall
             // resumes days 57-60.
             //
-            // Finite-counterparty note: the production registration
-            // carries the authored 30u finite supply, so the second
-            // stall window can order only 2 more units (days 57-58,
-            // orders 29-30) before the supply exhausts; days 59-60
-            // order nothing. The 14 + 14 order counts below are the two
-            // full 14-order windows (priming and first stall); the cap
-            // itself is pinned by Slice 6.
+            // Standing-term note (DEF-002): the production registration
+            // carries the authored 30u supply as its INITIAL size, and
+            // the daily driver restocks it by the order quantity before
+            // each order, so the second stall window orders 1/day on all
+            // of days 57-60 (orders 29-32) instead of exhausting at 30.
+            // The 14 + 14 order counts below are the two full 14-order
+            // windows (priming and first stall).
             Slice s = NewSlice();
             Series2CounterpartyRegistration reg = ProductionRegistration();
             Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
@@ -1783,18 +1788,16 @@ namespace LandLedgers.Editor.Economy
                 int diagBefore = s.Diag.Count;
                 BakeryWholesaleDailyResult r = RunDay(s, reg, day);
                 Assert.AreEqual(0, r.BatchesBaked, $"the stall resumes once the second window drains, day {day}");
-                Assert.AreEqual(day <= 58 ? 1 : 0, r.NotionsOrdered,
-                    day <= 58
-                        ? $"day {day} orders the 1u shortfall (finite supply still has room)"
-                        : $"day {day} orders nothing: the 30u finite supply is exhausted");
+                Assert.AreEqual(1, r.NotionsOrdered,
+                    $"day {day} orders the 1u shortfall (standing term: supply restocked per order)");
                 Assert.IsTrue(r.Refusal != null && r.Refusal.Contains("notions"),
                     $"day {day} refuses on notions; refusal: {r.Refusal}");
                 AssertBlockedLineNamesCause(s, diagBefore, s.Bakery.Batches[s.Bakery.Batches.Count - 1].BatchId, day, "notions");
             }
-            Assert.AreEqual(30, s.StoreService.Orders.Count,
-                "30 orders total: 14 priming + 14 first-stall + 2 second-stall, exhausting the 30u finite supply");
-            Assert.AreEqual(300, s.Market.TotalOutflowCents, "30 orders x 10c booked as market outflow at order time");
-            Assert.AreEqual(28, s.StoreService.Lots.Count, "no further arrivals inside the 60-day run (days 57-58 orders arrive days 71-72)");
+            Assert.AreEqual(32, s.StoreService.Orders.Count,
+                "32 orders total: 14 priming + 14 first-stall + 4 second-stall, standing term restocking per order");
+            Assert.AreEqual(320, s.Market.TotalOutflowCents, "32 orders x 10c booked as market outflow at order time");
+            Assert.AreEqual(28, s.StoreService.Lots.Count, "no further arrivals inside the 60-day run (days 57-60 orders arrive days 71-74)");
             Assert.AreEqual(3064, s.BakeryRuntime.CurrentCashCents,
                 "bakery 2,000 - 280c notions feeds (28 x 10c) + 1,344c wholesale (28 x 48c)");
             Assert.AreEqual(3656, s.StoreRuntime.CurrentCashCents,
@@ -2206,9 +2209,11 @@ namespace LandLedgers.Editor.Economy
                 "day 1 line carries producible: no (notions) from the Precheck outcome; line: " + line1);
             AssertCoverageLineNeverLabelsPlannedYieldAsStock(line1);
 
-            // Day 2: bin 24 lb (12 + 12 seeded, nothing baked), with
-            // the single outstanding notion order still covering the
-            // one active planned batch. Cover = 1.
+            // Day 2: bin 24 lb (12 + 12 seeded, nothing baked). The
+            // day-1 order is in transit, earmarked for day 15, so day 2
+            // places its own order arriving day 16 (DEF-002 priming
+            // rule — in-transit units are NOT deducted from the order).
+            // Cover = min(24/12, (0 + 2)/1) = 2.
             SeedInputs(s, 12, 0, 0);
             int diagBefore2 = s.Diag.Count;
             BakeryWholesaleDailyResult day2 = RunDay(s, reg, 2);
@@ -2221,10 +2226,10 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(line2.Contains("bin flour 24 lb"), "day 2 line carries bin flour 24 lb; line: " + line2);
             Assert.IsTrue(line2.Contains("flour in custody 0 lb"), "day 2 line carries flour in custody 0 lb; line: " + line2);
             Assert.IsTrue(line2.Contains("notions on hand 0u"), "day 2 line carries notions on hand 0u; line: " + line2);
-            Assert.IsTrue(line2.Contains("notions in flight: 1u (day 15: 1u)"),
-                "day 2 line carries the one outstanding notion order by arrival day; line: " + line2);
-            Assert.IsTrue(line2.Contains("days-of-cover 1 at 1 batch/day"),
-                "day 2 line carries one day of cover for the one active batch; line: " + line2);
+            Assert.IsTrue(line2.Contains("notions in flight: 2u (day 15: 1u, day 16: 1u)"),
+                "day 2 line carries the 2u notions in flight arriving days 15 and 16; line: " + line2);
+            Assert.IsTrue(line2.Contains("days-of-cover 2 at 1 batch/day"),
+                "day 2 line carries days-of-cover 2; line: " + line2);
             Assert.IsTrue(line2.Contains("next arrival day 15"),
                 "day 2 line carries next arrival day 15 (the earliest in-flight arrival); line: " + line2);
             Assert.IsTrue(line2.Contains("first failing input: notions"),
@@ -2233,8 +2238,8 @@ namespace LandLedgers.Editor.Economy
                 "day 2 line carries producible: no (notions) from the Precheck outcome; line: " + line2);
             AssertCoverageLineNeverLabelsPlannedYieldAsStock(line2);
 
-            // Day 3: bin 36 lb; the same pending order still covers the
-            // one active batch, so no duplicate forecast order is added.
+            // Day 3: bin 36 lb; day 3 places its own order arriving day
+            // 17, so 3u are in flight. Cover = min(36/12, (0 + 3)/1) = 3.
             SeedInputs(s, 12, 0, 0);
             int diagBefore3 = s.Diag.Count;
             BakeryWholesaleDailyResult day3 = RunDay(s, reg, 3);
@@ -2247,10 +2252,10 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(line3.Contains("bin flour 36 lb"), "day 3 line carries bin flour 36 lb; line: " + line3);
             Assert.IsTrue(line3.Contains("flour in custody 0 lb"), "day 3 line carries flour in custody 0 lb; line: " + line3);
             Assert.IsTrue(line3.Contains("notions on hand 0u"), "day 3 line carries notions on hand 0u; line: " + line3);
-            Assert.IsTrue(line3.Contains("notions in flight: 1u (day 15: 1u)"),
-                "day 3 line carries the single outstanding notion order by arrival day; line: " + line3);
-            Assert.IsTrue(line3.Contains("days-of-cover 1 at 1 batch/day"),
-                "day 3 line carries one day of cover for the one active batch; line: " + line3);
+            Assert.IsTrue(line3.Contains("notions in flight: 3u (day 15: 1u, day 16: 1u, day 17: 1u)"),
+                "day 3 line carries the 3u notions in flight arriving days 15, 16 and 17; line: " + line3);
+            Assert.IsTrue(line3.Contains("days-of-cover 3 at 1 batch/day"),
+                "day 3 line carries days-of-cover 3; line: " + line3);
             Assert.IsTrue(line3.Contains("next arrival day 15"),
                 "day 3 line carries next arrival day 15; line: " + line3);
             Assert.IsTrue(line3.Contains("first failing input: notions"),
@@ -2448,7 +2453,8 @@ namespace LandLedgers.Editor.Economy
             // NotionsPipeline_SixtyDayCycle_TwoFullPeriods, with the
             // depth parameter explicitly 0. Passes before the mechanism
             // lands (it is today's behaviour) and must keep passing
-            // after it.
+            // after it. DEF-002: the standing term changes only the cap
+            // tail (32 orders, not 30); the cycle shape is unchanged.
             Slice s = NewSlice();
             Series2CounterpartyRegistration reg = ProductionRegistration();
             Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
@@ -2488,9 +2494,10 @@ namespace LandLedgers.Editor.Economy
                 SeedInputs(s, 12, 0, 0);
                 BakeryWholesaleDailyResult r = RunDay(s, reg, day, notionsDepth: 0);
                 Assert.AreEqual(0, r.BatchesBaked, $"depth 0: the stall resumes once the second window drains, day {day}");
+                Assert.AreEqual(1, r.NotionsOrdered, $"depth 0: day {day} orders the 1u shortfall (standing term: supply restocked per order)");
             }
-            Assert.AreEqual(30, s.StoreService.Orders.Count,
-                "depth 0: 30 orders total (14 priming + 14 first-stall + 2 second-stall), as in Slice 1");
+            Assert.AreEqual(32, s.StoreService.Orders.Count,
+                "depth 0: 32 orders total (14 priming + 14 first-stall + 4 second-stall), as in Slice 1");
             Assert.AreEqual(28, s.Bakery.WholesaleDeliveries.Count, "depth 0: 28 daily bakes = 28 deliveries");
             Assert.AreEqual(3064, s.BakeryRuntime.CurrentCashCents,
                 "depth 0: bakery 2,000 - 280c notions feeds + 1,344c wholesale, as in Slice 1");
@@ -2510,12 +2517,15 @@ namespace LandLedgers.Editor.Economy
             // no stall. Flour is test-seeded 12 lb/day so only the
             // notions leg can block; fuel is seeded to 60u (46 bakes).
             //
-            // Fixture counterparty note: the production registration
-            // carries the authored 30u finite supply, and a sustained
-            // 60-day run orders 60u — so the fixture seeds the
-            // counterparty to 100u, exactly as Slice 5 seeds it to 60u
-            // for its acceptance. The 30u production cap itself is
-            // untouched and is Slice 6's pin, not this slice's.
+            // Fixture counterparty note (DEF-002): the production
+            // registration carries the authored 30u supply as its
+            // INITIAL size under a standing term — the daily driver
+            // restocks it per order — so a sustained 60-day run
+            // ordering 60u no longer needs the fixture's 100u seed;
+            // the seed stays as belt-and-braces, exactly as Slice 5
+            // seeds it to 60u for its acceptance. The finite-supply
+            // refusal itself is pinned by the Slice 6 test against a
+            // non-standing supplier, not this slice's.
             //
             // Expected shape (target = (14 + 1) x 1u = 15u of cover):
             // day 1 orders 15u in one order (today + 14 forward);
@@ -2592,6 +2602,77 @@ namespace LandLedgers.Editor.Economy
                     inTransitAtEnd += Math.Max(0, order.UnitsOrdered);
             Assert.AreEqual(14, inTransitAtEnd,
                 "steady-state pipeline stock at day 60 is 14u in transit (orders days 47-60, arriving days 61-74)");
+        }
+
+        [Test]
+        public void ForwardOrder_Notions_DepthFourteen_StandingTerm_SustainsDailyBakes_OnProductionSupply()
+        {
+            // DEF-002: the same depth-14 sustained run as
+            // ForwardOrder_Notions_DepthFourteen_SustainsDailyBakes,
+            // but on the PRODUCTION registration (30u initial supply)
+            // instead of the 100u fixture seed. The standing term
+            // restocks the counterparty by the order quantity before
+            // each order, so the 60u run no longer needs the seed: 46
+            // daily bakes days 15-60, 60u ordered, no refusal anywhere,
+            // and the counterparty still holds its full 30u at day 60.
+            // Flour is test-seeded 12 lb/day so only the notions leg
+            // can block; fuel is seeded to 60u (46 bakes). Store target
+            // raised to 2,000u: 46 bakes stock 46 x 24 = 1,104 loaves,
+            // past the shared fixture's 1,000u staple_food target.
+            Slice s = NewSlice(storeTarget: 2000);
+            Series2CounterpartyRegistration reg = ProductionRegistration();
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
+            SeedInputs(s, 0, 0, 60);
+            BookAccount(s, 24, 1, 2, 2);
+
+            for (int day = 1; day <= 60; day++)
+            {
+                SeedInputs(s, 12, 0, 0);
+                int diagBefore = s.Diag.Count;
+                BakeryWholesaleDailyResult r = RunDay(s, reg, day, notionsDepth: 14);
+                bool refusedToday = false;
+                for (int i = diagBefore; i < s.Diag.Count; i++)
+                    if (s.Diag[i] != null && s.Diag[i].Contains("exhausted finite supply"))
+                        refusedToday = true;
+                Assert.IsTrue(!refusedToday, $"no order is ever refused on exhausted supply, day {day}");
+                if (day == 1)
+                {
+                    Assert.AreEqual(15, r.NotionsOrdered, "day 1 orders today + 14 forward = 15u in one order");
+                    Assert.AreEqual(0, r.BatchesBaked, "nothing bakes before the first arrival, day 1");
+                }
+                else if (day <= 14)
+                {
+                    Assert.AreEqual(0, r.BatchesBaked, $"nothing bakes before the first arrival, day {day}");
+                    Assert.AreEqual(0, r.NotionsOrdered, $"no order while the 15u bulk order is in transit, day {day}");
+                }
+                else
+                {
+                    Assert.AreEqual(1, r.BatchesBaked, $"depth 14 sustains a daily bake on the production supply, day {day}");
+                    Assert.AreEqual(1, r.TransfersCompleted, $"transfer completes, day {day}");
+                    Assert.AreEqual(day == 15 ? 0 : 1, r.NotionsOrdered,
+                        day == 15
+                            ? "day 15 orders nothing: its 15u arrival already covers the target after the feed"
+                            : $"one 1u replacement order, day {day}");
+                }
+            }
+
+            Assert.AreEqual(46, s.StoreService.Orders.Count,
+                "46 orders over the run: 1 bulk priming order + 45 daily replacements (day 15 orders nothing)");
+            Assert.AreEqual(60, TotalNotionsOrderedUnits(s),
+                "total ordered 60u = 46 baked + 14u steady-state pipeline stock, on the 30u production supply");
+            Assert.AreEqual(46, s.Bakery.WholesaleDeliveries.Count, "46 daily bakes = 46 deliveries");
+            Assert.AreEqual(14, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                "fuel 60 - 46 bakes = 14u left: fuel never blocks this run");
+            Assert.AreEqual(3748, s.BakeryRuntime.CurrentCashCents,
+                "bakery 2,000 - 460c notions feeds (46 x 10c) + 2,208c wholesale (46 x 48c)");
+            Assert.AreEqual(2792, s.StoreRuntime.CurrentCashCents,
+                "store 5,000 - 460c receipts + 460c feeds - 2,208c wholesale");
+            Assert.AreEqual(600, s.Market.TotalOutflowCents, "60 orders x 10c booked as market outflow at order time");
+            ExternalCounterparty notionsCounterparty =
+                s.Market.GetCounterparty(BakeryNotionsDailySupply.NotionsSupplierId);
+            Assert.IsNotNull(notionsCounterparty, "the production notions counterparty must be registered on the market");
+            Assert.AreEqual(30, notionsCounterparty.SupplyUnits[BakeryFlourSupply.NotionsMaterialId],
+                "standing term: counterparty supply restocked to its 30u initial size after a 60u run");
         }
 
         [Test]
@@ -3404,17 +3485,19 @@ namespace LandLedgers.Editor.Economy
         // pack -------------------------------------------------------
         // The three hard caps on sustained production are pinned here
         // as horizon tests the owner can decide from (plan §8 B-2/B-3):
-        // the 30-unit finite notions counterparty, the 40-unit fuel
+        // a 30-unit finite notions counterparty, the 40-unit fuel
         // opening stock, and Millbrook's 40-80 lb/week replenishment
-        // against 84 lb/week of daily-bake demand. All three tests are
-        // expected to PASS — they pin the caps, and a failure rewrites
-        // the plan's §2 (stop rule, plan §4 Slice 6). Tests only; no
-        // production code.
+        // against 84 lb/week of daily-bake demand. DEF-002: the notions
+        // cap is pinned against a finite TEST supplier — the production
+        // wholesaler has a standing term and no longer exhausts. All
+        // three tests are expected to PASS — they pin the caps, and a
+        // failure rewrites the plan's §2 (stop rule, plan §4 Slice 6).
+        // Tests only; no production code.
         [Test]
         public void Cap_FiniteNotionsCounterparty_ExhaustsAfterThirtyOrderedUnits()
         {
             // Priority 3 Slice 6 (H-B3): with the Slice 4 notions depth
-            // 14 and the AUTHORED 30u finite counterparty (not the
+            // 14 and a 30u finite counterparty (not the
             // 60u/100u fixture seed of Slices 4-5), the run orders
             // 15u on day 1 (today + 14 forward) and 1u/day from day
             // 16, so the 30th ordered unit lands on day 30 and the
@@ -3426,7 +3509,12 @@ namespace LandLedgers.Editor.Economy
             // notions: the bin stays empty and no bake, order, or
             // arrival follows.
             Slice s = NewSlice();
-            Series2CounterpartyRegistration reg = ProductionRegistration();
+            // DEF-002: a finite TEST supplier carries the 30u cap —
+            // the production wholesaler ("off-map-provision-wholesaler")
+            // has a standing term and restocks per order, so it would
+            // never exhaust and this test could not pin the cap.
+            Series2CounterpartyRegistration reg = Registration(
+                "test-finite-notions", BakeryFlourSupply.NotionsMaterialId, 10, 0, 30, 14);
             Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
             SeedInputs(s, 0, 0, 60);
             BookAccount(s, 24, 1, 2, 2);

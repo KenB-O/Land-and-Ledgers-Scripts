@@ -2986,13 +2986,16 @@ namespace LandLedgers.FirstLedger
         /// wholesaler, via railhead", 250 mi, 14 transit days, 10c/unit) —
         /// never hardcoded here. Supply is a finite external order of
         /// BakeryNotionsDailySupply.FiniteExternalOrderUnits units — the
-        /// authored bootstrap endowment size, NOT canon; when it is
-        /// exhausted the driver refuses loudly and a standing wholesale
-        /// supply term is owed (D-1-adjacent). No freight surcharge: no
-        /// freight rate is authored for the railhead route (Kennedy must
-        /// approve a production freight rate before one is wired). No order
-        /// is placed here — the daily driver orders the day's shortfall, so
-        /// the pipeline primes from the first planned bake.
+        /// authored bootstrap endowment size, NOT canon. This is the
+        /// INITIAL counterparty supply, not a lifetime cap: DEF-002 gives
+        /// the production wholesaler a standing term, so the daily driver
+        /// restocks the counterparty supply by the order quantity before
+        /// each order (BakeryNotionsDailySupply, step (c)). No freight
+        /// surcharge: no freight rate is authored for the railhead route
+        /// (Kennedy must approve a production freight rate before one is
+        /// wired). No order is placed here — the daily driver orders the
+        /// day's shortfall, so the pipeline primes from the first planned
+        /// bake.
         /// TWO REGISTRATION SITES, ONE PER BUILD FLAVOR: in
         /// editor/development builds ConfigurePlaytestHorseFeed below
         /// already registered this same counterparty on the shared feed
@@ -3199,14 +3202,16 @@ namespace LandLedgers.FirstLedger
             // via railhead", 250 mi, 14 transit days, 10c/unit) — never
             // hardcoded here. Supply is a finite external order of
             // BakeryNotionsDailySupply.FiniteExternalOrderUnits units —
-            // the authored bootstrap endowment size, NOT canon; when it
-            // is exhausted the driver refuses loudly and a standing
-            // wholesale supply term is owed (D-1-adjacent). No freight
-            // surcharge: no freight rate is authored for the railhead
-            // route (Kennedy must approve a production freight rate
-            // before one is wired). No order is placed here — the daily
-            // driver orders the day's shortfall, so the pipeline primes
-            // from the first planned bake.
+            // the authored bootstrap endowment size, NOT canon. This is
+            // the INITIAL counterparty supply, not a lifetime cap: DEF-002
+            // gives the production wholesaler a standing term, so the
+            // daily driver restocks the counterparty supply by the order
+            // quantity before each order (BakeryNotionsDailySupply,
+            // step (c)). No freight surcharge: no freight rate is
+            // authored for the railhead route (Kennedy must approve a
+            // production freight rate before one is wired). No order is
+            // placed here — the daily driver orders the day's shortfall,
+            // so the pipeline primes from the first planned bake.
             var notionsImportDiag = new List<string>();
             LandLedgers.Economy.Businesses.Bakery.BakeryFlourSupply.EnsureBakeryImportables(notionsImportDiag);
             LandLedgers.Economy.Trade.ImportMaterial notionsMaterial =

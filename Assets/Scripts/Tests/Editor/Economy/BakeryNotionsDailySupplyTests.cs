@@ -413,6 +413,34 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void DepthZeroSecondDayOrdersWhileFirstOrderInTransit_PrimingRuleRestored()
+        {
+            // DEF-002: at depth 0 the day's post-feed shortfall is
+            // ordered regardless of outstanding orders — in-transit
+            // units are earmarked for the future days whose shortfalls
+            // ordered them. Checkpoint 7bdc530b subtracted outstanding
+            // coverage here, so day 2 ordered nothing and the pipeline
+            // primed one bake per 15 days instead of daily baking once
+            // primed. This test pins the restored rule at the unit
+            // level; the pipeline tests pin the 60-day consequence.
+            var s = NewSetup();
+            var reg = ProductionRegistration();
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag), "production counterparty registration should succeed");
+
+            BakeryNotionsDailySupplyResult day1 =
+                BakeryNotionsDailySupply.RunDay(InputsFor(s, reg, 1, 1), s.Diag);
+            Assert.AreEqual(1, day1.NotionsOrdered, "day 1 orders the 1u shortfall for its future bake");
+
+            BakeryNotionsDailySupplyResult day2 =
+                BakeryNotionsDailySupply.RunDay(InputsFor(s, reg, 1, 2), s.Diag);
+            Assert.AreEqual(1, day2.NotionsOrdered,
+                "day 2 orders its own 1u shortfall while the day-1 order is still in transit");
+            Assert.AreEqual(2, s.StoreService.Orders.Count, "two priming orders after day 2, one per future bake");
+            Assert.AreEqual(15, s.StoreService.Orders[0].ExpectedArrivalDayIndex, "day-1 order arrives day 15");
+            Assert.AreEqual(16, s.StoreService.Orders[1].ExpectedArrivalDayIndex, "day-2 order arrives day 16");
+        }
+
+        [Test]
         public void UnwiredSupply_RefusesLoudly_OrdersAndFeedsNothing()
         {
             var s = NewSetup();

@@ -308,6 +308,34 @@ namespace LandLedgers.Economy.BreadDrivers
             return Math.Max(0, plannedBatchIds.Count * BakeryBreadCatalog.BreadFlourPerBatch - held);
         }
 
+        /// <summary>DEF-002: expected new-batch demand per day from the
+        /// active wholesale accounts — deliveries per day by cadence
+        /// (batches per delivery from the product yield). A daily
+        /// account (24u every 1 day) is 1.0/day; a monthly account
+        /// (24u every 30 days) is 1/30 per day. The notions step orders
+        /// for this rate, not for the adopted-set count: the adopted set
+        /// cannot distinguish a daily account (prime 1/day) from a
+        /// single-batch account (order once and stop). Accounts with no
+        /// known product spec or no positive yield contribute nothing;
+        /// a non-positive cadence is treated as daily (AddWholesaleAccount
+        /// normalizes it to 1 the same way).</summary>
+        private static double ExpectedBatchesPerDay(BakeryShopRuntime bakery)
+        {
+            if (bakery?.WholesaleAccounts == null) return 0;
+            double rate = 0;
+            foreach (BakeryWholesaleAccount account in bakery.WholesaleAccounts)
+            {
+                if (account == null || !account.IsActive) continue;
+                BakeryProductSpec spec = BakeryBreadCatalog.GetSpec(account.ProductId);
+                if (string.IsNullOrEmpty(spec.ProductId)) continue;
+                if (spec.YieldUnitsPerBatch <= 0) continue;
+                int batchesPerDelivery = (Math.Max(0, account.UnitsPerDelivery) + spec.YieldUnitsPerBatch - 1) / spec.YieldUnitsPerBatch;
+                if (batchesPerDelivery <= 0) continue;
+                rate += (double)batchesPerDelivery / Math.Max(1, account.DeliveryCadenceDays);
+            }
+            return rate;
+        }
+
         public static BakeryWholesaleDailyResult RunDay(BakeryWholesaleDailyInputs inputs, List<string> diag)
         {
             diag = diag ?? new List<string>();
@@ -528,6 +556,11 @@ namespace LandLedgers.Economy.BreadDrivers
             // bin passes Precheck on notions; an unfed bin refuses there
             // loudly, and the pipeline order is the honest path to the
             // next bake — never a bootstrap seed, never conjured stock.
+            // DEF-002: the order is for expected demand — newly planned
+            // batches today plus the daily rate from the accounts — so
+            // the step gets both numbers. The adopted-set count alone
+            // cannot distinguish a daily account (prime 1/day) from a
+            // single-batch account (order once and stop).
             if (batchesToday > 0)
             {
                 var notionsInputs = new BakeryNotionsDailySupplyInputs
@@ -541,6 +574,8 @@ namespace LandLedgers.Economy.BreadDrivers
                     StoreBusinessId = inputs.StoreBusinessId,
                     BakeryBusinessId = inputs.BakeryBusinessId,
                     BatchesToday = batchesToday,
+                    NewBatchesToday = planned != null ? planned.Count : 0,
+                    ExpectedBatchesPerDay = ExpectedBatchesPerDay(bakery),
                     DayIndex = dayIndex,
                     PipelineDepthDays = inputs.NotionsPipelineDepthDays,
                 };

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Valuation;
 using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
@@ -190,8 +191,19 @@ namespace LandLedgers.Editor.Economy
             StringAssert.Contains("closed", closeMessage);
         }
 
+        // Checkpoint-54 follow-up: the old name and two of its assertions were
+        // wrong. "Operating cash remains with the business as working capital."
+        // exists nowhere in production code, and CompleteBusinessAcquisition
+        // does the opposite — ApplyPostAcquisitionOpeningCash RESETS operating
+        // cash to a motive-based opening float, "seller cash ... was not
+        // acquired." The staged close is the live design (the one-call
+        // purchase died at 1aaf7269); this test now pins what the close
+        // actually does. The owner-cash assertion was already right: total
+        // drop is earnest + final due = finalPrice when seller financing is
+        // zero, and AgreeTentativeTerms never sets seller financing on a
+        // fresh deal.
         [Test]
-        public void BusinessCloseKeepsOperatingCashInsideAcquiredBusiness()
+        public void BusinessCloseResetsOperatingCashToMotiveBasedOpeningFloat()
         {
             using TestWorld context = TestWorld.Create(10000000);
             Assert.Greater(context.AcquisitionMarket.BusinessListings.Count, 0);
@@ -205,18 +217,36 @@ namespace LandLedgers.Editor.Economy
             AcquisitionDealState deal = context.GetDeal(listing.listingId);
             Assert.NotNull(deal);
             int finalPrice = deal.tentativePriceCents;
+            int sellerFinanced = deal.sellerFinancedPrincipalCents;
+            SellerMotive motive = deal.sellerMotive;
 
             Assert.IsTrue(context.AcquisitionMarket.TryPurchaseSelected(AcquisitionMarketSection.Businesses, out string closeMessage), closeMessage);
 
-            Assert.AreEqual(ownerCashBefore - finalPrice, context.PlayerPortfolio.OwnerCashCents);
-            Assert.AreEqual(100000, business.RuntimeState.CurrentCashCents);
+            Assert.AreEqual(ownerCashBefore - (finalPrice - sellerFinanced), context.PlayerPortfolio.OwnerCashCents);
+            int payroll = business.RuntimeState.FilledWeeklyPayrollCents;
+            int reserve = SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business);
+            Assert.AreEqual(ExpectedPostAcquisitionOpeningCashCents(100000, payroll, reserve, motive), business.RuntimeState.CurrentCashCents);
             Assert.NotNull(business.Owner);
             Assert.AreEqual(BusinessOwnerKind.Player, business.Owner.OwnerKind);
-            StringAssert.Contains("Operating cash remains with the business as working capital.", closeMessage);
+            StringAssert.Contains("Opening operating cash set to", closeMessage);
+            StringAssert.Contains("was not acquired", closeMessage);
         }
 
+        // Checkpoint-54 follow-up: this test pinned the pre-1aaf7269 one-call
+        // purchase (TryDirectPurchaseSelected used to call TryPurchaseBusiness
+        // outright). That path is dead — the method is now [Obsolete] and
+        // delegates to TryAdvanceSelectedAcquisition, the staged deal machine,
+        // and TryPurchaseBusiness has no callers at all. A single call opens
+        // an inquiry only (see the Legacy test, which stays). This test now
+        // drives the obsolete entry one stage per call, as the UI would, to a
+        // staged close, and pins what the close actually does: owner cash
+        // drops by the tentative price less seller financing, and operating
+        // cash is reset to the motive-based opening float — the seller's till
+        // cash is not acquired. Real-life rule: an 1870 purchase runs
+        // inquiry, proof, earnest, diligence, agreement, close, never a
+        // single click.
         [Test]
-        public void DirectBusinessPurchaseKeepsOperatingCashInsideAcquiredBusiness()
+        public void DirectPurchaseEntryAdvancesStagedDealToCloseAndResetsOperatingCash()
         {
             using TestWorld context = TestWorld.Create(10000000);
             Assert.Greater(context.AcquisitionMarket.BusinessListings.Count, 0);
@@ -226,14 +256,40 @@ namespace LandLedgers.Editor.Economy
             context.SetBusinessCash(business, 100000);
             int ownerCashBefore = context.PlayerPortfolio.OwnerCashCents;
 
-            bool purchased = InvokeDirectPurchase(context.AcquisitionMarket, AcquisitionMarketSection.Businesses, out string message);
+            string closeMessage = string.Empty;
+            int finalPrice = 0;
+            int sellerFinanced = 0;
+            SellerMotive motive = SellerMotive.Holding;
+            bool closed = false;
+            for (int i = 0; i < 20; i++)
+            {
+                AcquisitionDealState deal = context.GetDeal(listing.listingId);
+                if (deal != null)
+                {
+                    finalPrice = deal.tentativePriceCents;
+                    sellerFinanced = deal.sellerFinancedPrincipalCents;
+                    motive = deal.sellerMotive;
+                }
 
-            Assert.IsTrue(purchased, message);
-            Assert.AreEqual(ownerCashBefore - listing.askingPriceCents, context.PlayerPortfolio.OwnerCashCents);
-            Assert.AreEqual(100000, business.RuntimeState.CurrentCashCents);
+                Assert.IsTrue(InvokeDirectPurchase(context.AcquisitionMarket, AcquisitionMarketSection.Businesses, out string message), message);
+                closeMessage = message;
+                if (context.GetDeal(listing.listingId) == null)
+                {
+                    closed = true;
+                    break;
+                }
+            }
+
+            Assert.IsTrue(closed, "The staged deal did not close within the expected workflow steps.");
+            Assert.AreEqual(ownerCashBefore - (finalPrice - sellerFinanced), context.PlayerPortfolio.OwnerCashCents);
+            int payroll = business.RuntimeState.FilledWeeklyPayrollCents;
+            int reserve = SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business);
+            Assert.AreEqual(ExpectedPostAcquisitionOpeningCashCents(100000, payroll, reserve, motive), business.RuntimeState.CurrentCashCents);
             Assert.NotNull(business.Owner);
             Assert.AreEqual(BusinessOwnerKind.Player, business.Owner.OwnerKind);
-            StringAssert.Contains("Operating cash remains with the business as working capital.", message);
+            Assert.IsTrue(context.TownWorld.Buildings[listing.buildingId].playerOwned);
+            StringAssert.Contains("Opening operating cash set to", closeMessage);
+            StringAssert.Contains("was not acquired", closeMessage);
         }
 
         [Test]
@@ -831,6 +887,37 @@ namespace LandLedgers.Editor.Economy
             bool result = (bool)method.Invoke(market, arguments);
             message = arguments[1] as string ?? string.Empty;
             return result;
+        }
+
+        // Mirror of AcquisitionMarketManager.CalculatePostAcquisitionOpeningCashCents,
+        // the authority for the opening float a closed business restarts with.
+        // The production formula is private, so the tests pin exact money through
+        // this mirror; if the production formula changes, this mirror must move
+        // with it. Inputs are the public values the close itself reads: payroll
+        // and survival reserve from the business runtime, the deal's seller
+        // motive, and the seller's cash on hand before close.
+        private static int ExpectedPostAcquisitionOpeningCashCents(
+            int previousCashCents,
+            int weeklyPayrollCents,
+            int survivalReserveCents,
+            SellerMotive motive)
+        {
+            int previous = Mathf.Max(0, previousCashCents);
+            int payroll = Mathf.Max(0, weeklyPayrollCents);
+            int reserve = Mathf.Max(0, survivalReserveCents);
+
+            int target = motive switch
+            {
+                SellerMotive.FinancialDistress => Mathf.Clamp(payroll / 4, 500, 2500),
+                SellerMotive.DebtPressure => Mathf.Clamp(payroll / 3, 500, 3500),
+                SellerMotive.Liquidating => Mathf.Clamp(payroll / 2, 1000, 5000),
+                SellerMotive.Retirement => Mathf.Max(5000, Mathf.Min(reserve, Mathf.Max(payroll, reserve / 2))),
+                SellerMotive.EstateSale => Mathf.Max(4000, Mathf.Min(reserve, Mathf.Max(payroll, reserve / 3))),
+                SellerMotive.Relocation => Mathf.Max(4000, Mathf.Min(reserve, Mathf.Max(payroll, reserve / 3))),
+                _ => Mathf.Max(2500, Mathf.Min(reserve, Mathf.Max(payroll, reserve / 4)))
+            };
+
+            return Mathf.Min(previous, Mathf.Max(0, target));
         }
 
         [Test]

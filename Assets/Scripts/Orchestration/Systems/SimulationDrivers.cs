@@ -500,6 +500,10 @@ namespace LandLedgers.Orchestration.Systems
             // existing sawmill-byproduct custody transfer; this creates no
             // stock, cash, or transaction.
             pass9.FuelIntake ??= new LandLedgers.Economy.Businesses.Sawmill.FuelYardByproductIntake();
+            // B-18 (DEF-003): a fresh Continue restores the intake lots as a
+            // pending DTO when the holder did not exist at restore time;
+            // apply it now that the holder exists (no-op when nothing is pending).
+            pass9.ApplyPendingFuelIntake();
 
             IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
             for (int i = 0; i < businesses.Count; i++)
@@ -509,6 +513,14 @@ namespace LandLedgers.Orchestration.Systems
 
                 string businessId = business.InstanceId ?? string.Empty;
                 int priceCents = sharedBusinessRuntime.GetConfiguredCategorySalePriceCents(business, "fuel_wood");
+                // B-18 (DEF-003, Decision 3): the per-instance Fuel Dealer
+                // runtime — purchasing, supplier relationships, order book,
+                // cash book — created once for the first formed dealer and
+                // reused after load. A dealer with no configured price still
+                // gets a runtime (it can buy even before it can sell); the
+                // retail offer below still requires a positive price.
+                LandLedgers.Economy.Businesses.FuelDealer.FuelDealerRuntime fuelDealerRuntime =
+                    EnsureFuelDealerRuntime(pass9, business, priceCents);
                 if (priceCents <= 0)
                 {
                     LogFuelDealerSupplierWarningOnce(businessId,
@@ -527,6 +539,13 @@ namespace LandLedgers.Orchestration.Systems
                         $"Fuel Dealer supplier registration refused for '{businessId}': {refusal}");
                     continue;
                 }
+
+                // B-18 (DEF-003): report each settled retail sale into the
+                // dealer's cash book. The runtime is this dealer's (Ensure
+                // returns null on an id mismatch), so a second dealer's
+                // sales are never recorded against the first dealer's books.
+                if (fuelDealerRuntime != null)
+                    adapter.OnRetailSaleRecorded = fuelDealerRuntime.RecordRetailSale;
 
                 Series2FuelDealerSupplierAdapter.RegisterIn(supplierDirectory, adapter);
                 if (fuelDealerSupplierRegistrationLogged.Add(businessId))
@@ -547,6 +566,39 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// B-18 (DEF-003, Decision 3): creates (once) or reuses the
+        /// per-instance Fuel Dealer runtime for one formed dealer, and
+        /// applies any pending restored state to it. First dealer only,
+        /// matching the daily transfer's first-dealer rule: when the holder
+        /// already belongs to another dealer this returns null, so a second
+        /// dealer's purchases and sales are never recorded against the
+        /// first dealer's books. A dealer without a business runtime gets
+        /// no runtime (the adapter refuses such a dealer too).
+        /// </summary>
+        private LandLedgers.Economy.Businesses.FuelDealer.FuelDealerRuntime EnsureFuelDealerRuntime(
+            Series2Pass9SaveState pass9, BusinessInstanceState dealerBusiness, int configuredBundlePriceCents)
+        {
+            if (pass9 == null || dealerBusiness == null || dealerBusiness.RuntimeState == null) return null;
+            if (pass9.FuelDealerRuntime != null)
+            {
+                if (!string.Equals(pass9.FuelDealerRuntime.DealerBusinessId, dealerBusiness.InstanceId, StringComparison.Ordinal))
+                    return null;
+                return pass9.FuelDealerRuntime;
+            }
+            pass9.FuelIntake ??= new LandLedgers.Economy.Businesses.Sawmill.FuelYardByproductIntake();
+            pass9.ApplyPendingFuelIntake();
+            var dealerCash = new Series2BusinessRuntimeCashPort(dealerBusiness.RuntimeState);
+            var runtime = new LandLedgers.Economy.Businesses.FuelDealer.FuelDealerRuntime(
+                dealerBusiness.InstanceId, pass9.FuelIntake, dealerCash);
+            pass9.FuelDealerRuntime = runtime;
+            string pendingRefusal = pass9.ApplyPendingFuelDealerRuntime();
+            if (pendingRefusal != null)
+                Debug.LogWarning("[FuelDealer] " + pendingRefusal, this);
+            runtime.SetConfiguredBundlePriceCents(configuredBundlePriceCents);
+            return runtime;
+        }
+
+        /// <summary>
         /// D1: daily sawmill-byproduct custody transfer — moves the mill's
         /// held byproduct lots into the first formed Fuel Dealer's intake
         /// by custody, so the bakery's paid-source builder (when D-F2
@@ -556,6 +608,11 @@ namespace LandLedgers.Orchestration.Systems
         /// (D-F3, decided by owner Decision 1, Nov 15, 2026) for the lots
         /// transferred. If the dealer cannot pay, the transfer is refused
         /// and nothing moves — no fuel without a legitimate purchase.
+        /// B-18 (DEF-003, Decision 3): the transfer is now a PURCHASE the
+        /// dealer decides on, not a passive push — the runtime's daily
+        /// assessment (target stock, cold-season scaled) declines the lots
+        /// when the yard is at/above target, and the settled purchase is
+        /// recorded in the runtime's cash book and supplier relationship.
         /// Never creates a lot, never touches a wagon or a shipment.
         /// Loud refusal (diagnostic + once-per-piece warning) when any
         /// piece is absent — the transfer never silently no-ops. Called
@@ -585,6 +642,9 @@ namespace LandLedgers.Orchestration.Systems
             // the existing sawmill-byproduct custody transfer; this creates
             // no stock, cash, or transaction.
             pass9.FuelIntake ??= new LandLedgers.Economy.Businesses.Sawmill.FuelYardByproductIntake();
+            // B-18 (DEF-003): apply a pending restored intake (fresh
+            // Continue) now that the holder exists; no-op when nothing is pending.
+            pass9.ApplyPendingFuelIntake();
 
             BusinessInstanceState millBusiness = null;
             BusinessInstanceState dealerBusiness = null;
@@ -618,6 +678,21 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     LogSawmillTransferWarningOnce("no-mill",
                         "Sawmill byproduct transfer skipped: no formed Sawmill business is present in the shared runtime.");
+                    // B-18 (DEF-003): record the missing local source in the
+                    // dealer's runtime when a dealer is formed, so the
+                    // cannot-restock state is visible instead of silent.
+                    if (dealerBusiness != null && !string.IsNullOrWhiteSpace(dealerBusiness.InstanceId))
+                    {
+                        FuelDealerRuntime noMillRuntime = EnsureFuelDealerRuntime(pass9, dealerBusiness,
+                            sharedBusinessRuntime.GetConfiguredCategorySalePriceCents(dealerBusiness, "fuel_wood"));
+                        noMillRuntime?.SyncLocalSupplier(null, dayIndex);
+                        FuelDealerRuntime.FuelDealerProcurementAssessment noMillAssessment =
+                            noMillRuntime?.AssessLocalPurchase(dayIndex, 0, IsColdSeasonMonth());
+                        if (noMillAssessment != null
+                            && (noMillAssessment.Decision == FuelDealerRuntime.FuelDealerProcurementDecision.NoSupply
+                                || noMillAssessment.Decision == FuelDealerRuntime.FuelDealerProcurementDecision.OffMapAvailable))
+                            Debug.Log($"[SawmillTransfer] Day {dayIndex}: {noMillAssessment.Reason}", this);
+                    }
                     return;
                 }
 
@@ -639,6 +714,16 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // B-18 (DEF-003, Decision 3): the per-instance runtime (created
+            // at registration, or here on first transfer) and the local
+            // supplier sync. The holder belongs to the first registered
+            // dealer; Ensure returns null on an id mismatch, so a second
+            // dealer's purchases are never recorded against the first
+            // dealer's books.
+            FuelDealerRuntime fuelDealerRuntime = EnsureFuelDealerRuntime(pass9, dealerBusiness,
+                sharedBusinessRuntime.GetConfiguredCategorySalePriceCents(dealerBusiness, "fuel_wood"));
+            fuelDealerRuntime?.SyncLocalSupplier(millBusiness?.InstanceId, dayIndex);
+
             // D-F3 (Decision 1): the transfer is a purchase — the dealer pays
             // the mill 1c per intake unit. Affordability is checked BEFORE
             // any custody moves, from the mill's held byproduct units; the
@@ -659,6 +744,20 @@ namespace LandLedgers.Orchestration.Systems
             {
                 foreach (LandLedgers.Economy.Businesses.Sawmill.SlabOffcutFuelLot lot in mill.ByproductStock)
                     heldIntakeUnits += Math.Max(0, lot == null ? 0 : lot.FuelWoodUnits);
+            }
+
+            // B-18 (DEF-003, Decision 3): the purchasing decision — the
+            // dealer buys only what its yard needs. At/above target the
+            // mill keeps its slabs for another day; no custody moves, no
+            // payment, no sale. Affordability is still checked below when
+            // the dealer does want the fuel.
+            FuelDealerRuntime.FuelDealerProcurementAssessment procurementAssessment =
+                fuelDealerRuntime?.AssessLocalPurchase(dayIndex, heldIntakeUnits, IsColdSeasonMonth());
+            if (procurementAssessment != null
+                && procurementAssessment.Decision == FuelDealerRuntime.FuelDealerProcurementDecision.DeclineFull)
+            {
+                Debug.Log($"[SawmillTransfer] Day {dayIndex}: {procurementAssessment.Reason}", this);
+                return;
             }
 
             long heldPriceCents = FuelConversionRates.ByproductPriceCents(heldIntakeUnits);
@@ -698,7 +797,14 @@ namespace LandLedgers.Orchestration.Systems
                 Debug.LogWarning($"[SawmillTransfer] Day {dayIndex}: byproduct settlement failed after custody moved: {settlement.Refusal}", this);
             }
 
-            Debug.Log($"[SawmillTransfer] Day {dayIndex}: transferred {transferred} byproduct lot(s) from mill '{mill.BusinessInstanceId}' to FuelDealer '{dealerBusiness.InstanceId}' by custody; paid {settlement.PriceCents}c for {settlement.IntakeUnits}u @ 1c/u (D-F3) ({string.Join("; ", diag)}).", this);
+            // B-18 (DEF-003): record the settled purchase in the dealer's
+            // cash book and supplier relationship, from the actual settled
+            // numbers — never from the pre-check estimate.
+            fuelDealerRuntime?.RecordLocalPurchase(dayIndex, millBusiness?.InstanceId,
+                settlement.IntakeUnits, settlement.PriceCents, transferred);
+
+            string procurementNote = procurementAssessment != null ? $" procurement: {procurementAssessment.Reason}" : string.Empty;
+            Debug.Log($"[SawmillTransfer] Day {dayIndex}: transferred {transferred} byproduct lot(s) from mill '{mill.BusinessInstanceId}' to FuelDealer '{dealerBusiness.InstanceId}' by custody; paid {settlement.PriceCents}c for {settlement.IntakeUnits}u @ 1c/u (D-F3) ({string.Join("; ", diag)}).{procurementNote}", this);
         }
 
         /// <summary>
@@ -9860,7 +9966,7 @@ namespace LandLedgers.Orchestration.Systems
                 dealerUnitPrice, intakeUnitsPerBakeryUnit);
             if (pricePerBakeryUnit <= 0 || pricePerBakeryUnit > int.MaxValue) return null;
 
-            return new LandLedgers.Orchestration.Player.Series2PaidDealerBakeryFuelSource(
+            var source = new LandLedgers.Orchestration.Player.Series2PaidDealerBakeryFuelSource(
                 pass9.FuelIntake,
                 dealerBusiness.InstanceId,
                 dealerBusiness.RuntimeState,
@@ -9869,6 +9975,14 @@ namespace LandLedgers.Orchestration.Systems
                 hub.Ids,
                 intakeUnitsPerBakeryUnit,
                 (int)pricePerBakeryUnit);
+            // B-18 (DEF-003): report each settled bakery sale into the
+            // dealer's cash book. The runtime is this dealer's (the holder
+            // is single-slot for the first registered dealer), so a sale is
+            // never recorded against another dealer's books.
+            if (pass9.FuelDealerRuntime != null
+                && string.Equals(pass9.FuelDealerRuntime.DealerBusinessId, dealerBusiness.InstanceId, StringComparison.Ordinal))
+                source.OnBakerySaleRecorded = pass9.FuelDealerRuntime.RecordBakerySale;
+            return source;
         }
 
         /// <summary>

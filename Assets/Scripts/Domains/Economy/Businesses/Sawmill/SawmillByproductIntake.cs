@@ -25,6 +25,15 @@ namespace LandLedgers.Economy.Businesses.Sawmill
         public string Species = string.Empty;
         public int ProducedDayIndex;
 
+        // B-18 (DEF-003, Decision 3): off-map provenance. A mill lot leaves
+        // these empty and traces through SourceMillBusinessId / SourceLogLotId
+        // / StandId; an off-map lot leaves THOSE empty and traces through
+        // these three instead (supplier, order, input lot). Never both: a lot
+        // is either mill byproduct or authored off-map input, never both.
+        public string OffMapSupplierId = string.Empty;
+        public string OffMapOrderId = string.Empty;
+        public string OffMapInputLotId = string.Empty;
+
         public SlabOffcutFuelLot() { }
 
         public string ProvenanceChain()
@@ -34,6 +43,9 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             if (!string.IsNullOrWhiteSpace(SourceLogLotId)) parts.Add($"log lot {SourceLogLotId}");
             if (!string.IsNullOrWhiteSpace(Species)) parts.Add(Species);
             if (!string.IsNullOrWhiteSpace(SourceMillBusinessId)) parts.Add($"mill {SourceMillBusinessId}");
+            if (!string.IsNullOrWhiteSpace(OffMapSupplierId)) parts.Add($"off-map supplier {OffMapSupplierId}");
+            if (!string.IsNullOrWhiteSpace(OffMapOrderId)) parts.Add($"order {OffMapOrderId}");
+            if (!string.IsNullOrWhiteSpace(OffMapInputLotId)) parts.Add($"input lot {OffMapInputLotId}");
             parts.Add($"day {ProducedDayIndex}");
             return parts.Count == 0 ? "NO PROVENANCE" : string.Join(" | ", parts.ToArray());
         }
@@ -41,15 +53,19 @@ namespace LandLedgers.Economy.Businesses.Sawmill
 
     /// <summary>
     /// W4A: the FuelDealer-side intake register for sawmill slabs and
-    /// offcuts. There is no FuelDealer per-instance business package yet —
-    /// the yard's existing implementation is the FuelYardProfile (EQP-5
-    /// equipment profile), the archetype local-market outlet, and the
-    /// recurring-order template "sawmill_offcuts_to_fuel_dealer"
-    /// (Sawmill "slabs_offcuts" -> FuelDealer, weekly target 10). Until a
-    /// FuelDealer per-instance runtime exists, this register is the intake
-    /// contract: custody transfer of NAMED lots to a NAMED FuelDealer
-    /// business instance. The FuelDealer takes real lots with provenance —
-    /// the byproducts are never synthesized into its stock.
+    /// offcuts. The FuelDealer's existing implementation is the
+    /// FuelYardProfile (EQP-5 equipment profile), the archetype
+    /// local-market outlet, and the recurring-order template
+    /// "sawmill_offcuts_to_fuel_dealer" (Sawmill "slabs_offcuts" ->
+    /// FuelDealer, weekly target 10). The per-instance Fuel Dealer
+    /// business runtime is FuelDealerRuntime (B-18, Decision 3): it owns
+    /// purchasing, supplier relationships, the order book, and the cash
+    /// book over this register. This register is the intake contract:
+    /// custody transfer of NAMED lots to a NAMED FuelDealer business
+    /// instance. The FuelDealer takes real lots with provenance —
+    /// the byproducts are never synthesized into its stock. Off-map fuel
+    /// arrives through ReceiveOffMapLot with off-map provenance
+    /// (supplier, order, input lot), never through the byproduct path.
     /// </summary>
     public sealed class FuelYardByproductIntake
     {
@@ -58,6 +74,26 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             new Dictionary<string, List<SlabOffcutFuelLot>>(StringComparer.Ordinal);
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
+
+        /// <summary>
+        /// Lot identity is global custody identity, not a per-dealer stock
+        /// key. Returns the dealer already holding the lot, or null.
+        /// </summary>
+        private string FindLotHolder(EntityId lotId)
+        {
+            foreach (KeyValuePair<string, List<SlabOffcutFuelLot>> entry in lotsByFuelDealer)
+            {
+                List<SlabOffcutFuelLot> existingLots = entry.Value;
+                if (existingLots == null) continue;
+                for (int i = 0; i < existingLots.Count; i++)
+                {
+                    SlabOffcutFuelLot existing = existingLots[i];
+                    if (existing == null || !existing.LotId.Equals(lotId)) continue;
+                    return entry.Key;
+                }
+            }
+            return null;
+        }
 
         /// <summary>Receives a byproduct lot into a named FuelDealer's custody. Returns the refusal, or null.</summary>
         public string ReceiveByproductLot(string fuelDealerBusinessId, SlabOffcutFuelLot lot, List<string> diag)
@@ -81,18 +117,12 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             // Lot identity is global custody identity, not a per-dealer stock
             // key. Reject replayed or cross-yard receipts before adding any
             // quantity so one physical byproduct cannot appear in two yards.
-            foreach (KeyValuePair<string, List<SlabOffcutFuelLot>> entry in lotsByFuelDealer)
+            string existingHolder = FindLotHolder(lot.LotId);
+            if (existingHolder != null)
             {
-                List<SlabOffcutFuelLot> existingLots = entry.Value;
-                if (existingLots == null) continue;
-                for (int i = 0; i < existingLots.Count; i++)
-                {
-                    SlabOffcutFuelLot existing = existingLots[i];
-                    if (existing == null || !existing.LotId.Equals(lot.LotId)) continue;
-                    string refusal = $"FuelYardByproductIntake.ReceiveByproductLot: lot {lot.LotId} is already held by FuelDealer '{entry.Key}'; duplicate custody refused.";
-                    diag.Add(refusal);
-                    return refusal;
-                }
+                string refusal = $"FuelYardByproductIntake.ReceiveByproductLot: lot {lot.LotId} is already held by FuelDealer '{existingHolder}'; duplicate custody refused.";
+                diag.Add(refusal);
+                return refusal;
             }
 
             List<SlabOffcutFuelLot> held;
@@ -103,6 +133,57 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             }
             held.Add(lot);
             diag.Add($"FuelYardByproductIntake: FuelDealer '{fuelDealerBusinessId}' received {lot.FuelWoodUnits} fuel-wood units "
+                + $"(lot {lot.LotId}) — {lot.ProvenanceChain()}.");
+            return null;
+        }
+
+        /// <summary>
+        /// B-18 (DEF-003, Decision 3): receives one authored off-map fuel
+        /// lot into a named FuelDealer's custody — the receipt half of a
+        /// FuelDealerRuntime off-map order. The lot traces through off-map
+        /// provenance (supplier, order, input lot), NOT through a mill, a
+        /// log lot, or a stand: those stay empty for off-map fuel, and a
+        /// lot claiming both provenances is refused. Same duplicate-custody
+        /// rule as the byproduct path. Returns the refusal, or null.
+        /// </summary>
+        public string ReceiveOffMapLot(string fuelDealerBusinessId, SlabOffcutFuelLot lot, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (string.IsNullOrWhiteSpace(fuelDealerBusinessId))
+                return "FuelYardByproductIntake.ReceiveOffMapLot: no FuelDealer business named — off-map fuel goes to a real yard, not the void.";
+            if (lot == null)
+                return "FuelYardByproductIntake.ReceiveOffMapLot: no lot offered — fuel wood is not conjured.";
+            if (lot.LotId == EntityId.Invalid)
+                return "FuelYardByproductIntake.ReceiveOffMapLot: a lot needs an EntityId — anonymous stock is refused.";
+            if (lot.FuelWoodUnits <= 0)
+                return "FuelYardByproductIntake.ReceiveOffMapLot: a lot needs positive fuel-wood units.";
+            if (string.IsNullOrWhiteSpace(lot.OwnerId))
+                return "FuelYardByproductIntake.ReceiveOffMapLot: no recorded owner — off-map custody cannot be inferred.";
+            if (string.IsNullOrWhiteSpace(lot.OffMapSupplierId)
+                || string.IsNullOrWhiteSpace(lot.OffMapOrderId)
+                || string.IsNullOrWhiteSpace(lot.OffMapInputLotId))
+                return "FuelYardByproductIntake.ReceiveOffMapLot: incomplete off-map chain — a lot needs its supplier, order, and input lot.";
+            if (!string.IsNullOrWhiteSpace(lot.SourceMillBusinessId)
+                || !string.IsNullOrWhiteSpace(lot.SourceLogLotId)
+                || !string.IsNullOrWhiteSpace(lot.StandId))
+                return "FuelYardByproductIntake.ReceiveOffMapLot: a lot cannot claim both mill and off-map provenance — one chain or the other, never both.";
+
+            string existingHolder = FindLotHolder(lot.LotId);
+            if (existingHolder != null)
+            {
+                string refusal = $"FuelYardByproductIntake.ReceiveOffMapLot: lot {lot.LotId} is already held by FuelDealer '{existingHolder}'; duplicate custody refused.";
+                diag.Add(refusal);
+                return refusal;
+            }
+
+            List<SlabOffcutFuelLot> held;
+            if (!lotsByFuelDealer.TryGetValue(fuelDealerBusinessId, out held))
+            {
+                held = new List<SlabOffcutFuelLot>();
+                lotsByFuelDealer[fuelDealerBusinessId] = held;
+            }
+            held.Add(lot);
+            diag.Add($"FuelYardByproductIntake: FuelDealer '{fuelDealerBusinessId}' received {lot.FuelWoodUnits} off-map fuel-wood units "
                 + $"(lot {lot.LotId}) — {lot.ProvenanceChain()}.");
             return null;
         }
@@ -223,6 +304,9 @@ namespace LandLedgers.Economy.Businesses.Sawmill
                         StandId = lot.StandId,
                         Species = lot.Species,
                         ProducedDayIndex = lot.ProducedDayIndex,
+                        OffMapSupplierId = lot.OffMapSupplierId,
+                        OffMapOrderId = lot.OffMapOrderId,
+                        OffMapInputLotId = lot.OffMapInputLotId,
                     });
                 }
             }

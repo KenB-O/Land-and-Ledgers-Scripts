@@ -1,13 +1,13 @@
 // Series 2 Pass 7 (selling): the Fuel Dealer as a real supplier in the
 // SupplierDirectory, over the real FuelYardByproductIntake (Pass 2's
-// dispense API). This adapter does NOT create a Fuel Dealer runtime —
-// there is still no per-instance Fuel Dealer business package, and
-// Pass 8 (freight + fuel chain) owns that. What this adapter owns is
-// the selling surface over intake lots that already exist with
-// provenance, so a household can buy fuel from a named dealer through
-// the embodied shopping loop instead of the dealer being invisible
-// to shoppers. Production binds this adapter to an existing formed
-// BusinessInstanceState; the adapter never creates that business.
+// dispense API). The per-instance Fuel Dealer business runtime is
+// FuelDealerRuntime (B-18, Decision 3): it owns purchasing, supplier
+// relationships, the order book, and the cash book over this intake,
+// and this adapter reports each settled retail sale into that cash
+// book through OnRetailSaleRecorded when the driver wires it. This
+// adapter still does NOT create the runtime — production binds it to
+// an existing formed BusinessInstanceState, and the driver creates the
+// runtime at registration; the adapter never creates that business.
 //
 // Item identity: households buy household item "fuel_wood"
 // (HouseholdItemCatalog.FuelWoodId). Intake lots hold fuel-wood units.
@@ -92,6 +92,15 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
         public string LocationId { get; }
         public string LastReceiptId => lastReceiptId;
         public int IntakeFuelWoodUnits => intake.TotalFuelWoodUnitsFor(SupplierBusinessId);
+
+        /// <summary>
+        /// B-18 (DEF-003): cash-book hook. The driver sets this to the
+        /// dealer's FuelDealerRuntime.RecordRetailSale at registration, so
+        /// each settled retail sale lands in the business's cash book.
+        /// Null when unwired (tests, old callers): sales still settle
+        /// exactly as before, only the book entry is skipped.
+        /// </summary>
+        public FuelDealerRetailSaleRecord OnRetailSaleRecorded { get; set; }
 
         public static void RegisterIn(SupplierDirectory directory, Series2FuelDealerSupplierAdapter adapter)
         {
@@ -284,13 +293,20 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
             if (sold <= 0) return 0;
             int revenue = sold * unitPrice;
 
-            if (settlement != null && settlement.Mode == ShoppingSettlementMode.TradeCreditObligation)
+            // B-18 (DEF-003): a trade-credit sale moves no cash (the FOA
+            // obligation is the receivable); a cash sale credits the dealer
+            // port, and a refused credit is reported as not-credited so the
+            // cash book shows goods dispensed with no cash received.
+            bool onTradeCredit = settlement != null && settlement.Mode == ShoppingSettlementMode.TradeCreditObligation;
+            bool cashCredited = false;
+            if (onTradeCredit)
             {
                 log.Add($"Day {dayIndex}: sold {sold}u fuel_wood on trade credit {settlement.ObligationId} ({revenue}c receivable, cash untouched).");
             }
             else
             {
                 string problem = cash.Credit(revenue, $"fuel dealer retail sale {sold}u fuel_wood");
+                cashCredited = problem == null;
                 if (problem != null)
                     diagnostics?.Add($"'{SupplierName}' WARNING: dealer cash port refused {revenue}c credit ({problem}) — dispense already moved; investigate.");
                 log.Add($"Day {dayIndex}: sold {sold}u fuel_wood for {revenue}c cash (provenance: {string.Join(" | ", provenances)}).");
@@ -298,6 +314,7 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
 
             lastReceiptId = $"rcpt-{SupplierBusinessId}-{dayIndex}-{receiptSequence++}";
             diagnostics?.Add($"'{SupplierName}' sold {sold}u fuel_wood ({lastReceiptId}).");
+            OnRetailSaleRecorded?.Invoke(dayIndex, sold, dispensed, revenue, lastReceiptId, cashCredited, onTradeCredit);
             return sold;
         }
 

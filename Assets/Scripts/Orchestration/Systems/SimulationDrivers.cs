@@ -1053,13 +1053,25 @@ namespace LandLedgers.Orchestration.Systems
         /// haul arriving in today's advance is delivered and sawn the same
         /// day. The driver lands BEFORE the miles authoring (Q1): a stand
         /// with no authored miles refuses loudly and once-only per stand,
-        /// and the lot stays at the landing. No teamster budget is charged
-        /// (Q8) — there is no identified teamster and no per-person minute
-        /// cost for hauling as written, so the slice lands WITHOUT a
-        /// TryCommitTask pre-commit and says so in a loud diagnostic each
-        /// day it dispatches or advances. The Canon 4.1 wagon gate is
-        /// passed null (Q5) until the log-wagon endowment lands; the skip
-        /// is recorded in the same daily diagnostic.
+        /// and the lot stays at the landing.
+        ///
+        /// C-2 (expanded campaign, OD-C3/OD-C4): the Canon 4.1 wagon gate
+        /// is passed for real (hub.InstalledEquipmentTaskGate) — the
+        /// mill's log wagon (kind log-wagon, from the sawmill
+        /// opening-equipment entry) must be in the mill's equipment
+        /// register or dispatch refuses loudly; the null-gate skip (Q5)
+        /// is ended. The teamster is the mill's first active non-owner
+        /// employee (mill-owned wagon + mill teamster — in the dev
+        /// scenario the mill hand, Silas Ward): each dispatched trip
+        /// pre-commits its loading + transit minutes against the
+        /// teamster's work-time budget, and the minutes actually advanced
+        /// are recorded as worked with the unspent pre-commit released,
+        /// mirroring DriveFelling. A trip the teamster cannot afford
+        /// stops dispatch for the day; the lots stay at the landing for
+        /// a fresh budget tomorrow. No teamster at all means no hauling:
+        /// dispatch and advance both wait, loudly — the wagon does not
+        /// drive itself. Source-reviewed only: this file is
+        /// harness-excluded, so Unity compilation is owed from Codex.
         /// </summary>
         private void DriveLogHauls(int absoluteDayIndex)
         {
@@ -1118,6 +1130,28 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // C-2 (OD-C3): the mill teamster — the first active non-owner
+            // mill employee, resolved the same way the bootstrapper
+            // rosters the mill hand (first active employee). No employee,
+            // no teamster: nothing moves, not even hauls already on the
+            // road — the wagon does not drive itself.
+            EntityId teamster = EntityId.Invalid;
+            if (millBusiness.RuntimeState?.EmploymentRegistry != null)
+            {
+                foreach (EmploymentRelationship relationship in millBusiness.RuntimeState.EmploymentRegistry.GetActiveByEmployer(millBusiness.InstanceId))
+                {
+                    if (relationship == null || relationship.EmployeePersonId < 0) continue;
+                    teamster = EntityId.For(EntityKind.Person, relationship.EmployeePersonId);
+                    break;
+                }
+            }
+            if (teamster == EntityId.Invalid)
+            {
+                LogHaulWarningOnce("no-teamster",
+                    "Hauling skipped: the sawmill has no active non-owner employee to team the log wagon (OD-C3); lots stay at the landing and hauls in transit do not advance.");
+                return;
+            }
+
             // 2. Dispatch every lot at the landing, FIFO by FelledDayIndex
             // (Q6: dispatch-all; landing-stock order breaks ties).
             var diag = new List<string>();
@@ -1125,6 +1159,7 @@ namespace LandLedgers.Orchestration.Systems
             var lots = new List<LogLot>(loggingOperation.LandingStock);
             var orderedLots = lots.OrderBy(lot => lot == null ? int.MaxValue : lot.FelledDayIndex).ToList();
             int dispatched = 0;
+            int teamsterCommittedMinutes = 0;
             foreach (LogLot lot in orderedLots)
             {
                 if (lot == null) continue;
@@ -1157,14 +1192,42 @@ namespace LandLedgers.Orchestration.Systems
                         "Haul refused: " + routeProblem);
                     continue;
                 }
+                // C-2: pre-commit this trip against the teamster's day
+                // before dispatching it — loading (2 min/log for the logs
+                // that fit) plus the wagon transit minutes for the ensured
+                // route. A trip the teamster cannot afford stops dispatch
+                // for the day; later lots wait for a fresh budget tomorrow.
+                int tripMinutes = 0;
+                int unitsThatFit = LoggingOperationRuntime.UnitsThatFitWagon(lot);
+                if (unitsThatFit > 0)
+                {
+                    JourneyRoute plannedRoute = hub.Journeys.FindRoute(stand.LocationId, millLocationId, TravelMode.Wagon);
+                    int transitMinutes = plannedRoute != null && plannedRoute.Found ? plannedRoute.TotalMinutes : 0;
+                    tripMinutes = unitsThatFit * LogHaul.LoadingMinutesPerLog + transitMinutes;
+                    if (!hub.WorkTimeBudgets.TryCommitTask(teamster, tripMinutes, out string commitRefusal))
+                    {
+                        LogHaulWarningOnce("teamster-budget-" + absoluteDayIndex,
+                            "Haul dispatch stopped: teamster " + teamster + " cannot afford the next trip (" + tripMinutes + " min) — " + commitRefusal + " Remaining lots stay at the landing.");
+                        break;
+                    }
+                    teamsterCommittedMinutes += tripMinutes;
+                }
                 LogHaul haul = loggingOperation.DispatchLogHaul(lot.LotId, millBusiness.InstanceId, millLocationId,
-                    hub.Journeys, stand.LocationId, absoluteDayIndex, diag, null); // Q5: gate null until the wagon endowment lands
+                    hub.Journeys, stand.LocationId, absoluteDayIndex, diag, hub.InstalledEquipmentTaskGate);
                 if (haul != null) dispatched++;
+                else if (tripMinutes > 0)
+                {
+                    // Dispatch refused after the trip was pre-committed
+                    // (gate or routing): release this trip's minutes —
+                    // they were never worked.
+                    hub.WorkTimeBudgets.GetOrCreate(teamster).ReleaseCommitment(tripMinutes);
+                    teamsterCommittedMinutes -= tripMinutes;
+                }
             }
 
             // 3. Advance all active hauls by the working day (C3: 600
             // minutes, not daylight). Snapshot the wagon-minutes before
-            // and after so the Q8 audit diagnostic can report exactly
+            // and after so the audit diagnostic can report exactly
             // what advanced.
             int loadingBefore = 0;
             int transitBefore = 0;
@@ -1174,7 +1237,14 @@ namespace LandLedgers.Orchestration.Systems
                 loadingBefore += haul.LoadingMinutesRemaining;
                 transitBefore += haul.TransitMinutesRemaining;
             }
-            loggingOperation.AdvanceHauls(WorkTimeBudget.DefaultDailyWorkMinutes, diag, absoluteDayIndex);
+            // C-2: the advance is bounded by what the teamster can still
+            // work today — the minutes reserved for these trips plus
+            // whatever remains of their day — so the teamster never works
+            // more than one 600-minute day advancing wagons.
+            WorkTimeBudget teamsterBudget = hub.WorkTimeBudgets.GetOrCreate(teamster);
+            int advanceMinutes = Math.Min(WorkTimeBudget.DefaultDailyWorkMinutes,
+                teamsterCommittedMinutes + teamsterBudget.MinutesRemaining);
+            loggingOperation.AdvanceHauls(advanceMinutes, diag, absoluteDayIndex);
             int loadingAfter = 0;
             int transitAfter = 0;
             foreach (LogHaul haul in loggingOperation.Hauls)
@@ -1186,17 +1256,28 @@ namespace LandLedgers.Orchestration.Systems
             int loadingAdvanced = loadingBefore - loadingAfter;
             int transitAdvanced = transitBefore - transitAfter;
 
-            // Q8 + Q5: one loud diagnostic each day the driver dispatches
-            // or advances, stating plainly that no teamster budget was
-            // charged and that the Canon 4.1 wagon gate was skipped (no
-            // log-wagon endowment yet). Teamster identity and the rest
-            // model stay an owner decision (A5 P15).
-            if (dispatched > 0 || loadingAdvanced + transitAdvanced > 0)
+            // C-2: settle the teamster's day like DriveFelling settles
+            // the fellers — record the wagon-minutes actually advanced
+            // as worked, release the pre-committed minutes that were
+            // never used. (Hauls already in transit from prior days can
+            // push the advanced total past today's pre-commit; those are
+            // real minutes the teamster worked today, so they are
+            // recorded and nothing is released for them.)
+            int advancedMinutes = loadingAdvanced + transitAdvanced;
+            if (advancedMinutes > 0)
+                teamsterBudget.RecordWorked(advancedMinutes);
+            int unspentMinutes = teamsterCommittedMinutes - advancedMinutes;
+            if (unspentMinutes > 0)
+                teamsterBudget.ReleaseCommitment(unspentMinutes);
+
+            // C-2: one loud diagnostic each day the driver dispatches or
+            // advances, naming the teamster charged and the gate enforced.
+            if (dispatched > 0 || advancedMinutes > 0)
             {
                 Debug.LogWarning("[LogHaul] Day " + absoluteDayIndex + ": dispatched " + dispatched + " haul(s), advanced "
-                    + (loadingAdvanced + transitAdvanced) + " wagon-minutes (" + loadingAdvanced + " loading + " + transitAdvanced + " transit); "
-                    + "no teamster budget was charged — hauling has no identified teamster and no per-person minute cost as written (note 113 Q8). "
-                    + "The log-wagon gate was skipped (null gate, Q5) until the wagon endowment lands.", this);
+                    + advancedMinutes + " wagon-minutes (" + loadingAdvanced + " loading + " + transitAdvanced + " transit); "
+                    + "teamster " + teamster + " charged " + advancedMinutes + " worked minute(s) against the mill's log-wagon trips (OD-C3). "
+                    + "The Canon 4.1 log-wagon gate was enforced through the installed equipment gate.", this);
             }
         }
 

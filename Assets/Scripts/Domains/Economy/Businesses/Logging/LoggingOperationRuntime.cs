@@ -108,6 +108,24 @@ namespace LandLedgers.Economy.Businesses.Logging
         }
 
         /// <summary>
+        /// C-2 (OD-C4): how many logs from a lot fit one log-wagon load —
+        /// the single fit authority for the 1200 kg two-horse logging
+        /// wagon (LogHaul.WagonCargoCapacityKg). floor(capacity / kg-per-log),
+        /// clamped to the lot's own units; 0 when not even one log fits.
+        /// Used by DispatchLogHaul's split and by the daily driver, which
+        /// must know the trip size before dispatching so it can pre-commit
+        /// the teamster's minutes for it.
+        /// </summary>
+        public static int UnitsThatFitWagon(LogLot lot)
+        {
+            if (lot == null || lot.LogUnits <= 0) return 0;
+            float kgPerLog = lot.MassKg / lot.LogUnits;
+            if (kgPerLog <= 0f) return 0;
+            int unitsThatFit = (int)Math.Floor(LogHaul.WagonCargoCapacityKg / kgPerLog);
+            return Math.Min(unitsThatFit, lot.LogUnits);
+        }
+
+        /// <summary>
         /// Fells logs from a registered stand into the landing stock. Gate
         /// order: NX-1 equipment gate on the T1E "fell-timber" codes
         /// (Canon 4.1 — axe or crosscut saw), then the registry's rights gate
@@ -244,10 +262,7 @@ namespace LandLedgers.Economy.Businesses.Logging
             bool splitLot = false;
             if (lot.MassKg > LogHaul.WagonCargoCapacityKg)
             {
-                float kgPerLog = lot.MassKg / lot.LogUnits;
-                int unitsThatFit = kgPerLog <= 0f
-                    ? 0
-                    : (int)Math.Floor(LogHaul.WagonCargoCapacityKg / kgPerLog);
+                int unitsThatFit = UnitsThatFitWagon(lot);
                 if (unitsThatFit <= 0)
                 {
                     diag.Add($"LoggingOperationRuntime: DISPATCH REFUSED — one log from lot {lot.LotId} exceeds the wagon's {LogHaul.WagonCargoCapacityKg:0.##} kg cargo limit.");
@@ -258,7 +273,7 @@ namespace LandLedgers.Economy.Businesses.Logging
                 {
                     LotId = lot.LotId,
                     LogUnits = unitsThatFit,
-                    MassKg = kgPerLog * unitsThatFit,
+                    MassKg = (lot.MassKg / lot.LogUnits) * unitsThatFit,
                     OwnerId = lot.OwnerId,
                     StandId = lot.StandId,
                     Species = lot.Species,

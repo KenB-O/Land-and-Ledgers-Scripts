@@ -48,7 +48,20 @@ namespace LandLedgers.Economy.Businesses.Logging
     {
         /// <summary>Calibration: minutes of loading work per log at the landing.</summary>
         public const int LoadingMinutesPerLog = 2;
-        public const float WagonCargoCapacityKg = 450f;
+
+        /// <summary>
+        /// C-2 (expanded campaign, OD-C4): cargo capacity of the LOG-haul
+        /// wagon — a period-plausible two-horse logging wagon at 1200 kg,
+        /// two 600 kg merchantable white-pine sawlogs per trip. The old
+        /// 450 kg figure was a light farm wagon, not a logging wagon, and
+        /// it contradicted the authored 600 kg/log: DispatchLogHaul
+        /// computed floor(450/600) = 0 logs fit and refused every lot
+        /// (F4). The 600 kg/log figure is kept (DEF-004 authoring); the
+        /// wagon is the thing that was wrong. This const is the LOG haul
+        /// only — the 450 kg general freight wagon (DEF-016 cargo math)
+        /// is a separate calibration and is untouched.
+        /// </summary>
+        public const float WagonCargoCapacityKg = 1200f;
 
         public EntityId HaulId = EntityId.Invalid;
         public LogLot Lot; // the physical lot in transit — held here, nowhere else

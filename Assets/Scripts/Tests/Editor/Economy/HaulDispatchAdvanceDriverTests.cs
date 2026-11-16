@@ -175,21 +175,23 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void T4_DispatchSplit_OverCapacityLot()
         {
-            var world = new World(300f);
-            LogLot lot = world.FellViaRuntime(2, 200); // 600 kg, over the 450 kg wagon
+            // C-2 (OD-C4): the logging wagon carries 1200 kg — two 600 kg
+            // authored sawlogs. Three logs (1800 kg) split: 2 fit, 1 stays.
+            var world = new World(600f);
+            LogLot lot = world.FellViaRuntime(3, 200); // 1800 kg, over the 1200 kg wagon
             JourneyModel journey = world.JourneyToMill(2f);
 
             LogHaul haul = world.Runtime.DispatchLogHaul(lot.LotId, "mill-1", "mill-1-yard",
                 journey, "sawmill-district", 200, world.Diagnostics);
 
             Assert.IsNotNull(haul, "The fitting portion must still dispatch.");
-            Assert.AreEqual(1, haul.Lot.LogUnits, "One 300 kg log fits the 450 kg wagon.");
-            Assert.AreEqual(300f, haul.Lot.MassKg, 0.01f);
+            Assert.AreEqual(2, haul.Lot.LogUnits, "Two 600 kg logs fit the 1200 kg logging wagon.");
+            Assert.AreEqual(1200f, haul.Lot.MassKg, 0.01f);
             Assert.AreEqual(1, world.Runtime.LandingStock.Count, "The balance stays at the landing.");
             LogLot balance = world.Runtime.LandingStock[0];
             Assert.AreEqual(lot.LotId, balance.LotId, "The balance keeps the original lot identity.");
             Assert.AreEqual(1, balance.LogUnits);
-            Assert.AreEqual(300f, balance.MassKg, 0.01f);
+            Assert.AreEqual(600f, balance.MassKg, 0.01f);
             LogLotCustodyRecord cargo = world.Ledger.GetLot(haul.Lot.LotId.ToString());
             Assert.IsNotNull(cargo, "The dispatched cargo is registered under its fresh id.");
             Assert.AreEqual(LogLotCustodyState.Loaded, cargo.State);

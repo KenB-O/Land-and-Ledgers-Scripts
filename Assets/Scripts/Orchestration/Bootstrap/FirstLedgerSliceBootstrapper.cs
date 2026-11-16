@@ -586,6 +586,12 @@ namespace LandLedgers.FirstLedger
             ConfigureLiveBakerySaveOwner();
             ConfigureLiveLumberYardSaveOwner();
             ConfigureLiveSawmillSaveOwner();
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            // F1 part 2 (O-F3): the carpentry workshop is configured on
+            // NewGame and Continue alike (the endowment is marker-gated;
+            // the workstation is re-established from the register).
+            ConfigureCarpentryWorkshop();
+#endif
             ConfigureLumberYardConstructionBindings();
             SimulationDrivers simulationDrivers = FindAnyObjectByType<SimulationDrivers>();
             simulationDrivers?.AttachBusinessRuntime(sharedBusinessRuntime);
@@ -1673,6 +1679,84 @@ namespace LandLedgers.FirstLedger
         }
 
         /// <summary>
+        /// F1 part 2 (expanded campaign 2026-11-16, O-F3): NewGame and
+        /// Continue alike — configures the development-town carpentry
+        /// workshop. Finds the configured carpentry slot (operation id
+        /// "carpentry-workshop", owner Don Millward), applies the
+        /// carpentry setup template (idempotent), applies the opening
+        /// endowment (marker-gated: tools, workstation, opening lumber
+        /// — once), and registers the workshop's equipment register on
+        /// the Pass 9 state so the save seam persists it. The
+        /// workstation registry is hub-owned and in-memory: on Continue
+        /// the endowment does not re-run, but the workstation is
+        /// re-established from the restored register here, so the
+        /// workshop stays usable after a save/load. Zero by default: a
+        /// configuration with no carpentry business gets nothing, and
+        /// the workshop is never created from thin air. Refusals are
+        /// Debug.LogError, the same posture as the bakery seeders.
+        /// </summary>
+        private void ConfigureCarpentryWorkshop()
+        {
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (!enableDevelopmentTownConfiguration || configuration == null) return;
+            string carpentryKey = null;
+            string ownerPersonKey = null;
+            foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
+                if (slot != null && string.Equals(slot.operationId?.Trim(), "carpentry-workshop", StringComparison.OrdinalIgnoreCase))
+                {
+                    carpentryKey = slot.key;
+                    ownerPersonKey = slot.ownerPersonKey;
+                    break;
+                }
+            if (string.IsNullOrWhiteSpace(carpentryKey)) return;
+            int ownerPersonId = configuration.ResolveRuntimePersonId(ownerPersonKey);
+            if (ownerPersonId < 0)
+            {
+                Debug.LogError($"[WorldStartup] Carpentry workshop '{carpentryKey}' refused: owner '{ownerPersonKey}' does not resolve to a town person.", this);
+                return;
+            }
+            BusinessInstanceState workshop = null;
+            if (sharedBusinessRuntime?.Businesses != null)
+                foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+                    if (business != null && business.BusinessType == BusinessType.Generic
+                        && business.Owner?.OwnerKind == BusinessOwnerKind.Npc
+                        && business.Owner?.PersonId == ownerPersonId)
+                    { workshop = business; break; }
+            if (workshop?.RuntimeState == null)
+            {
+                Debug.LogError($"[WorldStartup] Carpentry workshop '{carpentryKey}' refused: the configured workshop runtime does not exist.", this);
+                return;
+            }
+            if (!GenericBusinessSetupTemplateCatalog.TryApply(workshop, GenericBusinessSetupTemplateCatalog.CarpentryId, out string templateMessage))
+            {
+                Debug.LogError($"[WorldStartup] Carpentry workshop '{carpentryKey}' refused: {templateMessage}", this);
+                return;
+            }
+            Series2Pass9SaveState pass9 = saveLoadManager?.Series2Pass9State;
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogError($"[WorldStartup] Carpentry workshop '{carpentryKey}' refused: no SimulationSystemsHub is present.", this);
+                return;
+            }
+            BusinessEquipmentRegister register = systemsHub.EquipmentRegisterFor(workshop.InstanceId);
+            BusinessWorkstations workstations = systemsHub.WorkstationRegisterFor(workshop.InstanceId);
+            var diag = new List<string>();
+            if (!ScenarioCarpentryOpeningEndowment.TryApply(configuration, carpentryKey, workshop, register, workstations,
+                    timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                    diag, out string endowmentReport, out string endowmentError))
+            {
+                Debug.LogError($"[WorldStartup] {endowmentError}", this);
+                return;
+            }
+            if (pass9 != null && !pass9.EquipmentRegisters.Exists(existing => existing != null
+                    && string.Equals(existing.BusinessInstanceId, workshop.InstanceId, StringComparison.Ordinal)))
+                pass9.EquipmentRegisters.Add(register);
+            Debug.Log($"[WorldStartup] Carpentry workshop '{carpentryKey}' ({workshop.InstanceId}): {templateMessage} {endowmentReport}", this);
+            foreach (string line in diag) Debug.Log($"[WorldStartup] {line}", this);
+        }
+
+        /// <summary>
         /// Plan 01 (2026-11-06): NewGame-only booking of the scenario-owned
         /// bakery wholesale accounts, beside the opening-equipment seeding
         /// above. Resolves the bakery key exactly like the equipment
@@ -1776,6 +1860,7 @@ namespace LandLedgers.FirstLedger
             "crop-farm" or "cropfarm" => BusinessType.CropFarm,
             "fuel-dealer" => BusinessType.FuelDealer,
             "livery-freight" or "freight-company" => BusinessType.LiveryFreight,
+            "carpentry-workshop" => BusinessType.Generic,
             _ => throw new ArgumentException($"Unsupported configured business operation ID '{operationId}'.", nameof(operationId))
         };
 
@@ -1830,6 +1915,7 @@ namespace LandLedgers.FirstLedger
                     "bakery" => ownerName + " Bakery",
                     "fuel-dealer" => ownerName + " Fuel Dealer",
                     "livery-freight" or "freight-company" => ownerName + " Freight Company",
+                    "carpentry-workshop" => ownerName + " Carpentry Workshop",
                     _ => slot.key
                 };
                 roster.Add(new OpeningRosterEntry(type, displayName, ownerName,
@@ -2259,6 +2345,12 @@ namespace LandLedgers.FirstLedger
             // D1: same window, same rule — the mill holder must exist
             // before the Pass XL restore consumes the state.
             ConfigureLiveSawmillSaveOwner();
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            // F1 part 2 (O-F3): the carpentry workshop is re-established
+            // after every restore (the endowment is marker-gated; the
+            // workstation is re-derived from the restored register).
+            ConfigureCarpentryWorkshop();
+#endif
             // C3: same window, same rule — the price port and the yard
             // supplier registration are runtime state, re-established
             // here after every restore.

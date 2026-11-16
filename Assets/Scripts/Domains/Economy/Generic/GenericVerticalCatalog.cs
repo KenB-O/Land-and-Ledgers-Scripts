@@ -119,5 +119,17 @@ namespace LandLedgers.Economy
                 Enabled = true,
             };
         }
+
+        /// <summary>
+        /// F1 part 2 (O-F3): the generic product definition for lumber as
+        /// the carpentry workshop holds it. Lot identity is required so
+        /// the lumber a piece of furniture is made from keeps its lot
+        /// provenance into the finished EquipmentAsset (the production
+        /// executor captures the consumed FIFO lot ids). One unit is one
+        /// board as the furniture recipes count it.
+        /// </summary>
+        public static GenericProductDefinition LumberDefinition() =>
+            new GenericProductDefinition("lumber", "Lumber", ProductQuantityUnit.BoardFoot,
+                requiresLotIdentity: true);
     }
 }

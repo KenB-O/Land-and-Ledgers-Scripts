@@ -17,10 +17,10 @@ namespace LandLedgers.EditorTests.Population
             DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(AssetPath);
             Assert.IsNotNull(configuration);
             Assert.IsTrue(configuration.Validate(out string error), error);
-            Assert.AreEqual(13, configuration.People.Count);
-            Assert.AreEqual(7, configuration.Households.Count);
-            Assert.AreEqual(6, configuration.Relationships.Count);
-            Assert.AreEqual(6, configuration.Businesses.Count);
+            Assert.AreEqual(15, configuration.People.Count);
+            Assert.AreEqual(8, configuration.Households.Count);
+            Assert.AreEqual(7, configuration.Relationships.Count);
+            Assert.AreEqual(7, configuration.Businesses.Count);
             Assert.IsTrue(configuration.TryGetPerson("ethan", out DevelopmentTownConfiguration.PersonDefinition ethan));
             Assert.AreEqual("Ethan", ethan.firstName);
             Assert.AreEqual(7, configuration.ResolveRuntimePersonId("ethan"));
@@ -72,6 +72,29 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual("emma-kwint", kwintHousehold.memberPersonKeys[1]);
             Assert.AreEqual("josh", kwintHousehold.memberPersonKeys[2]);
             Assert.AreEqual(6, kwintHousehold.homeBuildingOrdinal);
+            // F1 part 2 (O-F3): Don Millward is the carpentry workshop
+            // owner/worker and Grace Millward his wife, in the same
+            // household. Renumbered at integration merge to home ordinal
+            // 7 and person ids 14/15: the F branch used ordinal 5 and ids
+            // 10/11, which the integration tree already gives to Silas
+            // Ward, and 6 is the Kwints' from C-8 (the F branch's "bump
+            // to 6" note was wrong).
+            Assert.IsTrue(configuration.TryGetPerson("don-millward", out DevelopmentTownConfiguration.PersonDefinition don));
+            Assert.AreEqual("Don", don.firstName);
+            Assert.AreEqual("Millward", don.lastName);
+            Assert.AreEqual(7, don.homeBuildingOrdinal);
+            Assert.IsTrue(configuration.TryGetPerson("grace-millward", out DevelopmentTownConfiguration.PersonDefinition grace));
+            Assert.AreEqual("Grace", grace.firstName);
+            Assert.AreEqual("Millward", grace.lastName);
+            Assert.AreEqual(7, grace.homeBuildingOrdinal);
+            Assert.AreEqual(14, configuration.ResolveRuntimePersonId("don-millward"));
+            Assert.AreEqual(15, configuration.ResolveRuntimePersonId("grace-millward"));
+            DevelopmentTownConfiguration.HouseholdDefinition millwardHousehold =
+                configuration.Households.Single(item => item.key == "millward");
+            Assert.AreEqual(2, millwardHousehold.memberPersonKeys.Length);
+            Assert.AreEqual("don-millward", millwardHousehold.memberPersonKeys[0]);
+            Assert.AreEqual("grace-millward", millwardHousehold.memberPersonKeys[1]);
+            Assert.AreEqual(7, millwardHousehold.homeBuildingOrdinal);
             Assert.AreEqual("A0", configuration.OpeningHorseId);
             Assert.AreEqual("opening-freight-wagon", configuration.OpeningWagonId);
             Assert.AreEqual("freight-company", configuration.FreightBusinessKey);
@@ -99,12 +122,16 @@ namespace LandLedgers.EditorTests.Population
             // stays on as a sawmill hand under him, never a second owner.
             Assert.AreEqual("enzo", configuration.Businesses.Single(item => item.key == "sawmill").ownerPersonKey);
             Assert.AreEqual("base:5", configuration.Businesses.Single(item => item.key == "lumber-yard").ownerPersonKey);
-            Assert.AreEqual(6, configuration.BusinessCashTargets.Count);
+            Assert.AreEqual("don-millward", configuration.Businesses.Single(item => item.key == "carpentry-workshop").ownerPersonKey);
+            Assert.AreEqual("carpentry-workshop", configuration.Businesses.Single(item => item.key == "carpentry-workshop").operationId);
+            Assert.AreEqual(7, configuration.BusinessCashTargets.Count);
             Assert.AreEqual(15000, configuration.BusinessCashTargets.Single(item => item.businessKey == "sawmill").targetCashCents);
             Assert.AreEqual(12000, configuration.BusinessCashTargets.Single(item => item.businessKey == "lumber-yard").targetCashCents);
-            Assert.AreEqual(7, configuration.HouseholdCashTargets.Count);
+            Assert.AreEqual(10000, configuration.BusinessCashTargets.Single(item => item.businessKey == "carpentry-workshop").targetCashCents);
+            Assert.AreEqual(8, configuration.HouseholdCashTargets.Count);
             Assert.AreEqual(40000, configuration.HouseholdCashTargets.Single(item => item.anchorPersonKey == "silas").targetCashCents);
             Assert.AreEqual(40000, configuration.HouseholdCashTargets.Single(item => item.anchorPersonKey == "enzo").targetCashCents);
+            Assert.AreEqual(40000, configuration.HouseholdCashTargets.Single(item => item.anchorPersonKey == "don-millward").targetCashCents);
             Assert.IsTrue(configuration.OpeningInventory.Any(item => item.businessKey == "general-store"));
             Assert.IsTrue(configuration.OpeningInventory.All(item => configuration.TryGetBusiness(item.businessKey, out _)));
             Assert.AreEqual(0, configuration.Households.Sum(item => item.openingCashCents),
@@ -125,6 +152,7 @@ namespace LandLedgers.EditorTests.Population
             }
             Assert.AreEqual(120, configuration.OpeningBakeryFlourPounds);
             Assert.AreEqual(30, configuration.OpeningBakeryNotionsUnits);
+            Assert.AreEqual(15, configuration.OpeningCarpentryLumberUnits);
         }
 
         [Test]

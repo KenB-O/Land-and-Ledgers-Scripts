@@ -269,6 +269,21 @@ namespace LandLedgers.Population
         [SerializeField, Min(0), Tooltip("Finite development-town opening baker's notions in units, received into the Bakery production bin on New Game only.")]
         private int openingBakeryNotionsUnits;
         /// <summary>
+        /// F1 part 2 (expanded campaign 2026-11-16, O-F3): finite
+        /// development-town opening lumber in units for the configured
+        /// carpentry workshop, received into the workshop's generic
+        /// inventory on New Game only (one of each lumber-only furniture
+        /// recipe: table 2 + chair batch 4 + cabinet-small 3 +
+        /// cabinet-large 4 + shelf 1 + crate 1 = 15; the bed and bedroll
+        /// are excluded — they need hay, which has no priced supply, F7
+        /// finding F3). An explicit, auditable opening endowment per the
+        /// business-establishment principle; never replenished
+        /// automatically — further lumber comes through the yard retail
+        /// procurement path. Zero by default: no workshop lumber.
+        /// </summary>
+        [SerializeField, Min(0), Tooltip("Finite development-town opening lumber in units for the configured carpentry workshop, received into the workshop's generic inventory on New Game only. One of each lumber-only furniture recipe (15 units); the bed and bedroll are excluded — they need hay, which has no priced supply.")]
+        private int openingCarpentryLumberUnits;
+        /// <summary>
         /// Plan 10 E4 (Obj 8; D-2): the fuel-dealer conversion factor —
         /// intake units per bakery fuel unit (IntakeUnitsPerBakeryUnit for
         /// Series2DealerBakeryFuelSource). Zero/unset by default: unset
@@ -312,6 +327,8 @@ namespace LandLedgers.Population
         public int OpeningBakeryFuelUnits => openingBakeryFuelUnits;
         public int OpeningBakeryFlourPounds => openingBakeryFlourPounds;
         public int OpeningBakeryNotionsUnits => openingBakeryNotionsUnits;
+        /// <summary>F1 part 2 (O-F3): finite opening lumber units for the configured carpentry workshop; 0 = no endowment.</summary>
+        public int OpeningCarpentryLumberUnits => openingCarpentryLumberUnits;
         /// <summary>Plan 10 E4: the D-2 fuel-dealer conversion factor (decided by owner Decision 1: 4 intake units per bakery fuel unit); 0 = unset (no dealer conversion).</summary>
         public int FuelDealerIntakeUnitsPerBakeryUnit => fuelDealerIntakeUnitsPerBakeryUnit;
         public string OpeningHorseId => openingHorseId ?? string.Empty;

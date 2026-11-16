@@ -125,6 +125,28 @@ MonoBehaviour:
     isFemale: 0
     occupation: Sawmill labourer
     homeBuildingOrdinal: 6
+  # F1 part 2 (expanded campaign 2026-11-16, O-F3): Don Millward runs the
+  # carpentry workshop with his wife Grace. Owner-directed names
+  # (Kennedy 2026-11-16). Ages are provisional calibrations (flagged 1),
+  # the owner corrects them. Renumbered at integration merge to home
+  # ordinal 7: the F branch used 5, which the integration tree already
+  # gives to Silas Ward, and 6 is the Kwints' from C-8.
+  - key: don-millward
+    firstName: Don
+    lastName: Millward
+    age: 58
+    ageIsProvisionalCalibration: 1
+    isFemale: 0
+    occupation: Carpenter
+    homeBuildingOrdinal: 7
+  - key: grace-millward
+    firstName: Grace
+    lastName: Millward
+    age: 56
+    ageIsProvisionalCalibration: 1
+    isFemale: 1
+    occupation: Unemployed
+    homeBuildingOrdinal: 7
   households:
   - key: base-household:0
     displayName: Baldwin-Ooms Household
@@ -183,6 +205,16 @@ MonoBehaviour:
     - josh
     homeBuildingOrdinal: 6
     openingCashCents: 0
+  # F1 part 2 (O-F3): the Millwards' household, home ordinal 7 (see the
+  # people section for the renumbering note).
+  - key: millward
+    displayName: Millward Household
+    surname: Millward
+    memberPersonKeys:
+    - don-millward
+    - grace-millward
+    homeBuildingOrdinal: 7
+    openingCashCents: 0
   relationships:
   - firstPersonKey: base:0
     secondPersonKey: base:1
@@ -202,6 +234,10 @@ MonoBehaviour:
   # C-8: Enzo and Emma Kwint, spouses.
   - firstPersonKey: enzo
     secondPersonKey: emma-kwint
+    relationship: 0
+  # F1 part 2: Don and Grace Millward, spouses.
+  - firstPersonKey: don-millward
+    secondPersonKey: grace-millward
     relationship: 0
   businesses:
   - key: general-store
@@ -270,6 +306,17 @@ MonoBehaviour:
       baseServiceFeeCents: 0
       ratePerMileCents: 0
       chargeRoundTrip: 1
+  - key: carpentry-workshop
+    operationId: carpentry-workshop
+    ownerPersonKey: don-millward
+    businessId: 
+    premisesId: 
+    premisesRequired: 1
+    openingCashCents: 10000
+    freightRateCard:
+      baseServiceFeeCents: 0
+      ratePerMileCents: 0
+      chargeRoundTrip: 1
   businessCashTargets:
   - businessKey: general-store
     targetCashCents: 50000
@@ -283,6 +330,8 @@ MonoBehaviour:
     targetCashCents: 15000
   - businessKey: lumber-yard
     targetCashCents: 12000
+  - businessKey: carpentry-workshop
+    targetCashCents: 10000
   householdCashTargets:
   - anchorPersonKey: base:2
     targetCashCents: 40000
@@ -299,6 +348,9 @@ MonoBehaviour:
   # C-8: the Kwint household's cash target (anchor: Enzo). Josh boards
   # here and carries no separate household target.
   - anchorPersonKey: enzo
+    targetCashCents: 40000
+  # F1 part 2: the Millward household's cash target (anchor: Don).
+  - anchorPersonKey: don-millward
     targetCashCents: 40000
   openingInventory:
   - businessKey: general-store
@@ -372,6 +424,12 @@ MonoBehaviour:
       kind: log-carriage
     - assetId: drive-system-1
       kind: drive-system
+  - businessKey: carpentry-workshop
+    assetEntries:
+    - assetId: carpenter-workbench-1
+      kind: workbench
+    kitIds:
+    - carpenter-hand-tool-kit
   openingEmployees:
   - businessKey: sawmill
     personKey: silas
@@ -424,6 +482,7 @@ MonoBehaviour:
   openingBakeryFuelUnits: 40
   openingBakeryFlourPounds: 120
   openingBakeryNotionsUnits: 30
+  openingCarpentryLumberUnits: 15
   fuelDealerIntakeUnitsPerBakeryUnit: 4
   freightBusinessKey: freight-company
   openingHorseId: A0

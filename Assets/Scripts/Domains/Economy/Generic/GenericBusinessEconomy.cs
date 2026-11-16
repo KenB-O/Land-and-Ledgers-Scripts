@@ -632,6 +632,8 @@ namespace LandLedgers.Economy
         public const string GeneralMerchandiseId = "general_merchandise_assortment";
         public const string BakeryId = "bakery_retail_setup";
         public const string SmithyId = "prairie_fork_smithy_setup";
+        /// <summary>F1 part 2 (O-F3): the carpentry workshop setup preset — the producing furniture business.</summary>
+        public const string CarpentryId = "carpentry_setup";
 
         public static IReadOnlyList<GenericBusinessSetupTemplate> CreateDefaults()
         {
@@ -677,6 +679,25 @@ namespace LandLedgers.Economy
                     },
                     SuggestedEquipmentKinds = new List<string> { "forge", "anvil", "bellows" },
                 },
+                new GenericBusinessSetupTemplate
+                {
+                    TemplateId = CarpentryId,
+                    DisplayName = "Carpentry workshop setup",
+                    SuggestCustomerFacingSpace = true,
+                    SuggestedProductIds = new List<string>
+                    {
+                        "furniture.bed", "furniture.table", "furniture.chair",
+                        "furniture.cabinet-small", "furniture.cabinet-large",
+                        "furniture.shelf", "furniture.crate", "furniture.bedroll",
+                    },
+                    SuggestedEquipmentKinds = new List<string> { "workbench", "carpenter-hand-tool-kit" },
+                    SuggestedProductionMethodIds = new List<string>
+                    {
+                        "furniture.bed", "furniture.table", "furniture.chair-batch",
+                        "furniture.cabinet-small", "furniture.cabinet-large",
+                        "furniture.shelf", "furniture.crate", "furniture.bedroll",
+                    },
+                },
             };
         }
 
@@ -716,6 +737,15 @@ namespace LandLedgers.Economy
                     break;
                 case SmithyId:
                     GenericBusinessVerticalService.ConfigurePrairieForkSmithy(business);
+                    break;
+                case CarpentryId:
+                    // F1 part 2 (O-F3): installs the eight furniture methods
+                    // and make-to-stock policies. It creates no equipment,
+                    // premises, stock, workers or retail lines — those remain
+                    // ordinary acquisition and runtime paths (the opening
+                    // endowment installs the tools and workstation; furniture
+                    // retail is F2).
+                    GenericBusinessVerticalService.ConfigureCarpentry(business);
                     break;
             }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.World.Property;
 
@@ -14,6 +15,8 @@ namespace LandLedgers.Economy.Financing
         FinancingFellThrough = 3,
         TitleRefused = 4,
         CashShortfall = 5,
+        /// <summary>D-6: the agreed contents failed re-validation at close — the deal fails, never silently drops an item.</summary>
+        ContentsRefused = 6,
     }
 
     /// <summary>Phase F: the seller's answer to a buyer offer. Append-only.</summary>
@@ -90,6 +93,20 @@ namespace LandLedgers.Economy.Financing
         public NpcCreditorProfile LenderProfile;
         public CreditOffer LenderOffer;
         public int LenderLoanCents;
+        /// <summary>
+        /// D-6: the itemized contents contract agreed at plan time (B6
+        /// PropertyContentsSelection — D defines NO second selection type).
+        /// Null = no contents terms (a bare-land sale, or a sale agreed
+        /// without contents). When set, the selection is validated at plan
+        /// time by ValidatePlan against the seller's furnishing register
+        /// and re-validated at close by CloseAcquisition; on re-validation
+        /// failure the deal FAILS LOUDLY and unwinds, never silently drops
+        /// an item. The contents value is a COMPONENT of AgreedPriceCents
+        /// (price == structure + contents), never a flat surcharge and
+        /// never double-counted — the structural valuation must exclude
+        /// the value of included fixtures (IncludedFixtureValueCents).
+        /// </summary>
+        public PropertyContentsSelection Contents;
 
         public NpcAcquisitionPlan() { }
     }
@@ -247,13 +264,32 @@ namespace LandLedgers.Economy.Financing
         /// <summary>
         /// Validates the plan without moving anything. Returns null when the
         /// plan is executable, or the exact reason it is not.
+        /// D-6: when the plan carries contents terms, sellerFurnishings is
+        /// the seller's household furnishing register (null = no register
+        /// supplied, and the plan is refused — seller authority cannot be
+        /// validated without it); structureValueCents is the structural
+        /// valuation WITHOUT the value of included fixtures (Agent F's
+        /// split — null = not supplied, and the price == structure +
+        /// contents check is skipped with a diagnostic note, never faked).
+        /// contentsAgreementCheck is the agreement-time contents validation
+        /// (Validate, requirePriced): CloseAcquisition passes false,
+        /// because the close re-validates with close semantics instead
+        /// (Revalidate — excluded-item drift is a note, not a failure),
+        /// and re-running agreement-time validation at close would fail a
+        /// deal for the seller's own excluded property leaving. Skipping
+        /// it at close is safe: the agreed values are frozen, and
+        /// Revalidate fails the close on any included-item condition
+        /// change, so the price cannot go stale silently.
         /// </summary>
         public string ValidatePlan(
             NpcAcquisitionPlan plan,
             TitleAuthority titles,
             SellerFinanceNegotiationBook negotiations,
             CreditCashBridge cash,
-            List<string> diag)
+            List<string> diag,
+            HouseholdFurnishingRegister sellerFurnishings = null,
+            int? structureValueCents = null,
+            bool contentsAgreementCheck = true)
         {
             diag = diag ?? diagnostics;
             if (plan == null) return "no acquisition plan.";
@@ -328,6 +364,42 @@ namespace LandLedgers.Economy.Financing
             if (buyerStore.ReadBalanceCents() + plan.LenderLoanCents < cashToSeller)
                 return $"the buyer holds {buyerStore.ReadBalanceCents()}c and borrows {plan.LenderLoanCents}c — short of the {cashToSeller}c cash portion.";
 
+            // ---- Contents leg (D-6): the itemized contents contract agreed
+            // at plan time. Validated here against the seller's furnishing
+            // register; re-validated at close by CloseAcquisition, because
+            // items can be sold, moved, or damaged between agreement and
+            // closing. The seller named by the plan must be the register's
+            // household (cash-store owner-name convention, "household:7") —
+            // a seller with no register has no authority to transfer these
+            // contents. Unpriced included items are refused at agreement
+            // (requirePriced): a closing contract cannot carry an unpriced
+            // item. Conservation (price == structure + contents) is checked
+            // only when a structure value is supplied — the split is Agent
+            // F's valuation (F6), and D invents no structure value here.
+            // Skipped entirely when contentsAgreementCheck is false: the
+            // close path re-validates with close semantics instead (see
+            // CloseAcquisition).
+            if (plan.Contents != null && contentsAgreementCheck)
+            {
+                if (sellerFurnishings == null)
+                    return "the plan carries contents terms but no seller furnishing register was supplied — seller authority cannot be validated.";
+                if (!string.Equals(plan.SellerName, "household:" + sellerFurnishings.HouseholdId, StringComparison.Ordinal))
+                    return $"the plan's seller '{plan.SellerName}' is not the furnishing register's household {sellerFurnishings.HouseholdId} — the seller has no authority to transfer these contents.";
+                List<string> contentsProblems = plan.Contents.Validate(sellerFurnishings, requirePriced: true);
+                if (contentsProblems.Count > 0)
+                    return "contents selection invalid: " + string.Join("; ", contentsProblems);
+                if (structureValueCents.HasValue)
+                {
+                    string conservation = PropertyContentsSelection.CheckConservation(
+                        structureValueCents.Value, plan.Contents.TotalContentsValueCents, plan.AgreedPriceCents);
+                    if (conservation != null) return conservation;
+                }
+                else
+                {
+                    diag.Add("NpcPropertyAcquisition.ValidatePlan: contents conservation (price == structure + contents) not checked — no structure value supplied; Agent F's structure valuation wires it in.");
+                }
+            }
+
             return null;
         }
 
@@ -337,6 +409,12 @@ namespace LandLedgers.Economy.Financing
         /// the cash movement, then title, then occupancy. Any mid-deal
         /// failure unwinds what already closed through the real payment
         /// machinery and fails LOUDLY.
+        /// D-6: sellerFurnishings is the seller's household furnishing
+        /// register as it stands at close (null = no register supplied);
+        /// structureValueCents is the structural valuation WITHOUT the
+        /// value of included fixtures (Agent F's split — null = not
+        /// supplied). Both are forwarded to ValidatePlan; the contents
+        /// are then re-validated here before any leg moves.
         /// </summary>
         public NpcAcquisitionResult CloseAcquisition(
             EntityIdRegistry ids,
@@ -352,7 +430,9 @@ namespace LandLedgers.Economy.Financing
             CreditOfferWorkflow workflow,
             int dayIndex,
             CreditEventLog events,
-            List<string> diag)
+            List<string> diag,
+            HouseholdFurnishingRegister sellerFurnishings = null,
+            int? structureValueCents = null)
         {
             diag = diag ?? diagnostics;
             var result = new NpcAcquisitionResult
@@ -360,10 +440,43 @@ namespace LandLedgers.Economy.Financing
                 ParcelId = plan != null ? plan.ParcelId : string.Empty,
                 AgreedPriceCents = plan != null ? plan.AgreedPriceCents : 0,
             };
-            string invalid = ValidatePlan(plan, titles, negotiations, cash, diag);
+            string invalid = ValidatePlan(plan, titles, negotiations, cash, diag, sellerFurnishings, structureValueCents,
+                contentsAgreementCheck: false);
             if (invalid != null)
                 return Fail(result, NpcAcquisitionFailureKind.InvalidPlan, "plan invalid: " + invalid,
                     plan, dayIndex, events, diag);
+
+            // ---- Contents leg (D-6): re-validate the agreed contents
+            // against the seller's register as it stands at close. Items
+            // can be sold, moved, or damaged between agreement and
+            // closing; on any failure the deal FAILS LOUDLY before anything
+            // moves — never silently drops an item. Nothing has moved yet,
+            // so the unwind is clean by construction. Note the close does
+            // NOT re-run agreement-time validation (Validate): excluded-item
+            // drift is a note at close, not a failure, and re-running
+            // Validate would fail the deal for the seller's own excluded
+            // property leaving.
+            if (plan.Contents != null)
+            {
+                if (sellerFurnishings == null)
+                {
+                    result.UnwoundCleanly = true;
+                    return Fail(result, NpcAcquisitionFailureKind.ContentsRefused,
+                        "the deal carries contents terms but no seller furnishing register was supplied at close — seller authority cannot be re-validated; nothing moved.",
+                        plan, dayIndex, events, diag);
+                }
+                List<string> closeProblems = plan.Contents.Revalidate(sellerFurnishings, out List<string> closeNotes);
+                foreach (string note in closeNotes)
+                    diag.Add("NpcPropertyAcquisition: contents at close — " + note);
+                if (closeProblems.Count > 0)
+                {
+                    result.UnwoundCleanly = true;
+                    return Fail(result, NpcAcquisitionFailureKind.ContentsRefused,
+                        "contents re-validation failed at close: " + string.Join("; ", closeProblems) + " — the deal fails; no item is silently dropped.",
+                        plan, dayIndex, events, diag);
+                }
+                diag.Add($"NpcPropertyAcquisition: contents re-validated at close — {plan.Contents.Lines.Count} lines, {plan.Contents.TotalContentsValueCents}c of the {plan.AgreedPriceCents}c price.");
+            }
 
             IRealCashStore buyerStore0 = cash.FindStore(plan.BuyerName);
             IRealCashStore sellerStore0 = cash.FindStore(plan.SellerName);

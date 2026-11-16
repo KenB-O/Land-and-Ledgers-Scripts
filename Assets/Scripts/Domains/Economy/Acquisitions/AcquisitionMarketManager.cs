@@ -116,7 +116,9 @@ namespace LandLedgers.Economy
         TitleDefect = 2,
         SellerWithdrew = 3,
         RivalPressure = 4,
-        AdverseDiligence = 5
+        AdverseDiligence = 5,
+        /// <summary>D-6: the agreed contents failed re-validation at close — the deal fails, never silently drops an item.</summary>
+        ContentsRefused = 6
     }
 
 
@@ -385,6 +387,21 @@ namespace LandLedgers.Economy
         public AcquisitionClosingFailureCause closingFailureCause = AcquisitionClosingFailureCause.None;
         public string closingFailureSummary = string.Empty;
         public AcquisitionDealStage failedFromStage = AcquisitionDealStage.None;
+        /// <summary>
+        /// D-6: the itemized contents contract agreed at TentativeAgreement
+        /// (B6 PropertyContentsSelection — D defines NO second selection
+        /// type). Null = no contents terms (a bare-land sale, or a sale
+        /// agreed without contents). When set, the selection is validated
+        /// at agreement by AgreeTentativeTerms against the seller's
+        /// furnishing register and re-validated at close by
+        /// CloseAcquisition; on re-validation failure the deal FAILS
+        /// LOUDLY and unwinds exactly like a title refusal, never
+        /// silently drops an item. The contents value is a COMPONENT of
+        /// the agreed price (price == structure + contents), never a flat
+        /// surcharge and never double-counted. Persisted in
+        /// AcquisitionDealSaveDto.
+        /// </summary>
+        public PropertyContentsSelection Contents;
 
         public AcquisitionDealSaveDto CaptureSaveDto()
         {
@@ -439,7 +456,11 @@ namespace LandLedgers.Economy
                 requiredDiligenceMask = requiredDiligenceMask,
                 completedDiligenceMask = completedDiligenceMask,
                 closingFailureCause = closingFailureCause,
-                closingFailureSummary = EncodeFailureSummaryForSave(closingFailureSummary, failedFromStage)
+                closingFailureSummary = EncodeFailureSummaryForSave(closingFailureSummary, failedFromStage),
+                // D-6: the agreed contents terms persist with the deal, so a
+                // mid-deal Continue never loses the contract. A null selection
+                // round-trips as null (no contents terms).
+                contents = Contents
             };
         }
 
@@ -502,7 +523,10 @@ namespace LandLedgers.Economy
                 completedDiligenceMask = dto.completedDiligenceMask,
                 closingFailureCause = dto.closingFailureCause,
                 closingFailureSummary = StripFailureSummaryMetadata(dto.closingFailureSummary),
-                failedFromStage = InferFailedFromStage(dto)
+                failedFromStage = InferFailedFromStage(dto),
+                // D-6: a save from before contents terms existed carries a
+                // null selection — the deal loads as a no-contents deal.
+                contents = dto.contents
             };
         }
 
@@ -8158,6 +8182,27 @@ namespace LandLedgers.Economy
             }
 
             int agreedPrice = result.Countered ? result.CounterofferPriceCents : terms.offerPriceCents;
+            // D-6: contents terms are validated at agreement, against the
+            // seller's furnishing register. A failure refuses the agreement
+            // (the deal stays in DiligenceComplete and can be re-agreed
+            // once the terms are corrected) — never silently drops an item
+            // from the contract. Conservation is NOT checked here: no
+            // structure value exists in this flow yet (Agent F's
+            // structure/contents split, F6); the price == structure +
+            // contents check is D-6's NPC-flow leg and D-7's close leg.
+            if (deal.Contents != null)
+            {
+                string contentsProblem = ValidateDealContentsAtAgreement(deal);
+                if (contentsProblem != null)
+                {
+                    deal.statusText = $"Tentative agreement refused: {contentsProblem}";
+                    marketStatus = deal.statusText;
+                    lastPurchaseSummary = deal.statusText;
+                    message = deal.statusText;
+                    Debug.Log($"[Acquisitions] {message}", this);
+                    return false;
+                }
+            }
             MarkDealProgress(deal, AcquisitionDealStage.TentativeAgreement, GetCurrentDayIndex());
             deal.tentativeAgreementDayIndex = GetCurrentDayIndex();
             deal.tentativePriceCents = Mathf.Max(1, agreedPrice);
@@ -8184,6 +8229,45 @@ namespace LandLedgers.Economy
             return true;
         }
 
+        /// <summary>
+        /// D-6: agreement-time contents validation for the player flow.
+        /// Returns null when the selection may be agreed, or the exact
+        /// reason it may not. Resolves the seller's furnishing register
+        /// through SellerFurnishingRegisterForBuilding; a missing resolver
+        /// is a loud refusal, not a silent pass.
+        /// </summary>
+        private string ValidateDealContentsAtAgreement(AcquisitionDealState deal)
+        {
+            if (deal == null || deal.Contents == null) return null;
+            HouseholdFurnishingRegister register = SellerFurnishingRegisterForBuilding?.Invoke(deal.Contents.BuildingInstanceId);
+            if (register == null)
+                return "the deal carries contents terms but no seller furnishing register is available — seller authority cannot be validated.";
+            List<string> problems = deal.Contents.Validate(register, requirePriced: true);
+            if (problems.Count > 0)
+                return "contents selection invalid: " + string.Join("; ", problems);
+            return null;
+        }
+
+        /// <summary>
+        /// D-6: close-time contents re-validation for the player flow.
+        /// Returns null when the selection still holds, or the exact reason
+        /// it does not. Excluded-item drift is reported in notes, not
+        /// failures (the seller's own property leaving). A missing resolver
+        /// is a loud refusal.
+        /// </summary>
+        private string RevalidateDealContentsAtClose(AcquisitionDealState deal, out List<string> notes)
+        {
+            notes = new List<string>();
+            if (deal == null || deal.Contents == null) return null;
+            HouseholdFurnishingRegister register = SellerFurnishingRegisterForBuilding?.Invoke(deal.Contents.BuildingInstanceId);
+            if (register == null)
+                return "the deal carries contents terms but no seller furnishing register is available — seller authority cannot be re-validated at close.";
+            List<string> problems = deal.Contents.Revalidate(register, out notes);
+            if (problems.Count > 0)
+                return "contents re-validation failed at close: " + string.Join("; ", problems) + " — the deal fails; no item is silently dropped.";
+            return null;
+        }
+
         private bool CloseAcquisition(AcquisitionListing listing, AcquisitionDealState deal, out string message)
         {
             if (GetCurrentDayIndex() > deal.closingDeadlineDayIndex)
@@ -8196,6 +8280,26 @@ namespace LandLedgers.Economy
             {
                 ApplyDealFailure(deal, message, false, out message);
                 return false;
+            }
+
+            // D-6: re-validate the agreed contents against the seller's
+            // register as it stands at close, before any money moves.
+            // Items can be sold, moved, or damaged between agreement and
+            // closing; on failure the deal FAILS LOUDLY and unwinds
+            // exactly like a title refusal — never silently drops an item.
+            if (deal.Contents != null)
+            {
+                string contentsProblem = RevalidateDealContentsAtClose(deal, out List<string> contentsNotes);
+                foreach (string note in contentsNotes)
+                    Debug.Log($"[Acquisitions] Contents at close — {note}", this);
+                if (contentsProblem != null)
+                {
+                    deal.closingFailureCause = AcquisitionClosingFailureCause.ContentsRefused;
+                    deal.closingFailureSummary = contentsProblem;
+                    RefreshDealWorkflowReadouts(listing, deal);
+                    ApplyDealFailure(deal, contentsProblem, false, out message);
+                    return false;
+                }
             }
 
             int finalPrice = Mathf.Max(1, deal.tentativePriceCents > 0 ? deal.tentativePriceCents : listing.askingPriceCents);
@@ -8921,6 +9025,18 @@ namespace LandLedgers.Economy
         private EarnestEscrowLedger escrowLedger;
 
         public EarnestEscrowLedger EscrowLedger => escrowLedger ??= new EarnestEscrowLedger();
+
+        /// <summary>
+        /// D-6: the seller's household furnishing register, resolved by
+        /// building instance id — the seam the contents contract is
+        /// validated against at TentativeAgreement and re-validated
+        /// against at close. Null = no seller register is wired (the
+        /// production binding is D-7 / Agent G wiring): a deal carrying
+        /// contents terms then refuses agreement and fails loudly at
+        /// close, because seller authority cannot be validated without
+        /// the register. A deal with no contents terms never calls it.
+        /// </summary>
+        public Func<int, HouseholdFurnishingRegister> SellerFurnishingRegisterForBuilding { get; set; }
 
         /// <summary>
         /// DEF-069: marks a held earnest escrow disputed. The funds are

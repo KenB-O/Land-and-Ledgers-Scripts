@@ -188,7 +188,7 @@ namespace LandLedgers.Editor.Time
 
             var starts = new[]
             {
-                Directory.GetCurrentDirectory(),
+                System.IO.Directory.GetCurrentDirectory(),
                 AppContext.BaseDirectory,
             };
             var tried = new StringBuilder();
@@ -209,7 +209,7 @@ namespace LandLedgers.Editor.Time
                             return candidate;
                         }
                     }
-                    DirectoryInfo parent = Directory.GetParent(dir);
+                    DirectoryInfo parent = System.IO.Directory.GetParent(dir);
                     dir = parent == null ? null : parent.FullName;
                 }
             }

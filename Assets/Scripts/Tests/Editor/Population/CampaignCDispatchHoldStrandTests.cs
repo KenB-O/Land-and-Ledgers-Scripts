@@ -433,7 +433,7 @@ namespace LandLedgers.Editor.Population
 
             var starts = new[]
             {
-                Directory.GetCurrentDirectory(),
+                System.IO.Directory.GetCurrentDirectory(),
                 AppContext.BaseDirectory,
             };
             var tried = new StringBuilder();
@@ -454,7 +454,7 @@ namespace LandLedgers.Editor.Population
                             return candidate;
                         }
                     }
-                    DirectoryInfo parent = Directory.GetParent(dir);
+                    DirectoryInfo parent = System.IO.Directory.GetParent(dir);
                     dir = parent == null ? null : parent.FullName;
                 }
             }

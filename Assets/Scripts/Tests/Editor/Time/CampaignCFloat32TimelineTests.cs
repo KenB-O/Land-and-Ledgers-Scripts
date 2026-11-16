@@ -360,7 +360,7 @@ namespace LandLedgers.Editor.Time
                 "The float timeline must still be a cast of the double one.");
             var users = new List<string>();
             string scriptsRoot = Path.Combine(FindRepoRoot(), "Assets", "Scripts");
-            foreach (string file in Directory.GetFiles(scriptsRoot, "*.cs",
+            foreach (string file in System.IO.Directory.GetFiles(scriptsRoot, "*.cs",
                 SearchOption.AllDirectories))
             {
                 if (file.Contains("Tests" + Path.DirectorySeparatorChar))
@@ -452,7 +452,7 @@ namespace LandLedgers.Editor.Time
 
             var starts = new[]
             {
-                Directory.GetCurrentDirectory(),
+                System.IO.Directory.GetCurrentDirectory(),
                 AppContext.BaseDirectory,
             };
             var tried = new StringBuilder();
@@ -473,7 +473,7 @@ namespace LandLedgers.Editor.Time
                             return candidate;
                         }
                     }
-                    DirectoryInfo parent = Directory.GetParent(dir);
+                    DirectoryInfo parent = System.IO.Directory.GetParent(dir);
                     dir = parent == null ? null : parent.FullName;
                 }
             }

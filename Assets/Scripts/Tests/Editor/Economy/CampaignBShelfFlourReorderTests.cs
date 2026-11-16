@@ -420,8 +420,8 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(100, mercantile.OnHandUnits("sugar"));
 
             var storeState = new BusinessRuntimeState();
-            storeState.CurrentCashCents = StoreStartingCashCents;
-            CategoryStockState stock = storeState.RegisterCategoryStock(StapleFood, 0, 120);
+            storeState.SetCurrentCashCents(StoreStartingCashCents);
+            CategoryStockState stock = storeState.EnsureCategoryStock(StapleFood, 0, 120);
             var diagnostics = new List<string>();
 
             StoreWeeklyReorderPlanner.NamedSupplierReceiptResult result =

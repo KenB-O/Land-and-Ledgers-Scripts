@@ -431,7 +431,7 @@ namespace LandLedgers.Editor.Economy
 
             var starts = new[]
             {
-                Directory.GetCurrentDirectory(),
+                System.IO.Directory.GetCurrentDirectory(),
                 AppContext.BaseDirectory,
             };
             var tried = new StringBuilder();
@@ -450,7 +450,7 @@ namespace LandLedgers.Editor.Economy
                         if (File.Exists(Path.Combine(candidate, NegotiationServicePath)))
                             return candidate;
                     }
-                    DirectoryInfo parent = Directory.GetParent(dir);
+                    DirectoryInfo parent = System.IO.Directory.GetParent(dir);
                     dir = parent == null ? null : parent.FullName;
                 }
             }
@@ -472,7 +472,7 @@ namespace LandLedgers.Editor.Economy
         private static IEnumerable<string> ProductionFiles()
         {
             string scripts = Path.Combine(FindRepoRoot(), "Assets", "Scripts");
-            foreach (string file in Directory.GetFiles(scripts, "*.cs", SearchOption.AllDirectories))
+            foreach (string file in System.IO.Directory.GetFiles(scripts, "*.cs", SearchOption.AllDirectories))
             {
                 string normalized = file.Replace('\\', '/');
                 if (normalized.Contains("/Tests/"))

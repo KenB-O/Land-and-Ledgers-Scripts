@@ -341,7 +341,7 @@ namespace LandLedgers.EditorTests.Economy
 
             var starts = new[]
             {
-                Directory.GetCurrentDirectory(),
+                System.IO.Directory.GetCurrentDirectory(),
                 AppContext.BaseDirectory,
             };
             var tried = new StringBuilder();
@@ -363,7 +363,7 @@ namespace LandLedgers.EditorTests.Economy
                         }
                     }
 
-                    DirectoryInfo parent = Directory.GetParent(dir);
+                    DirectoryInfo parent = System.IO.Directory.GetParent(dir);
                     dir = parent == null ? null : parent.FullName;
                 }
             }
@@ -398,7 +398,7 @@ namespace LandLedgers.EditorTests.Economy
         private static IEnumerable<string> ProductionCsFiles()
         {
             string scripts = Path.Combine(FindRepoRoot(), "Assets", "Scripts");
-            foreach (string file in Directory.GetFiles(scripts, "*.cs", SearchOption.AllDirectories))
+            foreach (string file in System.IO.Directory.GetFiles(scripts, "*.cs", SearchOption.AllDirectories))
             {
                 string[] parts = file.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 bool inTests = false;

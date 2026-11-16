@@ -97,6 +97,19 @@ namespace LandLedgers.Population
             /// was resolved.
             /// </summary>
             public float RestQuality01 = 1f;
+            /// <summary>
+            /// B4: the dining seat reserved for an Eating activity
+            /// ("chair:&lt;assetId&gt;"); empty when the meal resolves to
+            /// the Fallback (no table, no chair, or no free chair) or
+            /// when no dining registry was supplied.
+            /// </summary>
+            public string DiningSeatId = string.Empty;
+            /// <summary>
+            /// B4: how the meal is eaten (Seated at a reserved chair,
+            /// Fallback at home with no seat); Unspecified when no
+            /// dining registry was supplied.
+            /// </summary>
+            public DiningMode DiningMode = DiningMode.Unspecified;
         }
 
         /// <summary>The day's plan for one person, with loud conflicts.</summary>
@@ -118,7 +131,11 @@ namespace LandLedgers.Population
         /// registry is supplied (B1), sleep also resolves and reserves a
         /// legitimate sleeping place (bed, bedroll, floor) and records the
         /// place id and rest quality on the sleep activities; without a
-        /// registry, sleep plans exactly as before (time only).
+        /// registry, sleep plans exactly as before (time only). When a
+        /// dining registry is supplied (B4), each meal also resolves and
+        /// reserves a dining seat (chair at a table, else the Fallback)
+        /// and records the seat id and mode on the meal activities;
+        /// without a registry, meals plan exactly as before (time only).
         /// </summary>
         public PersonDayPlan PlanPersonDay(
             PersonDayPlanInputs inputs,
@@ -126,7 +143,8 @@ namespace LandLedgers.Population
             PersonScheduleTracker schedules,
             WorkTimeBudgetStore budgets,
             List<string> diag,
-            SleepingPlaceRegistry sleepingPlaces = null)
+            SleepingPlaceRegistry sleepingPlaces = null,
+            DiningPlaceRegistry diningPlaces = null)
         {
             var plan = new PersonDayPlan
             {
@@ -143,7 +161,12 @@ namespace LandLedgers.Population
             // 1. Sleep first: non-interruptible, wraps midnight → two windows.
             ReserveSleep(inputs, dayIndex, schedules, plan, diag, sleepingPlaces);
 
-            // 2. Meals: interruptible, no budget.
+            // 2. Meals: interruptible, no budget. When a dining registry
+            // is supplied (B4), each reserved meal also resolves a
+            // dining seat (chair at a table, else the Fallback) and
+            // stamps the seat id and mode on the meal activity. The
+            // seat is reserved only after the meal time itself was
+            // secured, so a failed plan never strands a seat.
             List<int> meals = inputs.MealStartMinutes != null && inputs.MealStartMinutes.Count > 0
                 ? inputs.MealStartMinutes
                 : new List<int>(DefaultMealMinutes);
@@ -156,8 +179,24 @@ namespace LandLedgers.Population
                     int candidate = mealStart + offset;
                     if (candidate < 0 || candidate + duration > 1440
                         || !schedules.IsFree(inputs.PersonId, dayIndex, candidate, duration)) continue;
-                    ReserveActivity(inputs.PersonId, PersonActivityKind.Eating, dayIndex,
+                    PlannedActivity meal = ReserveActivity(inputs.PersonId, PersonActivityKind.Eating, dayIndex,
                         candidate, duration, "meal window", schedules, budgets, plan, diag, commitBudget: false);
+                    if (meal != null && meal.Reserved && diningPlaces != null)
+                    {
+                        string seatError = diningPlaces.TryReserveDiningSeat(
+                            inputs.PersonId, dayIndex, candidate, duration, out DiningSeatReservation seat);
+                        if (seatError != null)
+                        {
+                            plan.Conflicts.Add("DailyActivityPlanner: could not reserve a dining seat for P" +
+                                inputs.PersonId + " — " + seatError);
+                            meal.DiningMode = DiningMode.Fallback;
+                        }
+                        else if (seat != null)
+                        {
+                            meal.DiningSeatId = seat.SeatId ?? string.Empty;
+                            meal.DiningMode = seat.Mode;
+                        }
+                    }
                     reserved = true;
                     break;
                 }
@@ -193,7 +232,13 @@ namespace LandLedgers.Population
         /// registry is supplied (B1), the household's sleep is assigned
         /// first, rotation-aware (worst-rested members get the bed first),
         /// and each member's sleep activities then carry their assigned
-        /// place; without a registry, planning is exactly as before.
+        /// place; without a registry, planning is exactly as before. When
+        /// a dining registry is supplied (B4), each member's meal
+        /// activities carry their reserved seat (or the Fallback); seats
+        /// are assigned in the same sorted member order, first-come-
+        /// first-served per meal window — there is no separate household
+        /// assignment pass and no rotation state, because seating
+        /// carries no benefit today (plan §6.2).
         /// </summary>
         public List<PersonDayPlan> PlanHouseholdDay(
             List<int> memberIds,
@@ -202,7 +247,8 @@ namespace LandLedgers.Population
             PersonScheduleTracker schedules,
             WorkTimeBudgetStore budgets,
             List<string> diag,
-            SleepingPlaceRegistry sleepingPlaces = null)
+            SleepingPlaceRegistry sleepingPlaces = null,
+            DiningPlaceRegistry diningPlaces = null)
         {
             var plans = new List<PersonDayPlan>();
             if (memberIds == null)
@@ -238,7 +284,7 @@ namespace LandLedgers.Population
 
             foreach (PersonDayPlanInputs inputs in collected)
             {
-                plans.Add(PlanPersonDay(inputs, dayIndex, schedules, budgets, diag, sleepingPlaces));
+                plans.Add(PlanPersonDay(inputs, dayIndex, schedules, budgets, diag, sleepingPlaces, diningPlaces));
             }
 
             return plans;

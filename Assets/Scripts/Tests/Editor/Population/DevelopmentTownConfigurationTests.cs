@@ -17,9 +17,9 @@ namespace LandLedgers.EditorTests.Population
             DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(AssetPath);
             Assert.IsNotNull(configuration);
             Assert.IsTrue(configuration.Validate(out string error), error);
-            Assert.AreEqual(10, configuration.People.Count);
-            Assert.AreEqual(6, configuration.Households.Count);
-            Assert.AreEqual(5, configuration.Relationships.Count);
+            Assert.AreEqual(13, configuration.People.Count);
+            Assert.AreEqual(7, configuration.Households.Count);
+            Assert.AreEqual(6, configuration.Relationships.Count);
             Assert.AreEqual(6, configuration.Businesses.Count);
             Assert.IsTrue(configuration.TryGetPerson("ethan", out DevelopmentTownConfiguration.PersonDefinition ethan));
             Assert.AreEqual("Ethan", ethan.firstName);
@@ -38,6 +38,40 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(1, silasHousehold.memberPersonKeys.Length);
             Assert.AreEqual("silas", silasHousehold.memberPersonKeys[0]);
             Assert.AreEqual(5, silasHousehold.homeBuildingOrdinal);
+            // C-8 (expanded campaign, Phase 1 forestry): Enzo Kwint runs
+            // the sawmill with his wife Emma; Josh Saunders labours for
+            // Enzo and boards with the Kwints (D-10/D-11 owns his permanent
+            // residence). Owner-directed names (Kennedy 2026-11-16); ages
+            // are provisional calibrations. Emma Kwint is a distinct person
+            // from Emma Baldwin-Ooms (base:1).
+            Assert.IsTrue(configuration.TryGetPerson("enzo", out DevelopmentTownConfiguration.PersonDefinition enzo));
+            Assert.AreEqual("Enzo", enzo.firstName);
+            Assert.AreEqual("Kwint", enzo.lastName);
+            Assert.AreEqual(40, enzo.age);
+            Assert.AreEqual("Sawmill owner/operator", enzo.occupation);
+            Assert.AreEqual(6, enzo.homeBuildingOrdinal);
+            Assert.AreEqual(11, configuration.ResolveRuntimePersonId("enzo"));
+            Assert.IsTrue(configuration.TryGetPerson("emma-kwint", out DevelopmentTownConfiguration.PersonDefinition emmaKwint));
+            Assert.AreEqual("Emma", emmaKwint.firstName);
+            Assert.AreEqual("Kwint", emmaKwint.lastName);
+            Assert.AreEqual(34, emmaKwint.age);
+            Assert.AreEqual("Unspecified", emmaKwint.occupation);
+            Assert.AreEqual(6, emmaKwint.homeBuildingOrdinal);
+            Assert.AreEqual(12, configuration.ResolveRuntimePersonId("emma-kwint"));
+            Assert.IsTrue(configuration.TryGetPerson("josh", out DevelopmentTownConfiguration.PersonDefinition josh));
+            Assert.AreEqual("Josh", josh.firstName);
+            Assert.AreEqual("Saunders", josh.lastName);
+            Assert.AreEqual(26, josh.age);
+            Assert.AreEqual("Sawmill labourer", josh.occupation);
+            Assert.AreEqual(6, josh.homeBuildingOrdinal);
+            Assert.AreEqual(13, configuration.ResolveRuntimePersonId("josh"));
+            DevelopmentTownConfiguration.HouseholdDefinition kwintHousehold =
+                configuration.Households.Single(item => item.key == "enzo-emma");
+            Assert.AreEqual(3, kwintHousehold.memberPersonKeys.Length);
+            Assert.AreEqual("enzo", kwintHousehold.memberPersonKeys[0]);
+            Assert.AreEqual("emma-kwint", kwintHousehold.memberPersonKeys[1]);
+            Assert.AreEqual("josh", kwintHousehold.memberPersonKeys[2]);
+            Assert.AreEqual(6, kwintHousehold.homeBuildingOrdinal);
             Assert.AreEqual("A0", configuration.OpeningHorseId);
             Assert.AreEqual("opening-freight-wagon", configuration.OpeningWagonId);
             Assert.AreEqual("freight-company", configuration.FreightBusinessKey);
@@ -61,13 +95,16 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual("base:2", configuration.Businesses.Single(item => item.key == "bakery").ownerPersonKey);
             Assert.AreEqual("base:4", configuration.Businesses.Single(item => item.key == "fuel-dealer").ownerPersonKey);
             Assert.AreEqual("ethan", configuration.Businesses.Single(item => item.key == "freight-company").ownerPersonKey);
-            Assert.AreEqual("shane", configuration.Businesses.Single(item => item.key == "sawmill").ownerPersonKey);
+            // C-8: Enzo Kwint runs the sawmill (Kennedy 2026-11-16); Shane
+            // stays on as a sawmill hand under him, never a second owner.
+            Assert.AreEqual("enzo", configuration.Businesses.Single(item => item.key == "sawmill").ownerPersonKey);
             Assert.AreEqual("base:5", configuration.Businesses.Single(item => item.key == "lumber-yard").ownerPersonKey);
             Assert.AreEqual(6, configuration.BusinessCashTargets.Count);
             Assert.AreEqual(15000, configuration.BusinessCashTargets.Single(item => item.businessKey == "sawmill").targetCashCents);
             Assert.AreEqual(12000, configuration.BusinessCashTargets.Single(item => item.businessKey == "lumber-yard").targetCashCents);
-            Assert.AreEqual(6, configuration.HouseholdCashTargets.Count);
+            Assert.AreEqual(7, configuration.HouseholdCashTargets.Count);
             Assert.AreEqual(40000, configuration.HouseholdCashTargets.Single(item => item.anchorPersonKey == "silas").targetCashCents);
+            Assert.AreEqual(40000, configuration.HouseholdCashTargets.Single(item => item.anchorPersonKey == "enzo").targetCashCents);
             Assert.IsTrue(configuration.OpeningInventory.Any(item => item.businessKey == "general-store"));
             Assert.IsTrue(configuration.OpeningInventory.All(item => configuration.TryGetBusiness(item.businessKey, out _)));
             Assert.AreEqual(0, configuration.Households.Sum(item => item.openingCashCents),
@@ -119,12 +156,25 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual("drive-system-1", millEquipment.assetEntries[5].assetId);
             Assert.AreEqual("drive-system", millEquipment.assetEntries[5].kind);
             Assert.AreEqual(7, configuration.OpeningLoggingCampProvisionCoverDays);
-            Assert.AreEqual(1, configuration.OpeningEmployees.Count);
+            Assert.AreEqual(3, configuration.OpeningEmployees.Count);
             DevelopmentTownConfiguration.BusinessEmployeeDefinition millHand = configuration.OpeningEmployees[0];
             Assert.AreEqual("sawmill", millHand.businessKey);
             Assert.AreEqual("silas", millHand.personKey);
             Assert.AreEqual("logger", millHand.role);
             Assert.AreEqual(750, millHand.weeklyWageCents);
+            // C-8: Shane stays on as a logger under the new owner Enzo, and
+            // Josh labours for Enzo — both at the miller precedent wage.
+            // The owner is never his own opening employee.
+            DevelopmentTownConfiguration.BusinessEmployeeDefinition shaneHand = configuration.OpeningEmployees[1];
+            Assert.AreEqual("sawmill", shaneHand.businessKey);
+            Assert.AreEqual("shane", shaneHand.personKey);
+            Assert.AreEqual("logger", shaneHand.role);
+            Assert.AreEqual(750, shaneHand.weeklyWageCents);
+            DevelopmentTownConfiguration.BusinessEmployeeDefinition joshHand = configuration.OpeningEmployees[2];
+            Assert.AreEqual("sawmill", joshHand.businessKey);
+            Assert.AreEqual("josh", joshHand.personKey);
+            Assert.AreEqual("labourer", joshHand.role);
+            Assert.AreEqual(750, joshHand.weeklyWageCents);
             Assert.AreEqual(1, configuration.OpeningSpareBlades.Count);
             DevelopmentTownConfiguration.BusinessSpareBladeDefinition spareBlade = configuration.OpeningSpareBlades[0];
             Assert.AreEqual("sawmill", spareBlade.businessKey);

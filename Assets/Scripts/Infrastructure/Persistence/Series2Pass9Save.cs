@@ -420,6 +420,17 @@ namespace LandLedgers.Persistence
         /// </summary>
         public List<HouseholdFurnishingRegister> HouseholdFurnishingRegisters = new List<HouseholdFurnishingRegister>();
 
+        /// <summary>
+        /// B2 (Agent B, expanded campaign 2026-11-16): stove fuel
+        /// stores — the fuel physically in each household stove
+        /// (HouseholdStoveFuelStoreDto). Additive; old saves leave this
+        /// empty and load with empty stores — the honest old-save
+        /// default (fuel that was never tracked was never in a stove).
+        /// The stove instances themselves are derived from the B0
+        /// registers on load and need no saved section.
+        /// </summary>
+        public List<HouseholdStoveFuelStoreDto> HouseholdStoveFuelStores = new List<HouseholdStoveFuelStoreDto>();
+
         /// <summary>Additive person-hand snapshots; older saves deserialize this as an empty list.</summary>
         public List<Pass9PersonHandOccupancyDto> PersonHands = new List<Pass9PersonHandOccupancyDto>();
 
@@ -562,6 +573,15 @@ namespace LandLedgers.Persistence
         /// load. A household with no register holds no furniture.
         /// </summary>
         public List<HouseholdFurnishingRegister> HouseholdFurnishingRegisters = new List<HouseholdFurnishingRegister>();
+
+        /// <summary>
+        /// B2 (Agent B): live stove fuel stores, held here so the Pass
+        /// 9 seam persists them. The hub/state owns the per-household
+        /// stove registries; the bootstrap restores the saved stores
+        /// into them after a load. A household with no entry holds no
+        /// fuel in any stove.
+        /// </summary>
+        public List<HouseholdStoveFuelStoreDto> HouseholdStoveFuelStores = new List<HouseholdStoveFuelStoreDto>();
 
         /// <summary>Live person hand authority; bound by SimulationDrivers and restored in place.</summary>
         public PersonHandOccupancyRegistry PersonHands;
@@ -960,6 +980,21 @@ namespace LandLedgers.Persistence
             else if (diag != null)
             {
                 diag.Add("Series2Pass9Save: no household furnishing registers supplied; furnishing section saved empty.");
+            }
+
+            // B2: stove fuel stores. Deep-copied, so later live mutation
+            // cannot rewrite the saved section.
+            if (HouseholdStoveFuelStores != null && HouseholdStoveFuelStores.Count > 0)
+            {
+                foreach (HouseholdStoveFuelStoreDto store in HouseholdStoveFuelStores)
+                {
+                    if (store == null) continue;
+                    dto.HouseholdStoveFuelStores.Add(CopyHouseholdStoveFuelStore(store));
+                }
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no stove fuel stores supplied; stove fuel section saved empty.");
             }
 
             if (PersonHands != null)
@@ -1450,6 +1485,16 @@ namespace LandLedgers.Persistence
                 HouseholdFurnishingRegisters.Add(CopyHouseholdFurnishingRegister(saved));
             }
 
+            // B2: stove fuel stores — clear-then-load, idempotent. Old
+            // saves carry no section and restore as empty stores;
+            // restoring twice rebuilds the same stores, never duplicates.
+            HouseholdStoveFuelStores.Clear();
+            foreach (HouseholdStoveFuelStoreDto saved in dto.HouseholdStoveFuelStores ?? new List<HouseholdStoveFuelStoreDto>())
+            {
+                if (saved == null) continue;
+                HouseholdStoveFuelStores.Add(CopyHouseholdStoveFuelStore(saved));
+            }
+
             if (PersonHands != null)
             {
                 var restoredHands = new List<HandOccupancy>();
@@ -1614,6 +1659,16 @@ namespace LandLedgers.Persistence
                     });
                 }
             return copy;
+        }
+
+        private static HouseholdStoveFuelStoreDto CopyHouseholdStoveFuelStore(HouseholdStoveFuelStoreDto source)
+        {
+            return new HouseholdStoveFuelStoreDto
+            {
+                HouseholdId = source.HouseholdId,
+                StoveAssetId = source.StoveAssetId ?? string.Empty,
+                FuelWoodUnits = source.FuelWoodUnits,
+            };
         }
 
         private static HouseholdFurnishingRegister CopyHouseholdFurnishingRegister(HouseholdFurnishingRegister source)

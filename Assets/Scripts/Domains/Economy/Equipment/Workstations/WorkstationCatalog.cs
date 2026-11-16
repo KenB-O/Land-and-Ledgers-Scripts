@@ -328,6 +328,39 @@ namespace LandLedgers.Economy.Equipment.Workstations
             }
         }
 
+        /// <summary>
+        /// B2 (Agent B, expanded campaign 2026-11-16): household stove.
+        /// Cooking at home requires the stove itself — the room is not
+        /// enough (Tech X §3.5). The component is the stove asset
+        /// (kind furniture.cooking-stove, plan §3.1): EvaluateReady
+        /// matches component kinds against asset Kind strings, so the
+        /// component kind MUST be the asset kind — a "household-stove"
+        /// component kind would never match any asset and the stove
+        /// could never be ready (the plan's §3.4 sketch names it that
+        /// way; the implementation corrects it). No separate
+        /// cookware-set component: no household cookware asset exists
+        /// (no product, no endowment), so requiring one would leave
+        /// every household stove permanently unready; the household
+        /// stove is the complete cooking apparatus for a household.
+        /// Agent F may introduce a cookware product later, at which
+        /// point the definition can gain the component. Fuel support
+        /// is 1 oven-wood unit per cooking session (plan §3.4 default,
+        /// Agent F calibration later) — the gate reads it from the
+        /// household reserve plus the stove's own fuel store.
+        /// </summary>
+        public static WorkstationDefinition HouseholdStove
+        {
+            get
+            {
+                var def = Build("household-stove", "Household Stove", "home",
+                    "B2 (Agent B, expanded campaign 2026-11-16); plan §3.4 — the household stove workstation",
+                    new[] { "cook-meals" },
+                    ("furniture.cooking-stove", 1));
+                def.SupportRequirements.Add(new SupportRequirement("fuel", "oven-wood", 1));
+                return def;
+            }
+        }
+
         /// <summary>W1B: barber chair station. Canon Part V barber profile: the barber
         /// chair is core equipment; "multiple chairs" is the scale column. One
         /// definition, many instances — the barbershop runtime pools chairs and
@@ -421,7 +454,7 @@ namespace LandLedgers.Economy.Equipment.Workstations
             ForgeStation, BakeOven, SaloonBar, GrainMillStation, ButcherBlock, SawmillSawLine, AssayBench,
             CattleHandlingPens, StoreCounter, BoardingKitchen, LaundryStation, TanningYard, PrintingPress,
             BarberChairStation, BarberBathStation, TailorCuttingTableStation, TellerWindowStation,
-            CarpenterWorkstation,
+            CarpenterWorkstation, HouseholdStove,
         };
     }
 }

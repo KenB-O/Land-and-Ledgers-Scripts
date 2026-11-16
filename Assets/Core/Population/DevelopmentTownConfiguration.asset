@@ -87,6 +87,14 @@ MonoBehaviour:
     isFemale: 0
     occupation: Unemployed; seeking work
     homeBuildingOrdinal: 4
+  - key: silas
+    firstName: Silas
+    lastName: Ward
+    age: 24
+    ageIsProvisionalCalibration: 1
+    isFemale: 0
+    occupation: Sawmill hand
+    homeBuildingOrdinal: 5
   households:
   - key: base-household:0
     displayName: Baldwin-Ooms Household
@@ -126,6 +134,13 @@ MonoBehaviour:
     memberPersonKeys:
     - shane
     homeBuildingOrdinal: 4
+    openingCashCents: 0
+  - key: silas
+    displayName: Silas Ward Household
+    surname: Ward
+    memberPersonKeys:
+    - silas
+    homeBuildingOrdinal: 5
     openingCashCents: 0
   relationships:
   - firstPersonKey: base:0
@@ -234,6 +249,8 @@ MonoBehaviour:
     targetCashCents: 40000
   - anchorPersonKey: shane
     targetCashCents: 40000
+  - anchorPersonKey: silas
+    targetCashCents: 40000
   openingInventory:
   - businessKey: general-store
     items:
@@ -292,6 +309,17 @@ MonoBehaviour:
       - bake-peels-1
     kitIds:
     - baker-hand-kit
+  - businessKey: sawmill
+    assetEntries:
+    - assetId: felling-axe-1
+      kind: felling-axe
+    - assetId: felling-axe-2
+      kind: felling-axe
+  openingEmployees:
+  - businessKey: sawmill
+    personKey: silas
+    role: logger
+    weeklyWageCents: 750
   timberStands:
   - standId: stand-pine-north
     displayName: North Pine Stand
@@ -311,6 +339,7 @@ MonoBehaviour:
     milesToMill: 4
     carryingCapacityUnits: 80
     siteQuality01: 1
+  openingLoggingCampProvisionCoverDays: 7
   wholesaleAccounts:
   - sellerBusinessKey: bakery
     buyerBusinessKey: general-store

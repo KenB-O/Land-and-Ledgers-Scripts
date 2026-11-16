@@ -17,14 +17,27 @@ namespace LandLedgers.EditorTests.Population
             DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(AssetPath);
             Assert.IsNotNull(configuration);
             Assert.IsTrue(configuration.Validate(out string error), error);
-            Assert.AreEqual(9, configuration.People.Count);
-            Assert.AreEqual(5, configuration.Households.Count);
+            Assert.AreEqual(10, configuration.People.Count);
+            Assert.AreEqual(6, configuration.Households.Count);
             Assert.AreEqual(5, configuration.Relationships.Count);
             Assert.AreEqual(6, configuration.Businesses.Count);
             Assert.IsTrue(configuration.TryGetPerson("ethan", out DevelopmentTownConfiguration.PersonDefinition ethan));
             Assert.AreEqual("Ethan", ethan.firstName);
             Assert.AreEqual(7, configuration.ResolveRuntimePersonId("ethan"));
             Assert.AreEqual(9, configuration.ResolveRuntimePersonId("shane"));
+            // C-1 (expanded campaign, Phase 1 forestry): the mill hand.
+            Assert.IsTrue(configuration.TryGetPerson("silas", out DevelopmentTownConfiguration.PersonDefinition silas));
+            Assert.AreEqual("Silas", silas.firstName);
+            Assert.AreEqual("Ward", silas.lastName);
+            Assert.AreEqual(24, silas.age);
+            Assert.AreEqual("Sawmill hand", silas.occupation);
+            Assert.AreEqual(5, silas.homeBuildingOrdinal);
+            Assert.AreEqual(10, configuration.ResolveRuntimePersonId("silas"));
+            DevelopmentTownConfiguration.HouseholdDefinition silasHousehold =
+                configuration.Households.Single(item => item.key == "silas");
+            Assert.AreEqual(1, silasHousehold.memberPersonKeys.Length);
+            Assert.AreEqual("silas", silasHousehold.memberPersonKeys[0]);
+            Assert.AreEqual(5, silasHousehold.homeBuildingOrdinal);
             Assert.AreEqual("A0", configuration.OpeningHorseId);
             Assert.AreEqual("opening-freight-wagon", configuration.OpeningWagonId);
             Assert.AreEqual("freight-company", configuration.FreightBusinessKey);
@@ -53,7 +66,8 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(6, configuration.BusinessCashTargets.Count);
             Assert.AreEqual(15000, configuration.BusinessCashTargets.Single(item => item.businessKey == "sawmill").targetCashCents);
             Assert.AreEqual(12000, configuration.BusinessCashTargets.Single(item => item.businessKey == "lumber-yard").targetCashCents);
-            Assert.AreEqual(5, configuration.HouseholdCashTargets.Count);
+            Assert.AreEqual(6, configuration.HouseholdCashTargets.Count);
+            Assert.AreEqual(40000, configuration.HouseholdCashTargets.Single(item => item.anchorPersonKey == "silas").targetCashCents);
             Assert.IsTrue(configuration.OpeningInventory.Any(item => item.businessKey == "general-store"));
             Assert.IsTrue(configuration.OpeningInventory.All(item => configuration.TryGetBusiness(item.businessKey, out _)));
             Assert.AreEqual(0, configuration.Households.Sum(item => item.openingCashCents),
@@ -74,6 +88,30 @@ namespace LandLedgers.EditorTests.Population
             }
             Assert.AreEqual(120, configuration.OpeningBakeryFlourPounds);
             Assert.AreEqual(30, configuration.OpeningBakeryNotionsUnits);
+        }
+
+        [Test]
+        public void Configuration_MillOpeningCrewToolsAndProvisions_AreAuthored()
+        {
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(AssetPath);
+            Assert.IsNotNull(configuration);
+            // C-1 (expanded campaign, Phase 1 forestry): two felling axes
+            // for the two-person crew, seven cover days of camp provisions,
+            // and the mill hand's opening employment.
+            DevelopmentTownConfiguration.BusinessOpeningEquipment millEquipment =
+                configuration.OpeningEquipment.Single(item => item.businessKey == "sawmill");
+            Assert.AreEqual(2, millEquipment.assetEntries.Length);
+            Assert.AreEqual("felling-axe-1", millEquipment.assetEntries[0].assetId);
+            Assert.AreEqual("felling-axe", millEquipment.assetEntries[0].kind);
+            Assert.AreEqual("felling-axe-2", millEquipment.assetEntries[1].assetId);
+            Assert.AreEqual("felling-axe", millEquipment.assetEntries[1].kind);
+            Assert.AreEqual(7, configuration.OpeningLoggingCampProvisionCoverDays);
+            Assert.AreEqual(1, configuration.OpeningEmployees.Count);
+            DevelopmentTownConfiguration.BusinessEmployeeDefinition millHand = configuration.OpeningEmployees[0];
+            Assert.AreEqual("sawmill", millHand.businessKey);
+            Assert.AreEqual("silas", millHand.personKey);
+            Assert.AreEqual("logger", millHand.role);
+            Assert.AreEqual(750, millHand.weeklyWageCents);
         }
 
         [Test]

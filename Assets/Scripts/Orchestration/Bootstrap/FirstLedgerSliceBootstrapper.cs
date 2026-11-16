@@ -2640,6 +2640,32 @@ namespace LandLedgers.FirstLedger
                 }
             }
 
+            // C-1 (expanded campaign, Phase 1 forestry): register the
+            // scenario-authored opening employments for the mill BEFORE
+            // rostering, so the camp can field a two-person felling team
+            // (the owner plus the first active employee). The registry is
+            // the hub-owned one (persisted via the hub save seam); a
+            // refusal warns and the roster proceeds with the owner alone,
+            // and the felling driver then refuses loudly for want of a
+            // crew, exactly as it does today with no employee.
+            if (millBusiness.RuntimeState != null)
+            {
+                systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+                var employmentDiag = new List<string>();
+                if (!ScenarioOpeningEmploymentEndowment.TryApply(configuration, millKey,
+                        millBusiness.InstanceId, millBusiness.RuntimeState,
+                        systemsHub?.Employments, dayIndex, employmentDiag,
+                        out string employmentReport, out string employmentError))
+                {
+                    Debug.LogWarning($"[SawmillProduction] {employmentError}", this);
+                }
+                else
+                {
+                    Debug.Log($"[SawmillProduction] {employmentReport}", this);
+                    foreach (string line in employmentDiag) Debug.Log($"[SawmillProduction] {line}", this);
+                }
+            }
+
             if (pass9.LoggingCamp != null)
             {
                 // Roster the mill crew: the owner first, then the first

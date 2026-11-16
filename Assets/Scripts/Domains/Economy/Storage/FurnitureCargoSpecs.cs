@@ -84,6 +84,47 @@ namespace LandLedgers.Economy.Storage
         }
 
         /// <summary>
+        /// F3: builds one consolidated-manifest line for a furniture item
+        /// from the registry spec, through TryBuildFreightSpec — the same
+        /// loud refusal on a missing or Unknown measure, so an Unknown
+        /// mass/volume can never become a zero-measure line that would
+        /// not bind in FreightCargoCapacity. A line is one source lot of
+        /// one SKU; units are whole items, never a partial item. Returns
+        /// null on success and a refusal reason on failure; the caller
+        /// owns the refusal.
+        /// </summary>
+        public static string TryBuildManifestLine(string itemId, string lotId, int units,
+            out FreightManifestLine line)
+        {
+            line = null;
+            if (string.IsNullOrWhiteSpace(lotId))
+            {
+                return "FurnitureCargoSpecs: a manifest line needs a non-empty source lot id.";
+            }
+
+            if (units <= 0)
+            {
+                return $"FurnitureCargoSpecs: manifest line for lot '{lotId}' needs a positive unit count, not {units}.";
+            }
+
+            string specRefusal = TryBuildFreightSpec(itemId, out FreightCargoSpec spec);
+            if (specRefusal != null)
+            {
+                return specRefusal;
+            }
+
+            line = new FreightManifestLine
+            {
+                LotId = lotId.Trim(),
+                SkuId = itemId.Trim(),
+                Units = units,
+                MassKgPerUnit = spec.MassKgPerUnit,
+                VolumeM3PerUnit = spec.VolumeM3PerUnit,
+            };
+            return null;
+        }
+
+        /// <summary>
         /// Trip-math passthrough: how many units of this cargo fit one wagon.
         /// FreightCargoCapacity is the single trip-math authority.
         /// </summary>

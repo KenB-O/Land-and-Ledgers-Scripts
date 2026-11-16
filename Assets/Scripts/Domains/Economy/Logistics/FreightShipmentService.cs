@@ -100,11 +100,25 @@ namespace LandLedgers.Economy.Logistics
         public CommitFreightSourceLotHandler CommitSourceLot;
 
         /// <summary>
+        /// F3: per-line source debit for a consolidated shipment. Null
+        /// means no consolidated debit authority is wired: a consolidated
+        /// shipment refuses to load rather than shipping undebited goods.
+        /// </summary>
+        public CommitConsolidatedSourceLotsHandler CommitConsolidatedSourceLots;
+
+        /// <summary>
         /// Atomically credits the same CargoLotId to the destination, or refuses
         /// without moving stock. The destination authority must persist receipt
         /// identity and refuse a second credit for this shipment/lot pair.
         /// </summary>
         public ReceiveFreightCargoLotHandler ReceiveCargoLot;
+
+        /// <summary>
+        /// F3: per-line receipt for a consolidated shipment. Null means no
+        /// consolidated receiver is wired: the cargo stays in wagon custody
+        /// rather than being falsely marked delivered.
+        /// </summary>
+        public ReceiveConsolidatedCargoLotsHandler ReceiveConsolidatedCargoLots;
 
         /// <summary>
         /// Optional physical presentation gate for source-lot freight. When wired,
@@ -151,6 +165,25 @@ namespace LandLedgers.Economy.Logistics
 
     public delegate bool ConfirmFreightPhysicalHandlingHandler(
         LogisticsShipmentState shipment, EntityId handlerId, out bool physicallyReceived, out string reason);
+
+    /// <summary>
+    /// F3: per-line source debit for a consolidated shipment. The
+    /// implementation debits every manifest line (reading
+    /// shipment.ManifestLines) and treats ShipmentId as an idempotency
+    /// key across lines. Returns false without moving stock when any
+    /// line cannot be debited.
+    /// </summary>
+    public delegate bool CommitConsolidatedSourceLotsHandler(
+        LogisticsShipmentState shipment, out string reason);
+
+    /// <summary>
+    /// F3: per-line receipt for a consolidated shipment. Credits every
+    /// manifest line to the destination, or refuses without moving stock.
+    /// A failed line fails the whole receipt loudly — the cargo stays in
+    /// wagon custody, nothing is silently dropped.
+    /// </summary>
+    public delegate bool ReceiveConsolidatedCargoLotsHandler(
+        LogisticsShipmentState shipment, out string reason);
 
     /// <summary>
     /// Drives freight shipments. The wagon, driver, and animals are real;
@@ -532,6 +565,171 @@ namespace LandLedgers.Economy.Logistics
         }
 
         /// <summary>
+        /// F3: creates a consolidated shipment (Planned) from a manifest of
+        /// lines — one line per source lot. Aggregate mass/volume are
+        /// validated ONCE against the wagon (sum of lines, not per-line)
+        /// before load; over capacity blocks pre-load with zero cargo owned,
+        /// exactly as CreateShipment does for a single cargo. One wagon,
+        /// one trip, one freight charge (the DEF-016 card prices per trip).
+        /// The shipment owns the manifest; each line keeps its own source
+        /// lot, custody and title, and the consolidated hooks debit/credit
+        /// per line at load/unload. No single cargo spec is recorded for
+        /// this shipment (cargoSpecs carries single-lot specs only).
+        /// Multi-trip split-load is NOT done here: a manifest that exceeds
+        /// one wagon is refused pre-load, and splitting a manifest into
+        /// whole wagon loads is a caller/coordination concern for a later
+        /// slice — never a partial item, never a silent drop.
+        /// </summary>
+        public LogisticsShipmentState CreateConsolidatedShipment(string shipmentId, string sourceBusinessId,
+            string destinationBusinessId, List<FreightManifestLine> lines,
+            string wagonAssetId, FreightShipmentHooks hooks, out string reason)
+        {
+            reason = string.Empty;
+            if (string.IsNullOrWhiteSpace(shipmentId))
+            {
+                reason = "FreightShipmentService: a consolidated shipment needs an id — refusing phantom shipment.";
+                return null;
+            }
+
+            string manifestRefusal = FreightConsolidatedManifest.ValidateLines(lines);
+            if (manifestRefusal != null)
+            {
+                reason = "FreightShipmentService: " + manifestRefusal;
+                return null;
+            }
+
+            foreach (LogisticsShipmentState existing in trackedShipments)
+            {
+                if (existing != null && string.Equals(existing.ShipmentId, shipmentId, StringComparison.Ordinal))
+                {
+                    reason = $"FreightShipmentService: shipment id '{shipmentId}' is already recorded; duplicate shipment creation refused.";
+                    return null;
+                }
+            }
+
+            if (!wagons.TryGetValue(wagonAssetId ?? string.Empty, out EquipmentAsset wagon) || wagon == null)
+            {
+                reason = "FreightShipmentService: wagon '" + wagonAssetId + "' is not a registered wagon — refusing phantom wagon.";
+                return null;
+            }
+
+            if (!wagon.IsWagon)
+            {
+                reason = "FreightShipmentService: asset '" + wagonAssetId + "' is not a wagon (kind '" + wagon.Kind + "').";
+                return null;
+            }
+
+            // A manifest line's lot must not already ride on another live shipment.
+            foreach (FreightManifestLine line in lines)
+            {
+                string owner = FindLotAssignment(line.LotId, null);
+                if (owner != null)
+                {
+                    reason = $"FreightShipmentService: source lot '{line.LotId}' is already assigned to shipment '{owner}'; duplicate lot assignment refused.";
+                    return null;
+                }
+            }
+
+            // Pass IX WS3 (A4-13): same exclusivity as a single-lot shipment.
+            string wagonConflict = FindExclusivityConflict(null, wagonAssetId, EntityId.Invalid, null);
+            if (wagonConflict != null)
+            {
+                reason = "FreightShipmentService: " + wagonConflict;
+                return null;
+            }
+
+            if (hooks != null && hooks.Reservations != null
+                && hooks.Reservations.IsReserved(ReservationKeyConventions.Asset(wagonAssetId), hooks.NowGameSeconds))
+            {
+                reason = "FreightShipmentService: wagon '" + wagonAssetId + "' is reserved through the " +
+                    "reservation authority by another holder — no double-booking (A4-13).";
+                return null;
+            }
+
+            int totalUnits = FreightConsolidatedManifest.TotalUnits(lines);
+            var shipment = new LogisticsShipmentState
+            {
+                shipmentId = shipmentId,
+                cargoLotId = "freight-cargo:" + shipmentId,
+                sourceBusinessInstanceId = sourceBusinessId ?? string.Empty,
+                destinationBusinessInstanceId = destinationBusinessId ?? string.Empty,
+                plannedQuantityUnits = Math.Max(0, totalUnits),
+                physicalWagonAssetId = wagonAssetId,
+                physicalLocationId = sourceBusinessId ?? string.Empty,
+                requiresSourceLotCustody = true,
+                manifestLines = CopyManifestLines(lines),
+            };
+
+            string capacityRefusal = FreightConsolidatedManifest.CapacityRefusal(lines, wagon);
+            if (capacityRefusal != null)
+            {
+                return BlockPreLoad(shipment, capacityRefusal, hooks);
+            }
+
+            Log(hooks, "consolidated shipment '" + shipmentId + "' planned: " + lines.Count + " line(s), "
+                + totalUnits + " units ("
+                + FreightConsolidatedManifest.TotalMassKg(lines).ToString("0.0") + "kg, "
+                + FreightConsolidatedManifest.TotalVolumeM3(lines).ToString("0.00") + "m3) on wagon '"
+                + wagonAssetId + "' from '" + sourceBusinessId + "' to '" + destinationBusinessId + "'.");
+            Track(shipment);
+            return shipment;
+        }
+
+        /// <summary>
+        /// F3: finds the live shipment a source lot already rides on — the
+        /// single lot of a single-lot shipment, or any line of a
+        /// consolidated manifest. Failed shipments hold nothing. Returns
+        /// the owning shipment id, or null when the lot is free. The
+        /// excepted shipment is skipped (a shipment never conflicts with
+        /// itself).
+        /// </summary>
+        private string FindLotAssignment(string lotId, LogisticsShipmentState except)
+        {
+            if (string.IsNullOrWhiteSpace(lotId)) return null;
+            string wanted = lotId.Trim();
+            foreach (LogisticsShipmentState existing in trackedShipments)
+            {
+                if (existing == null || ReferenceEquals(existing, except)) continue;
+                if (existing.Status == LogisticsShipmentStatus.Failed) continue;
+                if (string.Equals(existing.CargoLotId, wanted, StringComparison.Ordinal))
+                {
+                    return existing.ShipmentId;
+                }
+
+                foreach (FreightManifestLine line in existing.ManifestLines)
+                {
+                    if (line != null && string.Equals(line.LotId, wanted, StringComparison.Ordinal))
+                    {
+                        return existing.ShipmentId;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>F3: deep-copies manifest lines so a save snapshot and the live record never share line objects.</summary>
+        private static List<FreightManifestLine> CopyManifestLines(IReadOnlyList<FreightManifestLine> lines)
+        {
+            var copy = new List<FreightManifestLine>();
+            if (lines == null) return copy;
+            foreach (FreightManifestLine line in lines)
+            {
+                if (line == null) continue;
+                copy.Add(new FreightManifestLine
+                {
+                    LotId = line.LotId,
+                    SkuId = line.SkuId,
+                    Units = line.Units,
+                    MassKgPerUnit = line.MassKgPerUnit,
+                    VolumeM3PerUnit = line.VolumeM3PerUnit,
+                });
+            }
+
+            return copy;
+        }
+
+        /// <summary>
         /// Binds the authoritative source lot to a still-planned shipment.
         /// One whole lot can be assigned to only one shipment record; callers
         /// that need split loads must first represent those quantities as
@@ -550,16 +748,22 @@ namespace LandLedgers.Economy.Logistics
                 reason = $"FreightShipmentService: source lot '{lotId}' can only be bound before shipment '{shipment.ShipmentId}' loading begins.";
                 return false;
             }
-            foreach (LogisticsShipmentState existing in trackedShipments)
+
+            // F3: a consolidated shipment binds its manifest at creation;
+            // a single lot bound afterwards would corrupt the manifest.
+            if (shipment.IsConsolidated)
             {
-                if (existing == null || ReferenceEquals(existing, shipment)) continue;
-                if (string.Equals(existing.CargoLotId, lotId, StringComparison.Ordinal)
-                    && existing.Status != LogisticsShipmentStatus.Failed)
-                {
-                    reason = $"FreightShipmentService: source lot '{lotId}' is already assigned to shipment '{existing.ShipmentId}' ({existing.Status}); duplicate lot assignment refused.";
-                    return false;
-                }
+                reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' is consolidated — its manifest lines are bound at creation, not by TryBindSourceLot.";
+                return false;
             }
+
+            string owner = FindLotAssignment(lotId, shipment);
+            if (owner != null)
+            {
+                reason = $"FreightShipmentService: source lot '{lotId}' is already assigned to shipment '{owner}'; duplicate lot assignment refused.";
+                return false;
+            }
+
             shipment.cargoLotId = lotId.Trim();
             shipment.cargoSkuId = skuId.Trim();
             shipment.requiresSourceLotCustody = true;
@@ -622,7 +826,23 @@ namespace LandLedgers.Economy.Logistics
             // Capacity can change after planning (for example, a wagon can
             // become damaged or be reconciled from its current authority).
             // Recheck before creating the handling task or debiting a source lot.
-            if (wagons.TryGetValue(shipment.physicalWagonAssetId ?? string.Empty, out EquipmentAsset currentWagon)
+            // F3: a consolidated shipment rechecks its aggregate manifest,
+            // not a single cargo spec (it carries none in cargoSpecs).
+            if (shipment.IsConsolidated)
+            {
+                if (wagons.TryGetValue(shipment.physicalWagonAssetId ?? string.Empty, out EquipmentAsset currentWagon))
+                {
+                    string consolidatedRefusal = FreightConsolidatedManifest.CapacityRefusal(
+                        shipment.ManifestLines, currentWagon);
+                    if (consolidatedRefusal != null)
+                    {
+                        BlockPreLoad(shipment, consolidatedRefusal, hooks);
+                        reason = "FreightShipmentService: " + consolidatedRefusal + " Shipment failed before loading; source inventory remains untouched.";
+                        return false;
+                    }
+                }
+            }
+            else if (wagons.TryGetValue(shipment.physicalWagonAssetId ?? string.Empty, out EquipmentAsset currentWagon)
                 && cargoSpecs.TryGetValue(shipment.ShipmentId, out FreightCargoSpec plannedCargo))
             {
                 string invalidCargo = ValidateCargoSpec(plannedCargo);
@@ -635,7 +855,18 @@ namespace LandLedgers.Economy.Logistics
                     return false;
                 }
             }
-            if (shipment.requiresSourceLotCustody
+
+            // F3: a consolidated shipment needs its per-line debit authority
+            // wired before loading; without it the goods would ship undebited.
+            if (shipment.IsConsolidated)
+            {
+                if (hooks?.CommitConsolidatedSourceLots == null)
+                {
+                    reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' is consolidated but has no wired consolidated source-debit authority; no task or cargo movement started.";
+                    return false;
+                }
+            }
+            else if (shipment.requiresSourceLotCustody
                 && (string.IsNullOrWhiteSpace(shipment.cargoLotId)
                     || string.IsNullOrWhiteSpace(shipment.cargoSkuId)
                     || hooks?.CommitSourceLot == null))
@@ -742,7 +973,19 @@ namespace LandLedgers.Economy.Logistics
                 reason = $"FreightShipmentService: load task '{taskId}' is missing; shipment remains in source custody.";
                 return false;
             }
-            if (shipment.requiresSourceLotCustody
+            // F3: a consolidated shipment needs its per-line debit authority;
+            // the single-lot binding below never applies to it.
+            if (shipment.IsConsolidated
+                && shipment.requiresSourceLotCustody
+                && !shipment.sourceLotDebitApplied
+                && hooks?.CommitConsolidatedSourceLots == null)
+            {
+                reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' has no wired consolidated source-debit authority; no loading work recorded.";
+                return FailLoadOnDebitRefusal(shipment, taskId, hooks, reason);
+            }
+
+            if (!shipment.IsConsolidated
+                && shipment.requiresSourceLotCustody
                 && (!shipment.sourceLotDebitApplied)
                 && (string.IsNullOrWhiteSpace(shipment.cargoLotId)
                     || string.IsNullOrWhiteSpace(shipment.cargoSkuId)
@@ -767,25 +1010,51 @@ namespace LandLedgers.Economy.Logistics
 
             if (shipment.requiresSourceLotCustody && !shipment.sourceLotDebitApplied)
             {
-                if (string.IsNullOrWhiteSpace(shipment.cargoLotId)
+                // F3: per-line debit — every manifest line, or none. A
+                // failed line fails the whole load loudly; the cargo stays
+                // in source custody and the loader is freed for a retry.
+                if (shipment.IsConsolidated)
+                {
+                    if (hooks?.CommitConsolidatedSourceLots == null)
+                    {
+                        reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' requires a consolidated source-debit authority, but none is wired; source stock was not moved.";
+                        return FailLoadOnDebitRefusal(shipment, taskId, hooks, reason);
+                    }
+
+                    if (!hooks.CommitConsolidatedSourceLots(shipment, out reason))
+                    {
+                        if (string.IsNullOrWhiteSpace(reason)) reason = "consolidated source-lot debit refused; no cargo loaded.";
+                        Log(hooks, $"shipment '{shipment.ShipmentId}': consolidated source debit refused: {reason}");
+                        return FailLoadOnDebitRefusal(shipment, taskId, hooks, reason);
+                    }
+
+                    shipment.sourceLotDebitApplied = true;
+                    Log(hooks, $"shipment '{shipment.ShipmentId}': manifest ({shipment.ManifestLines.Count} lines, {shipment.PlannedQuantityUnits}u) debited once; cargo enters wagon custody.");
+                }
+                else if (string.IsNullOrWhiteSpace(shipment.cargoLotId)
                     || string.IsNullOrWhiteSpace(shipment.cargoSkuId))
                 {
                     reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' requires a source lot id and SKU before loading; source stock was not moved.";
                     return false;
                 }
-                if (hooks?.CommitSourceLot == null)
+                else
                 {
-                    reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' requires source-lot debit for '{shipment.cargoLotId}', but no debit authority is wired; source stock was not moved.";
-                    return FailLoadOnDebitRefusal(shipment, taskId, hooks, reason);
+                    if (hooks?.CommitSourceLot == null)
+                    {
+                        reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' requires source-lot debit for '{shipment.cargoLotId}', but no debit authority is wired; source stock was not moved.";
+                        return FailLoadOnDebitRefusal(shipment, taskId, hooks, reason);
+                    }
+
+                    if (!hooks.CommitSourceLot(shipment, shipment.PlannedQuantityUnits, out reason))
+                    {
+                        if (string.IsNullOrWhiteSpace(reason)) reason = "source-lot debit refused; no cargo loaded.";
+                        Log(hooks, $"shipment '{shipment.ShipmentId}': source debit refused for lot '{shipment.cargoLotId}': {reason}");
+                        return FailLoadOnDebitRefusal(shipment, taskId, hooks, reason);
+                    }
+
+                    shipment.sourceLotDebitApplied = true;
+                    Log(hooks, $"shipment '{shipment.ShipmentId}': source lot '{shipment.cargoLotId}' ({shipment.cargoSkuId}) debited once; {shipment.PlannedQuantityUnits}u enters wagon custody.");
                 }
-                if (!hooks.CommitSourceLot(shipment, shipment.PlannedQuantityUnits, out reason))
-                {
-                    if (string.IsNullOrWhiteSpace(reason)) reason = "source-lot debit refused; no cargo loaded.";
-                    Log(hooks, $"shipment '{shipment.ShipmentId}': source debit refused for lot '{shipment.cargoLotId}': {reason}");
-                    return FailLoadOnDebitRefusal(shipment, taskId, hooks, reason);
-                }
-                shipment.sourceLotDebitApplied = true;
-                Log(hooks, $"shipment '{shipment.ShipmentId}': source lot '{shipment.cargoLotId}' ({shipment.cargoSkuId}) debited once; {shipment.PlannedQuantityUnits}u enters wagon custody.");
             }
             hooks.Tasks.CompleteTask(taskId, TaskOutcome.Success, hooks.DayIndex, hooks.Budgets);
             // Slice A2 (QA-05): the task terminalized, so its window releases.
@@ -1013,7 +1282,19 @@ namespace LandLedgers.Economy.Logistics
                 reason = "FreightShipmentService: shipment '" + shipment.ShipmentId + "' is " + shipment.Status + ", not Arrived.";
                 return false;
             }
-            if (shipment.requiresSourceLotCustody
+            // F3: a consolidated shipment needs its manifest debited and its
+            // per-line receiver wired before unloading.
+            if (shipment.IsConsolidated
+                && shipment.requiresSourceLotCustody
+                && (!shipment.sourceLotDebitApplied
+                    || hooks?.ReceiveConsolidatedCargoLots == null))
+            {
+                reason = $"FreightShipmentService: shipment '{shipment.ShipmentId}' requires a debited manifest and wired consolidated lot receiver before unloading; cargo remains in wagon custody.";
+                return false;
+            }
+
+            if (!shipment.IsConsolidated
+                && shipment.requiresSourceLotCustody
                 && (!shipment.sourceLotDebitApplied
                     || string.IsNullOrWhiteSpace(shipment.cargoLotId)
                     || hooks?.ReceiveCargoLot == null))
@@ -1150,6 +1431,50 @@ namespace LandLedgers.Economy.Logistics
 
             if (shipment.requiresSourceLotCustody)
             {
+                // F3: per-line receipt — every manifest line, or none. A
+                // failed line fails the whole receipt loudly; the cargo
+                // stays in wagon custody (Delayed, retryable) and nothing
+                // is silently dropped. No partial per-line acceptance in
+                // this slice: the hook credits all lines or refuses.
+                if (shipment.IsConsolidated)
+                {
+                    if (!shipment.sourceLotDebitApplied)
+                    {
+                        shipment.MarkDelayed("source manifest was not debited; recipient credit refused", LogisticsShipmentStatus.Arrived);
+                        Log(hooks, $"shipment '{shipment.ShipmentId}': NOT delivered — no debited manifest; {remaining}u remain in wagon custody.");
+                        return true;
+                    }
+
+                    if (hooks?.ReceiveConsolidatedCargoLots == null)
+                    {
+                        shipment.MarkDelayed("no consolidated lot receiver wired; cargo remains in wagon custody", LogisticsShipmentStatus.Arrived);
+                        Log(hooks, $"shipment '{shipment.ShipmentId}': NOT delivered — no consolidated lot receiver.");
+                        return true;
+                    }
+
+                    if (!hooks.ReceiveConsolidatedCargoLots(shipment, out string consolidatedReceiveReason))
+                    {
+                        shipment.MarkDelayed(
+                            string.IsNullOrWhiteSpace(consolidatedReceiveReason) ? "recipient refused consolidated manifest" : consolidatedReceiveReason.Trim(),
+                            LogisticsShipmentStatus.Arrived);
+                        Log(hooks, $"shipment '{shipment.ShipmentId}': NOT delivered — manifest remains in wagon custody ({shipment.BlockedReason}).");
+                        return true;
+                    }
+
+                    shipment.deliveredQuantityUnits += remaining;
+                    shipment.remainingQuantityUnits = 0;
+                    shipment.deliveryApplied = true;
+                    shipment.physicalLocationId = shipment.destinationBusinessInstanceId;
+                    shipment.physicalTransportBound = false;
+                    shipment.state = LogisticsShipmentStatus.Completed;
+                    // DEF-071 (Decision 14): the manifest was credited — forward progress.
+                    shipment.ResetDelayCycles();
+                    hooks.OnPhysicalReceivingComplete?.Invoke(shipment, unloadTask.AssigneeId);
+                    ReleaseShipmentReservations(shipment);
+                    Log(hooks, $"shipment '{shipment.ShipmentId}': manifest ({shipment.ManifestLines.Count} lines) credited once to '{shipment.destinationBusinessInstanceId}' ({remaining}u).");
+                    return true;
+                }
+
                 if (!shipment.sourceLotDebitApplied || string.IsNullOrWhiteSpace(shipment.cargoLotId))
                 {
                     shipment.MarkDelayed("source lot was not debited or cargo lot identity is missing; recipient credit refused", LogisticsShipmentStatus.Arrived);
@@ -1302,6 +1627,26 @@ namespace LandLedgers.Economy.Logistics
             /// diagnostic, no crash). Format version stays 6.
             /// </summary>
             public List<FreightDispatchPlanSaveDto> DispatchPlans = new List<FreightDispatchPlanSaveDto>();
+            /// <summary>
+            /// F3: one persisted manifest per consolidated shipment, keyed
+            /// by shipment id. Additive; an old save leaves this empty and
+            /// restore behaves exactly as before (no consolidated shipment
+            /// can exist in an old save). The manifest rides here — not in
+            /// LogisticsShipmentSaveDto — so no shim change is needed.
+            /// </summary>
+            public List<FreightManifestSaveDto> Manifests = new List<FreightManifestSaveDto>();
+        }
+
+        /// <summary>
+        /// F3: one persisted consolidated manifest — the shipment id plus
+        /// its lines, deep-copied at capture so the live record and the
+        /// save never share line objects.
+        /// </summary>
+        [Serializable]
+        public sealed class FreightManifestSaveDto
+        {
+            public string ShipmentId = string.Empty;
+            public List<FreightManifestLine> Lines = new List<FreightManifestLine>();
         }
 
         /// <summary>
@@ -1329,6 +1674,15 @@ namespace LandLedgers.Economy.Logistics
                     dto.Shipments.Add(s.CaptureSaveDto());
                     if (dispatchAuthorities.ContainsKey(s.ShipmentId))
                         dto.ShipmentIdsWithDispatchAuthorities.Add(s.ShipmentId);
+                    // F3: a consolidated shipment's manifest rides here.
+                    if (s.IsConsolidated)
+                    {
+                        dto.Manifests.Add(new FreightManifestSaveDto
+                        {
+                            ShipmentId = s.ShipmentId,
+                            Lines = CopyManifestLines(s.ManifestLines),
+                        });
+                    }
                 }
             dto.ShipmentIdsWithLoadTasks.AddRange(loadTasks.Keys);
             dto.ShipmentIdsWithUnloadTasks.AddRange(unloadTasks.Keys);
@@ -1403,6 +1757,31 @@ namespace LandLedgers.Economy.Logistics
                 // exclusivity covers them exactly once — no duplicate holds,
                 // no invisible live shipment after a mid-transport load.
                 Track(restored);
+            }
+
+            // F3: re-attach persisted manifests to their restored shipments.
+            // Clear-then-load: a smaller second save drops manifests it no
+            // longer carries, because a restored state starts with no lines
+            // and only listed manifests are attached. Deep-copied, so the
+            // live record never shares line objects with the DTO.
+            if (dto.Manifests != null && dto.Manifests.Count > 0)
+            {
+                var manifestsByShipment = new Dictionary<string, List<FreightManifestLine>>(StringComparer.Ordinal);
+                foreach (FreightManifestSaveDto manifest in dto.Manifests)
+                {
+                    if (manifest == null || string.IsNullOrWhiteSpace(manifest.ShipmentId) || manifest.Lines == null)
+                        continue;
+                    manifestsByShipment[manifest.ShipmentId] = CopyManifestLines(manifest.Lines);
+                }
+
+                foreach (LogisticsShipmentState restored in out_)
+                {
+                    if (restored == null) continue;
+                    if (manifestsByShipment.TryGetValue(restored.ShipmentId, out List<FreightManifestLine> lines))
+                    {
+                        restored.manifestLines = lines;
+                    }
+                }
             }
             // Pass XI WS4 save/load fix (Gap 2): rebind dispatch authorities
             // for restored shipments that were already dispatched and are not

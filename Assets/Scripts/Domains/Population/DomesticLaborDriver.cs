@@ -53,6 +53,47 @@ namespace LandLedgers.Population
             public bool CleaningNeeded;
             public bool ColdSeason;
             public bool HasAnimals;
+            /// <summary>
+            /// B2 (Agent B, expanded campaign 2026-11-16): the household's
+            /// stove registry, when the caller has one (Agent G wires it
+            /// from the hub/state in production). Null means no stove
+            /// information — meal-prep plans as before, with
+            /// MealPrepMode Unspecified. The registry never blocks the
+            /// task: without a ready stove the mode is ColdFoodFallback
+            /// and the household eats cold food from stores.
+            /// </summary>
+            public HouseholdStoveRegistry Stoves;
+            /// <summary>
+            /// B2: the household's fuel-wood reserve units as the caller
+            /// reads them, for the stove gate's fuel support check.
+            /// -1 means unknown (legacy callers) — only fuel already in
+            /// the stove stores counts. Agent G wires the real value
+            /// from the household reserve.
+            /// </summary>
+            public int FuelWoodReserveUnits = -1;
+            /// <summary>
+            /// B3 (Agent B, expanded campaign 2026-11-16): the household's
+            /// state, when the caller has it (SimulationDrivers passes it
+            /// from the daily drive). The driver reads the fuel-wood
+            /// reserve and the heating forecast from it for the fuel trip
+            /// cargo. Null means unknown — the fuel trip cannot pick up
+            /// fuel and the cooking settlement is skipped.
+            /// </summary>
+            public HouseholdState Household;
+            /// <summary>
+            /// B3: the household's inventory, when the caller has it
+            /// (hub.HouseholdInventories). The cooking settlement reads
+            /// flour from it. Null means unknown — cooking produces
+            /// nothing.
+            /// </summary>
+            public HouseholdInventory Inventory;
+            /// <summary>
+            /// B3: the meal authority, when the caller has it (constructed
+            /// from hub.MealLog). The cooking settlement records
+            /// production through it. Null means unknown — cooking
+            /// produces nothing.
+            /// </summary>
+            public HouseholdMealService MealService;
         }
 
         /// <summary>One planned domestic task: not yet scheduled.</summary>
@@ -67,6 +108,18 @@ namespace LandLedgers.Population
             public int StartMinuteOfDay;
             public string Status = "Pending"; // Pending | Started | Failed
             public string Note = string.Empty;
+            /// <summary>
+            /// B2 (Agent B, expanded campaign 2026-11-16): how this
+            /// meal-prep task cooks — StoveCooking when the household's
+            /// stove gate passed, ColdFoodFallback when it fell back to
+            /// cold food from stores, Unspecified when no stove registry
+            /// was consulted (legacy). Only meal-prep tasks carry a
+            /// mode; B3 reads it at cook time (fuel from the stove
+            /// store for StoveCooking, none for ColdFoodFallback).
+            /// Additive: old saves deserialize it as Unspecified — the
+            /// honest old-save default (not evaluated).
+            /// </summary>
+            public HouseholdStoveMealPrepMode MealPrepMode = HouseholdStoveMealPrepMode.Unspecified;
         }
 
         /// <summary>One in-flight domestic task: scheduled, awaiting its due event.</summary>
@@ -83,11 +136,59 @@ namespace LandLedgers.Population
             public bool RequiresPhysicalArrival;
             public string ActivityLocationId = string.Empty;
             public int BuildingId = -1;
+            /// <summary>
+            /// B3 (Agent B, expanded campaign 2026-11-16): the fuel-handling
+            /// trip leg — 0 = travelling to the firewood pile, 1 = carrying
+            /// fuel to the stove. Only fuel-handling flights use it; every
+            /// other definition stays on leg 0. Persisted: a save mid-trip
+            /// resumes on the same leg with its hold intact.
+            /// </summary>
+            public int FuelHandlingLeg;
+            /// <summary>
+            /// B3: fuel-wood units currently carried by this person on a fuel
+            /// trip (the in-transit reservation, plan §5.1 step 3). The
+            /// reserve is debited only on stove receipt; a failed trip
+            /// releases the hold with nothing debited.
+            /// </summary>
+            public int FuelUnitsInTransit;
+            /// <summary>B3: the stove the in-transit fuel is bound for (asset id). Empty when nothing is carried.</summary>
+            public string FuelStoveAssetId = string.Empty;
+            /// <summary>
+            /// B3: how this meal-prep task cooks, copied from the pending
+            /// task at start time — StoveCooking burns stove fuel and
+            /// produces through the meal authority, ColdFoodFallback and
+            /// Unspecified produce nothing. Only meal-prep flights carry a
+            /// mode.
+            /// </summary>
+            public HouseholdStoveMealPrepMode MealPrepMode = HouseholdStoveMealPrepMode.Unspecified;
         }
 
         private readonly List<PendingDomesticTask> pending = new List<PendingDomesticTask>();
         private readonly List<InFlightDomesticTask> inFlight = new List<InFlightDomesticTask>();
         private readonly List<string> diagnostics = new List<string>();
+        /// <summary>
+        /// B3: the cooking conversion for one meal-prep session — 2 flour
+        /// to 1 bread, the conversion pinned by the Phase B household
+        /// consumption tests. Provisional default (plan §5.1 step 6):
+        /// the smallest meaningful production, one loaf per session.
+        /// Agent F owns the recipe book; F or the owner corrects the
+        /// ratio and the session output. No recipe is invented here.
+        /// </summary>
+        public const int FlourUnitsPerLoaf = 2;
+        public const int LoavesPerMealPrepSession = 1;
+        // B3: per-household cooking/fuel context, supplied each DriveDay
+        // from the caller's inputs. TRANSIENT — never persisted (the
+        // driver save DTO holds only pending/in-flight/cleanliness).
+        // Repopulated every DriveDay; empty after a mid-day Continue
+        // until the next day boundary. A flight whose context is missing
+        // settles nothing and consumes nothing — the failure is
+        // recorded loudly, never silently. LoadFromSaveDto clears
+        // these maps, so a restored driver never settles against a
+        // previous session's objects.
+        private readonly Dictionary<int, HouseholdState> householdById = new Dictionary<int, HouseholdState>();
+        private readonly Dictionary<int, HouseholdStoveRegistry> stovesByHousehold = new Dictionary<int, HouseholdStoveRegistry>();
+        private readonly Dictionary<int, HouseholdInventory> inventoryByHousehold = new Dictionary<int, HouseholdInventory>();
+        private readonly Dictionary<int, HouseholdMealService> mealServiceByHousehold = new Dictionary<int, HouseholdMealService>();
 
         /// <summary>
         /// Campaign C-24 (DEF-010, Decision 6): the household cleanliness
@@ -142,6 +243,15 @@ namespace LandLedgers.Population
                 return;
             }
 
+            // B3: remember today's per-household context (transient, never
+            // persisted). The fuel trip reads the household and the stove
+            // registry; the cooking settlement reads the inventory and
+            // the meal authority. Repopulated every DriveDay.
+            if (inputs.Household != null) householdById[inputs.HouseholdId] = inputs.Household;
+            if (inputs.Stoves != null) stovesByHousehold[inputs.HouseholdId] = inputs.Stoves;
+            if (inputs.Inventory != null) inventoryByHousehold[inputs.HouseholdId] = inputs.Inventory;
+            if (inputs.MealService != null) mealServiceByHousehold[inputs.HouseholdId] = inputs.MealService;
+
             // Pass IX (A2-04): yesterday's unstarted plans are stale — prune
             // before planning today so the persisted list cannot grow
             // monotonically (PASS8-009 pattern).
@@ -160,7 +270,22 @@ namespace LandLedgers.Population
 
             if (inputs.FuelHandlingNeeded)
             {
-                wanted.Add((DomesticTaskCatalog.FuelHandlingId, 540, "household fuel-handling need"));
+                // B3: no stove = no fuel-handling task. There is nowhere
+                // to carry fuel to, so the need stays visible as a
+                // procurement need (the household needs a stove and/or
+                // fuel), not a handling task. The guard reads the same
+                // derived stove list the meal-prep gate reads. Without a
+                // registry the caller cannot know, so the task is planned
+                // as before (legacy; the pickup then refuses loudly).
+                if (inputs.Stoves != null && inputs.Stoves.Stoves.Count == 0)
+                {
+                    diag.Add("DomesticLaborDriver: household " + inputs.HouseholdId +
+                        " needs fuel handling but has no installed stove — no handling task (procurement need, not a trip).");
+                }
+                else
+                {
+                    wanted.Add((DomesticTaskCatalog.FuelHandlingId, 540, "household fuel-handling need"));
+                }
             }
 
             if (inputs.HasAnimals)
@@ -198,6 +323,27 @@ namespace LandLedgers.Population
                     continue;
                 }
 
+                // B2 (Agent B, expanded campaign 2026-11-16): the stove
+                // gate for meal-prep. A ready stove cooks on the stove;
+                // anything else falls back to cold food from stores —
+                // the task is still planned and still credits family
+                // labour (DEF-015: meal-prep serves no meal and changes
+                // no meal count). The stove never blocks eating, and the
+                // fallback is recorded loudly on the task note, never
+                // silently. Without a stove registry the mode stays
+                // Unspecified (legacy behaviour, Agent G's wiring).
+                HouseholdStoveMealPrepMode mealPrepMode = HouseholdStoveMealPrepMode.Unspecified;
+                string taskNote = want.why;
+                if (string.Equals(want.definitionId, DomesticTaskCatalog.MealPrepId, StringComparison.Ordinal)
+                    && inputs.Stoves != null)
+                {
+                    string stoveReason;
+                    mealPrepMode = inputs.Stoves.CheckMealPrep(dayIndex, inputs.FuelWoodReserveUnits, diag, out stoveReason);
+                    taskNote = mealPrepMode == HouseholdStoveMealPrepMode.StoveCooking
+                        ? want.why + " — stove cooking"
+                        : want.why + " — cold food, no stove: " + stoveReason;
+                }
+
                 pending.Add(new PendingDomesticTask
                 {
                     HouseholdId = inputs.HouseholdId,
@@ -206,7 +352,8 @@ namespace LandLedgers.Population
                     DayIndex = dayIndex,
                     StartMinuteOfDay = selectedStartMinute,
                     Status = "Pending",
-                    Note = want.why,
+                    Note = taskNote,
+                    MealPrepMode = mealPrepMode,
                 });
                 diag.Add("DomesticLaborDriver: planned '" + definition.DisplayName + "' for P" + personId +
                     " at minute " + want.startMinute + " (" + want.why + ").");
@@ -316,6 +463,9 @@ namespace LandLedgers.Population
                     DayIndex = dayIndex,
                     DueEventId = dueEventId ?? string.Empty,
                     RequiresPhysicalArrival = requiresPhysicalArrival,
+                    // B3: the meal-prep mode travels with the flight so
+                    // the completion settlement knows how the task cooks.
+                    MealPrepMode = item.MealPrepMode,
                 });
                 diag.Add("DomesticLaborDriver: P" + item.PersonId + " started '" + item.DefinitionId +
                     "' (" + plannedMinutes + " min)" + (requiresPhysicalArrival
@@ -347,6 +497,11 @@ namespace LandLedgers.Population
                 if (result == DomesticActivityMovementResult.Traveling) continue;
                 if (result == DomesticActivityMovementResult.Unsupported)
                 {
+                    // B3: a failed trip releases any in-transit fuel hold
+                    // first — the reserve was never debited, so the
+                    // release restores nothing, but the hold must not
+                    // survive the deferred task.
+                    ReleaseFuelHold(flight, diag);
                     if (tasks.InterruptTask(flight.TaskId, budgets, out string rejection))
                     {
                         dueEvents.Cancel(flight.DueEventId);
@@ -359,6 +514,62 @@ namespace LandLedgers.Population
                     else diag.Add("DomesticLaborDriver: could not defer '" + flight.DefinitionId + "' for P"
                         + flight.PersonId + ": " + rejection + ".");
                     continue;
+                }
+
+                // B3: a fuel-handling arrival is a leg arrival, not a work
+                // start. Leg 0 is the firewood pile (pick up the trip
+                // cargo); leg 1 is the stove (deliver the carried fuel
+                // into the store). Only a delivered trip schedules its
+                // due event — the handling work runs after the stove is
+                // fed. A failed leg interrupts the task and removes the
+                // flight, with no completion and no labour credit.
+                if (string.Equals(flight.DefinitionId, DomesticTaskCatalog.FuelHandlingId, StringComparison.Ordinal))
+                {
+                    if (flight.FuelHandlingLeg <= 0)
+                    {
+                        string pickupRefusal = TryPickupFuel(flight, diag);
+                        if (pickupRefusal != null)
+                        {
+                            ReleaseFuelHold(flight, diag);
+                            if (tasks.InterruptTask(flight.TaskId, budgets, out string pickupRejection))
+                            {
+                                dueEvents.Cancel(flight.DueEventId);
+                                ReleaseAssignmentReservation(domestic, schedules, flight);
+                                inFlight.RemoveAt(i);
+                                diag.Add("DomesticLaborDriver: fuel trip for household " + flight.HouseholdId +
+                                    " failed at the firewood pile — " + pickupRefusal +
+                                    " Task requeued without completion or family-labor credit.");
+                            }
+                            else diag.Add("DomesticLaborDriver: could not defer the fuel trip for P" +
+                                flight.PersonId + ": " + pickupRejection + ".");
+                            continue;
+                        }
+                        flight.FuelHandlingLeg = 1;
+                        diag.Add("DomesticLaborDriver: P" + flight.PersonId + " picked up " +
+                            flight.FuelUnitsInTransit + " fuel-wood unit(s) at the firewood pile for stove " +
+                            flight.FuelStoveAssetId + "; carrying to the stove.");
+                        continue;
+                    }
+
+                    string deliveryRefusal = TryDeliverFuel(flight, diag);
+                    if (deliveryRefusal != null)
+                    {
+                        ReleaseFuelHold(flight, diag);
+                        if (tasks.InterruptTask(flight.TaskId, budgets, out string deliveryRejection))
+                        {
+                            dueEvents.Cancel(flight.DueEventId);
+                            ReleaseAssignmentReservation(domestic, schedules, flight);
+                            inFlight.RemoveAt(i);
+                            diag.Add("DomesticLaborDriver: fuel trip for household " + flight.HouseholdId +
+                                " failed at the stove — " + deliveryRefusal +
+                                " Task requeued without completion or family-labor credit.");
+                        }
+                        else diag.Add("DomesticLaborDriver: could not defer the fuel trip for P" +
+                            flight.PersonId + ": " + deliveryRejection + ".");
+                        continue;
+                    }
+                    // Delivered: fall through to the due-event scheduling
+                    // below — the handling work now runs.
                 }
 
                 WorkTask task = tasks.FindTask(flight.TaskId);
@@ -514,7 +725,233 @@ namespace LandLedgers.Population
                 {
                     cleanliness.ResetAfterCleaning(flight.HouseholdId, dayIndex);
                 }
+                // B3: a completed meal-prep task settles its cooking —
+                // StoveCooking burns stove fuel and produces one loaf
+                // through the meal authority; anything else produces
+                // nothing. The settlement never serves a meal and never
+                // changes a meal count (DEF-015). The labour credit
+                // above stands whatever the settlement decides — the
+                // time was genuinely spent.
+                if (string.Equals(flight.DefinitionId, DomesticTaskCatalog.MealPrepId, StringComparison.Ordinal))
+                {
+                    SettleCooking(flight, dayIndex, remaining, diag);
+                }
             }
+        }
+
+        /// <summary>
+        /// B3: the fuel a trip carries — the next day's heating forecast
+        /// (the stove store is the buffer for the next burn) plus one
+        /// unit for today's cooking session when a meal-prep task is
+        /// planned, capped by the fuel-wood reserve on hand. The store
+        /// is fed today for tomorrow's burn and today's cooking: the
+        /// burn runs at the day boundary before the trip, so the trip
+        /// refills the store the burn will draw from next. The cooking
+        /// unit is HouseholdStoveRegistry.FuelUnitsPerMealPrepSession
+        /// (1). Returns 0 when there is no household, no registry, no
+        /// burn forecast, and no meal-prep — or when the reserve is
+        /// empty.
+        /// </summary>
+        public static int ComputeFuelTripCargo(HouseholdState household, int dayIndex, HouseholdStoveRegistry stoves, bool hasMealPrepToday)
+        {
+            if (household == null || stoves == null) return 0;
+            int heating = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(household, dayIndex + 1);
+            int cooking = hasMealPrepToday ? HouseholdStoveRegistry.FuelUnitsPerMealPrepSession : 0;
+            int wanted = heating + cooking;
+            if (wanted <= 0) return 0;
+            HouseholdReserveState reserve = household.GetReserve(HouseholdReserveCatalog.FuelWoodCategoryId);
+            int onHand = reserve != null ? Math.Max(0, reserve.currentUnits) : 0;
+            return Math.Min(wanted, onHand);
+        }
+
+        /// <summary>B3: true when a meal-prep task is pending or in flight for the household on the given day.</summary>
+        private bool HasMealPrepToday(int householdId, int dayIndex)
+        {
+            foreach (PendingDomesticTask item in pending)
+            {
+                if (item != null && item.HouseholdId == householdId && item.DayIndex == dayIndex
+                    && string.Equals(item.DefinitionId, DomesticTaskCatalog.MealPrepId, StringComparison.Ordinal)
+                    && string.Equals(item.Status, "Pending", StringComparison.Ordinal)) return true;
+            }
+            foreach (InFlightDomesticTask item in inFlight)
+            {
+                if (item != null && item.HouseholdId == householdId && item.DayIndex == dayIndex
+                    && string.Equals(item.DefinitionId, DomesticTaskCatalog.MealPrepId, StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// B3: releases a fuel trip's in-transit hold. The reserve was
+        /// never debited for the hold, so releasing restores nothing —
+        /// it clears the record so a deferred/failed trip cannot later
+        /// deliver fuel that was never reserved. Loud in diagnostics
+        /// when a hold existed.
+        /// </summary>
+        private void ReleaseFuelHold(InFlightDomesticTask flight, List<string> diag)
+        {
+            if (flight == null || flight.FuelUnitsInTransit <= 0) return;
+            if (diag != null)
+            {
+                diag.Add("DomesticLaborDriver: released the in-transit hold of " + flight.FuelUnitsInTransit +
+                    " fuel-wood unit(s) for household " + flight.HouseholdId +
+                    " (trip failed/deferred — the reserve was never debited, nothing to return).");
+            }
+            flight.FuelUnitsInTransit = 0;
+            flight.FuelStoveAssetId = string.Empty;
+        }
+
+        /// <summary>
+        /// B3: the firewood-pile pickup (leg 0 arrival). Computes the
+        /// trip cargo and records it as the in-transit hold on the
+        /// flight. The reserve is NOT debited here — it is debited only
+        /// on stove receipt (TryDeliverFuel, via TryFeedStove).
+        /// Refuses loudly with nothing recorded when there is no
+        /// household context, no stove registry, no installed stove,
+        /// or no fuel to carry. Returns null on success.
+        /// </summary>
+        private string TryPickupFuel(InFlightDomesticTask flight, List<string> diag)
+        {
+            if (flight == null) return "no flight to pick up fuel for.";
+            if (!householdById.TryGetValue(flight.HouseholdId, out HouseholdState household) || household == null)
+                return "no household state (Agent G wiring).";
+            if (!stovesByHousehold.TryGetValue(flight.HouseholdId, out HouseholdStoveRegistry stoves) || stoves == null)
+                return "no stove registry (Agent G wiring).";
+            if (stoves.Stoves.Count == 0)
+                return "no installed stove.";
+            HouseholdStove stove = stoves.Stoves[0];
+            int cargo = ComputeFuelTripCargo(household, flight.DayIndex, stoves, HasMealPrepToday(flight.HouseholdId, flight.DayIndex));
+            if (cargo <= 0)
+                return "no fuel to carry (reserve empty or no burn forecast).";
+            flight.FuelUnitsInTransit = cargo;
+            flight.FuelStoveAssetId = stove.StoveAssetId;
+            return null;
+        }
+
+        /// <summary>
+        /// B3: the stove delivery (leg 1 arrival). Moves the carried
+        /// fuel from the reserve into the stove store via TryFeedStove
+        /// — the reserve is debited here, exactly what the store is
+        /// credited, so the hold converts into custody. Refuses loudly
+        /// with the hold released when the reserve is short (a burn may
+        /// have taken the reserved units) or the stove is gone; the
+        /// trip then fails without completion or credit. Returns null
+        /// on success.
+        /// </summary>
+        private string TryDeliverFuel(InFlightDomesticTask flight, List<string> diag)
+        {
+            if (flight == null) return "no flight to deliver fuel for.";
+            if (flight.FuelUnitsInTransit <= 0 || string.IsNullOrWhiteSpace(flight.FuelStoveAssetId))
+                return "nothing is being carried.";
+            if (!householdById.TryGetValue(flight.HouseholdId, out HouseholdState household) || household == null)
+                return "no household state (Agent G wiring).";
+            if (!stovesByHousehold.TryGetValue(flight.HouseholdId, out HouseholdStoveRegistry stoves) || stoves == null)
+                return "no stove registry (Agent G wiring).";
+            int units = flight.FuelUnitsInTransit;
+            string stoveAssetId = flight.FuelStoveAssetId;
+            string refusal = stoves.TryFeedStove(stoveAssetId, units, household, diag);
+            if (refusal != null) return refusal;
+            flight.FuelUnitsInTransit = 0;
+            flight.FuelStoveAssetId = string.Empty;
+            if (diag != null)
+            {
+                diag.Add("DomesticLaborDriver: P" + flight.PersonId + " fed " + units +
+                    " fuel-wood unit(s) into stove " + stoveAssetId + " (household " + flight.HouseholdId + ").");
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// B3: the meal-prep cooking settlement, run at the task's
+        /// completion. StoveCooking: burns exactly
+        /// FuelUnitsPerMealPrepSession fuel from the representative
+        /// stove's store (the first installed stove holding at least a
+        /// session of fuel) and converts exactly FlourUnitsPerLoaf
+        /// flour into LoavesPerMealPrepSession loaf through the meal
+        /// authority (PrepareFromRaw, equipment named, labour named) —
+        /// the production record is the cooking output. The checks run
+        /// before any debit: no fuel in any stove store, or no flour in
+        /// the inventory, refuses LOUDLY and produces nothing (no fuel
+        /// burned, no ingredients consumed, no record).
+        /// ColdFoodFallback and Unspecified produce nothing and refuse
+        /// nothing — the household eats cold food from stores. Missing
+        /// context (no registry, inventory, meal service, or household)
+        /// skips the settlement loudly — never silently, never
+        /// consuming. The settlement never serves a meal and never
+        /// changes a meal count (DEF-015).
+        /// </summary>
+        public void SettleCooking(InFlightDomesticTask flight, int dayIndex, int minutesWorked, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (flight == null) return;
+            if (flight.MealPrepMode != HouseholdStoveMealPrepMode.StoveCooking) return;
+            if (!stovesByHousehold.TryGetValue(flight.HouseholdId, out HouseholdStoveRegistry stoves) || stoves == null)
+            {
+                diag.Add("DomesticLaborDriver: cooking settlement skipped for household " + flight.HouseholdId +
+                    " — no stove registry (Agent G wiring); no fuel burned, nothing produced.");
+                return;
+            }
+            if (!householdById.TryGetValue(flight.HouseholdId, out HouseholdState household) || household == null)
+            {
+                diag.Add("DomesticLaborDriver: cooking settlement skipped for household " + flight.HouseholdId +
+                    " — no household state (Agent G wiring); no fuel burned, nothing produced.");
+                return;
+            }
+            if (!inventoryByHousehold.TryGetValue(flight.HouseholdId, out HouseholdInventory inventory) || inventory == null)
+            {
+                diag.Add("DomesticLaborDriver: cooking settlement skipped for household " + flight.HouseholdId +
+                    " — no inventory (Agent G wiring); no fuel burned, nothing produced.");
+                return;
+            }
+            if (!mealServiceByHousehold.TryGetValue(flight.HouseholdId, out HouseholdMealService mealService) || mealService == null)
+            {
+                diag.Add("DomesticLaborDriver: cooking settlement skipped for household " + flight.HouseholdId +
+                    " — no meal service (Agent G wiring); no fuel burned, nothing produced.");
+                return;
+            }
+            HouseholdStove stove = null;
+            foreach (HouseholdStove candidate in stoves.Stoves)
+            {
+                if (candidate != null && candidate.FuelWoodUnitsOnHand >= HouseholdStoveRegistry.FuelUnitsPerMealPrepSession)
+                {
+                    stove = candidate;
+                    break;
+                }
+            }
+            if (stove == null)
+            {
+                diag.Add("DomesticLaborDriver: cooking produced nothing for household " + flight.HouseholdId +
+                    " — no fuel in any stove store (stove cooking refused loudly).");
+                return;
+            }
+            if (inventory.GetAvailableUnits(HouseholdItemCatalog.FlourId) < FlourUnitsPerLoaf)
+            {
+                diag.Add("DomesticLaborDriver: cooking produced nothing for household " + flight.HouseholdId +
+                    " — no flour in the household inventory (stove cooking refused loudly); no fuel burned.");
+                return;
+            }
+            string fuelRefusal = stoves.TryConsumeStoveFuel(stove.StoveAssetId, HouseholdStoveRegistry.FuelUnitsPerMealPrepSession, diag);
+            if (fuelRefusal != null)
+            {
+                diag.Add("DomesticLaborDriver: cooking produced nothing for household " + flight.HouseholdId +
+                    " — " + fuelRefusal);
+                return;
+            }
+            string prepRefusal = mealService.PrepareFromRaw(inventory, HouseholdItemCatalog.FlourId, HouseholdItemCatalog.BreadId,
+                FlourUnitsPerLoaf, LoavesPerMealPrepSession,
+                "household stove " + stove.StoveAssetId, Math.Max(0, minutesWorked), dayIndex, "P" + flight.PersonId);
+            if (prepRefusal != null)
+            {
+                // The fuel is already burned — this cannot happen after
+                // the checks above (the conversion's inputs were
+                // verified); log it loudly as an anomaly, never silently.
+                diag.Add("DomesticLaborDriver: cooking produced nothing for household " + flight.HouseholdId +
+                    " after burning fuel — " + prepRefusal);
+                return;
+            }
+            diag.Add("DomesticLaborDriver: P" + flight.PersonId + " cooked " + LoavesPerMealPrepSession + " loaf(s) from " +
+                FlourUnitsPerLoaf + " flour on stove " + stove.StoveAssetId + " (1 fuel unit, household " +
+                flight.HouseholdId + ").");
         }
 
         /// <summary>
@@ -927,6 +1364,15 @@ namespace LandLedgers.Population
             pending.Clear();
             inFlight.Clear();
             cleanliness.LoadRecords(null);
+            // B3: the transient per-household context is cleared on load —
+            // a restored driver must never settle against a previous
+            // session's objects. The maps are repopulated at the next
+            // DriveDay; a flight due before then settles nothing and
+            // consumes nothing (recorded loudly, never silently).
+            householdById.Clear();
+            stovesByHousehold.Clear();
+            inventoryByHousehold.Clear();
+            mealServiceByHousehold.Clear();
             if (dto == null)
             {
                 return;

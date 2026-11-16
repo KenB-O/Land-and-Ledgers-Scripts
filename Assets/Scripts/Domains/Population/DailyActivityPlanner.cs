@@ -85,6 +85,31 @@ namespace LandLedgers.Population
             public string ReservationId = string.Empty;
             public bool Reserved;
             public bool ConsumesBudget;
+            /// <summary>
+            /// B1: the sleeping place reserved for a Sleeping activity
+            /// (bed/bedroll/floor place id from the sleeping-place
+            /// registry); empty when no place was resolved.
+            /// </summary>
+            public string SleepingPlaceId = string.Empty;
+            /// <summary>
+            /// B1: rest quality of the resolved sleeping place (bed 1.0,
+            /// bedroll 0.8, floor 0.6, O-1 defaults); 1.0 when no place
+            /// was resolved.
+            /// </summary>
+            public float RestQuality01 = 1f;
+            /// <summary>
+            /// B4: the dining seat reserved for an Eating activity
+            /// ("chair:&lt;assetId&gt;"); empty when the meal resolves to
+            /// the Fallback (no table, no chair, or no free chair) or
+            /// when no dining registry was supplied.
+            /// </summary>
+            public string DiningSeatId = string.Empty;
+            /// <summary>
+            /// B4: how the meal is eaten (Seated at a reserved chair,
+            /// Fallback at home with no seat); Unspecified when no
+            /// dining registry was supplied.
+            /// </summary>
+            public DiningMode DiningMode = DiningMode.Unspecified;
         }
 
         /// <summary>The day's plan for one person, with loud conflicts.</summary>
@@ -102,14 +127,24 @@ namespace LandLedgers.Population
         /// <summary>
         /// Plans one person's day: reserves sleep, meals, job-seeking/management
         /// blocks and rest in priority order. Returns the plan; conflicts name
-        /// whatever already held the person's time.
+        /// whatever already held the person's time. When a sleeping-place
+        /// registry is supplied (B1), sleep also resolves and reserves a
+        /// legitimate sleeping place (bed, bedroll, floor) and records the
+        /// place id and rest quality on the sleep activities; without a
+        /// registry, sleep plans exactly as before (time only). When a
+        /// dining registry is supplied (B4), each meal also resolves and
+        /// reserves a dining seat (chair at a table, else the Fallback)
+        /// and records the seat id and mode on the meal activities;
+        /// without a registry, meals plan exactly as before (time only).
         /// </summary>
         public PersonDayPlan PlanPersonDay(
             PersonDayPlanInputs inputs,
             int dayIndex,
             PersonScheduleTracker schedules,
             WorkTimeBudgetStore budgets,
-            List<string> diag)
+            List<string> diag,
+            SleepingPlaceRegistry sleepingPlaces = null,
+            DiningPlaceRegistry diningPlaces = null)
         {
             var plan = new PersonDayPlan
             {
@@ -124,9 +159,14 @@ namespace LandLedgers.Population
             }
 
             // 1. Sleep first: non-interruptible, wraps midnight → two windows.
-            ReserveSleep(inputs, dayIndex, schedules, plan, diag);
+            ReserveSleep(inputs, dayIndex, schedules, plan, diag, sleepingPlaces);
 
-            // 2. Meals: interruptible, no budget.
+            // 2. Meals: interruptible, no budget. When a dining registry
+            // is supplied (B4), each reserved meal also resolves a
+            // dining seat (chair at a table, else the Fallback) and
+            // stamps the seat id and mode on the meal activity. The
+            // seat is reserved only after the meal time itself was
+            // secured, so a failed plan never strands a seat.
             List<int> meals = inputs.MealStartMinutes != null && inputs.MealStartMinutes.Count > 0
                 ? inputs.MealStartMinutes
                 : new List<int>(DefaultMealMinutes);
@@ -139,8 +179,24 @@ namespace LandLedgers.Population
                     int candidate = mealStart + offset;
                     if (candidate < 0 || candidate + duration > 1440
                         || !schedules.IsFree(inputs.PersonId, dayIndex, candidate, duration)) continue;
-                    ReserveActivity(inputs.PersonId, PersonActivityKind.Eating, dayIndex,
+                    PlannedActivity meal = ReserveActivity(inputs.PersonId, PersonActivityKind.Eating, dayIndex,
                         candidate, duration, "meal window", schedules, budgets, plan, diag, commitBudget: false);
+                    if (meal != null && meal.Reserved && diningPlaces != null)
+                    {
+                        string seatError = diningPlaces.TryReserveDiningSeat(
+                            inputs.PersonId, dayIndex, candidate, duration, out DiningSeatReservation seat);
+                        if (seatError != null)
+                        {
+                            plan.Conflicts.Add("DailyActivityPlanner: could not reserve a dining seat for P" +
+                                inputs.PersonId + " — " + seatError);
+                            meal.DiningMode = DiningMode.Fallback;
+                        }
+                        else if (seat != null)
+                        {
+                            meal.DiningSeatId = seat.SeatId ?? string.Empty;
+                            meal.DiningMode = seat.Mode;
+                        }
+                    }
                     reserved = true;
                     break;
                 }
@@ -172,7 +228,17 @@ namespace LandLedgers.Population
         /// <summary>
         /// Plans every member of a household for the day, in deterministic
         /// (person-id) order so reservations compete fairly for shared nothing —
-        /// each person has their own exclusive time.
+        /// each person has their own exclusive time. When a sleeping-place
+        /// registry is supplied (B1), the household's sleep is assigned
+        /// first, rotation-aware (worst-rested members get the bed first),
+        /// and each member's sleep activities then carry their assigned
+        /// place; without a registry, planning is exactly as before. When
+        /// a dining registry is supplied (B4), each member's meal
+        /// activities carry their reserved seat (or the Fallback); seats
+        /// are assigned in the same sorted member order, first-come-
+        /// first-served per meal window — there is no separate household
+        /// assignment pass and no rotation state, because seating
+        /// carries no benefit today (plan §6.2).
         /// </summary>
         public List<PersonDayPlan> PlanHouseholdDay(
             List<int> memberIds,
@@ -180,7 +246,9 @@ namespace LandLedgers.Population
             int dayIndex,
             PersonScheduleTracker schedules,
             WorkTimeBudgetStore budgets,
-            List<string> diag)
+            List<string> diag,
+            SleepingPlaceRegistry sleepingPlaces = null,
+            DiningPlaceRegistry diningPlaces = null)
         {
             var plans = new List<PersonDayPlan>();
             if (memberIds == null)
@@ -190,6 +258,7 @@ namespace LandLedgers.Population
 
             var ordered = new List<int>(memberIds);
             ordered.Sort();
+            var collected = new List<PersonDayPlanInputs>();
             foreach (int personId in ordered)
             {
                 PersonDayPlanInputs inputs = inputsFor != null ? inputsFor(personId) : null;
@@ -199,10 +268,48 @@ namespace LandLedgers.Population
                 }
 
                 inputs.PersonId = personId;
-                plans.Add(PlanPersonDay(inputs, dayIndex, schedules, budgets, diag));
+                collected.Add(inputs);
+            }
+
+            if (sleepingPlaces != null)
+            {
+                string assignError = sleepingPlaces.AssignHouseholdSleep(ordered, dayIndex,
+                    pid => SleepStartFor(collected, pid),
+                    pid => SleepEndFor(collected, pid));
+                if (assignError != null && diag != null)
+                {
+                    diag.Add("DailyActivityPlanner: sleeping-place assignment — " + assignError);
+                }
+            }
+
+            foreach (PersonDayPlanInputs inputs in collected)
+            {
+                plans.Add(PlanPersonDay(inputs, dayIndex, schedules, budgets, diag, sleepingPlaces, diningPlaces));
             }
 
             return plans;
+        }
+
+        private static int SleepStartFor(List<PersonDayPlanInputs> collected, int personId)
+        {
+            foreach (PersonDayPlanInputs inputs in collected)
+            {
+                if (inputs != null && inputs.PersonId == personId)
+                    return inputs.SleepStartMinute;
+            }
+
+            return DefaultSleepStartMinute;
+        }
+
+        private static int SleepEndFor(List<PersonDayPlanInputs> collected, int personId)
+        {
+            foreach (PersonDayPlanInputs inputs in collected)
+            {
+                if (inputs != null && inputs.PersonId == personId)
+                    return inputs.SleepEndMinute;
+            }
+
+            return DefaultSleepEndMinute;
         }
 
         /// <summary>
@@ -337,9 +444,21 @@ namespace LandLedgers.Population
 
         // ---------- internals ----------
 
+        /// <summary>
+        /// B1 sleeping-place hook: when a registry is supplied, the
+        /// person's sleeping place for the night is resolved and
+        /// reserved here (bed, bedroll, floor — the floor fallback
+        /// always resolves, so no bed never prevents sleeping) and the
+        /// place id and rest quality are recorded on the reserved sleep
+        /// activities. A place reservation created here is cancelled
+        /// again when the sleep time itself could not be reserved, so a
+        /// failed plan never strands a bed hold; a pre-existing
+        /// reservation (household assignment, or an earlier plan for
+        /// the same day) is reused, never double-reserved.
+        /// </summary>
         private void ReserveSleep(
             PersonDayPlanInputs inputs, int dayIndex, PersonScheduleTracker schedules,
-            PersonDayPlan plan, List<string> diag)
+            PersonDayPlan plan, List<string> diag, SleepingPlaceRegistry sleepingPlaces = null)
         {
             int start = inputs.SleepStartMinute;
             int end = inputs.SleepEndMinute;
@@ -349,18 +468,71 @@ namespace LandLedgers.Population
                 return;
             }
 
+            string placeId = string.Empty;
+            float restQuality = 1f;
+            bool createdPlaceHere = false;
+            if (sleepingPlaces != null)
+            {
+                SleepingPlaceReservation live = sleepingPlaces.LiveReservationFor(inputs.PersonId, dayIndex);
+                if (live == null)
+                {
+                    string reserveError = sleepingPlaces.TryReserveSleepingPlace(
+                        inputs.PersonId, dayIndex, start, end, null, out SleepingPlaceReservation made);
+                    if (reserveError != null)
+                    {
+                        plan.Conflicts.Add("DailyActivityPlanner: could not reserve a sleeping place for P" +
+                            inputs.PersonId + " — " + reserveError);
+                    }
+                    else if (made != null)
+                    {
+                        live = made;
+                        createdPlaceHere = true;
+                    }
+                }
+
+                if (live != null)
+                {
+                    placeId = live.PlaceId;
+                    restQuality = live.RestQuality01;
+                }
+            }
+
+            PlannedActivity evening = null;
+            PlannedActivity morning = null;
             if (start < end)
             {
-                ReserveActivity(inputs.PersonId, PersonActivityKind.Sleeping, dayIndex,
+                evening = ReserveActivity(inputs.PersonId, PersonActivityKind.Sleeping, dayIndex,
                     start, end - start, "sleep", schedules, null, plan, diag, commitBudget: false);
             }
             else
             {
                 // Wraps midnight: evening part on this day, morning part on this day.
-                ReserveActivity(inputs.PersonId, PersonActivityKind.Sleeping, dayIndex,
+                evening = ReserveActivity(inputs.PersonId, PersonActivityKind.Sleeping, dayIndex,
                     start, 1440 - start, "sleep (evening)", schedules, null, plan, diag, commitBudget: false);
-                ReserveActivity(inputs.PersonId, PersonActivityKind.Sleeping, dayIndex,
+                morning = ReserveActivity(inputs.PersonId, PersonActivityKind.Sleeping, dayIndex,
                     0, end, "sleep (morning)", schedules, null, plan, diag, commitBudget: false);
+            }
+
+            bool anySleepReserved = (evening != null && evening.Reserved) || (morning != null && morning.Reserved);
+            if (sleepingPlaces != null && createdPlaceHere && !anySleepReserved)
+            {
+                // The time could not be secured: do not strand the bed
+                // hold, and do not count the night as slept.
+                sleepingPlaces.CancelSleepingPlace(inputs.PersonId, dayIndex);
+            }
+            else if (!string.IsNullOrWhiteSpace(placeId))
+            {
+                if (evening != null && evening.Reserved)
+                {
+                    evening.SleepingPlaceId = placeId;
+                    evening.RestQuality01 = restQuality;
+                }
+
+                if (morning != null && morning.Reserved)
+                {
+                    morning.SleepingPlaceId = placeId;
+                    morning.RestQuality01 = restQuality;
+                }
             }
         }
 

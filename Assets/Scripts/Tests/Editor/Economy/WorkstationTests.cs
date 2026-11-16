@@ -52,7 +52,7 @@ namespace LandLedgers.EditorTests.Economy
         public void Catalog_AllWorkstations_DefinedAsData()
         {
             var all = WorkstationCatalog.All;
-            Assert.AreEqual(18, all.Count, "Group A + C + D + EQP-5 + printing press + barber chair + barber bath + tailor table + teller window + carpenter workshop: forge, oven, bar, mill, butcher block, saw line, assay bench, handling pens, store counter, kitchen, laundry, tanning yard, printing press, barber chair, barber bath, tailor table, teller window, carpenter workshop.");
+            Assert.AreEqual(19, all.Count, "Group A + C + D + EQP-5 + printing press + barber chair + barber bath + tailor table + teller window + carpenter workshop + household stove: forge, oven, bar, mill, butcher block, saw line, assay bench, handling pens, store counter, kitchen, laundry, tanning yard, printing press, barber chair, barber bath, tailor table, teller window, carpenter workshop, household stove.");
             foreach (var def in all)
             {
                 Assert.IsTrue(def.Components.Count > 0, $"{def.WorkstationId} must name components.");

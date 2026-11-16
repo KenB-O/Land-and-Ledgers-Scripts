@@ -802,6 +802,289 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(PurchasingNeedStatus.Fulfilled, gNeed.Status);
         }
 
+        // ---- Save/Continue during an active trip (this slice, F1/F2) ----
+        //
+        // The Fixture's driver has null route delegates, so the existing
+        // SaveLoad tests never take the post-load route branch: in
+        // production the pathing director exists and reports NO active
+        // route after a load, which aborted every mid-route trip at its
+        // first leg due. These tests model that post-load state with
+        // mutable delegates (no route active until one is (re)started)
+        // and pin the rehydrate route restart and the recovery
+        // persistence.
+
+        [Test]
+        public void SaveLoad_MidOutbound_PostLoadRouteRestart_ResumesToSameOutcome()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+
+            // Advance to mid-outbound, then save everything.
+            float start = Fixture.Day * 86400f;
+            f.Driver.AdvanceTick(start + 610 * 60f, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Outbound, f.Driver.ActiveTrips[0].State);
+
+            var tasksDto = f.Tasks.CaptureSaveDto();
+            var budgetsDto = f.Budgets.CaptureSaveDto();
+            var schedulesDto = f.Tracker.CaptureSaveDto();
+            var driverDto = f.Driver.CaptureSaveDto();
+            var dueDto = f.DueEvents.CaptureSaveDto();
+
+            // Restore into a FRESH fixture under a driver modelling the
+            // post-load production routes: no route is active until one is
+            // (re)started, and arrival is a separate flag.
+            var g = new Fixture();
+            float gStart = Fixture.Day * 86400f;
+            bool routeActive = false;
+            bool arrived = false;
+            var gDriver = new ShoppingTripDriver(g.Loop,
+                (p, l) => { routeActive = true; return true; },
+                (p, l) => arrived,
+                (p, l) => routeActive,
+                (p, l) => routeActive ? (float?)300f : null,
+                (p, l) => { routeActive = false; },
+                60f);
+            g.Tasks.LoadFromSaveDto(tasksDto);
+            g.Budgets.LoadFromSaveDto(budgetsDto, Fixture.Day);
+            g.Tracker.LoadFromSaveDto(schedulesDto);
+            g.DueEvents.LoadFromSaveDto(dueDto);
+            gDriver.LoadFromSaveDto(driverDto);
+            HouseholdPurchasingNeed gNeed = g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            gNeed.UnitsNeeded = need.UnitsNeeded;
+
+            gDriver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                Fixture.Day, gStart + 610 * 60f, g.DueEvents, g.Diag);
+            Assert.AreEqual(1, gDriver.ActiveTrips.Count);
+            // The pin: rehydrate restarted the physical route that the
+            // save could not carry.
+            Assert.IsTrue(routeActive, "rehydrate did not restart the outbound route\n" + string.Join("\n", g.Diag));
+
+            // Pop the outbound leg due while the shopper has not arrived:
+            // the trip must retry on its live route, not abort.
+            PlannedShoppingTrip restored = gDriver.ActiveTrips[0];
+            DueEvent outboundDue = null;
+            foreach (DueEvent ev in g.DueEvents.PopDue(gStart + 86400f))
+            {
+                if (ev.PayloadRef == restored.Legs.Outbound.TaskId.ToString()) outboundDue = ev;
+            }
+            Assert.IsNotNull(outboundDue, "outbound leg due not restored");
+            gDriver.HandleDueEvent(outboundDue, Fixture.Day, outboundDue.DueGameSeconds, g.DueEvents, g.Diag);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Outbound, restored.State);
+            Assert.AreEqual(1, gDriver.ActiveTrips.Count);
+
+            // Arrival on the retry due: the trip proceeds to settlement.
+            arrived = true;
+            foreach (DueEvent ev in g.DueEvents.PopDue(outboundDue.DueGameSeconds + 61f))
+            {
+                gDriver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, g.DueEvents, g.Diag);
+            }
+
+            // Drain to completion (same shape as the existing test).
+            for (int t = 122; t < 2000 && gDriver.ActiveTrips.Count > 0; t++)
+            {
+                float now = gStart + t * 300f;
+                gDriver.AdvanceTick(now, Fixture.Day, g.DueEvents, g.Diag);
+                foreach (DueEvent ev in g.DueEvents.PopDue(now))
+                {
+                    gDriver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, g.DueEvents, g.Diag);
+                }
+            }
+            for (int i = 0; i < 50 && (g.DueEvents.ScheduledCount > 0 || gDriver.ActiveTrips.Count > 0); i++)
+            {
+                foreach (DueEvent ev in g.DueEvents.PopDue(gStart + 3 * 86400f))
+                {
+                    gDriver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, g.DueEvents, g.Diag);
+                }
+            }
+
+            Assert.AreEqual(0, gDriver.ActiveTrips.Count, "restored trip should finish\n" + string.Join("\n", g.Diag));
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, gNeed.Status);
+            Assert.AreEqual(90, g.Store.Stock[HouseholdItemCatalog.FlourId]);
+            Assert.AreEqual(1200, g.Store.CashReceived);
+        }
+
+        [Test]
+        public void SaveLoad_MidReturn_PostLoadRouteRestart_ReceivesAtHome()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrivalGameSeconds);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State);
+            Assert.IsNotNull(trip.Batch);
+            Assert.AreEqual(1, f.Loop.ActiveCustodyBatches.Count);
+            Assert.AreEqual(1200, f.Store.CashReceived);
+
+            // Complete the in-store leg so the return leg is airborne with
+            // the paid batch in hand, then save mid-return.
+            DueEvent inStoreDue = null;
+            foreach (DueEvent ev in f.DueEvents.PopDue(arrivalGameSeconds + 86400f))
+            {
+                if (ev.PayloadRef == trip.Legs.InStore.TaskId.ToString()) inStoreDue = ev;
+            }
+            Assert.IsNotNull(inStoreDue, "in-store leg due not scheduled");
+            f.Driver.HandleDueEvent(inStoreDue, Fixture.Day, inStoreDue.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State);
+            float savedAt = inStoreDue.DueGameSeconds;
+
+            var tasksDto = f.Tasks.CaptureSaveDto();
+            var budgetsDto = f.Budgets.CaptureSaveDto();
+            var schedulesDto = f.Tracker.CaptureSaveDto();
+            var driverDto = f.Driver.CaptureSaveDto();
+            var dueDto = f.DueEvents.CaptureSaveDto();
+            var custodyDto = f.Loop.CaptureCustodySaveDto();
+
+            var g = new Fixture();
+            float gStart = Fixture.Day * 86400f;
+            bool routeActive = false;
+            bool arrived = false;
+            var gDriver = new ShoppingTripDriver(g.Loop,
+                (p, l) => { routeActive = true; return true; },
+                (p, l) => arrived,
+                (p, l) => routeActive,
+                (p, l) => routeActive ? (float?)300f : null,
+                (p, l) => { routeActive = false; },
+                60f);
+            g.Tasks.LoadFromSaveDto(tasksDto);
+            g.Budgets.LoadFromSaveDto(budgetsDto, Fixture.Day);
+            g.Tracker.LoadFromSaveDto(schedulesDto);
+            g.DueEvents.LoadFromSaveDto(dueDto);
+            g.Loop.LoadCustodyFromSaveDto(custodyDto);
+            gDriver.LoadFromSaveDto(driverDto);
+            HouseholdPurchasingNeed gNeed = g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            gNeed.UnitsNeeded = need.UnitsNeeded;
+
+            gDriver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                Fixture.Day, savedAt, g.DueEvents, g.Diag);
+            Assert.AreEqual(1, gDriver.ActiveTrips.Count);
+            Assert.IsTrue(routeActive, "rehydrate did not restart the return route\n" + string.Join("\n", g.Diag));
+
+            PlannedShoppingTrip restored = gDriver.ActiveTrips[0];
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, restored.State);
+            DueEvent returnDue = null;
+            foreach (DueEvent ev in g.DueEvents.PopDue(gStart + 86400f))
+            {
+                if (ev.PayloadRef == restored.Legs.Return.TaskId.ToString()) returnDue = ev;
+            }
+            Assert.IsNotNull(returnDue, "return leg due not restored");
+            gDriver.HandleDueEvent(returnDue, Fixture.Day, returnDue.DueGameSeconds, g.DueEvents, g.Diag);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, restored.State);
+            Assert.AreEqual(1, gDriver.ActiveTrips.Count);
+
+            arrived = true;
+            foreach (DueEvent ev in g.DueEvents.PopDue(returnDue.DueGameSeconds + 61f))
+            {
+                gDriver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, g.DueEvents, g.Diag);
+            }
+
+            Assert.AreEqual(0, gDriver.ActiveTrips.Count, "restored trip should finish\n" + string.Join("\n", g.Diag));
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Done, restored.State);
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, gNeed.Status);
+            Assert.AreEqual(10, g.Inventories.GetOrCreate(Fixture.HouseholdId).GetTotalUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(0, g.Loop.ActiveCustodyBatches.Count);
+            // Settlement ran before the save (f.Store, 1200c): the restored
+            // run must NOT settle again — no second charge, no second sale.
+            Assert.AreEqual(0, g.Store.CashReceived);
+            Assert.AreEqual(100, g.Store.Stock[HouseholdItemCatalog.FlourId]);
+        }
+
+        [Test]
+        public void SaveLoad_PaidReturnRecovery_PersistsAndCompletes()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            bool returnAvailable = false;
+            string physicalLocation = "home";
+            var driver = new ShoppingTripDriver(f.Loop,
+                (p, l) => l != "home" || returnAvailable,
+                (p, l) => l == physicalLocation,
+                (p, l) => true);
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = driver.ActiveTrips[0];
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+            physicalLocation = "store";
+            DueEvent outbound = f.DueEvents.PopDue(departure + 86400f)[0];
+            driver.HandleDueEvent(outbound, Fixture.Day, outbound.DueGameSeconds, f.DueEvents, f.Diag);
+            DueEvent inStore = f.DueEvents.PopDue(outbound.DueGameSeconds + 86400f)[0];
+            driver.HandleDueEvent(inStore, Fixture.Day, inStore.DueGameSeconds, f.DueEvents, f.Diag);
+            // Return route unavailable: abort, paid batch queued for recovery.
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Failed, trip.State);
+            Assert.AreEqual(0, driver.ActiveTrips.Count);
+            Assert.AreEqual(1200, f.Store.CashReceived);
+            Assert.AreEqual(90, f.Store.Stock[HouseholdItemCatalog.FlourId]);
+            Assert.AreEqual(1, f.Loop.ActiveCustodyBatches.Count);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+
+            var tasksDto = f.Tasks.CaptureSaveDto();
+            var budgetsDto = f.Budgets.CaptureSaveDto();
+            var schedulesDto = f.Tracker.CaptureSaveDto();
+            var driverDto = driver.CaptureSaveDto();
+            var dueDto = f.DueEvents.CaptureSaveDto();
+            var custodyDto = f.Loop.CaptureCustodySaveDto();
+
+            // Restore under post-load delegates: the holder is at the store.
+            var g = new Fixture();
+            var gDriver = new ShoppingTripDriver(g.Loop,
+                (p, l) => l != "home" || returnAvailable,
+                (p, l) => l == physicalLocation,
+                (p, l) => true,
+                (p, l) => (float?)300f,
+                null,
+                60f);
+            g.Tasks.LoadFromSaveDto(tasksDto);
+            g.Budgets.LoadFromSaveDto(budgetsDto, Fixture.Day);
+            g.Tracker.LoadFromSaveDto(schedulesDto);
+            g.DueEvents.LoadFromSaveDto(dueDto);
+            g.Loop.LoadCustodyFromSaveDto(custodyDto);
+            gDriver.LoadFromSaveDto(driverDto);
+            Assert.IsTrue(gDriver.NeedsRehydrateAfterLoad, "recovery-only save must still rehydrate");
+            HouseholdPurchasingNeed gNeed = g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            gNeed.UnitsNeeded = need.UnitsNeeded;
+            gDriver.RehydrateAfterLoad(g.Tasks, id => (IGoodsSupplier)g.Store,
+                Fixture.Day, Fixture.Day * 86400f + 610 * 60f, g.DueEvents, g.Diag);
+            Assert.IsFalse(gDriver.NeedsRehydrateAfterLoad);
+
+            // Next day: the pending recovery is planned (not a fresh purchase).
+            returnAvailable = true;
+            g.Budgets.EnsureDay(Fixture.Day + 1);
+            gDriver.PlanForHousehold(Fixture.HouseholdId, g.Needs, Fixture.Day + 1, g.LoopOptions, g.Diag);
+            Assert.AreEqual(1, gDriver.ActiveTrips.Count, "paid recovery was lost across save/load\n" + string.Join("\n", g.Diag));
+            PlannedShoppingTrip recovery = gDriver.ActiveTrips[0];
+            Assert.AreEqual(PlannedShoppingTrip.TripState.RecoveryPlanned, recovery.State);
+            Assert.AreEqual(trip.TripId, recovery.TripId);
+
+            float recoveryDeparture = (Fixture.Day + 1) * 86400f + recovery.DepartureMinuteOfDay * 60f;
+            gDriver.AdvanceTick(recoveryDeparture, Fixture.Day + 1, g.DueEvents, g.Diag);
+            DueEvent returnDue = null;
+            foreach (DueEvent ev in g.DueEvents.PopDue(recoveryDeparture + 86400f))
+            {
+                if (ev.PayloadRef == recovery.Legs.Return.TaskId.ToString()) returnDue = ev;
+            }
+            Assert.IsNotNull(returnDue, "recovery return leg due not scheduled");
+            gDriver.HandleDueEvent(returnDue, Fixture.Day + 1, returnDue.DueGameSeconds, g.DueEvents, g.Diag);
+            // The return leg is airborne now (BeginReturnLeg set Returning
+            // at departure); the retry below is the arrival gate, not a
+            // second departure.
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, recovery.State);
+            physicalLocation = "home";
+            foreach (DueEvent ev in g.DueEvents.PopDue(returnDue.DueGameSeconds + 61f))
+            {
+                gDriver.HandleDueEvent(ev, Fixture.Day + 1, ev.DueGameSeconds, g.DueEvents, g.Diag);
+            }
+
+            Assert.AreEqual(0, gDriver.ActiveTrips.Count, "recovery trip should finish\n" + string.Join("\n", g.Diag));
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Done, recovery.State);
+            Assert.AreEqual(10, g.Inventories.GetOrCreate(Fixture.HouseholdId).GetTotalUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(0, g.Loop.ActiveCustodyBatches.Count);
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, gNeed.Status);
+            // Settlement ran before the save (f.Store, 1200c): the recovery
+            // must NOT charge again — no second charge, no second sale.
+            Assert.AreEqual(0, g.Store.CashReceived);
+            Assert.AreEqual(100, g.Store.Stock[HouseholdItemCatalog.FlourId]);
+        }
+
         // ---- Plan 16: General Store employee service (sub-items 1-4) ----
         //
         // The new production members (loop resolver properties, trip

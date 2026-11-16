@@ -361,7 +361,8 @@ namespace LandLedgers.Population
         }
 
         public static int ResolveDailyHeatingUse(
-            HouseholdState household, HouseholdReserveState reserve, int absoluteDayIndex, CalendarAnchor anchor)
+            HouseholdState household, HouseholdReserveState reserve, int absoluteDayIndex, CalendarAnchor anchor,
+            HouseholdStoveRegistry stoves = null)
         {
             if (household == null)
             {
@@ -380,8 +381,39 @@ namespace LandLedgers.Population
             reserve.ApplyDefinition(HouseholdReserveCatalog.Get(HouseholdReserveCatalog.FuelWoodCategoryId), household);
 
             int requiredFuelUnits = CalculateDailyFuelUseUnits(household, absoluteDayIndex, anchor);
-            int consumedUnits = Mathf.Min(requiredFuelUnits, Mathf.Max(0, reserve.currentUnits));
-            reserve.currentUnits = Mathf.Max(0, reserve.currentUnits - consumedUnits);
+            int consumedUnits = 0;
+            if (stoves != null)
+            {
+                // B3: the stove store is the custody record for fuel
+                // already moved — the burn debits installed stove stores
+                // first (in derivation order, via TryConsumeStoveFuel),
+                // then the remainder from the reserve. One burn, one
+                // debit: the total debited equals the required burn,
+                // capped by what exists, and the store and the reserve
+                // never both pay for the same unit. Until Agent G wires
+                // the registry in at the call site, stoves is null and
+                // the burn debits the reserve as today.
+                int remaining = requiredFuelUnits;
+                foreach (HouseholdStove stove in stoves.Stoves)
+                {
+                    if (remaining <= 0) break;
+                    if (stove == null) continue;
+                    int take = Math.Min(remaining, Math.Max(0, stove.FuelWoodUnitsOnHand));
+                    if (take <= 0) continue;
+                    string refusal = stoves.TryConsumeStoveFuel(stove.StoveAssetId, take, null);
+                    if (refusal != null) continue;
+                    consumedUnits += take;
+                    remaining -= take;
+                }
+                int fromReserve = Math.Min(remaining, Math.Max(0, reserve.currentUnits));
+                reserve.currentUnits = Math.Max(0, reserve.currentUnits - fromReserve);
+                consumedUnits += fromReserve;
+            }
+            else
+            {
+                consumedUnits = Mathf.Min(requiredFuelUnits, Mathf.Max(0, reserve.currentUnits));
+                reserve.currentUnits = Mathf.Max(0, reserve.currentUnits - consumedUnits);
+            }
 
             int shortfallUnits = Mathf.Max(0, requiredFuelUnits - consumedUnits);
             float winterStrain01 = CalculateEffectiveWinterStrain01(
@@ -542,7 +574,8 @@ namespace LandLedgers.Population
         }
 
         public static int ResolveDailyUse(
-            HouseholdState household, int absoluteDayIndex, CalendarAnchor anchor)
+            HouseholdState household, int absoluteDayIndex, CalendarAnchor anchor,
+            HouseholdStoveRegistry stoves = null)
         {
             if (household == null)
             {
@@ -573,8 +606,13 @@ namespace LandLedgers.Population
 
                 if (HouseholdHeatingEvaluator.IsFuelReserve(definition))
                 {
+                    // B3: the household's stove registry, when the caller
+                    // has it (Agent G wires it from the store runtime's
+                    // daily drive) — the burn debits installed stove
+                    // stores first, then the reserve. Null keeps today's
+                    // behaviour exactly.
                     totalUsed += HouseholdHeatingEvaluator.ResolveDailyHeatingUse(
-                        household, reserve, absoluteDayIndex, anchor);
+                        household, reserve, absoluteDayIndex, anchor, stoves);
                     continue;
                 }
 

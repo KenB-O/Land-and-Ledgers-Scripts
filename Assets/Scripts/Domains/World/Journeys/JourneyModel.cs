@@ -92,6 +92,14 @@ namespace LandLedgers.World.Journeys
         public string Diagnostic = string.Empty;
         /// <summary>NX-2C: set when a condition provider altered this route (weather/road/river note).</summary>
         public string ConditionNote = string.Empty;
+        /// <summary>
+        /// DEF-016: the route's aggregate condition multiplier — conditioned
+        /// cost divided by real miles along the chosen path. Exactly 1 when
+        /// unconditioned; above 1 when mud, snow, or high water slowed the
+        /// route (wagon mud is 1.6x). The freight quote prices the mileage
+        /// through this multiplier. 0 means unset (treat as 1).
+        /// </summary>
+        public float ConditionMultiplier;
     }
 
     /// <summary>
@@ -289,6 +297,7 @@ namespace LandLedgers.World.Journeys
                 route.LegLocationIds.Add(fromLocationId);
                 route.TotalMiles = 0f;
                 route.TotalMinutes = 0;
+                route.ConditionMultiplier = 1f;
                 return route;
             }
 
@@ -392,6 +401,11 @@ namespace LandLedgers.World.Journeys
             route.LegLocationIds = path;
             route.TotalMiles = realMiles;
             route.TotalMinutes = MinutesForMiles(dist[toLocationId], mode);
+            // DEF-016: conditioned cost over real miles — the aggregate
+            // multiplier the freight quote prices through. Exactly 1 when
+            // no provider conditioned any edge (Dijkstra cost then equals
+            // real miles along the chosen path).
+            route.ConditionMultiplier = realMiles > 0f ? dist[toLocationId] / realMiles : 1f;
             if (conditioned)
                 route.ConditionNote = "Route conditioned by weather/road/river state (Canon 4.4).";
             return route;

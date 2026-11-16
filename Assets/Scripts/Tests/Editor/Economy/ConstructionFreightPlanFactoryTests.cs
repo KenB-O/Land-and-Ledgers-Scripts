@@ -122,9 +122,18 @@ namespace LandLedgers.EditorTests.Economy
                     Freight, Tasks, Budgets, Tracker, Cash);
             }
 
-            public WorkPackage Package()
+            // DEF-016: a package carries its materials. The default 20
+            // lumber units fit the production wagon in one trip at the
+            // lumber calibration (20 x 16 kg = 320 kg, 20 x 0.04 m3 =
+            // 0.8 m3), so the one-trip quote expectations below are
+            // unchanged. Package(0) builds a package with no materials
+            // (the no-materials refusal test).
+            public WorkPackage Package(int lumberUnits = 20)
             {
-                return new WorkPackage { PackageId = "pkg-1", ProjectId = Project.ProjectId };
+                var package = new WorkPackage { PackageId = "pkg-1", ProjectId = Project.ProjectId };
+                if (lumberUnits > 0)
+                    package.Materials.Add(Material("lumber", lumberUnits, "board feet", ConstructionMaterialKind.Lumber));
+                return package;
             }
         }
 
@@ -139,8 +148,11 @@ namespace LandLedgers.EditorTests.Economy
             ConstructionFreightPlan plan = factory.Build(f.Package());
 
             Assert.IsNotNull(plan, factory.LastRefusal);
-            // 3.5 miles round trip: 25c + ceil(2 x 3.5) x 1c = 25 + 7 = 32c.
+            // 3.5 miles round trip, one trip (20 lumber units fit the wagon):
+            // 25c + ceil(2 x 3.5) x 1c = 25 + 7 = 32c.
             Assert.AreEqual(32, plan.FreightChargeCents);
+            Assert.AreEqual(1, plan.TripCount);
+            Assert.AreEqual(32, plan.FreightChargeCentsPerTrip);
             Assert.AreEqual("business:freight-1", plan.CarrierPayeeLabel);
             Assert.AreEqual("household:7", plan.BuyerOwnerName);
         }
@@ -293,7 +305,7 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void CargoSpec_IsTheDefault_NoInventedLumberMass()
+        public void CargoSpec_IsTheLumberCalibration()
         {
             var f = new Fixture();
             ConstructionFreightPlanFactory factory = f.Build();
@@ -301,8 +313,59 @@ namespace LandLedgers.EditorTests.Economy
             ConstructionFreightPlan plan = factory.Build(f.Package());
 
             Assert.IsNotNull(plan, factory.LastRefusal);
+            // DEF-016: one milled white-pine board, 1 in x 12 in x 16 ft
+            // (16 board feet) — 16 kg / 0.04 m3. See LumberCargoSpec.
+            Assert.AreEqual(16f, plan.CargoSpec.MassKgPerUnit);
+            Assert.AreEqual(0.04f, plan.CargoSpec.VolumeM3PerUnit);
+        }
+
+        [Test]
+        public void MultiTripQuote_300LumberUnits_ElevenTrips()
+        {
+            var f = new Fixture();
+            ConstructionFreightPlanFactory factory = f.Build();
+
+            ConstructionFreightPlan plan = factory.Build(f.Package(300));
+
+            Assert.IsNotNull(plan, factory.LastRefusal);
+            // DEF-016: 300 lumber units at 16 kg each is 28 per trip
+            // (mass binds: floor(450 / 16) = 28, volume would allow 100),
+            // so 11 trips at 32c each — 352c total, not one 32c trip.
+            Assert.AreEqual(11, plan.TripCount);
+            Assert.AreEqual(32, plan.FreightChargeCentsPerTrip);
+            Assert.AreEqual(352, plan.FreightChargeCents);
+        }
+
+        [Test]
+        public void NonLumberPackage_UsesDefaultSpec()
+        {
+            var f = new Fixture();
+            ConstructionFreightPlanFactory factory = f.Build();
+
+            var package = f.Package(0);
+            package.Materials.Add(Material("nails", 20, "pounds", ConstructionMaterialKind.Hardware));
+
+            ConstructionFreightPlan plan = factory.Build(package);
+
+            Assert.IsNotNull(plan, factory.LastRefusal);
+            // DEF-016: hardware has no calibrated spec yet, so the load
+            // freights on the default spec exactly as before, one trip.
             Assert.AreEqual(1f, plan.CargoSpec.MassKgPerUnit);
             Assert.AreEqual(0.01f, plan.CargoSpec.VolumeM3PerUnit);
+            Assert.AreEqual(1, plan.TripCount);
+            Assert.AreEqual(32, plan.FreightChargeCents);
+        }
+
+        [Test]
+        public void NoMaterials_Refuses()
+        {
+            var f = new Fixture();
+            ConstructionFreightPlanFactory factory = f.Build();
+
+            ConstructionFreightPlan plan = factory.Build(f.Package(0));
+
+            Assert.IsNull(plan);
+            StringAssert.Contains("no materials", factory.LastRefusal);
         }
 
         [Test]
@@ -470,13 +533,12 @@ namespace LandLedgers.EditorTests.Economy
                 {
                     PhaseName = "Framing", Sequence = 0, LaborMinutes = 480, Notes = "log walls and roof",
                 };
-                // 300 units, not the adapter tests' 600: at the default cargo
-                // spec (1 kg / 0.01 m3 per unit) 300 units is 300 kg / 3 m3,
-                // which fits the production opening wagon (450 kg / 4 m3) in
-                // one trip. A 600-unit load is 600 kg and the shipment service
-                // honestly refuses it pre-load — a single construction shipment
-                // is bounded by the wagon, and multi-trip or split-load support
-                // is a follow-up (DEF-016 territory), not this slice.
+                // 300 units, not the adapter tests' 600: at the DEF-016
+                // lumber calibration (16 kg / 0.04 m3 per board) the wagon
+                // carries 28 units per trip (mass binds), so 300 units is
+                // 11 priced trips. A 600-unit load is 22 trips the same way
+                // — multi-trip support landed with DEF-016, and the single-
+                // trip bound is gone from the story, not hidden.
                 framing.Materials.Add(Material("lumber", 300, "board feet", ConstructionMaterialKind.Lumber));
                 framing.RequiredToolItemIds.Add("saw");
                 design.Phases.Add(framing);
@@ -519,16 +581,17 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual("lumber", framing.StagedMaterialLines[0].DisplayName);
 
             // Exact money: 300 lumber at 40c is 12000c materials plus the
-            // factory's quoted 32c freight charge (25c + ceil(2 x 3.5) x 1c),
-            // paid exactly once.
+            // factory's quoted freight — 11 trips at 32c each (25c +
+            // ceil(2 x 3.5) x 1c per trip), 352c total, paid once per trip.
             Assert.AreEqual(1, c.SalePort.Sales.Count);
             Assert.AreEqual(12000, c.SalePort.Sales[0].TotalCents);
-            Assert.AreEqual(100000 - 12000 - 32, c.HouseholdLedger.GetBalanceCents());
+            Assert.AreEqual(100000 - 12000 - 352, c.HouseholdLedger.GetBalanceCents());
             Assert.AreEqual(12000, c.YardPurse.ReadBalanceCents());
-            Assert.AreEqual(32, c.CarrierPurse.ReadBalanceCents());
+            Assert.AreEqual(352, c.CarrierPurse.ReadBalanceCents());
             Assert.AreEqual(9700, c.SalePort.Stock["lumber"]);
             Assert.AreEqual(12000, record.FindFunding(framing.PackageId).ActualMaterialCostCents);
-            Assert.AreEqual(32, record.FindFunding(framing.PackageId).FreightCostCents);
+            Assert.AreEqual(352, record.FindFunding(framing.PackageId).FreightCostCents);
+            Assert.AreEqual(352, c.FreightCoordinator.LastFreightPaidCents);
 
             // Staging consumed the transient stockpile: nothing left behind.
             Assert.IsNotNull(adapter.LastStockpile);

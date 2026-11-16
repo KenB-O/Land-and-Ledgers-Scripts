@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Logistics;
 using UnityEngine;
 
 namespace LandLedgers.Economy.Freight
@@ -23,6 +24,28 @@ namespace LandLedgers.Economy.Freight
         public string DistanceRounding = "Ceiling to whole chargeable mile";
         public string PayerBusinessId = string.Empty;
         public string PaymentTiming = "After successful delivery";
+        /// <summary>
+        /// DEF-016 (Decision 10): cargo-aware disclosure. The money fields
+        /// keep their per-trip card meaning: BaseServiceFeeCents is the
+        /// card base per trip, MileageChargeCents is the per-trip mileage
+        /// charge, TotalPriceCents is trips x (base + mileage). TripCount
+        /// 0 on an old save reads as 1 everywhere it is consumed.
+        /// </summary>
+        public int TripCount;
+        /// <summary>Most units one wagon carries of this cargo (the tighter of the mass and volume bounds).</summary>
+        public int UnitsPerTrip;
+        /// <summary>Total units priced.</summary>
+        public int TotalQuantityUnits;
+        /// <summary>Total cargo mass across all trips, kilograms.</summary>
+        public float CargoMassKg;
+        /// <summary>Total cargo volume across all trips, cubic metres.</summary>
+        public float CargoVolumeM3;
+        /// <summary>Price of one trip (base + mileage); TotalPriceCents is TripCount x this.</summary>
+        public int PerTripTotalCents;
+        /// <summary>Road-condition multiplier applied to the mileage (1 = unconditioned, from the journey route).</summary>
+        public float ConditionMultiplier;
+        /// <summary>One factual line naming the trips, cargo, condition, and price.</summary>
+        public string TermsSummary = string.Empty;
     }
 
     [Serializable]
@@ -233,7 +256,8 @@ namespace LandLedgers.Economy.Freight
                 || quote.OneWayDistanceMiles <= 0f || quote.ChargeableMiles <= 0
                 || quote.BaseServiceFeeCents < 0 || quote.RatePerMileCents < 0
                 || quote.MileageChargeCents < 0 || quote.TotalPriceCents < 0
-                || (long)quote.BaseServiceFeeCents + quote.MileageChargeCents != quote.TotalPriceCents)
+                || quote.TripCount < 0
+                || (long)Math.Max(1, quote.TripCount) * (quote.BaseServiceFeeCents + quote.MileageChargeCents) != quote.TotalPriceCents)
                 return "Freight quote is incomplete or its integer-cent arithmetic does not reconcile.";
             if (request.Status == FreightServiceRequestStatus.Accepted || request.Status == FreightServiceRequestStatus.Refused)
                 return "Freight request is terminal; quote change refused.";
@@ -499,7 +523,111 @@ namespace LandLedgers.Economy.Freight
                 TotalPriceCents = (int)total,
                 DistanceBasis = chargeRoundTrip ? "Expected round trip, loaded outward and empty return" : "One-way route",
                 DistanceRounding = "Each chargeable mile rounded up to a whole mile",
-                PaymentTiming = "After successful delivery"
+                PaymentTiming = "After successful delivery",
+                // DEF-016: the miles-only quote is a single trip by construction.
+                TripCount = 1,
+                PerTripTotalCents = (int)total,
+                ConditionMultiplier = 1f,
+                TermsSummary = "1 trip; " + baseFeeCents + "c dispatch + " + ratePerMileCents + "c/mi "
+                    + (chargeRoundTrip ? "round trip" : "one-way") + "; total " + total + "c",
+            };
+            return true;
+        }
+
+        /// <summary>
+        /// DEF-016 (Decision 10): cargo-aware quotation. The price is the
+        /// card applied per trip, times the trips the load needs: each trip
+        /// is a real wagon journey with its own dispatch, load, drive, and
+        /// unload. Road conditions scale the mileage portion only
+        /// (mustering does not get muddier, the miles do); the multiplier
+        /// comes from the journey route, and 0 means unconditioned.
+        /// Handling, crew, and animals are priced through the per-trip
+        /// dispatch and disclosed on the plan — no invented per-horse or
+        /// per-hand rate. The old TryCalculate is untouched for callers
+        /// with miles only.
+        /// </summary>
+        public static bool TryCalculateCargo(float oneWayDistanceMiles, int baseFeeCents, int ratePerMileCents,
+            bool chargeRoundTrip, int quantityUnits, FreightCargoSpec cargo,
+            float wagonMassCapacityKg, float wagonVolumeCapacityM3,
+            float conditionMultiplier, out FreightServiceQuote quote, out string reason)
+        {
+            quote = null;
+            reason = string.Empty;
+            if (float.IsNaN(oneWayDistanceMiles) || float.IsInfinity(oneWayDistanceMiles) || oneWayDistanceMiles <= 0f)
+            { reason = "An authored positive one-way distance in miles is required."; return false; }
+            if (baseFeeCents < 0 || ratePerMileCents < 0)
+            { reason = "Freight rate card contains a negative fee."; return false; }
+            if (quantityUnits <= 0)
+            { reason = "A freight quote needs a positive quantity — a load of nothing has no trips to price."; return false; }
+            string cargoRefusal = FreightCargoCapacity.ValidateCargoSpec(cargo);
+            if (cargoRefusal != null) { reason = cargoRefusal; return false; }
+            string wagonRefusal = FreightCargoCapacity.ValidateWagonCapacity(wagonMassCapacityKg, wagonVolumeCapacityM3);
+            if (wagonRefusal != null) { reason = wagonRefusal; return false; }
+            if (float.IsNaN(conditionMultiplier) || float.IsInfinity(conditionMultiplier) || conditionMultiplier < 0f)
+            { reason = "Freight road-condition multiplier must be a finite, non-negative value."; return false; }
+            double multiplier = conditionMultiplier == 0f ? 1d : (double)conditionMultiplier;
+
+            int unitsPerTrip = FreightCargoCapacity.MaxUnitsPerTrip(cargo, wagonMassCapacityKg, wagonVolumeCapacityM3);
+            if (unitsPerTrip <= 0)
+            { reason = "The wagon cannot carry even one unit of this cargo — no trip to quote."; return false; }
+            // Ceiling division in long arithmetic: perTrip can be
+            // int.MaxValue (a cargo that binds on neither dimension),
+            // and quantityUnits + perTrip - 1 overflows an int there.
+            int trips = (int)((quantityUnits + (long)unitsPerTrip - 1) / unitsPerTrip);
+
+            double baseChargeable = chargeRoundTrip ? Math.Ceiling(oneWayDistanceMiles * 2d) : Math.Ceiling(oneWayDistanceMiles);
+            if (baseChargeable <= 0d || baseChargeable > int.MaxValue)
+            { reason = "Chargeable mileage is outside supported whole-mile bounds."; return false; }
+            double conditionedChargeable = Math.Ceiling(baseChargeable * multiplier);
+            if (conditionedChargeable <= 0d || conditionedChargeable > int.MaxValue)
+            { reason = "Chargeable mileage is outside supported whole-mile bounds."; return false; }
+            long mileagePerTrip;
+            long perTripTotal;
+            long total;
+            try
+            {
+                mileagePerTrip = checked((long)conditionedChargeable * ratePerMileCents);
+                perTripTotal = checked(mileagePerTrip + baseFeeCents);
+                total = checked(perTripTotal * trips);
+            }
+            catch (OverflowException)
+            {
+                reason = "Calculated freight quote exceeds supported integer-cent currency bounds.";
+                return false;
+            }
+            if (mileagePerTrip > int.MaxValue || perTripTotal > int.MaxValue || total > int.MaxValue)
+            { reason = "Calculated freight quote exceeds supported integer-cent currency bounds."; return false; }
+
+            float cargoMassKg = quantityUnits * cargo.MassKgPerUnit;
+            float cargoVolumeM3 = quantityUnits * cargo.VolumeM3PerUnit;
+            string terms = trips + (trips == 1 ? " trip, " : " trips, ")
+                + quantityUnits + "u total (" + cargoMassKg.ToString("0.0") + "kg, " + cargoVolumeM3.ToString("0.00") + "m3); "
+                + baseFeeCents + "c dispatch + " + ratePerMileCents + "c/mi "
+                + (chargeRoundTrip ? "round trip" : "one-way")
+                + "; total " + total + "c (" + perTripTotal + "c per trip)";
+            if (multiplier != 1d)
+                terms += "; road conditions " + conditionMultiplier.ToString("0.##") + "x, "
+                    + (int)conditionedChargeable + " billed miles for " + (int)baseChargeable + " route miles";
+            quote = new FreightServiceQuote
+            {
+                QuoteId = string.Empty,
+                OneWayDistanceMiles = oneWayDistanceMiles,
+                ChargeableMiles = (int)conditionedChargeable,
+                BaseServiceFeeCents = baseFeeCents,
+                RatePerMileCents = ratePerMileCents,
+                MileageChargeCents = (int)mileagePerTrip,
+                TotalPriceCents = (int)total,
+                DistanceBasis = chargeRoundTrip ? "Expected round trip, loaded outward and empty return" : "One-way route",
+                DistanceRounding = "Each chargeable mile rounded up to a whole mile",
+                PaymentTiming = "After successful delivery",
+                TripCount = trips,
+                UnitsPerTrip = unitsPerTrip,
+                TotalQuantityUnits = quantityUnits,
+                CargoMassKg = cargoMassKg,
+                CargoVolumeM3 = cargoVolumeM3,
+                PerTripTotalCents = (int)perTripTotal,
+                ConditionMultiplier = (float)multiplier,
+                TermsSummary = terms,
             };
             return true;
         }

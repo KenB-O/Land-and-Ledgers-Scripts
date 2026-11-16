@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using LandLedgers.Animals;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Blacksmith;
+using LandLedgers.Economy.Businesses.LumberYard;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Logistics;
@@ -46,9 +47,18 @@ namespace LandLedgers.Orchestration.Systems
     /// unloader are the first two distinct active members of the
     /// commissioning household, excluding the driver.
     ///
-    /// CargoSpec is the FreightCargoSpec default (1 kg / 0.01 m3 per unit):
-    /// no authored lumber mass exists anywhere in the yard or sawmill code,
-    /// and cargo-sensitive calibration belongs to DEF-016 (Decision 10).
+    /// CargoSpec is the lumber calibration (DEF-016: one milled white-pine
+    /// board, 16 kg / 0.04 m3) when every material line is lumber, and the
+    /// FreightCargoSpec default (1 kg / 0.01 m3 per unit) otherwise, with a
+    /// diagnostic naming the fallback. The spec is a freight parameter, not
+    /// item truth — calibrating other materials is a follow-up.
+    ///
+    /// DEF-016 (Decision 10): the quote is cargo-aware and multi-trip —
+    /// the same 25c dispatch + 1c/mile round-trip card, priced per trip
+    /// over the wagon's per-trip capacity, with conditioned miles billed
+    /// through the route's own multiplier. The plan carries the total,
+    /// the per-trip charge, and the trip count; the coordinator trusts
+    /// the plan and reconciles it before any money moves.
     /// </summary>
     public sealed class ConstructionFreightPlanFactory
     {
@@ -160,10 +170,30 @@ namespace LandLedgers.Orchestration.Systems
             if (estimate.Miles <= 0f)
                 return Refuse("ConstructionFreightPlanFactory: the yard-to-site route for project '" + project.ProjectId + "' measures " + estimate.Miles + " miles — a freight quote needs positive miles, refusing.");
 
-            if (!FreightServiceQuoteCalculator.TryCalculate(estimate.Miles, baseServiceFeeCents, ratePerMileCents, chargeRoundTrip,
-                    out FreightServiceQuote quote, out string quoteRefusal))
-                return Refuse("ConstructionFreightPlanFactory: no freight quote for project '" + project.ProjectId + "' — "
-                    + (string.IsNullOrWhiteSpace(quoteRefusal) ? "the quote calculator refused." : quoteRefusal));
+            // DEF-016: the load is the sum of every material line. A
+            // package with no materials has nothing to freight — refuse
+            // loudly instead of quoting a price for nothing.
+            List<ConstructionMaterialRequirement> materials = package.Materials ?? new List<ConstructionMaterialRequirement>();
+            int totalUnits = 0;
+            foreach (ConstructionMaterialRequirement requirement in materials)
+                totalUnits += Math.Max(0, requirement.RequiredUnits);
+            if (totalUnits <= 0)
+                return Refuse("ConstructionFreightPlanFactory: package '" + package.PackageId + "' has no materials to freight.");
+
+            // DEF-016: the cargo spec is a freight parameter, not item
+            // truth (see LumberCargoSpec). All-lumber loads freight on
+            // the lumber calibration; anything else falls back to the
+            // default spec exactly as today, with a diagnostic naming
+            // the fallback — calibrating other materials is a follow-up.
+            bool allLumber = true;
+            foreach (ConstructionMaterialRequirement requirement in materials)
+                if (requirement.MaterialKind != ConstructionMaterialKind.Lumber)
+                    allLumber = false;
+            FreightCargoSpec cargoSpec = allLumber
+                ? LumberCargoSpec.Spec
+                : new FreightCargoSpec();
+            if (!allLumber)
+                diagnostics.Add("ConstructionFreightPlanFactory: non-lumber materials in package '" + package.PackageId + "' — freighting on the default cargo spec (no calibrated spec for that material yet).");
 
             BusinessInstanceState carrier = freightBusiness != null ? freightBusiness() : null;
             if (carrier == null)
@@ -178,6 +208,19 @@ namespace LandLedgers.Orchestration.Systems
             if (!string.Equals(wagon.OwnerKind, "business", StringComparison.Ordinal)
                 || !string.Equals(wagon.OwnerId, carrier.InstanceId, StringComparison.Ordinal))
                 return Refuse("ConstructionFreightPlanFactory: wagon '" + wagonAssetId + "' is not owned by freight business '" + carrier.InstanceId + "' — refusing.");
+            if (wagon.PayloadMassCapacityKg <= 0f || wagon.CargoVolumeCapacityM3 <= 0f)
+                return Refuse("ConstructionFreightPlanFactory: wagon '" + wagonAssetId + "' has no payload capacity (" + wagon.PayloadMassCapacityKg + " kg / " + wagon.CargoVolumeCapacityM3 + " m3) — refusing.");
+
+            // Quote (DEF-016): cargo-aware, multi-trip, condition-aware.
+            // The 25c dispatch + 1c/mile round-trip card is unchanged; the
+            // quote now prices trips (quantity over the wagon's per-trip
+            // capacity) and bills conditioned miles through the route's
+            // own multiplier.
+            if (!FreightServiceQuoteCalculator.TryCalculateCargo(estimate.Miles, baseServiceFeeCents, ratePerMileCents, chargeRoundTrip,
+                    totalUnits, cargoSpec, wagon.PayloadMassCapacityKg, wagon.CargoVolumeCapacityM3,
+                    estimate.ConditionMultiplier, out FreightServiceQuote quote, out string quoteRefusal))
+                return Refuse("ConstructionFreightPlanFactory: no freight quote for project '" + project.ProjectId + "' — "
+                    + (string.IsNullOrWhiteSpace(quoteRefusal) ? "the quote calculator refused." : quoteRefusal));
 
             List<EntityId> draftAnimals = new List<EntityId>();
             IReadOnlyCollection<AnimalState> animals = activeAnimals != null ? activeAnimals() : null;
@@ -219,10 +262,14 @@ namespace LandLedgers.Orchestration.Systems
                 Tracker = tracker,
                 Cash = cash,
                 SiteLabel = project.ProjectId,
+                // DEF-016: the total is the quoted total across all trips;
+                // per-trip and trip count come from the same quote.
                 FreightChargeCents = quote.TotalPriceCents,
+                FreightChargeCentsPerTrip = quote.PerTripTotalCents,
+                TripCount = quote.TripCount,
                 CarrierPayeeLabel = "business:" + carrier.InstanceId,
                 BuyerOwnerName = "household:" + project.HouseholdId,
-                CargoSpec = new FreightCargoSpec(),
+                CargoSpec = cargoSpec,
                 TransitGameSeconds = Math.Max(1f, estimate.MinutesOneWay * 60f),
             };
             return plan;

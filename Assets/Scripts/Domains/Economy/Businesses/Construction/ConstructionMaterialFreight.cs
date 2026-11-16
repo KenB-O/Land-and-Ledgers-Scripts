@@ -390,7 +390,12 @@ namespace LandLedgers.Economy
         public WorkTimeBudgetStore Budgets;
         public PersonScheduleTracker Tracker;
         public string SiteLabel = string.Empty;
+        /// <summary>The quoted total freight charge across all trips. The commissioner's overrun gate and funding record read the total.</summary>
         public int FreightChargeCents;
+        /// <summary>DEF-016: how many wagon trips the quoted load needs. 0 on a hand-built plan reads as 1.</summary>
+        public int TripCount;
+        /// <summary>DEF-016: the charge for one trip. 0 on a hand-built plan reads as the whole FreightChargeCents.</summary>
+        public int FreightChargeCentsPerTrip;
         public string CarrierPayeeLabel = string.Empty;
         public CreditCashBridge Cash;
         public string BuyerOwnerName = string.Empty;
@@ -413,6 +418,9 @@ namespace LandLedgers.Economy
         private int sequence;
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
+
+        /// <summary>DEF-016: total freight actually paid by the last FreightSaleToSite call (0 when the call paid nothing or refused before payment). Reset per call.</summary>
+        public int LastFreightPaidCents { get; private set; }
 
         /// <summary>QA-20: the coordinator holds no save slot and is rebuilt
         /// after a load, so its sequence restarts at 0. Seed it from the
@@ -438,8 +446,12 @@ namespace LandLedgers.Economy
         /// <summary>
         /// Freights one recorded sale to the site. Returns null on success
         /// (goods in the stockpile); a refusal otherwise — on refusal the
-        /// sale still stands at the supplier (real purchase, buyer's goods),
-        /// but NOTHING reaches the stockpile.
+        /// sale still stands at the supplier (real purchase, buyer's
+        /// goods), and only the trips that completed before the failure
+        /// reached the stockpile (DEF-016: each trip's goods are received
+        /// as its trip completes, so a later failure never strands
+        /// delivered goods in a completed shipment with no inventory
+        /// holding them).
         /// </summary>
         public string FreightSaleToSite(
             ConstructionMaterialSale sale,
@@ -449,6 +461,7 @@ namespace LandLedgers.Economy
             List<string> diag)
         {
             diag = diag ?? diagnostics;
+            LastFreightPaidCents = 0;
             if (sale == null || plan == null || stockpile == null)
                 return "ConstructionMaterialFreightCoordinator: sale, freight plan and stockpile required.";
             if (plan.Freight == null)
@@ -461,80 +474,38 @@ namespace LandLedgers.Economy
                 return $"ConstructionMaterialFreightCoordinator: sale '{sale.SaleId}' has no units to freight.";
             if (plan.FreightChargeCents < 0)
                 return "ConstructionMaterialFreightCoordinator: a negative freight charge is not a quote — refusing.";
+            if (plan.FreightChargeCents > 0 && string.IsNullOrWhiteSpace(plan.CarrierPayeeLabel))
+                return "ConstructionMaterialFreightCoordinator: a freight charge with no carrier payee — refusing.";
 
-            // The freight charge is real money to a real carrier, quoted up
-            // front — paid before the wagon rolls, through the cash bridge.
-            if (plan.FreightChargeCents > 0)
-            {
-                if (string.IsNullOrWhiteSpace(plan.CarrierPayeeLabel))
-                    return "ConstructionMaterialFreightCoordinator: a freight charge with no carrier payee — refusing.";
-                string payProblem = ConstructionCashMover.MoveCash(plan.Cash, plan.BuyerOwnerName,
-                    plan.CarrierPayeeLabel, plan.FreightChargeCents, dayIndex,
-                    $"freight for sale '{sale.SaleId}' to site '{plan.SiteLabel}'", diag);
-                if (payProblem != null)
-                    return "ConstructionMaterialFreightCoordinator: freight charge unpaid — " + payProblem;
-            }
+            // DEF-016: the plan is the quoting authority. Reconcile it
+            // (trips x per-trip must equal the total) and check it can
+            // actually carry the load at this wagon, BEFORE any money
+            // moves — a plan that quotes too few trips refuses here with
+            // "blocked pre-load", instead of paying first and then
+            // blocking at the shipment service as before.
+            int trips = Math.Max(1, plan.TripCount);
+            int perTripCharge = plan.FreightChargeCentsPerTrip > 0
+                ? plan.FreightChargeCentsPerTrip : plan.FreightChargeCents;
+            if ((long)trips * perTripCharge != plan.FreightChargeCents)
+                return "ConstructionMaterialFreightCoordinator: freight plan charge does not reconcile — "
+                    + trips + " trip(s) x " + perTripCharge + "c is not " + plan.FreightChargeCents
+                    + "c; refusing.";
+            int maxPerTrip = FreightCargoCapacity.MaxUnitsPerTrip(plan.CargoSpec, plan.Wagon);
+            int tripsNeeded = FreightCargoCapacity.TripsNeeded(sale.TotalUnits, plan.CargoSpec, plan.Wagon);
+            if (tripsNeeded < 0 || tripsNeeded > trips)
+                return "ConstructionMaterialFreightCoordinator: freight plan quotes " + trips
+                    + " trip(s) but the load needs "
+                    + (tripsNeeded < 0 ? "more than the wagon can ever carry" : tripsNeeded + " trip(s)")
+                    + " at this wagon capacity — shipment blocked pre-load; goods stay with the supplier, nothing freighted.";
 
-            // QA-20: seed from the service's tracked shipments so a fresh
-            // coordinator after load never re-issues a pre-save cship- id.
-            SeedSequenceFromService(plan.Freight);
-            string shipmentId = $"cship-{sequence++}";
-            // Pass XI WS2: the site stockpile IS the receiving authority for
-            // this leg. Without a ReceiveShipment callback the shipment
-            // service honestly holds the goods in wagon custody and the
-            // chain can never complete (the coordinator previously built
-            // these hooks with no receiver, so every site delivery stalled
-            // at unloading). Acceptance here is site custody only; the
-            // stockpile bookkeeping follows after conservation is verified,
-            // and staging consumes the stockpile — no unit is counted twice.
-            // A shipment bound for anywhere but this site is refused.
-            var hooks = new FreightShipmentHooks
-            {
-                Tasks = plan.Tasks,
-                Budgets = plan.Budgets,
-                DayIndex = dayIndex,
-                Diagnostics = diag,
-                // Slice A2 (QA-05): the coordinator already reserves whole-day
-                // crew windows for the loader and unloader before driving the
-                // chain (below), so the freight service must NOT reserve
-                // sub-windows inside them (TryReserve would refuse the
-                // overlap) and must not log the missing-calendar diagnostic.
-                // The crew's person-time is guarded by the coordinator's own
-                // windows, not by the service's reserve-first path.
-                CrewWindowsReservedByCaller = true,
-                ReceiveShipment = (LogisticsShipmentState shipment, int quantityUnits, out string receiveReason) =>
-                {
-                    receiveReason = string.Empty;
-                    if (shipment == null || quantityUnits <= 0)
-                    {
-                        receiveReason = "no shipment or nothing to receive";
-                        return 0;
-                    }
-                    if (!string.IsNullOrWhiteSpace(plan.SiteLabel)
-                        && !string.Equals(shipment.destinationBusinessInstanceId, plan.SiteLabel, StringComparison.Ordinal))
-                    {
-                        receiveReason = $"shipment '{shipment.ShipmentId}' is bound for " +
-                            $"'{shipment.destinationBusinessInstanceId}', not site '{plan.SiteLabel}'";
-                        return 0;
-                    }
-                    diag?.Add($"ConstructionMaterialFreightCoordinator: site '{plan.SiteLabel}' accepted " +
-                        $"{quantityUnits}u from shipment '{shipment.ShipmentId}' into site custody.");
-                    return quantityUnits;
-                },
-            };
-            plan.Freight.RegisterWagon(plan.Wagon);
-            string reason;
-            LogisticsShipmentState shipment = plan.Freight.CreateShipment(
-                shipmentId, sale.SupplierBusinessId, plan.SiteLabel, sale.TotalUnits,
-                plan.CargoSpec ?? new FreightCargoSpec(), plan.Wagon.AssetId, hooks, out reason);
-            if (shipment == null)
-                return "ConstructionMaterialFreightCoordinator: shipment not created — " + reason;
-            if (shipment.Status == LogisticsShipmentStatus.Failed)
-                return $"ConstructionMaterialFreightCoordinator: shipment '{shipmentId}' blocked pre-load ({shipment.BlockedReason}) — goods stay with the supplier, nothing freighted.";
+            List<ConstructionMaterialSale> tripSales = SplitSaleIntoTrips(sale, trips, maxPerTrip, out string splitRefusal);
+            if (splitRefusal != null)
+                return "ConstructionMaterialFreightCoordinator: " + splitRefusal;
 
             // Person-time exclusivity for the handling crew: the loader and
             // unloader are real people who cannot be double-booked while
-            // they work the shipment.
+            // they work the shipment. One whole-day reservation covers
+            // every trip of this call (the trips run back to back today).
             if (!plan.LoaderId.IsValid || plan.LoaderId.Kind != EntityKind.Person)
                 return "ConstructionMaterialFreightCoordinator: freight loading needs a real loader person — refusing phantom crew.";
             if (!plan.UnloaderId.IsValid || plan.UnloaderId.Kind != EntityKind.Person)
@@ -544,11 +515,11 @@ namespace LandLedgers.Economy
             {
                 string loaderRes = plan.Tracker.TryReserve(
                     plan.LoaderId.Id, PersonActivityKind.Work, dayIndex, 0, 1440,
-                    $"freight load {shipmentId}");
+                    $"freight load {sale.SaleId}");
                 if (loaderRes == null) crewReservations.Add(LastReservationId(plan.Tracker, plan.LoaderId));
                 string unloaderRes = plan.Tracker.TryReserve(
                     plan.UnloaderId.Id, PersonActivityKind.Work, dayIndex, 0, 1440,
-                    $"freight unload {shipmentId}");
+                    $"freight unload {sale.SaleId}");
                 if (unloaderRes == null) crewReservations.Add(LastReservationId(plan.Tracker, plan.UnloaderId));
                 if (loaderRes != null || unloaderRes != null)
                 {
@@ -558,19 +529,200 @@ namespace LandLedgers.Economy
                 }
             }
 
-            string failure = RunShipmentChain(plan, shipment, hooks, dayIndex, diag);
+            string failure = RunTrips(plan, sale, stockpile, tripSales, perTripCharge, trips, dayIndex, diag);
             if (plan.Tracker != null)
                 foreach (string id in crewReservations) plan.Tracker.Release(id);
             if (failure != null) return failure;
 
-            string verifyReason;
-            if (!plan.Freight.VerifyConservation(shipment, sale.TotalUnits, out verifyReason))
-                return $"ConstructionMaterialFreightCoordinator: conservation FAILED for '{shipmentId}' — {verifyReason}. Goods do not reach the stockpile.";
-
-            string receiveProblem = stockpile.Receive(sale, diag);
-            if (receiveProblem != null) return receiveProblem;
             diag.Add($"ConstructionMaterialFreightCoordinator: sale '{sale.SaleId}' freighted to '{plan.SiteLabel}' " +
-                $"({sale.TotalUnits} unit(s) conserved) and received into the site stockpile.");
+                $"({sale.TotalUnits} unit(s) conserved in {trips} trip(s), {LastFreightPaidCents}c freight) and received into the site stockpile.");
+            return null;
+        }
+
+        /// <summary>
+        /// DEF-016: slices one recorded sale into per-trip sub-sales,
+        /// filling each trip to the wagon's per-trip capacity and putting
+        /// the remainder on the last trip. Lines are walked in order and
+        /// may split across trips; provenance is preserved with a trip
+        /// suffix on each sliced line. A sale that cannot be sliced into
+        /// exactly `trips` non-empty sub-sales is an inconsistent plan,
+        /// refused — never silently re-priced. Returns the sub-sales, or
+        /// an empty list with `refusal` set.
+        /// </summary>
+        private static List<ConstructionMaterialSale> SplitSaleIntoTrips(ConstructionMaterialSale sale,
+            int trips, int maxUnitsPerTrip, out string refusal)
+        {
+            refusal = null;
+            var result = new List<ConstructionMaterialSale>();
+            if (sale == null || trips <= 0 || maxUnitsPerTrip <= 0)
+            {
+                refusal = "a sale, a positive trip count, and a positive per-trip capacity are required to split a load.";
+                return result;
+            }
+            int remaining = sale.TotalUnits;
+            int lineIndex = 0;
+            int lineRemaining = 0;
+            for (int tripIndex = 0; tripIndex < trips; tripIndex++)
+            {
+                int take = Math.Min(maxUnitsPerTrip, remaining);
+                if (take <= 0)
+                {
+                    refusal = "freight plan quotes " + trips + " trip(s) for " + sale.TotalUnits
+                        + " unit(s) — trip " + (tripIndex + 1) + " would carry nothing; the plan is inconsistent, refusing.";
+                    return new List<ConstructionMaterialSale>();
+                }
+                var sub = new ConstructionMaterialSale
+                {
+                    SaleId = sale.SaleId + "/trip-" + (tripIndex + 1),
+                    SupplierBusinessId = sale.SupplierBusinessId,
+                    ProjectId = sale.ProjectId,
+                    PackageId = sale.PackageId,
+                    DayIndex = sale.DayIndex,
+                };
+                int needed = take;
+                while (needed > 0 && lineIndex < sale.Lines.Count)
+                {
+                    ConstructionMaterialSaleLine line = sale.Lines[lineIndex];
+                    if (line == null || line.Units <= 0) { lineIndex++; lineRemaining = 0; continue; }
+                    if (lineRemaining <= 0) lineRemaining = line.Units;
+                    int slice = Math.Min(needed, lineRemaining);
+                    sub.Lines.Add(new ConstructionMaterialSaleLine
+                    {
+                        DisplayName = line.DisplayName,
+                        Units = slice,
+                        UnitLabel = line.UnitLabel,
+                        UnitPriceCents = line.UnitPriceCents,
+                        SupplierBusinessId = line.SupplierBusinessId,
+                        Provenance = (line.Provenance ?? string.Empty) + $" (trip {tripIndex + 1} of {trips})",
+                    });
+                    needed -= slice;
+                    lineRemaining -= slice;
+                    if (lineRemaining <= 0) lineIndex++;
+                }
+                if (needed > 0)
+                {
+                    refusal = "sale '" + sale.SaleId + "' lines do not sum to its total — cannot split the load; refusing.";
+                    return new List<ConstructionMaterialSale>();
+                }
+                result.Add(sub);
+                remaining -= take;
+            }
+            if (remaining != 0)
+            {
+                refusal = "sale '" + sale.SaleId + "' did not split evenly across " + trips + " trip(s) — refusing.";
+                return new List<ConstructionMaterialSale>();
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// DEF-016: runs the plan's trips back to back. Each trip is
+        /// priced and settled separately (its charge is paid before its
+        /// wagon rolls), runs the real shipment chain, is conservation-
+        /// verified against its own sub-sale, and is received into the
+        /// stockpile immediately — so a later trip's failure leaves the
+        /// earlier trips' goods at the site, never stranded in a
+        /// completed shipment. Returns the failure, or null. The caller
+        /// releases the crew reservations either way.
+        /// </summary>
+        private string RunTrips(ConstructionFreightPlan plan, ConstructionMaterialSale sale,
+            ConstructionSiteStockpile stockpile, List<ConstructionMaterialSale> tripSales, int perTripCharge, int trips,
+            int dayIndex, List<string> diag)
+        {
+            // QA-20: seed from the service's tracked shipments so a fresh
+            // coordinator after load never re-issues a pre-save cship- id.
+            SeedSequenceFromService(plan.Freight);
+            int deliveredUnits = 0;
+            for (int tripIndex = 0; tripIndex < tripSales.Count; tripIndex++)
+            {
+                ConstructionMaterialSale tripSale = tripSales[tripIndex];
+                string tripLabel = "trip " + (tripIndex + 1) + " of " + trips;
+                // The freight charge is real money to a real carrier, quoted
+                // up front per trip — paid before that trip's wagon rolls.
+                if (perTripCharge > 0)
+                {
+                    string payProblem = ConstructionCashMover.MoveCash(plan.Cash, plan.BuyerOwnerName,
+                        plan.CarrierPayeeLabel, perTripCharge, dayIndex,
+                        $"freight for sale '{sale.SaleId}' {tripLabel} to site '{plan.SiteLabel}'", diag);
+                    if (payProblem != null)
+                        return "ConstructionMaterialFreightCoordinator: freight charge for " + tripLabel + " unpaid — "
+                            + payProblem + $" ({deliveredUnits} of {sale.TotalUnits} unit(s) already at the site).";
+                    LastFreightPaidCents += perTripCharge;
+                }
+                string shipmentId = $"cship-{sequence++}";
+                // Pass XI WS2: the site stockpile IS the receiving authority
+                // for this leg. Without a ReceiveShipment callback the
+                // shipment service honestly holds the goods in wagon custody
+                // and the chain can never complete (the coordinator
+                // previously built these hooks with no receiver, so every
+                // site delivery stalled at unloading). Acceptance here is
+                // site custody only; the stockpile bookkeeping follows after
+                // conservation is verified, and staging consumes the
+                // stockpile — no unit is counted twice. A shipment bound for
+                // anywhere but this site is refused.
+                var hooks = new FreightShipmentHooks
+                {
+                    Tasks = plan.Tasks,
+                    Budgets = plan.Budgets,
+                    DayIndex = dayIndex,
+                    Diagnostics = diag,
+                    // Slice A2 (QA-05): the coordinator already reserves
+                    // whole-day crew windows for the loader and unloader
+                    // before driving the chain (above), so the freight
+                    // service must NOT reserve sub-windows inside them
+                    // (TryReserve would refuse the overlap) and must not
+                    // log the missing-calendar diagnostic. The crew's
+                    // person-time is guarded by the coordinator's own
+                    // windows, not by the service's reserve-first path.
+                    CrewWindowsReservedByCaller = true,
+                    ReceiveShipment = (LogisticsShipmentState shipment, int quantityUnits, out string receiveReason) =>
+                    {
+                        receiveReason = string.Empty;
+                        if (shipment == null || quantityUnits <= 0)
+                        {
+                            receiveReason = "no shipment or nothing to receive";
+                            return 0;
+                        }
+                        if (!string.IsNullOrWhiteSpace(plan.SiteLabel)
+                            && !string.Equals(shipment.destinationBusinessInstanceId, plan.SiteLabel, StringComparison.Ordinal))
+                        {
+                            receiveReason = $"shipment '{shipment.ShipmentId}' is bound for " +
+                                $"'{shipment.destinationBusinessInstanceId}', not site '{plan.SiteLabel}'";
+                            return 0;
+                        }
+                        diag?.Add($"ConstructionMaterialFreightCoordinator: site '{plan.SiteLabel}' accepted " +
+                            $"{quantityUnits}u from shipment '{shipment.ShipmentId}' into site custody.");
+                        return quantityUnits;
+                    },
+                };
+                plan.Freight.RegisterWagon(plan.Wagon);
+                string reason;
+                LogisticsShipmentState shipment = plan.Freight.CreateShipment(
+                    shipmentId, sale.SupplierBusinessId, plan.SiteLabel, tripSale.TotalUnits,
+                    plan.CargoSpec ?? new FreightCargoSpec(), plan.Wagon.AssetId, hooks, out reason);
+                if (shipment == null)
+                    return "ConstructionMaterialFreightCoordinator: " + tripLabel + " shipment not created — " + reason
+                        + $" ({deliveredUnits} of {sale.TotalUnits} unit(s) already at the site).";
+                if (shipment.Status == LogisticsShipmentStatus.Failed)
+                    return $"ConstructionMaterialFreightCoordinator: shipment '{shipmentId}' ({tripLabel}) blocked pre-load ({shipment.BlockedReason}) — goods stay with the supplier ({deliveredUnits} of {sale.TotalUnits} unit(s) already at the site).";
+
+                string failure = RunShipmentChain(plan, shipment, hooks, dayIndex, diag);
+                if (failure != null)
+                    return "ConstructionMaterialFreightCoordinator: " + tripLabel + " failed — " + failure
+                        + $" ({deliveredUnits} of {sale.TotalUnits} unit(s) already at the site).";
+
+                string verifyReason;
+                if (!plan.Freight.VerifyConservation(shipment, tripSale.TotalUnits, out verifyReason))
+                    return $"ConstructionMaterialFreightCoordinator: conservation FAILED for '{shipmentId}' ({tripLabel}) — {verifyReason}. Goods do not reach the stockpile.";
+
+                string receiveProblem = stockpile.Receive(tripSale, diag);
+                if (receiveProblem != null)
+                    return "ConstructionMaterialFreightCoordinator: " + tripLabel + " receipt failed — " + receiveProblem
+                        + $" ({deliveredUnits} of {sale.TotalUnits} unit(s) already at the site).";
+                deliveredUnits += tripSale.TotalUnits;
+                diag.Add($"ConstructionMaterialFreightCoordinator: {tripLabel} of sale '{sale.SaleId}' " +
+                    $"({tripSale.TotalUnits} unit(s)) arrived at '{plan.SiteLabel}'.");
+            }
             return null;
         }
 

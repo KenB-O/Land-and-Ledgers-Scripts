@@ -569,14 +569,10 @@ namespace LandLedgers.Economy.Logistics
             return shipment;
         }
 
+        /// <summary>DEF-016: cargo-spec validation lives in FreightCargoCapacity now, so the quote calculator (which prices before any shipment exists) and this service share one rule and one wording.</summary>
         private static string ValidateCargoSpec(FreightCargoSpec cargo)
         {
-            if (cargo == null) return "FreightShipmentService: cargo specification is missing.";
-            if (float.IsNaN(cargo.MassKgPerUnit) || float.IsInfinity(cargo.MassKgPerUnit) || cargo.MassKgPerUnit < 0f)
-                return "FreightShipmentService: cargo mass per unit must be a finite, non-negative value; shipment owns zero cargo.";
-            if (float.IsNaN(cargo.VolumeM3PerUnit) || float.IsInfinity(cargo.VolumeM3PerUnit) || cargo.VolumeM3PerUnit < 0f)
-                return "FreightShipmentService: cargo volume per unit must be a finite, non-negative value; shipment owns zero cargo.";
-            return null;
+            return FreightCargoCapacity.ValidateCargoSpec(cargo);
         }
 
         private static string CapacityRefusal(int quantityUnits, FreightCargoSpec cargo, EquipmentAsset wagon)

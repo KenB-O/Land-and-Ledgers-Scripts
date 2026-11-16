@@ -16,6 +16,8 @@ namespace LandLedgers.World.Journeys
         public int MinutesOneWay;
         public float Miles;
         public string Diagnostic = string.Empty;
+        /// <summary>DEF-016: the route's aggregate condition multiplier (1 = unconditioned, 0 = unset, treat as 1).</summary>
+        public float ConditionMultiplier;
     }
 
     /// <summary>
@@ -86,6 +88,7 @@ namespace LandLedgers.World.Journeys
             estimate.FromModel = true;
             estimate.MinutesOneWay = route.TotalMinutes;
             estimate.Miles = route.TotalMiles;
+            estimate.ConditionMultiplier = route.ConditionMultiplier;
             return estimate;
         }
 

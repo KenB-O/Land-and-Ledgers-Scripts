@@ -328,6 +328,25 @@ namespace LandLedgers.EditorTests.Integration
             // the baseline.
             "FurnishingContentsItem", "FurnishingContentsLine", "PropertyContentsSelection",
             "FurnishingWant", "FurnishingResaleLine", "HouseholdFurnishingEvaluationInputs",
+            // B7 (Agent B, expanded campaign 2026-11-16): the directed-action
+            // record and the presence contract of
+            // PlayerFurnishingPresenceContract.cs. They are the working
+            // records of the presence feature — constructed and consumed
+            // inside that file and read by the tests; they have no reference
+            // outside Domains/Population yet, so they are classified
+            // feature-internal here, the same precedent as the B1
+            // sleeping-place, B4 dining, B5 storage and B6 contents records
+            // above. FurnishingPresencePolicy and FurnishingTaskDefinitions
+            // are static classes and the enums (FurnishingActionKind,
+            // PresenceRequirement, DirectedActionStatus,
+            // DirectedActionVerdict) and the seams
+            // (IPlayerFurnishingPresenceDriver,
+            // IFurnishingAgentAuthorization) and the executor delegate need
+            // no entry. When Agent G wires the production presence driver
+            // (SimulationDrivers) and Agents D and F consume the contract
+            // (player selection API, purchase flow), these gain production
+            // callers outside the directory and should leave the baseline.
+            "DirectedFurnishingAction", "PlayerFurnishingPresenceContract",
             "SkillTaskDurationEstimator",
             "SmithingRecipe", "SocietyReconciliation", "StageLaborBaseline", "StagedBakeryBatch",
             "StagedBakeryBatchSaveDto", "StandingInstruction", "StandingInstructionRegister", "StandingInstructionSaveDto",

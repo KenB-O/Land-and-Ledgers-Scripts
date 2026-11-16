@@ -52,6 +52,29 @@ namespace LandLedgers.Economy.Equipment.Workstations
             }
         }
 
+        /// <summary>
+        /// F1 (expanded campaign 2026-11-16): CarpenterWorkshop. Canon Part V:
+        /// Builder (carpenter/joiner) — workbench, carpenter hand-tool kit,
+        /// workshop space. Furniture-making happens here; the shop building
+        /// alone grants nothing (Tech X §3.5). The kit is satisfied by an
+        /// EquipmentAsset whose Kind is the kit id, the same convention as
+        /// the wheelwright station's "wheelwright-hand-tools" component.
+        /// This is the furniture-making workstation; the construction
+        /// builder/carpenter crew is a different thing (it builds buildings).
+        /// </summary>
+        public static WorkstationDefinition CarpenterWorkstation
+        {
+            get
+            {
+                var def = Build("carpenter-workshop", "Carpenter Workshop", "carpenter-workshop",
+                    "F1 (expanded campaign 2026-11-16); Canon Part V: Builder (carpenter/joiner); Tech X §3.5",
+                    new[] { "make-furniture" },
+                    ("workbench", 1), ("carpenter-hand-tool-kit", 1));
+                def.SupportRequirements.Add(new SupportRequirement("operator-skill", "carpentry"));
+                return def;
+            }
+        }
+
         /// <summary>Tech X §3.5: ForgeStation. EQP-2 migrates the EQU-2 flag to derived readiness.</summary>
         public static WorkstationDefinition ForgeStation
         {
@@ -398,6 +421,7 @@ namespace LandLedgers.Economy.Equipment.Workstations
             ForgeStation, BakeOven, SaloonBar, GrainMillStation, ButcherBlock, SawmillSawLine, AssayBench,
             CattleHandlingPens, StoreCounter, BoardingKitchen, LaundryStation, TanningYard, PrintingPress,
             BarberChairStation, BarberBathStation, TailorCuttingTableStation, TellerWindowStation,
+            CarpenterWorkstation,
         };
     }
 }

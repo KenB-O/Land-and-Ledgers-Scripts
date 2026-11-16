@@ -261,7 +261,7 @@ namespace LandLedgers.Economy.Storage
 
         private static PhysicalItemSpec[] SeedSpecs()
         {
-            return new[]
+            var seeds = new List<PhysicalItemSpec>
             {
                 // Household catalog ids (HouseholdInventory.cs Definitions),
                 // identity copied verbatim from the catalog. Every physical
@@ -310,6 +310,14 @@ namespace LandLedgers.Economy.Storage
                 // (cordwood units)"); no authored mass in source.
                 UnknownSpec("bakery-fuelwood", "Bakery Fuelwood", "unit"), // Unknown: no authored mass in source.
             };
+
+            // Agent F slice F0 (expanded campaign 2026-11-16): first-wave
+            // furniture specs with Known authored mass/volume/dimensions
+            // (FurnitureItemSpecs). Furniture ids are not household-catalog
+            // ids, so no catalog-agreement check applies; the registry stays
+            // the one and only spec registry.
+            seeds.AddRange(FurnitureItemSpecs.SeedSpecs());
+            return seeds.ToArray();
         }
     }
 }

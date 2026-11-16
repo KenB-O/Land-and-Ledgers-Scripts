@@ -61,6 +61,18 @@ namespace LandLedgers.World.Regional
                 { "hand_tool", "tools_hardware" }, { "farm_tool", "tools_hardware" },
                 { "patent_remedy", "medicine_remedies" },
                 { "medicine_bottle", "medicine_remedies" },
+                // Agent F, slice F2 (expanded campaign 2026-11-16): the
+                // first-wave furniture items live in the dedicated
+                // "furniture" retail category (O-F4, plan's proposed
+                // default), never in household_goods, so furniture prices
+                // move with furniture stock, not with soap stock. Ids are
+                // FurnitureItemSpecs.AllIds (F0's single authored table).
+                { "furniture.bed", "furniture" }, { "furniture.table", "furniture" },
+                { "furniture.chair", "furniture" },
+                { "furniture.cabinet-small", "furniture" },
+                { "furniture.cabinet-large", "furniture" },
+                { "furniture.shelf", "furniture" }, { "furniture.crate", "furniture" },
+                { "furniture.bedroll", "furniture" },
             };
 
         public static string CategoryForItem(string itemId)

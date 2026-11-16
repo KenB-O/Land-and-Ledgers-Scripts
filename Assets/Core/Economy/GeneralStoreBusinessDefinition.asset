@@ -37,6 +37,7 @@ MonoBehaviour:
     - household_goods
     - tools_hardware
     - medicine_remedies
+    - furniture
     workerSlots:
     - slotId: clerk_helper
       displayName: Store Clerk
@@ -128,6 +129,23 @@ MonoBehaviour:
     itemIds:
     - patent_remedy
     - medicine_bottle
+  - categoryId: furniture
+    displayName: Furniture
+    role: 0
+    demandGroup: 6
+    sortOrder: 70
+    defaultMarkupMultiplier: 1.4
+    lowStockThreshold01: 0.25
+    playerFacingSummary: Beds, tables, chairs and storage for frontier homes.
+    itemIds:
+    - furniture.bed
+    - furniture.table
+    - furniture.chair
+    - furniture.cabinet-small
+    - furniture.cabinet-large
+    - furniture.shelf
+    - furniture.crate
+    - furniture.bedroll
   items:
   - itemId: flour
     displayName: Flour
@@ -426,6 +444,94 @@ MonoBehaviour:
     coreStock: 1
     producerTags: [freight, doctor]
     consumerTags: [household]
+  - itemId: furniture.bed
+    displayName: Bed
+    categoryId: furniture
+    unit: each
+    pricing: {baselineCents: 300, localMarketBand: {minCents: 250, maxCents: 450}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 2
+    reorderTargetUnits: 4
+    reorderLotSize: 1
+    coreStock: 1
+    producerTags: [carpenter]
+    consumerTags: [household]
+  - itemId: furniture.table
+    displayName: Table
+    categoryId: furniture
+    unit: each
+    pricing: {baselineCents: 225, localMarketBand: {minCents: 175, maxCents: 325}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 2
+    reorderTargetUnits: 4
+    reorderLotSize: 1
+    coreStock: 1
+    producerTags: [carpenter]
+    consumerTags: [household]
+  - itemId: furniture.chair
+    displayName: Chair
+    categoryId: furniture
+    unit: each
+    pricing: {baselineCents: 125, localMarketBand: {minCents: 100, maxCents: 175}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 4
+    reorderTargetUnits: 6
+    reorderLotSize: 2
+    coreStock: 1
+    producerTags: [carpenter]
+    consumerTags: [household]
+  - itemId: furniture.cabinet-small
+    displayName: Small Cabinet
+    categoryId: furniture
+    unit: each
+    pricing: {baselineCents: 325, localMarketBand: {minCents: 250, maxCents: 450}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 2
+    reorderTargetUnits: 4
+    reorderLotSize: 1
+    coreStock: 1
+    producerTags: [carpenter]
+    consumerTags: [household]
+  - itemId: furniture.cabinet-large
+    displayName: Large Cabinet
+    categoryId: furniture
+    unit: each
+    pricing: {baselineCents: 425, localMarketBand: {minCents: 325, maxCents: 600}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 2
+    reorderTargetUnits: 4
+    reorderLotSize: 1
+    coreStock: 1
+    producerTags: [carpenter]
+    consumerTags: [household]
+  - itemId: furniture.shelf
+    displayName: Shelf
+    categoryId: furniture
+    unit: each
+    pricing: {baselineCents: 80, localMarketBand: {minCents: 60, maxCents: 125}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 4
+    reorderTargetUnits: 6
+    reorderLotSize: 2
+    coreStock: 1
+    producerTags: [carpenter]
+    consumerTags: [household]
+  - itemId: furniture.crate
+    displayName: Crate
+    categoryId: furniture
+    unit: each
+    pricing: {baselineCents: 75, localMarketBand: {minCents: 50, maxCents: 125}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 4
+    reorderTargetUnits: 6
+    reorderLotSize: 2
+    coreStock: 1
+    producerTags: [carpenter]
+    consumerTags: [household]
+  - itemId: furniture.bedroll
+    displayName: Bedroll
+    categoryId: furniture
+    unit: each
+    pricing: {baselineCents: 60, localMarketBand: {minCents: 40, maxCents: 100}, markupMultiplier: 1, supplyDemandSensitivity: 0.25}
+    startingStockUnits: 4
+    reorderTargetUnits: 6
+    reorderLotSize: 2
+    coreStock: 1
+    producerTags: [carpenter]
+    consumerTags: [household]
   siteRequirements:
     minimumSiteSizeCells: {x: 5, y: 5}
     minimumFrontageCells: 5
@@ -443,5 +549,5 @@ MonoBehaviour:
   baselineWeeklyThroughputUnits: 36
   baselineDailyServiceCapacity: 0
   inputCategoryIds: []
-  outputCategoryIds: [staple_food, meat, clothing, household_goods, tools_hardware, medicine_remedies]
+  outputCategoryIds: [staple_food, meat, clothing, household_goods, tools_hardware, medicine_remedies, furniture]
   serviceCategoryIds: []

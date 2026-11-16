@@ -95,6 +95,112 @@ namespace LandLedgers.Economy.GenericBusiness
             if (RequiredFloorAreaSqM < 0f) problems.Add("Required floor area cannot be negative.");
             return problems;
         }
+
+        /// <summary>
+        /// Derives the runtime method from this recipe. The recipe stays the
+        /// one authority: the method is a projection of it, never a second
+        /// source of recipe data. Phase durations are game seconds here and
+        /// whole minutes on the method (legacy ProductionPhaseDefinition);
+        /// minutes = ceil(seconds / 60), so a recipe authored in whole
+        /// minutes converts exactly and a sub-minute phase rounds up to one
+        /// minute, never down to zero. Person-required phases reserve the
+        /// recipe's equipment and workspaces; passive phases reserve the
+        /// workspaces only (the piece cures in the shop; the tools are free).
+        /// Byproducts and fuel/energy inputs are carried as data — the
+        /// runtime consumes exactly the listed inputs and creates output only
+        /// through the caller's callback, which also creates the byproducts.
+        /// </summary>
+        public ProductionMethodDefinition ToMethodDefinition()
+        {
+            var method = new ProductionMethodDefinition
+            {
+                MethodId = MethodId,
+                RequiredFloorAreaSqM = RequiredFloorAreaSqM,
+                WasteFraction01 = WasteFraction01,
+                PerformanceSkillId = PerformanceSkillId,
+            };
+            if (Outputs != null && Outputs.Count > 0 && Outputs[0] != null)
+            {
+                method.OutputProductId = Outputs[0].ProductId;
+                method.OutputQuantity = Outputs[0].Quantity;
+            }
+            if (Inputs != null)
+            {
+                foreach (ProductionRecipeInput input in Inputs)
+                {
+                    if (input == null) continue;
+                    method.InputRequirements.Add(new ProductionInputRequirement
+                    {
+                        ProductId = input.ProductId,
+                        Quantity = input.Quantity,
+                    });
+                }
+            }
+            if (Byproducts != null)
+            {
+                foreach (ProductionRecipeOutput byproduct in Byproducts)
+                {
+                    if (byproduct == null) continue;
+                    method.ByproductOutputs.Add(new ProductionInputRequirement
+                    {
+                        ProductId = byproduct.ProductId,
+                        Quantity = byproduct.Quantity,
+                    });
+                }
+            }
+            if (FuelOrEnergyInputs != null)
+            {
+                foreach (ProductionRecipeInput fuel in FuelOrEnergyInputs)
+                {
+                    if (fuel == null) continue;
+                    method.FuelOrEnergyInputs.Add(new ProductionInputRequirement
+                    {
+                        ProductId = fuel.ProductId,
+                        Quantity = fuel.Quantity,
+                    });
+                }
+            }
+            if (Substitutions != null)
+            {
+                foreach (ProductionInputSubstitution substitution in Substitutions)
+                {
+                    if (substitution == null) continue;
+                    method.InputSubstitutions.Add(new ProductionInputSubstitutionDefinition
+                    {
+                        OriginalProductId = substitution.OriginalProductId,
+                        AlternativeProductIds = new List<string>(substitution.AlternativeProductIds ?? new List<string>()),
+                        AlternativeQuantity = substitution.AlternativeQuantity,
+                    });
+                }
+            }
+            if (RequiredEquipmentIds != null) method.RequiredEquipmentIds.AddRange(RequiredEquipmentIds);
+            if (RequiredWorkspaceIds != null) method.RequiredWorkspaceIds.AddRange(RequiredWorkspaceIds);
+            if (FeasibilityConditions != null) method.FeasibilityConditions.AddRange(FeasibilityConditions);
+            if (Phases != null)
+            {
+                foreach (ProductionRecipePhase phase in Phases)
+                {
+                    if (phase == null) continue;
+                    var methodPhase = new ProductionPhaseDefinition
+                    {
+                        PhaseId = phase.PhaseId,
+                        ElapsedMinutes = Math.Max(1, (int)Math.Ceiling(phase.DurationGameSeconds / 60f)),
+                        RequiresPerson = phase.RequiresPerson,
+                    };
+                    if (phase.RequiresPerson)
+                    {
+                        if (RequiredEquipmentIds != null) methodPhase.ReservedEquipmentIds.AddRange(RequiredEquipmentIds);
+                        if (RequiredWorkspaceIds != null) methodPhase.ReservedWorkspaceIds.AddRange(RequiredWorkspaceIds);
+                    }
+                    else
+                    {
+                        if (RequiredWorkspaceIds != null) methodPhase.ReservedWorkspaceIds.AddRange(RequiredWorkspaceIds);
+                    }
+                    method.Phases.Add(methodPhase);
+                }
+            }
+            return method;
+        }
     }
 
     public sealed class ProductionRecipePhase
@@ -172,6 +278,348 @@ namespace LandLedgers.Economy.GenericBusiness
         public static IReadOnlyList<ProductionRecipeDetail> All()
         {
             return new[] { BreadBatch(), RollsBatch(), PieBatch() };
+        }
+    }
+
+    /// <summary>
+    /// F1 (expanded campaign 2026-11-16): furniture recipe presets, plan
+    /// section 4.2. First wave is CARPENTRY ONLY (wood + fasteners +
+    /// cloth). Stove (cast iron) and barrel (cooperage) are deliberately out.
+    ///
+    /// Product ids: furniture.* per FurnitureItemSpecs (Domains/Economy/
+    /// Storage/FurnitureItemSpecs.cs, the F0 authored table); "lumber" is
+    /// one milled board (ImportCatalog.LumberId; RepairQueueEconomy.
+    /// LumberMaterialId); "nails_hardware_lot" and "basic_cloth" are
+    /// household-catalog ids (cloth by the yard); "hay" is the CropChain
+    /// hay lot (ProductKind "hay", integer units at 40 units/acre);
+    /// "fuel-wood" is the sawmill slab/offcut fuel-wood product.
+    ///
+    /// Quantities are the plan's proposed numbers, adopted under the
+    /// standing delegation doctrine (O-F1: proceed on the proposed numbers;
+    /// Kennedy corrects what he disagrees with). Labour is person-minutes
+    /// through TaskAuthority; passive phases (finish curing) advance time
+    /// without holding the person, per the bakery proof/drying pattern.
+    /// Whole boards only as inputs: a piece that needs less than a board
+    /// consumes 1 board and yields offcut fuel-wood as a byproduct.
+    ///
+    /// Two open pins from plan section 4.2, resolved here:
+    /// - Hay stuffing: hay lots are real integer-unit lots (CropChain.
+    ///   StackHay, 40 units/acre). At a ~1 ton/acre prairie-hay yield one
+    ///   unit is ~25 kg; a straw mattress takes ~15 kg, so ONE whole hay
+    ///   unit stuffs one mattress (bed, bedroll). Whole units only — no
+    ///   fractional lot is ever consumed, and no free input is substituted.
+    /// - Nails per chair: the lot authority has no fractional-lot path, so
+    ///   the chair recipe is a BATCH of 4 chairs: 4 lumber + 1
+    ///   nails_hardware_lot -> 4 chairs + 4 fuel-wood offcuts, 480
+    ///   person-minutes (4 x the plan's 120). The plan's cost build is
+    ///   preserved exactly (nails share 3c per chair). One run = 4 chairs;
+    ///   callers planning in output units must divide by 4.
+    ///
+    /// Cure (passive, 120 min): an authored finish-curing window for every
+    /// recipe with a finish phase (bed, table, chairs, cabinets). Shelf,
+    /// crate and bedroll have no finish phase and no cure phase. The cure
+    /// duration is a calibration assumption for the owner to correct.
+    ///
+    /// Substitutions are advisory only: the runtime consumes exactly the
+    /// listed inputs unless the caller implements substitution. Flannel may
+    /// stand in for basic_cloth ticking (same yardage). There is no oak
+    /// substitution to record: the sawmill hardwood profile yields the same
+    /// "lumber" product id, so there is no distinct oak-lumber product.
+    ///
+    /// The producing business is NOT decided here (O-F3, open): these
+    /// presets name the recipes, the skill and the workstation. Which
+    /// business runs them, and where the carpenter works, is the owner's
+    /// decision. Tests drive the recipes through GenericProductionRuntime
+    /// with a test business fixture only.
+    /// </summary>
+    public static class FurnitureRecipePresets
+    {
+        public const string CarpentrySkillId = "carpentry";
+        public const string CarpenterWorkstationId = "carpenter-workshop";
+
+        private static readonly string[] CarpenterEquipment =
+            { "workbench", "carpenter-hand-tool-kit" };
+        private static readonly string[] CarpenterWorkspaces =
+            { CarpenterWorkstationId };
+
+        private static ProductionRecipeDetail Recipe(
+            string methodId, string displayName,
+            List<ProductionRecipeInput> inputs,
+            string outputId, float outputQty,
+            List<ProductionRecipeOutput> byproducts,
+            List<ProductionRecipePhase> phases,
+            List<string> feasibilityConditions)
+        {
+            var recipe = new ProductionRecipeDetail
+            {
+                MethodId = methodId,
+                DisplayName = displayName,
+                Inputs = inputs,
+                Outputs = new List<ProductionRecipeOutput>
+                {
+                    new ProductionRecipeOutput { ProductId = outputId, Quantity = outputQty },
+                },
+                Byproducts = byproducts ?? new List<ProductionRecipeOutput>(),
+                RequiredEquipmentIds = new List<string>(CarpenterEquipment),
+                RequiredWorkspaceIds = new List<string>(CarpenterWorkspaces),
+                PerformanceSkillId = CarpentrySkillId,
+                FeasibilityConditions = feasibilityConditions,
+                Phases = phases,
+            };
+            return recipe;
+        }
+
+        private static ProductionRecipePhase PersonPhase(string phaseId, float minutes) =>
+            new ProductionRecipePhase
+            {
+                PhaseId = phaseId,
+                DurationGameSeconds = minutes * 60f,
+                RequiresPerson = true,
+            };
+
+        private static ProductionRecipePhase CurePhase(float minutes = 120f) =>
+            new ProductionRecipePhase
+            {
+                PhaseId = "cure",
+                DurationGameSeconds = minutes * 60f,
+                RequiresPerson = false,
+            };
+
+        private static ProductionRecipeInput Input(string productId, float quantity) =>
+            new ProductionRecipeInput { ProductId = productId, Quantity = quantity };
+
+        private static ProductionRecipeOutput Byproduct(string productId, float quantity) =>
+            new ProductionRecipeOutput { ProductId = productId, Quantity = quantity };
+
+        private static ProductionInputSubstitution ClothSubstitution(float yards) =>
+            new ProductionInputSubstitution
+            {
+                OriginalProductId = "basic_cloth",
+                AlternativeProductIds = new List<string> { "flannel" },
+                AlternativeQuantity = yards,
+            };
+
+        /// <summary>
+        /// Bed (frame + straw mattress, assembled): 2 lumber, 1
+        /// nails_hardware_lot, 4 yd basic_cloth (ticking), 1 hay (mattress
+        /// stuffing). Labour cut 60, join/assemble 180, finish 60 = 300
+        /// person-minutes + 120 passive cure. Bedding is NOT an input (no
+        /// legitimate supply exists); it is a separate retail product.
+        /// </summary>
+        public static ProductionRecipeDetail Bed()
+        {
+            var recipe = Recipe(
+                "furniture.bed", "Bed",
+                new List<ProductionRecipeInput>
+                {
+                    Input("lumber", 2f),
+                    Input("nails_hardware_lot", 1f),
+                    Input("basic_cloth", 4f),
+                    Input("hay", 1f),
+                },
+                "furniture.bed", 1f,
+                null,
+                new List<ProductionRecipePhase>
+                {
+                    PersonPhase("cut", 60f),
+                    PersonPhase("join-assemble", 180f),
+                    PersonPhase("finish", 60f),
+                    CurePhase(),
+                },
+                new List<string> { "carpenter workstation present", "lumber, fasteners, ticking cloth and hay on hand" });
+            recipe.Substitutions.Add(ClothSubstitution(4f));
+            return recipe;
+        }
+
+        /// <summary>
+        /// Table (dining/work): 2 lumber, 1 nails_hardware_lot. Labour cut
+        /// 45, assemble 120, finish 45 = 210 person-minutes + 120 passive cure.
+        /// </summary>
+        public static ProductionRecipeDetail Table()
+        {
+            return Recipe(
+                "furniture.table", "Table",
+                new List<ProductionRecipeInput>
+                {
+                    Input("lumber", 2f),
+                    Input("nails_hardware_lot", 1f),
+                },
+                "furniture.table", 1f,
+                null,
+                new List<ProductionRecipePhase>
+                {
+                    PersonPhase("cut", 45f),
+                    PersonPhase("assemble", 120f),
+                    PersonPhase("finish", 45f),
+                    CurePhase(),
+                },
+                new List<string> { "carpenter workstation present", "lumber and fasteners on hand" });
+        }
+
+        /// <summary>
+        /// Chair BATCH of 4: 4 lumber, 1 nails_hardware_lot -> 4 chairs + 4
+        /// fuel-wood offcuts (each chair uses ~half a board; the rest is
+        /// offcut). Labour 4 x (cut 30, assemble 60, finish 30) = 480
+        /// person-minutes + 120 passive cure. One run = 4 chairs; see the
+        /// class header for why the chair is batched.
+        /// </summary>
+        public static ProductionRecipeDetail ChairBatch()
+        {
+            return Recipe(
+                "furniture.chair-batch", "Chair batch (4 chairs)",
+                new List<ProductionRecipeInput>
+                {
+                    Input("lumber", 4f),
+                    Input("nails_hardware_lot", 1f),
+                },
+                "furniture.chair", 4f,
+                new List<ProductionRecipeOutput>
+                {
+                    Byproduct("fuel-wood", 4f),
+                },
+                new List<ProductionRecipePhase>
+                {
+                    PersonPhase("cut", 120f),
+                    PersonPhase("assemble", 240f),
+                    PersonPhase("finish", 120f),
+                    CurePhase(),
+                },
+                new List<string> { "carpenter workstation present", "lumber and fasteners on hand" });
+        }
+
+        /// <summary>
+        /// Small cabinet: 3 lumber, 1 nails_hardware_lot. Labour cut 60,
+        /// assemble 180, finish 60 = 300 person-minutes + 120 passive cure.
+        /// </summary>
+        public static ProductionRecipeDetail CabinetSmall()
+        {
+            return Recipe(
+                "furniture.cabinet-small", "Small Cabinet",
+                new List<ProductionRecipeInput>
+                {
+                    Input("lumber", 3f),
+                    Input("nails_hardware_lot", 1f),
+                },
+                "furniture.cabinet-small", 1f,
+                null,
+                new List<ProductionRecipePhase>
+                {
+                    PersonPhase("cut", 60f),
+                    PersonPhase("assemble", 180f),
+                    PersonPhase("finish", 60f),
+                    CurePhase(),
+                },
+                new List<string> { "carpenter workstation present", "lumber and fasteners on hand" });
+        }
+
+        /// <summary>
+        /// Large cabinet: 4 lumber, 1 nails_hardware_lot. Labour cut 90,
+        /// assemble 240, finish 90 = 420 person-minutes + 120 passive cure.
+        /// </summary>
+        public static ProductionRecipeDetail CabinetLarge()
+        {
+            return Recipe(
+                "furniture.cabinet-large", "Large Cabinet",
+                new List<ProductionRecipeInput>
+                {
+                    Input("lumber", 4f),
+                    Input("nails_hardware_lot", 1f),
+                },
+                "furniture.cabinet-large", 1f,
+                null,
+                new List<ProductionRecipePhase>
+                {
+                    PersonPhase("cut", 90f),
+                    PersonPhase("assemble", 240f),
+                    PersonPhase("finish", 90f),
+                    CurePhase(),
+                },
+                new List<string> { "carpenter workstation present", "lumber and fasteners on hand" });
+        }
+
+        /// <summary>
+        /// Shelf: 1 lumber, no fasteners (pegged/bracketed). Labour cut 30,
+        /// assemble 30 = 60 person-minutes. Byproduct 1 fuel-wood offcut.
+        /// No finish phase, no cure phase.
+        /// </summary>
+        public static ProductionRecipeDetail Shelf()
+        {
+            return Recipe(
+                "furniture.shelf", "Shelf",
+                new List<ProductionRecipeInput>
+                {
+                    Input("lumber", 1f),
+                },
+                "furniture.shelf", 1f,
+                new List<ProductionRecipeOutput>
+                {
+                    Byproduct("fuel-wood", 1f),
+                },
+                new List<ProductionRecipePhase>
+                {
+                    PersonPhase("cut", 30f),
+                    PersonPhase("assemble", 30f),
+                },
+                new List<string> { "carpenter workstation present", "lumber on hand" });
+        }
+
+        /// <summary>
+        /// Crate: 1 lumber. Labour cut 15, assemble 30 = 45 person-minutes.
+        /// Byproduct 1 fuel-wood offcut. No finish phase, no cure phase.
+        /// </summary>
+        public static ProductionRecipeDetail Crate()
+        {
+            return Recipe(
+                "furniture.crate", "Crate",
+                new List<ProductionRecipeInput>
+                {
+                    Input("lumber", 1f),
+                },
+                "furniture.crate", 1f,
+                new List<ProductionRecipeOutput>
+                {
+                    Byproduct("fuel-wood", 1f),
+                },
+                new List<ProductionRecipePhase>
+                {
+                    PersonPhase("cut", 15f),
+                    PersonPhase("assemble", 30f),
+                },
+                new List<string> { "carpenter workstation present", "lumber on hand" });
+        }
+
+        /// <summary>
+        /// Bedroll: 2 yd basic_cloth, 1 hay (stuffing). Labour sew/fill 60
+        /// person-minutes. No lumber — the cheap sleeping product for poor
+        /// households. No finish phase, no cure phase.
+        /// </summary>
+        public static ProductionRecipeDetail Bedroll()
+        {
+            var recipe = Recipe(
+                "furniture.bedroll", "Bedroll",
+                new List<ProductionRecipeInput>
+                {
+                    Input("basic_cloth", 2f),
+                    Input("hay", 1f),
+                },
+                "furniture.bedroll", 1f,
+                null,
+                new List<ProductionRecipePhase>
+                {
+                    PersonPhase("sew-fill", 60f),
+                },
+                new List<string> { "carpenter workstation present", "ticking cloth and hay on hand" });
+            recipe.Substitutions.Add(ClothSubstitution(2f));
+            return recipe;
+        }
+
+        public static IReadOnlyList<ProductionRecipeDetail> All()
+        {
+            return new[]
+            {
+                Bed(), Table(), ChairBatch(), CabinetSmall(), CabinetLarge(),
+                Shelf(), Crate(), Bedroll(),
+            };
         }
     }
 }

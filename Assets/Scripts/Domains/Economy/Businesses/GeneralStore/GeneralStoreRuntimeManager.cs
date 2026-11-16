@@ -5971,13 +5971,22 @@ namespace LandLedgers.FirstLedger
             }
 
             float categoryMarkupMultiplier = GetCategoryMarkupMultiplier(categoryId);
+
+            // Checkpoint-58 follow-up (Decision 9): evaluate the band
+            // against the pressure-adjusted price actually charged, not
+            // the no-pressure price — the same pressure site 2 resolves
+            // in GetAverageCategoryUnitPrice. A null runtime keeps 0f, so
+            // an unbound manager prices exactly as before.
+            float supplyDemandPressure =
+                RetailPricingDefinition.ResolveCategorySupplyDemandPressure01(runtimeState, categoryId);
+
             ReadOnlySpan<ItemDefinition> items = storeDefinition.Items;
             for (int i = 0; i < items.Length; i++)
             {
                 ItemDefinition item = items[i];
                 if (item != null
                     && string.Equals(item.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase)
-                    && item.Pricing.IsMarginCompressedByBand(categoryMarkupMultiplier, 0f))
+                    && item.Pricing.IsMarginCompressedByBand(categoryMarkupMultiplier, supplyDemandPressure))
                 {
                     return true;
                 }

@@ -124,5 +124,49 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(quoted, charged);
             Assert.AreEqual(225, 3 * quoted);
         }
+
+        // Checkpoint-58 follow-up (Decision 9): the band check the
+        // manager runs for its "capped" flag must evaluate the
+        // pressure-adjusted price, not the no-pressure price. Tea from the
+        // authored definition: no wholesale cost, so landed is
+        // round(60 x 0.7) = 42; band [45, 80]; sensitivity 0.3. The
+        // manager-level call site cannot compile in the harness (Agent 3
+        // note 67), so the mechanism is pinned here and the flag itself by
+        // Unity-only tests in GeneralStoreRuntimeManagerTests.cs.
+        private static RetailPricingDefinition TeaPricing() => new RetailPricingDefinition
+        {
+            baselineCents = 60,
+            baseWholesaleCostCents = 0,
+            importCostCents = 0,
+            localMarketBand = new PriceBand { minCents = 45, maxCents = 80 },
+            markupMultiplier = 1f,
+            supplyDemandSensitivity = 0.3f,
+        };
+
+        [Test]
+        public void BandCheck_TeaCompressesAtLowStockOnlyWithPressure()
+        {
+            // Store margin +0.30, so the category markup is 1.75. At low
+            // stock the pressure-adjusted price is round(42 x 1.75 x 1.3)
+            // = 96, over the band max of 80; at no pressure it is
+            // round(42 x 1.75) = 74, inside the band. The old 0f
+            // evaluation under-reports "capped" at low stock.
+            RetailPricingDefinition tea = TeaPricing();
+            Assert.IsTrue(tea.IsMarginCompressedByBand(1.75f, 1f));
+            Assert.IsFalse(tea.IsMarginCompressedByBand(1.75f, 0f));
+        }
+
+        [Test]
+        public void BandCheck_TeaNotCompressedAtFullStockDespiteNoPressureCap()
+        {
+            // Store margin +0.50, so the category markup is 1.95. At full
+            // stock the pressure-adjusted price is round(42 x 1.95 x 0.7)
+            // = 57, inside the band; at no pressure it is round(42 x
+            // 1.95) = 82, over the band max of 80. The old 0f evaluation
+            // over-reports "capped" at full stock.
+            RetailPricingDefinition tea = TeaPricing();
+            Assert.IsFalse(tea.IsMarginCompressedByBand(1.95f, -1f));
+            Assert.IsTrue(tea.IsMarginCompressedByBand(1.95f, 0f));
+        }
     }
 }

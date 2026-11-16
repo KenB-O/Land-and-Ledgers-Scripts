@@ -268,6 +268,108 @@ namespace LandLedgers.EditorTests.Economy
             }
         }
 
+        [Test]
+        public void BandCheck_LowStock_ReportsCappedWhenPressureAdjustedPriceHitsBand()
+        {
+            // Checkpoint-58 follow-up (Decision 9): the "capped" flag must
+            // evaluate the pressure-adjusted price actually charged, not
+            // the no-pressure price. Store margin +0.30, so the
+            // staple_food markup is 1.75. At empty stock the pressure is
+            // +1 and tea prices at round(42 x 1.75 x 1.3) = 96, over its
+            // band max of 80; at no pressure it is round(42 x 1.75) = 74,
+            // inside the band. The old 0f evaluation under-reports
+            // "capped" here. The oracle proves the test discriminates: it
+            // reports capped at the fixed pressure and not at 0f.
+            GeneralStoreBusinessDefinition definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(DefinitionPath);
+            Assert.NotNull(definition, "Authored General Store definition missing");
+            GameObject root = new("GeneralStoreRuntimeManager_BandCheckLowStock");
+            try
+            {
+                GeneralStoreRuntimeManager manager = NewManager(root);
+                BusinessInstanceState business = BusinessInstanceState.Create(
+                    "band-check-low-stock", definition, 60, BusinessOwnerIdentity.Npc(1, "Test owner", "Test"));
+                SetStore(manager, definition, business.RuntimeState);
+                SetStoreMarginAdjustment(manager, 0.30f);
+                SetAllCategoryStock(business.RuntimeState, _ => 0);
+
+                Assert.IsTrue(OracleAnyCompressed(definition, business.RuntimeState, 0.30f, null),
+                    "Oracle: some item should compress at the fixed pressure");
+                Assert.IsFalse(OracleAnyCompressed(definition, business.RuntimeState, 0.30f, 0f),
+                    "Oracle: no item should compress at no pressure, or the test cannot discriminate");
+                string line = manager.BuildStorePricingLine();
+                Assert.IsTrue(line.Contains("some prices capped"), $"Expected capped flag at empty stock: {line}");
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void BandCheck_FullStock_DoesNotOverReportCapped()
+        {
+            // Store margin +0.50, so the staple_food markup is 1.95. At
+            // full stock the pressure is -1 and tea prices at round(42 x
+            // 1.95 x 0.7) = 57, inside its band; at no pressure it is
+            // round(42 x 1.95) = 82, over the band max of 80. The old 0f
+            // evaluation over-reports "capped" here. The oracle proves
+            // the test discriminates: it reports not capped at the fixed
+            // pressure and capped at 0f.
+            GeneralStoreBusinessDefinition definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(DefinitionPath);
+            Assert.NotNull(definition, "Authored General Store definition missing");
+            GameObject root = new("GeneralStoreRuntimeManager_BandCheckFullStock");
+            try
+            {
+                GeneralStoreRuntimeManager manager = NewManager(root);
+                BusinessInstanceState business = BusinessInstanceState.Create(
+                    "band-check-full-stock", definition, 60, BusinessOwnerIdentity.Npc(1, "Test owner", "Test"));
+                SetStore(manager, definition, business.RuntimeState);
+                SetStoreMarginAdjustment(manager, 0.50f);
+                SetAllCategoryStock(business.RuntimeState, target => target);
+
+                Assert.IsFalse(OracleAnyCompressed(definition, business.RuntimeState, 0.50f, null),
+                    "Oracle: no item should compress at the fixed pressure");
+                Assert.IsTrue(OracleAnyCompressed(definition, business.RuntimeState, 0.50f, 0f),
+                    "Oracle: some item should compress at no pressure, or the test cannot discriminate");
+                string line = manager.BuildStorePricingLine();
+                Assert.IsFalse(line.Contains("some prices capped"), $"Expected no capped flag at full stock: {line}");
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void BandCheck_HalfStock_ReportsCappedWhenBandGenuinelyHit()
+        {
+            // Control: store margin +0.50, all categories at half stock,
+            // so the pressure is 0 and tea prices at round(42 x 1.95) =
+            // 82, over its band max of 80. The flag still fires when the
+            // band is genuinely hit — the fix must not silence it.
+            GeneralStoreBusinessDefinition definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(DefinitionPath);
+            Assert.NotNull(definition, "Authored General Store definition missing");
+            GameObject root = new("GeneralStoreRuntimeManager_BandCheckHalfStock");
+            try
+            {
+                GeneralStoreRuntimeManager manager = NewManager(root);
+                BusinessInstanceState business = BusinessInstanceState.Create(
+                    "band-check-half-stock", definition, 60, BusinessOwnerIdentity.Npc(1, "Test owner", "Test"));
+                SetStore(manager, definition, business.RuntimeState);
+                SetStoreMarginAdjustment(manager, 0.50f);
+                SetAllCategoryStock(business.RuntimeState, target => target / 2);
+
+                Assert.IsTrue(OracleAnyCompressed(definition, business.RuntimeState, 0.50f, null),
+                    "Oracle: some item should compress at half stock");
+                string line = manager.BuildStorePricingLine();
+                Assert.IsTrue(line.Contains("some prices capped"), $"Expected capped flag at half stock: {line}");
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
         private const string DefinitionPath = "Assets/Core/Economy/GeneralStoreBusinessDefinition.asset";
 
         private static void SetStore(GeneralStoreRuntimeManager manager, GeneralStoreBusinessDefinition definition, BusinessRuntimeState state)
@@ -280,6 +382,50 @@ namespace LandLedgers.EditorTests.Economy
                 "runtimeState", BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(stateField, "GeneralStoreRuntimeManager.runtimeState field missing");
             stateField.SetValue(manager, state);
+        }
+
+        private static void SetStoreMarginAdjustment(GeneralStoreRuntimeManager manager, float adjustment)
+        {
+            FieldInfo adjustmentField = typeof(GeneralStoreRuntimeManager).GetField(
+                "storeMarginAdjustment01", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(adjustmentField, "GeneralStoreRuntimeManager.storeMarginAdjustment01 field missing");
+            adjustmentField.SetValue(manager, adjustment);
+        }
+
+        private static void SetAllCategoryStock(BusinessRuntimeState state, Func<int, int> levelForTarget)
+        {
+            for (int i = 0; i < state.CategoryStock.Count; i++)
+            {
+                CategoryStockState stock = state.CategoryStock[i];
+                stock.SetCurrentStockForTests(levelForTarget(stock.TargetStockUnits));
+            }
+        }
+
+        private static bool OracleAnyCompressed(GeneralStoreBusinessDefinition definition, BusinessRuntimeState state, float marginAdjustment, float? forcedPressure)
+        {
+            // Mirrors IsCategoryPriceCompressedByBand over every authored
+            // item: the category markup is the definition default plus
+            // the store margin adjustment, and the pressure is either
+            // forced (to prove the test discriminates) or resolved from
+            // live stock exactly as the manager resolves it.
+            foreach (ItemDefinition item in definition.Items)
+            {
+                if (item == null)
+                {
+                    continue;
+                }
+
+                ItemCategoryDefinition category = definition.FindCategory(item.CategoryId);
+                float categoryMarkup = category != null ? category.DefaultMarkupMultiplier : 1f;
+                float markup = Mathf.Max(1f, categoryMarkup + marginAdjustment);
+                float pressure = forcedPressure ?? RetailPricingDefinition.ResolveCategorySupplyDemandPressure01(state, item.CategoryId);
+                if (item.Pricing.IsMarginCompressedByBand(markup, pressure))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static int OracleFlourPrice(GeneralStoreBusinessDefinition definition, CategoryStockState stock)

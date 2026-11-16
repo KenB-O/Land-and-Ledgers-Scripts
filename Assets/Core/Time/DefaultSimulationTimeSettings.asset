@@ -36,7 +36,7 @@ MonoBehaviour:
   - October
   - November
   - December
-  startingYear: 1886
+  startingYear: 1870
   startingMonth: 1
   startingWeekOfMonth: 1
   startingDayOfWeek: 1

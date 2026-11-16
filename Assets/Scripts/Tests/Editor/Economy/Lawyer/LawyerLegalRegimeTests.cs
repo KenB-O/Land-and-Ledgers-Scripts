@@ -11,8 +11,8 @@ namespace LandLedgers.EditorTests.Economy
     /// D3D: the dated legal-regime authority. Every dated fact asserted here
     /// comes from Canon Project Bible §1.6B (interest chronology, statehood,
     /// municipal debt, bankruptcy gap, homestead) and §1.6C (the authority
-    /// list). The epoch is the spring-1880 campaign opening (Canon §2.1B);
-    /// day 0 defaults to April 1, 1880.
+    /// list). The epoch is the calendar anchor (1880-03-01); day 0 defaults
+    /// to March 1, 1880. The opening is scenario data (Canon Rev XXV §1.1).
     /// </summary>
     [TestFixture]
     public sealed class LawyerLegalRegimeTests
@@ -28,11 +28,11 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void Epoch_DayZero_IsSpring1880_AndRoundTrips()
+        public void Epoch_DayZero_IsCalendarAnchor_AndRoundTrips()
         {
             LegalRegimeDate d0 = regime.DateForDayIndex(0);
             Assert.AreEqual(1880, d0.Year);
-            Assert.AreEqual(4, d0.Month);
+            Assert.AreEqual(3, d0.Month);
             Assert.AreEqual(1, d0.Day);
 
             int statehood = regime.DayIndexForDate(1889, 11, 2);
@@ -57,7 +57,7 @@ namespace LandLedgers.EditorTests.Economy
         public void Usury_SevenPercentDefault_TwelvePercentWrittenCeiling()
         {
             Assert.AreEqual(7, regime.DefaultLegalRatePercent);
-            int opening = regime.DayIndexForDate(1880, 4, 1);
+            int opening = regime.DayIndexForDate(1880, 3, 1);
             Assert.AreEqual(12, regime.MaxWrittenContractRatePercent(opening, false));
 
             string why;
@@ -114,7 +114,7 @@ namespace LandLedgers.EditorTests.Economy
         [Test]
         public void HomesteadAndSpousal_ProtectedThroughout()
         {
-            int opening = regime.DayIndexForDate(1880, 4, 1);
+            int opening = regime.DayIndexForDate(1880, 3, 1);
             Assert.IsTrue(regime.HomesteadExemptionRecognized(opening),
                 "Homestead/personal-property exemptions exist before statehood.");
             Assert.IsTrue(regime.SpousalParticipationRequiredForHomesteadTransferOrEncumbrance(opening));

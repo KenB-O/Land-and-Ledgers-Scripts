@@ -331,14 +331,40 @@ namespace LandLedgers.Tasks
 
             if (reservationAuthority != null)
             {
+                // Campaign C (DEF-074): release the task's reservations
+                // and say so — but only when one actually existed, so
+                // terminal transitions for tasks with no reservation stay
+                // silent. ReservationsForTask returns the live handles
+                // for this owner id and ReleaseAllForTask removes them
+                // immediately, so the before/after count is exact.
+                int reservationsBefore = reservationAuthority.ReservationsForTask(task.TaskId.ToString()).Count;
                 reservationAuthority.ReleaseAllForTask(task.TaskId.ToString());
+                int releasedReservations = reservationsBefore - reservationAuthority.ReservationsForTask(task.TaskId.ToString()).Count;
+                if (releasedReservations > 0)
+                {
+                    Debug.Log("[TaskAuthority] Released " + releasedReservations +
+                        " reservation(s) for task " + task.TaskId + " on terminal transition.");
+                }
             }
 
             task.SetReservationHandleId(string.Empty);
 
             if (dueEventScheduler != null)
             {
+                // Campaign C (DEF-062): cancel the task's pending due events
+                // and say so — but only when one actually existed, so terminal
+                // transitions for tasks with no pending due stay silent.
+                // ScheduledCount drops immediately on both schedulers
+                // (DueEventScheduler removes from byId; SimpleDueEventScheduler
+                // removes from its list), so the before/after count is exact.
+                int scheduledBefore = dueEventScheduler.ScheduledCount;
                 dueEventScheduler.CancelForPayload(task.TaskId.ToString());
+                int cancelledDueEvents = scheduledBefore - dueEventScheduler.ScheduledCount;
+                if (cancelledDueEvents > 0)
+                {
+                    Debug.Log("[TaskAuthority] Cancelled " + cancelledDueEvents +
+                        " due event(s) for task " + task.TaskId + " on terminal transition.");
+                }
             }
 
             task.SetDueEventId(string.Empty);

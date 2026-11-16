@@ -1,5 +1,6 @@
 using System;
 using LandLedgers.Economy;
+using LandLedgers.Time;
 using LandLedgers.UI;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -19,6 +20,17 @@ namespace LandLedgers.FirstLedger
         private string currentListingId = string.Empty;
         private bool listenersBound;
         private int selectedResponseIndex = -1;
+
+        // Campaign C (DEF-066): the real-time conversation rule (Nov 13
+        // design decision) — a direct player-NPC conversation slows the
+        // simulation globally to real time and restores the previously
+        // selected speed on exit. The gate owns the capture/restore state
+        // machine; this controller only applies its decisions through
+        // TimeManager.SetSpeed. NPC-to-NPC conversations never reach
+        // this controller (DailySocialDrive runs them synchronously in
+        // the daily drive), so they cannot change player speed.
+        private TimeManager timeManager;
+        private readonly ConversationSpeedGate conversationSpeedGate = new ConversationSpeedGate();
 
         public event Action<string> ConversationStateChanged;
 
@@ -109,9 +121,45 @@ namespace LandLedgers.FirstLedger
         public void Close()
         {
             view?.SetVisible(false);
+            ApplyConversationClosed();
             LLFeedbackService.Play(LLFeedbackKind.UIBack, "seller meeting close", canvas);
             selectedResponseIndex = -1;
             NotifyConversationStateChanged();
+        }
+
+        // Campaign C (DEF-066): entering a direct player-NPC conversation
+        // slows the simulation globally to real time; leaving restores
+        // the previously selected speed. The gate is re-entrancy-safe
+        // (a second open while the meeting is already visible is a
+        // no-op) and never unpauses a paused sim. A null timeManager
+        // skips both directions consistently: no gate activation, so
+        // no restore is ever owed.
+        private void ApplyConversationOpened()
+        {
+            if (timeManager == null)
+            {
+                return;
+            }
+
+            SimulationSpeed? slowTo = conversationSpeedGate.BeginConversation(timeManager.CurrentSpeed);
+            if (slowTo.HasValue)
+            {
+                timeManager.SetSpeed(slowTo.Value);
+            }
+        }
+
+        private void ApplyConversationClosed()
+        {
+            if (timeManager == null)
+            {
+                return;
+            }
+
+            SimulationSpeed? restoreTo = conversationSpeedGate.EndConversation(timeManager.CurrentSpeed);
+            if (restoreTo.HasValue)
+            {
+                timeManager.SetSpeed(restoreTo.Value);
+            }
         }
 
         private void ClearConversationState(bool showView)
@@ -122,6 +170,13 @@ namespace LandLedgers.FirstLedger
             view?.Render(null);
             ClearResponseButtonListeners();
             view?.SetVisible(showView);
+            // Campaign C (DEF-066): the unavailable readout is still the
+            // meeting UI open in front of the player, so it counts as
+            // entering the conversation for the slowdown.
+            if (showView)
+            {
+                ApplyConversationOpened();
+            }
             NotifyConversationStateChanged();
         }
 
@@ -132,6 +187,9 @@ namespace LandLedgers.FirstLedger
             selectedResponseIndex = 0;
             RefreshView();
             view?.SetVisible(true);
+            // Campaign C (DEF-066): entering a direct player-NPC
+            // conversation slows the simulation globally to real time.
+            ApplyConversationOpened();
             NotifyConversationStateChanged();
         }
 
@@ -436,6 +494,11 @@ namespace LandLedgers.FirstLedger
                 readout.PrimaryActionLabel);
             ClearResponseButtonListeners();
             view.SetVisible(true);
+            // Campaign C (DEF-066): the unavailable readout is still the
+            // meeting UI open in front of the player. The gate is
+            // re-entrancy-safe, so this is a no-op when the meeting was
+            // already open (the AdvanceDeal path).
+            ApplyConversationOpened();
             return true;
         }
 
@@ -511,6 +574,7 @@ namespace LandLedgers.FirstLedger
         {
             acquisitionMarket ??= FindAnyObjectByType<AcquisitionMarketManager>();
             canvas ??= FindAnyObjectByType<Canvas>();
+            timeManager ??= TimeManager.Instance ?? FindAnyObjectByType<TimeManager>();
         }
     }
 

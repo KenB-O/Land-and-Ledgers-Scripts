@@ -149,7 +149,7 @@ namespace LandLedgers.EditorTests.Orchestration
             Assert.AreEqual(78, a.PreferredResidents);
             Assert.AreEqual(90, a.MaxResidents);
             Assert.AreEqual(3, a.FixedBusinessIds.Count);
-            Assert.AreEqual("1880-03-01", a.StartDateIso);
+            Assert.AreEqual("1870-01-01", a.StartDateIso);
         }
 
         [Test]

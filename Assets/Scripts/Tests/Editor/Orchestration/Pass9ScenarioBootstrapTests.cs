@@ -135,28 +135,36 @@ namespace LandLedgers.EditorTests.Orchestration
 
             TimeManager clock = CreateTimeManager();
             Assert.IsTrue(ScenarioBootstrapFactory.ApplyToTimeManager(plan, clock));
-            Assert.AreEqual(365, clock.CurrentAbsoluteDayIndex);
+            // Campaign C (DEF-012): the campaign day index starts at zero;
+            // the start is carried as the clock offset, so the date — not
+            // the anchor-relative day — is what the clock reads.
+            Assert.AreEqual(0, clock.CurrentAbsoluteDayIndex);
             Assert.AreEqual(1881, clock.CurrentDate.Year);
             Assert.AreEqual(3, clock.CurrentDate.Month);
             Assert.AreEqual(1, clock.CurrentDate.DayOfMonth);
         }
 
         [Test]
-        public void Bootstrap_DefaultSliceL_StartsAtTheAnchorDate()
+        public void Bootstrap_DefaultSliceL_StartsAtTheOrdinaryOpening()
         {
             ScenarioPreset preset = SliceLPresetFactory.Build();
             Assert.IsTrue(ScenarioBootstrapFactory.TryCreateStart(preset, out ScenarioBootstrapPlan plan, new List<string>()));
-            Assert.AreEqual(1880, plan.StartYear);
-            Assert.AreEqual(0, plan.StartDayIndex, "the default Slice L start IS the anchor date");
-            Assert.AreEqual(60, plan.AnchorFrameDayIndex);
+            Assert.AreEqual(1870, plan.StartYear);
+            Assert.AreEqual(1, plan.StartMonth);
+            Assert.AreEqual(1, plan.StartDay);
+            Assert.AreEqual(-3712, plan.StartDayIndex, "1870-01-01 is 3712 days before the 1880-03-01 anchor");
+            Assert.AreEqual(-3652, plan.AnchorFrameDayIndex, "1870-01-01 is 3652 days before the 1880-01-01 anchor frame");
 
             TimeManager clock = CreateTimeManager();
             Assert.IsTrue(ScenarioBootstrapFactory.ApplyToTimeManager(plan, clock));
             Assert.AreEqual(0, clock.CurrentAbsoluteDayIndex);
+            Assert.AreEqual(1870, clock.CurrentDate.Year);
+            Assert.AreEqual(1, clock.CurrentDate.Month);
+            Assert.AreEqual(1, clock.CurrentDate.DayOfMonth);
         }
 
         [Test]
-        public void Bootstrap_UnknownSelection_FallsBackToAnchorDate_NotPreset()
+        public void Bootstrap_UnknownSelection_FallsBackToOrdinaryOpening_NotPreset()
         {
             var selection = new CapturedScenarioSelection("", "Some Old Save Title");
             Assert.IsTrue(ScenarioBootstrapFactory.TryCreateStart(selection, new ScenarioPreset[0],
@@ -164,8 +172,8 @@ namespace LandLedgers.EditorTests.Orchestration
             Assert.IsFalse(plan.Composition.IsPreset);
             Assert.IsFalse(plan.UsePresetStartDate);
             Assert.AreEqual("legacy", plan.Composition.Version);
-            Assert.AreEqual(0, plan.StartDayIndex);
-            Assert.AreEqual(1880, plan.StartYear);
+            Assert.AreEqual(-3712, plan.StartDayIndex);
+            Assert.AreEqual(1870, plan.StartYear);
 
             Assert.IsFalse(ScenarioBootstrapFactory.TryCreateStart(null, null, out _, new List<string>()),
                 "no selection, no start");

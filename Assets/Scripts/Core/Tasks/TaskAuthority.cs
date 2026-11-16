@@ -106,6 +106,28 @@ namespace LandLedgers.Tasks
             executionGate = gate;
         }
 
+        /// <summary>
+        /// Campaign C (DEF-049): retention floor for terminal-task pruning, in days.
+        /// A technical housekeeping constant, not an economic policy: same-tick and
+        /// same-day readers (production phase completion checks, due-event handlers,
+        /// diagnostics reconciliation) must never observe a task vanish on its
+        /// completion day. Seven days exceeds every same-day or next-day read window
+        /// found in the reader audit (see PruneTerminalTasks), while bounding save
+        /// growth to roughly a week of terminal tasks instead of all history.
+        /// </summary>
+        public const int TerminalTaskRetentionDays = 7;
+
+        /// <summary>
+        /// Campaign C (DEF-049): optional external-reference seam, same shape as
+        /// IsWorkerUnavailable. When installed, the daily terminal-task prune asks
+        /// it whether a terminal task is still referenced by a live process outside
+        /// this authority (live shopping trips hold leg/service task ids that
+        /// save/load rehydration requires to resolve). Null = no external references
+        /// known. The predicate must be cheap and must never mutate state; it is
+        /// consulted once per terminal task per daily prune.
+        /// </summary>
+        public Func<EntityId, bool> IsTaskExternallyReferenced { get; set; }
+
         /// <summary>Swaps the duration estimator (TTS-3 installs the skill-based one).</summary>
         public void SetDurationEstimator(ITaskDurationEstimator estimator)
         {
@@ -787,6 +809,128 @@ namespace LandLedgers.Tasks
             }
 
             RebuildLookupsIfNeeded();
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-049): removes terminal tasks nothing reads anymore, so
+        /// saves grow with live state instead of total tasks ever created
+        /// (Check 10 F-15: CaptureSaveDto persisted every task ever created).
+        ///
+        /// A task is pruned only when ALL of these hold:
+        /// - Status is Complete, Failed, or Cancelled. Interrupted re-queues, so
+        ///   it is never terminal here; ReworkRequired keeps its corrective-task
+        ///   link and is out of this pass's scope.
+        /// - Its terminal day is at least TerminalTaskRetentionDays before
+        ///   currentDayIndex. Complete/Failed record completedDayIndex.
+        ///   Cancelled records no day (MarkCancelled takes no day), so Cancelled
+        ///   tasks use createdDayIndex as the anchor; no production reader needs
+        ///   a cancelled task after cancellation (every FindTask call site
+        ///   null-handles), so the creation-day anchor is safe. Recording a
+        ///   cancellation day is a follow-up, not a blocker.
+        /// - No non-terminal task lists it as a prerequisite (PrerequisitesComplete
+        ///   requires a prereq to resolve with Status Complete; no production code
+        ///   writes prerequisites today, but the guard keeps the prune safe if one
+        ///   ever does).
+        /// - IsTaskExternallyReferenced, when installed, does not flag it (live
+        ///   shopping trips: RehydrateAfterLoad aborts a trip whose leg/service
+        ///   task id fails to resolve, and leg tasks complete mid-trip while the
+        ///   trip is still live — so a completed leg task MUST survive while its
+        ///   trip lives).
+        ///
+        /// Removal drops the task from the task list, both id lookups, and its
+        /// owner's queue. Reservations and due events were already released by the
+        /// terminal transition itself (ReleaseTaskResources), so the prune releases
+        /// nothing and changes no scheduling, dispatch, or completion semantics.
+        /// Returns the number of tasks removed. A negative currentDayIndex prunes
+        /// nothing.
+        /// </summary>
+        public int PruneTerminalTasks(int currentDayIndex)
+        {
+            if (currentDayIndex < 0)
+            {
+                return 0;
+            }
+
+            // Prerequisite targets of open tasks must survive: a dependent that
+            // can never see its prereq Complete can never start.
+            var prereqTargets = new HashSet<EntityId>();
+            foreach (WorkTask task in tasks)
+            {
+                if (task == null || !task.IsOpen)
+                {
+                    continue;
+                }
+
+                foreach (EntityId prereqId in task.PrerequisiteTaskIds)
+                {
+                    prereqTargets.Add(prereqId);
+                }
+            }
+
+            int pruned = 0;
+            // Backwards so removal never skips an entry.
+            for (int i = tasks.Count - 1; i >= 0; i--)
+            {
+                WorkTask task = tasks[i];
+                if (task == null)
+                {
+                    continue;
+                }
+
+                if (task.Status != TaskStatus.Complete
+                    && task.Status != TaskStatus.Failed
+                    && task.Status != TaskStatus.Cancelled)
+                {
+                    continue;
+                }
+
+                int terminalDay = task.CompletedDayIndex >= 0 ? task.CompletedDayIndex : task.CreatedDayIndex;
+                if (currentDayIndex - terminalDay < TerminalTaskRetentionDays)
+                {
+                    continue;
+                }
+
+                if (prereqTargets.Contains(task.TaskId))
+                {
+                    continue;
+                }
+
+                if (IsTaskExternallyReferenced != null)
+                {
+                    bool referenced;
+                    try
+                    {
+                        referenced = IsTaskExternallyReferenced(task.TaskId);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Fail closed for this task: a broken predicate must never
+                        // delete a task it cannot vouch for, and must not abort the
+                        // sweep for the other tasks.
+                        Debug.LogWarning("[TaskAuthority] DEF-049 prune: external-reference check failed for task "
+                            + task.TaskId + " (" + ex.GetType().Name + ") — task kept.");
+                        continue;
+                    }
+
+                    if (referenced)
+                    {
+                        continue;
+                    }
+                }
+
+                tasks.RemoveAt(i);
+                taskLookup.Remove(task.TaskId);
+                taskLookupByIdString.Remove(task.TaskId.ToString());
+                List<WorkTask> queue;
+                if (queueByOwner.TryGetValue(task.OwnerId, out queue))
+                {
+                    queue.Remove(task);
+                }
+
+                pruned++;
+            }
+
+            return pruned;
         }
     }
 }

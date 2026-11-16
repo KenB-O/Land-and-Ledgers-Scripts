@@ -41,6 +41,13 @@
 // Direct translations (loaf -> loaf) need no factor: 1:1 is identity
 // of the unit, not a decided rate.
 //
+// Owner Decision 1 (Nov 15, 2026) has since DECIDED the fuel factors:
+// 1 intake unit ~= 1 kg dry wood, 1 bakery fuel unit = 4 intake units,
+// 1 household bundle = 10 intake units, sawmill byproduct 1c per intake
+// unit. Callers should pass the FuelConversionRates values. The map
+// still takes caller parameters (no defaults added here): the decision
+// sets the factors, it does not move them into this map.
+//
 // Deliberately UNMAPPED (a translation failure with a diagnostic, not
 // a guessed entry):
 //   - bakery-notions: no store or profile equivalent was found. Notions

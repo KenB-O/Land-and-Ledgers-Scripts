@@ -363,7 +363,7 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void FuelDealerLiveRegistration_RequiresExplicitIntakeBundleConversion()
+        public void FuelDealerLiveRegistration_AppliesDecidedIntakeBundleConversion()
         {
             BusinessProfileDefinition profile = BuildFuelDealerProfile();
             ItemDefinition fuel = profile.FindItem("fuel_wood_bundle");
@@ -388,27 +388,31 @@ namespace LandLedgers.Editor.Economy
                 business, intake, new Series2BusinessRuntimeCashPort(business.RuntimeState), configuredPrice,
                 out Series2FuelDealerSupplierAdapter adapter, out string refusal), refusal);
 
-            Assert.AreEqual(0, adapter.FuelUnitsPerHouseholdUnit,
-                "live wiring must not turn the legacy 1:1 test convenience into an approved conversion");
-            Assert.IsFalse(adapter.OffersItem("fuel_wood"));
-            var diagnostics = new List<string>();
-            Assert.AreEqual(0, adapter.SellItem("fuel_wood", 1, 1, CashSettlement(), diagnostics));
-            Assert.AreEqual(12, intake.TotalFuelWoodUnitsFor(business.InstanceId));
-            Assert.AreEqual(0, business.RuntimeState.CurrentCashCents);
-            StringAssert.Contains("quantity is not configured", string.Join("; ", diagnostics));
-
-            // Explicit test parameter only: the production hookup leaves this
-            // unresolved until an authorized conversion is configured.
-            adapter.FuelUnitsPerHouseholdUnit = 2;
-            Assert.AreEqual(6, adapter.ItemStockUnits("fuel_wood"));
+            // D-F1 (DECIDED, owner Decision 1, Nov 15, 2026): production
+            // applies 10 intake units per household bundle.
+            Assert.AreEqual(FuelConversionRates.IntakeUnitsPerHouseholdBundle, adapter.FuelUnitsPerHouseholdUnit,
+                "live wiring must apply the decided conversion, not the legacy 1:1 test convenience");
+            Assert.AreEqual(1, adapter.ItemStockUnits("fuel_wood"),
+                "12 intake units at 10 per bundle is 1 saleable bundle; the 2-unit remainder stays in the yard.");
             Assert.IsTrue(adapter.OffersItem("fuel_wood"));
-            Assert.AreEqual(3, adapter.SellItem("fuel_wood", 3, 1, CashSettlement(), diagnostics));
-            Assert.AreEqual(6, intake.TotalFuelWoodUnitsFor(business.InstanceId));
-            Assert.AreEqual(configuredPrice * 3, business.RuntimeState.CurrentCashCents);
+            var diagnostics = new List<string>();
+            Assert.AreEqual(1, adapter.SellItem("fuel_wood", 1, 1, CashSettlement(), diagnostics));
+            Assert.AreEqual(2, intake.TotalFuelWoodUnitsFor(business.InstanceId),
+                "one bundle dispensed 10 intake units; 2 remain.");
+            Assert.AreEqual(configuredPrice, business.RuntimeState.CurrentCashCents);
+
+            // An explicit test parameter can still override the factor for
+            // arithmetic checks; production uses the decided 10.
+            adapter.FuelUnitsPerHouseholdUnit = 2;
+            Assert.AreEqual(1, adapter.ItemStockUnits("fuel_wood"));
+            Assert.IsTrue(adapter.OffersItem("fuel_wood"));
+            Assert.AreEqual(1, adapter.SellItem("fuel_wood", 1, 1, CashSettlement(), diagnostics));
+            Assert.AreEqual(0, intake.TotalFuelWoodUnitsFor(business.InstanceId));
+            Assert.AreEqual(configuredPrice * 2, business.RuntimeState.CurrentCashCents);
         }
 
         [Test]
-        public void FuelDealerRegistration_StockedYardStillSellsNothing_ConversionUnset()
+        public void FuelDealerRegistration_StockedYardSellsDecidedBundles()
         {
             BusinessProfileDefinition profile = BuildFuelDealerProfile();
             ItemDefinition fuel = profile.FindItem("fuel_wood_bundle");
@@ -442,17 +446,25 @@ namespace LandLedgers.Editor.Economy
             int fuelSellers = 0;
             foreach (IGoodsSupplier supplier in directory.SuppliersFor("fuel_wood")) fuelSellers++;
             Assert.AreEqual(1, fuelSellers, "the registered business is discoverable for its configured category");
-            Assert.AreEqual(0, adapter.FuelUnitsPerHouseholdUnit,
-                "live wiring must not turn the legacy 1:1 test convenience into an approved conversion");
-            Assert.AreEqual(0, adapter.ItemStockUnits("fuel_wood"), "a stocked yard sells nothing until the conversion decision lands");
-            Assert.IsFalse(adapter.OffersItem("fuel_wood"), "a stocked yard with no conversion is not a saleable offer");
+            Assert.AreEqual(FuelConversionRates.IntakeUnitsPerHouseholdBundle, adapter.FuelUnitsPerHouseholdUnit,
+                "live wiring must apply the decided conversion (D-F1: 10 intake units per bundle)");
+            Assert.AreEqual(2, adapter.ItemStockUnits("fuel_wood"), "20 intake units at 10 per bundle is 2 saleable bundles");
+            Assert.IsTrue(adapter.OffersItem("fuel_wood"), "a stocked yard with the decided conversion is a saleable offer");
 
             var diagnostics = new List<string>();
+            Assert.AreEqual(1, adapter.SellItem("fuel_wood", 1, 1, CashSettlement(), diagnostics));
+            Assert.AreEqual(10, intake.TotalFuelWoodUnitsFor(business.InstanceId), "one bundle dispensed 10 intake units.");
+            Assert.AreEqual(configuredPrice, business.RuntimeState.CurrentCashCents);
+            Assert.AreEqual(1, adapter.SellItem("fuel_wood", 1, 1, CashSettlement(), diagnostics));
+            Assert.AreEqual(0, intake.TotalFuelWoodUnitsFor(business.InstanceId));
+            Assert.AreEqual(configuredPrice * 2, business.RuntimeState.CurrentCashCents);
+
+            // An empty yard sells nothing, and a refused sale moves no cash.
             int cashBefore = business.RuntimeState.CurrentCashCents;
-            Assert.AreEqual(0, adapter.SellItem("fuel_wood", 1, 0, CashSettlement(), diagnostics));
-            StringAssert.Contains("not configured", string.Join("; ", diagnostics));
+            Assert.AreEqual(0, adapter.SellItem("fuel_wood", 1, 1, CashSettlement(), diagnostics));
+            StringAssert.Contains("stock exhausted or short", string.Join("; ", diagnostics));
             Assert.AreEqual(cashBefore, business.RuntimeState.CurrentCashCents, "a refused sale moves no cash");
-            Assert.AreEqual(20, intake.TotalFuelWoodUnitsFor(business.InstanceId), "a refused sale leaves the yard untouched");
+            Assert.AreEqual(0, intake.TotalFuelWoodUnitsFor(business.InstanceId), "a refused sale leaves the yard untouched");
         }
 
         [Test]

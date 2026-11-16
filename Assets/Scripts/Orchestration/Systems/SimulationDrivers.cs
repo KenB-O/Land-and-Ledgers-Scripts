@@ -224,6 +224,12 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField, Tooltip("CLN-1 hub owning the authorities. Found automatically if empty.")]
         private SimulationSystemsHub hub;
 
+        // CAMPAIGN-B (Agent B, 2026-11-15): delegated vacancy hiring service.
+        // Session-only state (once-only diagnostic suppression); efforts,
+        // inquiries, employments, and slot fills persist through their own
+        // authorities. Not serialized.
+        private DelegatedHiringService delegatedHiringService;
+
         [SerializeField, Tooltip("Found automatically if empty.")]
         private TimeManager timeManager;
 
@@ -367,6 +373,13 @@ namespace LandLedgers.Orchestration.Systems
         private HouseholdShoppingLoop householdShoppingLoop;
         private ShoppingTripDriver shoppingTripDriver;
 
+        // Campaign C (DEF-023): sticky record of a shopping-trip rehydration
+        // skipped at Rebind because the hub or TimeManager was not available
+        // yet. Read by ApplyRestoredShoppingTrips (records the skip loudly)
+        // and OnShortTick (one late retry, then a one-tick backstop shield).
+        // Runtime-only, never serialized; see ShoppingRehydrateGuard.
+        private readonly ShoppingRehydrateGuard shoppingRehydrateGuard = new ShoppingRehydrateGuard();
+
         // Plan 07 (Slice 07): cached staged-bakery driver, rebuilt when
         // the Pass 9 state's chain instance changes (covers restore).
         private StagedBakeryChainDriver stagedBakeryDriver;
@@ -382,6 +395,10 @@ namespace LandLedgers.Orchestration.Systems
         // (townWorld null / Grid null / zero road components) instead of
         // re-occurring silently.
         private string lastTownJourneyNetworkFailure = string.Empty;
+        // Maintenance pass 2026-11-15, Part A: the "no journey locations"
+        // warning in DriveDailyNeeds fires once per empty spell, not once
+        // per day; reset when locations appear so a later regression warns.
+        private bool noJourneyLocationsWarningLogged;
         // Plan 03 Slice 0 (P0-2): the instance id of the TownWorldController
         // whose identity was last logged, so the drivers' held instance is
         // named once per instance (including the null -> instance
@@ -490,6 +507,10 @@ namespace LandLedgers.Orchestration.Systems
             // existing sawmill-byproduct custody transfer; this creates no
             // stock, cash, or transaction.
             pass9.FuelIntake ??= new LandLedgers.Economy.Businesses.Sawmill.FuelYardByproductIntake();
+            // B-18 (DEF-003): a fresh Continue restores the intake lots as a
+            // pending DTO when the holder did not exist at restore time;
+            // apply it now that the holder exists (no-op when nothing is pending).
+            pass9.ApplyPendingFuelIntake();
 
             IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
             for (int i = 0; i < businesses.Count; i++)
@@ -499,6 +520,14 @@ namespace LandLedgers.Orchestration.Systems
 
                 string businessId = business.InstanceId ?? string.Empty;
                 int priceCents = sharedBusinessRuntime.GetConfiguredCategorySalePriceCents(business, "fuel_wood");
+                // B-18 (DEF-003, Decision 3): the per-instance Fuel Dealer
+                // runtime — purchasing, supplier relationships, order book,
+                // cash book — created once for the first formed dealer and
+                // reused after load. A dealer with no configured price still
+                // gets a runtime (it can buy even before it can sell); the
+                // retail offer below still requires a positive price.
+                LandLedgers.Economy.Businesses.FuelDealer.FuelDealerRuntime fuelDealerRuntime =
+                    EnsureFuelDealerRuntime(pass9, business, priceCents);
                 if (priceCents <= 0)
                 {
                     LogFuelDealerSupplierWarningOnce(businessId,
@@ -518,13 +547,20 @@ namespace LandLedgers.Orchestration.Systems
                     continue;
                 }
 
+                // B-18 (DEF-003): report each settled retail sale into the
+                // dealer's cash book. The runtime is this dealer's (Ensure
+                // returns null on an id mismatch), so a second dealer's
+                // sales are never recorded against the first dealer's books.
+                if (fuelDealerRuntime != null)
+                    adapter.OnRetailSaleRecorded = fuelDealerRuntime.RecordRetailSale;
+
                 Series2FuelDealerSupplierAdapter.RegisterIn(supplierDirectory, adapter);
                 if (fuelDealerSupplierRegistrationLogged.Add(businessId))
                 {
                     Debug.Log($"[FuelDealerSupplier] Registered existing business '{business.RuntimeDisplayName}' " +
                         $"(id='{businessId}', owner='{business.Owner.DisplayName}', building={business.AssignedBuildingId}) " +
                         $"at '{adapter.LocationId}'; configured fuel_wood price={priceCents}c/bundle, " +
-                        $"yard intake={adapter.IntakeFuelWoodUnits} sourced unit(s), household-bundle conversion unset, " +
+                        $"yard intake={adapter.IntakeFuelWoodUnits} sourced unit(s), household-bundle conversion={FuelConversionRates.IntakeUnitsPerHouseholdBundle} intake units/bundle (Decision 1), " +
                         $"saleable bundles={adapter.ItemStockUnits(HouseholdItemCatalog.FuelWoodId)}.", this);
                 }
             }
@@ -537,13 +573,54 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// B-18 (DEF-003, Decision 3): creates (once) or reuses the
+        /// per-instance Fuel Dealer runtime for one formed dealer, and
+        /// applies any pending restored state to it. First dealer only,
+        /// matching the daily transfer's first-dealer rule: when the holder
+        /// already belongs to another dealer this returns null, so a second
+        /// dealer's purchases and sales are never recorded against the
+        /// first dealer's books. A dealer without a business runtime gets
+        /// no runtime (the adapter refuses such a dealer too).
+        /// </summary>
+        private LandLedgers.Economy.Businesses.FuelDealer.FuelDealerRuntime EnsureFuelDealerRuntime(
+            Series2Pass9SaveState pass9, BusinessInstanceState dealerBusiness, int configuredBundlePriceCents)
+        {
+            if (pass9 == null || dealerBusiness == null || dealerBusiness.RuntimeState == null) return null;
+            if (pass9.FuelDealerRuntime != null)
+            {
+                if (!string.Equals(pass9.FuelDealerRuntime.DealerBusinessId, dealerBusiness.InstanceId, StringComparison.Ordinal))
+                    return null;
+                return pass9.FuelDealerRuntime;
+            }
+            pass9.FuelIntake ??= new LandLedgers.Economy.Businesses.Sawmill.FuelYardByproductIntake();
+            pass9.ApplyPendingFuelIntake();
+            var dealerCash = new Series2BusinessRuntimeCashPort(dealerBusiness.RuntimeState);
+            var runtime = new LandLedgers.Economy.Businesses.FuelDealer.FuelDealerRuntime(
+                dealerBusiness.InstanceId, pass9.FuelIntake, dealerCash);
+            pass9.FuelDealerRuntime = runtime;
+            string pendingRefusal = pass9.ApplyPendingFuelDealerRuntime();
+            if (pendingRefusal != null)
+                Debug.LogWarning("[FuelDealer] " + pendingRefusal, this);
+            runtime.SetConfiguredBundlePriceCents(configuredBundlePriceCents);
+            return runtime;
+        }
+
+        /// <summary>
         /// D1: daily sawmill-byproduct custody transfer — moves the mill's
         /// held byproduct lots into the first formed Fuel Dealer's intake
         /// by custody, so the bakery's paid-source builder (when D-F2
         /// lands) sees the day's stock. First mill and first dealer only
         /// (C2 rule); a second mill or dealer warns and gets nothing.
-        /// Custody only: never pays the mill (D-F3 open), never creates a
-        /// lot, never touches a wagon or a shipment, never reads a price.
+        /// Custody AND payment: the dealer pays the mill 1c per intake unit
+        /// (D-F3, decided by owner Decision 1, Nov 15, 2026) for the lots
+        /// transferred. If the dealer cannot pay, the transfer is refused
+        /// and nothing moves — no fuel without a legitimate purchase.
+        /// B-18 (DEF-003, Decision 3): the transfer is now a PURCHASE the
+        /// dealer decides on, not a passive push — the runtime's daily
+        /// assessment (target stock, cold-season scaled) declines the lots
+        /// when the yard is at/above target, and the settled purchase is
+        /// recorded in the runtime's cash book and supplier relationship.
+        /// Never creates a lot, never touches a wagon or a shipment.
         /// Loud refusal (diagnostic + once-per-piece warning) when any
         /// piece is absent — the transfer never silently no-ops. Called
         /// from OnDayChanged immediately before
@@ -572,6 +649,9 @@ namespace LandLedgers.Orchestration.Systems
             // the existing sawmill-byproduct custody transfer; this creates
             // no stock, cash, or transaction.
             pass9.FuelIntake ??= new LandLedgers.Economy.Businesses.Sawmill.FuelYardByproductIntake();
+            // B-18 (DEF-003): apply a pending restored intake (fresh
+            // Continue) now that the holder exists; no-op when nothing is pending.
+            pass9.ApplyPendingFuelIntake();
 
             BusinessInstanceState millBusiness = null;
             BusinessInstanceState dealerBusiness = null;
@@ -605,6 +685,21 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     LogSawmillTransferWarningOnce("no-mill",
                         "Sawmill byproduct transfer skipped: no formed Sawmill business is present in the shared runtime.");
+                    // B-18 (DEF-003): record the missing local source in the
+                    // dealer's runtime when a dealer is formed, so the
+                    // cannot-restock state is visible instead of silent.
+                    if (dealerBusiness != null && !string.IsNullOrWhiteSpace(dealerBusiness.InstanceId))
+                    {
+                        FuelDealerRuntime noMillRuntime = EnsureFuelDealerRuntime(pass9, dealerBusiness,
+                            sharedBusinessRuntime.GetConfiguredCategorySalePriceCents(dealerBusiness, "fuel_wood"));
+                        noMillRuntime?.SyncLocalSupplier(null, dayIndex);
+                        FuelDealerRuntime.FuelDealerProcurementAssessment noMillAssessment =
+                            noMillRuntime?.AssessLocalPurchase(dayIndex, 0, IsColdSeasonMonth());
+                        if (noMillAssessment != null
+                            && (noMillAssessment.Decision == FuelDealerRuntime.FuelDealerProcurementDecision.NoSupply
+                                || noMillAssessment.Decision == FuelDealerRuntime.FuelDealerProcurementDecision.OffMapAvailable))
+                            Debug.Log($"[SawmillTransfer] Day {dayIndex}: {noMillAssessment.Reason}", this);
+                    }
                     return;
                 }
 
@@ -626,9 +721,97 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // B-18 (DEF-003, Decision 3): the per-instance runtime (created
+            // at registration, or here on first transfer) and the local
+            // supplier sync. The holder belongs to the first registered
+            // dealer; Ensure returns null on an id mismatch, so a second
+            // dealer's purchases are never recorded against the first
+            // dealer's books.
+            FuelDealerRuntime fuelDealerRuntime = EnsureFuelDealerRuntime(pass9, dealerBusiness,
+                sharedBusinessRuntime.GetConfiguredCategorySalePriceCents(dealerBusiness, "fuel_wood"));
+            fuelDealerRuntime?.SyncLocalSupplier(millBusiness?.InstanceId, dayIndex);
+
+            // D-F3 (Decision 1): the transfer is a purchase — the dealer pays
+            // the mill 1c per intake unit. Affordability is checked BEFORE
+            // any custody moves, from the mill's held byproduct units; the
+            // payment then settles on the actual before/after intake delta,
+            // never on an estimate, so a lot that failed to transfer is
+            // never paid for. A transfer with no formed mill business has
+            // no mill cash to credit, so it is refused loudly rather than
+            // moving fuel unpaid.
+            IBusinessCashPort dealerCash = dealerBusiness.RuntimeState != null
+                ? new Series2BusinessRuntimeCashPort(dealerBusiness.RuntimeState)
+                : null;
+            IBusinessCashPort millCash = millBusiness?.RuntimeState != null
+                ? new Series2BusinessRuntimeCashPort(millBusiness.RuntimeState)
+                : null;
+
+            int heldIntakeUnits = 0;
+            if (mill.ByproductStock != null)
+            {
+                foreach (LandLedgers.Economy.Businesses.Sawmill.SlabOffcutFuelLot lot in mill.ByproductStock)
+                    heldIntakeUnits += Math.Max(0, lot == null ? 0 : lot.FuelWoodUnits);
+            }
+
+            // B-18 (DEF-003, Decision 3): the purchasing decision — the
+            // dealer buys only what its yard needs. At/above target the
+            // mill keeps its slabs for another day; no custody moves, no
+            // payment, no sale. Affordability is still checked below when
+            // the dealer does want the fuel.
+            FuelDealerRuntime.FuelDealerProcurementAssessment procurementAssessment =
+                fuelDealerRuntime?.AssessLocalPurchase(dayIndex, heldIntakeUnits, IsColdSeasonMonth());
+            if (procurementAssessment != null
+                && procurementAssessment.Decision == FuelDealerRuntime.FuelDealerProcurementDecision.DeclineFull)
+            {
+                Debug.Log($"[SawmillTransfer] Day {dayIndex}: {procurementAssessment.Reason}", this);
+                return;
+            }
+
+            long heldPriceCents = FuelConversionRates.ByproductPriceCents(heldIntakeUnits);
+            if (heldPriceCents > 0)
+            {
+                if (dealerCash == null || millCash == null)
+                {
+                    LogSawmillTransferWarningOnce("no-cash-port",
+                        $"Sawmill byproduct transfer refused: {heldIntakeUnits}u of byproduct held ({heldPriceCents}c at 1c/u, D-F3) but the "
+                        + (dealerCash == null ? "dealer" : "mill")
+                        + " has no cash authority; no fuel moved unpaid.");
+                    return;
+                }
+
+                if (dealerCash.BalanceCents < heldPriceCents)
+                {
+                    LogSawmillTransferWarningOnce("dealer-cannot-pay",
+                        $"Sawmill byproduct transfer refused: dealer '{dealerBusiness.InstanceId}' holds {dealerCash.BalanceCents}c but owes {heldPriceCents}c for {heldIntakeUnits}u of byproduct at 1c/u (D-F3); no fuel moved unpaid.");
+                    return;
+                }
+            }
+
             var diag = new List<string>();
+            int intakeBefore = pass9.FuelIntake.TotalFuelWoodUnitsFor(dealerBusiness.InstanceId);
             int transferred = mill.TransferByproductsToFuelDealer(dealerBusiness.InstanceId, pass9.FuelIntake, diag);
-            Debug.Log($"[SawmillTransfer] Day {dayIndex}: transferred {transferred} byproduct lot(s) from mill '{mill.BusinessInstanceId}' to FuelDealer '{dealerBusiness.InstanceId}' by custody ({string.Join("; ", diag)}).", this);
+            int intakeAfter = pass9.FuelIntake.TotalFuelWoodUnitsFor(dealerBusiness.InstanceId);
+            int settledUnits = Math.Max(0, intakeAfter - intakeBefore);
+            FuelDealerByproductSettlement.SettlementResult settlement =
+                FuelDealerByproductSettlement.Settle(settledUnits, dealerCash, millCash, diag);
+            if (!settlement.Settled)
+            {
+                // Unreachable in practice: the pre-check above guarantees the
+                // dealer can pay the held price, and the settled price is on
+                // a delta no larger than the held quantity. If it ever fires,
+                // the custody already moved, so the books must be reconciled
+                // — never silently re-paid.
+                Debug.LogWarning($"[SawmillTransfer] Day {dayIndex}: byproduct settlement failed after custody moved: {settlement.Refusal}", this);
+            }
+
+            // B-18 (DEF-003): record the settled purchase in the dealer's
+            // cash book and supplier relationship, from the actual settled
+            // numbers — never from the pre-check estimate.
+            fuelDealerRuntime?.RecordLocalPurchase(dayIndex, millBusiness?.InstanceId,
+                settlement.IntakeUnits, settlement.PriceCents, transferred);
+
+            string procurementNote = procurementAssessment != null ? $" procurement: {procurementAssessment.Reason}" : string.Empty;
+            Debug.Log($"[SawmillTransfer] Day {dayIndex}: transferred {transferred} byproduct lot(s) from mill '{mill.BusinessInstanceId}' to FuelDealer '{dealerBusiness.InstanceId}' by custody; paid {settlement.PriceCents}c for {settlement.IntakeUnits}u @ 1c/u (D-F3) ({string.Join("; ", diag)}).{procurementNote}", this);
         }
 
         /// <summary>
@@ -1860,6 +2043,29 @@ namespace LandLedgers.Orchestration.Systems
             hub.RegisterSawmillToYardTransferDriver(driver);
         }
 
+        // CAMPAIGN-B (DEF-042): resolve the general-store business a shopping
+        // trip names, so the Plan 16 queue/clerk resolvers address the store
+        // the shopping loop actually uses. The manager's own (player) store
+        // first; otherwise any GeneralStore business in the shared runtime
+        // (the dev NPC store). Any other id — another supplier, an unknown
+        // id, an empty id — returns null so the caller keeps today's null /
+        // -1 behaviour. A null shared runtime degrades to the player store
+        // only (the pre-B60 bootstrap path, where shopping can run before
+        // the runtime is assigned).
+        private BusinessInstanceState ResolveGeneralStoreBusiness(
+            LandLedgers.FirstLedger.GeneralStoreRuntimeManager manager, string businessId)
+        {
+            if (manager == null || string.IsNullOrWhiteSpace(businessId)) return null;
+            if (manager.CurrentBusiness != null
+                && string.Equals(manager.CurrentBusiness.InstanceId, businessId, StringComparison.Ordinal))
+                return manager.CurrentBusiness;
+            if (sharedBusinessRuntime != null
+                && sharedBusinessRuntime.TryFindByInstanceId(businessId, out BusinessInstanceState found)
+                && found != null && found.BusinessType == BusinessType.GeneralStore)
+                return found;
+            return null;
+        }
+
         private void BuildHouseholdShoppingLoop()
         {
             // Local public-store awareness is independent of whether the
@@ -1922,33 +2128,45 @@ namespace LandLedgers.Orchestration.Systems
             // Plan 16: General Store employee service. The loop resolves the
             // manager-bound store's live queue and a filled clerk by supplier
             // business id; any other supplier resolves null / -1 and behaves
-            // exactly as today. The manager business id is
-            // CurrentBusiness.InstanceId falling back to "general-store" —
-            // the same string the trading port reports as StoreBusinessId
-            // (GeneralStoreTradingPort.cs:49) and the supplier adapter
-            // exposes as SupplierBusinessId
-            // (GeneralStoreSupplierAdapter.cs:144), so a live store trip's
-            // SupplierBusinessId matches it. The FindAnyObjectByType call is
-            // the existing production pattern (SimulationDrivers.cs:1192,
+            // exactly as today.
+            // CAMPAIGN-B (DEF-042): the id matched here must be the store the
+            // shopping loop actually uses. In dev/editor builds the registered
+            // supplier is the NPC store port (FirstLedgerSliceBootstrapper
+            // registers BuildHouseholdTradingPort(developmentNpcStore)), whose
+            // id is "general_store_001"-style — while the manager's
+            // CurrentBusiness is the player store ("player_general_store").
+            // Matching only the player id left every dev trip with a null
+            // queue and clerk -1, so Slice 17's settle gate, Slice 18b's
+            // balk, and Slice 19's serialization never engaged and sales
+            // settled unserved. Resolve through ResolveGeneralStoreBusiness:
+            // the player store, or any GeneralStore business in the shared
+            // runtime (the dev NPC store). The queue is the manager's single
+            // live line, labelled for the store served; the clerk is read
+            // from that store's own runtime state, whose owner-occupied
+            // "owner:N" clerk slot now parses
+            // (GeneralStoreRuntimeManager.TryGetServiceClerkPersonId). The
+            // "general-store" fallback id keeps today's queue behaviour for
+            // a pre-formation port. The FindAnyObjectByType call is the
+            // existing production pattern (SimulationDrivers.cs:1192,
             // :4288, :5352).
             householdShoppingLoop.ResolveCustomerQueue = businessId =>
             {
                 var manager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
                 if (manager == null) return null;
-                string managerBusinessId = manager.CurrentBusiness != null
-                    ? manager.CurrentBusiness.InstanceId
-                    : "general-store";
-                return string.Equals(managerBusinessId, businessId, StringComparison.Ordinal) ? manager.CustomerQueue : null;
+                BusinessInstanceState store = ResolveGeneralStoreBusiness(manager, businessId);
+                if (store != null) return manager.CustomerQueueForBusiness(store);
+                if (string.Equals(businessId, "general-store", StringComparison.Ordinal)) return manager.CustomerQueue;
+                return null;
             };
             householdShoppingLoop.ResolveServiceClerkPersonId = businessId =>
             {
                 var manager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
                 if (manager == null) return -1;
-                string managerBusinessId = manager.CurrentBusiness != null
-                    ? manager.CurrentBusiness.InstanceId
-                    : "general-store";
-                if (!string.Equals(managerBusinessId, businessId, StringComparison.Ordinal)) return -1;
-                return manager.TryGetServiceClerkPersonId(out int clerkPersonId) ? clerkPersonId : -1;
+                BusinessInstanceState store = ResolveGeneralStoreBusiness(manager, businessId);
+                if (store == null) return -1;
+                if (ReferenceEquals(store, manager.CurrentBusiness))
+                    return manager.TryGetServiceClerkPersonId(out int clerkPersonId) ? clerkPersonId : -1;
+                return manager.TryGetServiceClerkPersonId(store.RuntimeState, out int npcClerkPersonId) ? npcClerkPersonId : -1;
             };
 
             // Pass 9 person-hand persistence shares the same live authority
@@ -1960,6 +2178,16 @@ namespace LandLedgers.Orchestration.Systems
                 personHandSave.Series2Pass9State ??= new Series2Pass9SaveState();
                 personHandSave.Series2Pass9State.PersonHands = hub.PersonHands;
                 personHandSave.Series2Pass9State.HandheldContainers = hub.HandheldContainers;
+                // Campaign C (DEF-073): bind the live store queue into the
+                // Pass 9 save state so saves capture the waiting line
+                // (patience included). Same instance the shopping driver
+                // resolves; restore is clear-then-load into it. New Game
+                // sessions never run EnsurePass9SaveOwnerForRestore, so
+                // without this the first save would still write an empty
+                // queue section.
+                var storeManager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+                if (storeManager != null)
+                    personHandSave.Series2Pass9State.CustomerQueue = storeManager.CustomerQueue;
             }
 
             // Physical hands P4/P5: seed the hub-owned hand authority from
@@ -1994,10 +2222,6 @@ namespace LandLedgers.Orchestration.Systems
             // save; a loop attached after the hub load leaves the custody
             // section unrestored for that load.
             hub.ShoppingLoop = householdShoppingLoop;
-            // Slice 25: attach the driver beside the loop, same shape —
-            // the hub only holds the reference for save/load.
-            hub.ShoppingTripDriver = shoppingTripDriver;
-
             // Physical shopping is driven through the existing phased loop.
             // The transaction driver may settle only after the visible person
             // has reached the seller building and may deposit only after the
@@ -2013,6 +2237,27 @@ namespace LandLedgers.Orchestration.Systems
                     CancelShoppingPhysicalRoute,
                     timeManager != null && timeManager.Settings != null
                         ? timeManager.Settings.ShortTickIntervalGameSeconds : 900f);
+            }
+
+            // Slice 25: attach the driver beside the loop, same shape —
+            // the hub only holds the reference for save/load. The attach
+            // MUST run after the creation above: attaching first hands
+            // the hub a null driver on the first build, and the hub load
+            // that follows drops any saved trips (DEF-028). Attaching
+            // the live driver also drains any trips the hub held pending
+            // from the load (see SimulationSystemsHub.ShoppingTripDriver).
+            hub.ShoppingTripDriver = shoppingTripDriver;
+
+            // Campaign C (DEF-049): the daily terminal-task prune must never remove
+            // a task a live shopping trip still references (rehydrate requires every
+            // leg/service id to resolve, and leg tasks complete mid-trip). The driver
+            // owns the live-trip lists, so it answers the predicate; the authority
+            // only calls it. Re-installing on every build is idempotent, and the
+            // lambda reads the field at call time, so a rebuilt driver is picked up.
+            if (hub != null && hub.Tasks != null)
+            {
+                hub.Tasks.IsTaskExternallyReferenced = taskId =>
+                    shoppingTripDriver != null && shoppingTripDriver.IsTaskReferencedByLiveTrip(taskId);
             }
 
         }
@@ -2287,6 +2532,20 @@ namespace LandLedgers.Orchestration.Systems
 
             // Slice 25: rehydrate shopping trips restored by the hub save.
             ApplyRestoredShoppingTrips();
+
+            // Campaign C (DEF-073): re-arm the queue patience tick at the
+            // restored clock, so a restored waiting customer's remaining
+            // patience decays from the restored time instead of pausing
+            // (in-session load, reused driver) or skipping the first
+            // short-tick interval (fresh scene). No-op on a New Game: the
+            // clock is at the scenario start and the queue is empty.
+            if (shoppingTripDriver != null && timeManager != null)
+                shoppingTripDriver.RearmQueueTickWatermark(timeManager.AbsoluteGameSeconds);
+
+            // Campaign C (DEF-047): resume a wagon leg restored by the hub
+            // save. Runs only while a restored leg is pending, so New Game
+            // rebinds and loads without a leg are no-ops.
+            ApplyRestoredWagonLeg();
         }
 
         /// <summary>
@@ -2304,8 +2563,33 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public void ApplyRestoredShoppingTrips()
         {
-            if (shoppingTripDriver == null || !shoppingTripDriver.NeedsRehydrateAfterLoad) return;
-            if (hub == null || timeManager == null) return;
+            if (shoppingTripDriver == null || !shoppingTripDriver.NeedsRehydrateAfterLoad)
+            {
+                // Campaign C (DEF-023): no pending restored trips — a New Game
+                // rebind, a second rebind, or a load with no trips. Any earlier
+                // skip is no longer pending.
+                shoppingRehydrateGuard.RecordCleared();
+                return;
+            }
+            if (hub == null || timeManager == null)
+            {
+                // Campaign C (DEF-023): FAIL LOUDLY instead of silently dropping
+                // the pending trips. Rebind is the only production caller, so a
+                // skip here leaves NeedsRehydrateAfterLoad set: the driver's
+                // leg/service maps stay empty, and the per-tick backstop
+                // (SyncTaskCompletionDueEvents) will re-schedule the leg dues
+                // while the MAP-ONLY service due is never re-registered. The
+                // guard in OnShortTick attempts one late apply and shields the
+                // first tick; this error names the exact loss. Logged only when
+                // the skip is newly armed, so a late retry on every tick cannot
+                // spam the Console.
+                int pending = shoppingTripDriver.ActiveTrips != null ? shoppingTripDriver.ActiveTrips.Count : 0;
+                if (shoppingRehydrateGuard.RecordSkipped(pending))
+                {
+                    Debug.LogError("[SimulationDrivers] ApplyRestoredShoppingTrips SKIPPED: " + pending + " restored shopping trip(s) are pending rehydration but " + (hub == null ? "SimulationSystemsHub" : "TimeManager") + " is not available. No retry exists after Rebind — the trips stay unrehydrated until the missing authority is restored. See DEF-023.", this);
+                }
+                return;
+            }
             var diag = new List<string>();
             shoppingTripDriver.RehydrateAfterLoad(
                 hub.Tasks,
@@ -2317,6 +2601,46 @@ namespace LandLedgers.Orchestration.Systems
             foreach (string message in diag)
             {
                 if (!string.IsNullOrWhiteSpace(message)) Debug.Log("[ShoppingTrips] " + message, this);
+            }
+            // Campaign C (DEF-023): rehydration ran — clear any earlier skip.
+            shoppingRehydrateGuard.RecordCleared();
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-047): resumes the wagon leg restored by the hub
+        /// save, exactly once per load. Runs only while the logistics
+        /// runtime reports a pending restored leg, so New Game rebinds and
+        /// loads without a leg are no-ops. Unlike shopping-trip rehydration
+        /// there is no per-tick backstop that would silently re-schedule a
+        /// skipped leg, so a refused resume fails LOUDLY once (warning
+        /// naming the leg) and is not retried: the wagon stays where it
+        /// stands, exactly as before this fix. The leg is consumed either
+        /// way, so a second Rebind cannot resume it twice.
+        /// MUST run before the first post-load tick, like
+        /// ApplyRestoredShoppingTrips: the daily freight drives start new
+        /// legs from journey events and must not overwrite a leg that is
+        /// about to resume.
+        /// </summary>
+        public void ApplyRestoredWagonLeg()
+        {
+            LogisticsRuntimeManager logisticsRuntime = FindAnyObjectByType<LogisticsRuntimeManager>();
+            WagonLegSaveDto restoredLeg = logisticsRuntime != null ? logisticsRuntime.RestoredWagonLeg : null;
+            if (restoredLeg == null || !restoredLeg.isActive)
+            {
+                logisticsRuntime?.ClearRestoredWagonLeg();
+                return;
+            }
+            OpeningTransportPresentationController transportPresentation =
+                FindAnyObjectByType<OpeningTransportPresentationController>();
+            logisticsRuntime.ClearRestoredWagonLeg();
+            if (transportPresentation == null)
+            {
+                Debug.LogWarning($"[CoupledTransport] ApplyRestoredWagonLeg SKIPPED: leg '{restoredLeg.legLabel}' (journey '{restoredLeg.physicalJourneyId}') was restored from the save, but no opening transport presentation exists in this scene — the wagon team was never presented (Present runs on New Game, not on Continue), so the leg cannot resume. The wagon stays absent and the shipment keeps its saved state. See DEF-047.", this);
+                return;
+            }
+            if (!transportPresentation.ResumeCoupledLeg(restoredLeg))
+            {
+                Debug.LogWarning($"[CoupledTransport] ApplyRestoredWagonLeg FAILED: leg '{restoredLeg.legLabel}' (journey '{restoredLeg.physicalJourneyId}') was restored from the save but the resume was refused (see the [CoupledTransport] refusal above); the wagon stays where it stands and the shipment keeps its saved state. See DEF-047.", this);
             }
         }
 
@@ -2487,6 +2811,29 @@ namespace LandLedgers.Orchestration.Systems
             // worker commitments truthful (WaitingOnPassiveProcess releases the worker;
             // ResumeTask re-commits).
             hub.Tasks.SetWorkTimeBudgetStore(hub.WorkTimeBudgets);
+
+            // Campaign C (DEF-062): install the hub's due-event scheduler on the
+            // hub's TaskAuthority, so CancelTask / CompleteTask / InterruptTask
+            // cancel the task's pending due events via ReleaseTaskResources
+            // instead of leaving stale dues that fire and no-op silently.
+            // The cancel code already existed (TaskAuthorityLifecycle:339-341);
+            // only this installation was missing — SetDueEventScheduler had
+            // zero production callers. The hub owns both instances and the
+            // restore is in-place (SimulationSystemsHub:1388, :1481), so one
+            // install here survives save/load.
+            hub.Tasks.SetDueEventScheduler(hub.DueEvents);
+
+            // Campaign C (DEF-074): install the hub's unified reservation
+            // authority on the hub's TaskAuthority, so CancelTask /
+            // CompleteTask / InterruptTask release the task's reservations
+            // via ReleaseTaskResources instead of leaving them held.
+            // The release code already existed
+            // (TaskAuthorityLifecycle:340-341); only this installation was
+            // missing — SetReservationAuthority had zero production
+            // callers. The hub owns both instances and the restore is
+            // in-place (SimulationSystemsHub:1400, :1501), so one install
+            // here survives save/load.
+            hub.Tasks.SetReservationAuthority(hub.ReservationAuthority);
 
             // Priority 4 Slice 4: install the task-duration diagnostic on
             // the hub's TaskAuthority, clocked by the authoritative
@@ -3314,6 +3661,11 @@ namespace LandLedgers.Orchestration.Systems
             // layoff knowledge routes into real job applications.
             DriveSocialDay(absoluteDayIndex);
             DriveAutonomousLabor(absoluteDayIndex);
+            // CAMPAIGN-B (Agent B, 2026-11-15): delegated vacancy hiring.
+            // Runs after DriveTravelAndComms accrued today's inquiries and
+            // after the manager cycle, so a hire can use an inquiry from
+            // today. Player-owned businesses are reported, never auto-hired.
+            DriveDelegatedHiring(absoluteDayIndex);
 
             // Priority 4 Slice 4 (plan §5 Slice 4 item 2): the daily
             // task-duration evaluation, once per day, placed at the end of
@@ -3327,6 +3679,58 @@ namespace LandLedgers.Orchestration.Systems
             // DriveDailyNeeds mid-drive, so no placement after the shopping
             // drive can precede it.
             hub.DurationDiagnostics?.Evaluate(timeManager.AbsoluteGameSeconds, absoluteDayIndex);
+
+            // Campaign C (DEF-049): prune terminal tasks nothing reads anymore, once
+            // per day, after every daily drive has run — so the day's completions are
+            // all recorded first. Bounded by the retention floor and the live-trip /
+            // prerequisite guards in TaskAuthority.PruneTerminalTasks; saves then grow
+            // with live state, not with total tasks ever created.
+            DriveTaskPruning(absoluteDayIndex);
+        }
+
+        // Campaign C (DEF-049 follow-on, E-06): sticky flag for the
+        // once-only loud error when DriveTaskPruning runs with no
+        // live-trip predicate installed. Runtime-only, never serialized.
+        private bool taskPruneMissingPredicateWarningLogged;
+
+        /// <summary>
+        /// Campaign C (DEF-049): daily terminal-task prune (see
+        /// TaskAuthority.PruneTerminalTasks). Runs last in the day drive; the
+        /// retention floor keeps same-day reads safe regardless of drive order.
+        /// Campaign C (DEF-049 follow-on, E-06): the live-trip predicate is
+        /// installed only when hub.Tasks exists at build time, and
+        /// PruneTerminalTasks silently skips the guard when it is null — so
+        /// a prune with no predicate installed would delete live-trip leg
+        /// tasks unguarded. Refuse to prune and fail loudly instead (DEF-023
+        /// pattern: one error, then silent until a prune actually runs).
+        /// </summary>
+        private void DriveTaskPruning(int absoluteDayIndex)
+        {
+            if (hub?.Tasks == null)
+            {
+                return;
+            }
+
+            if (hub.Tasks.IsTaskExternallyReferenced == null)
+            {
+                if (!taskPruneMissingPredicateWarningLogged)
+                {
+                    taskPruneMissingPredicateWarningLogged = true;
+                    Debug.LogError("[TaskAuthority] DEF-049 prune refused on day " + absoluteDayIndex
+                        + ": no live-trip external-reference predicate installed — terminal tasks kept. "
+                        + "A load that skips the predicate install must not prune unguarded.", this);
+                }
+
+                return;
+            }
+
+            taskPruneMissingPredicateWarningLogged = false;
+            int pruned = hub.Tasks.PruneTerminalTasks(absoluteDayIndex);
+            if (pruned > 0)
+            {
+                Debug.Log("[TaskAuthority] DEF-049 prune day " + absoluteDayIndex + ": removed "
+                    + pruned + " terminal task(s).", this);
+            }
         }
 
         private void DriveMillbrookAidTable(int absoluteDayIndex)
@@ -3387,9 +3791,11 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         /// <summary>
         /// Pass V drive-by: daily domestic labor. Each household's
-        /// need-driven tasks (meals for members at home, fuel in cold season,
-        /// animal care when the household owns animals, baseline chores) are
-        /// planned by DomesticLaborDriver and scheduled on real person time.
+        /// need-driven tasks (meals for members at home, fuel when the
+        /// household burns fuel and has fuel on hand, animal care when the
+        /// household owns animals, cleaning once accumulated household use
+        /// reaches the threshold) are planned by DomesticLaborDriver and
+        /// scheduled on real person time.
         /// </summary>
         private void DriveDomesticLaborDay(int absoluteDayIndex)
         {
@@ -3411,6 +3817,10 @@ namespace LandLedgers.Orchestration.Systems
                 if (household == null) continue;
                 List<int> members = householdMemberships.GetActiveMembers(household.id);
                 if (members.Count == 0) continue;
+                // Campaign C-24 (DEF-010, Decision 6): record today's household
+                // use before planning, so the cleaning need reads the
+                // accumulated state including today.
+                hub.DomesticLaborDriver.AccumulateCleaningUse(household.id, members.Count, absoluteDayIndex);
                 var inputs = new DomesticLaborDriver.DomesticDayInputs
                 {
                     HouseholdId = household.id,
@@ -3423,20 +3833,33 @@ namespace LandLedgers.Orchestration.Systems
                     IsWindowUnavailable = (personId, startMinute, durationMinutes) =>
                         pathingDirector != null && pathingDirector.IsCommittedToScheduledWorkWindow(
                             personId, absoluteDayIndex, startMinute, durationMinutes),
-                    // DailyNeedsService currently serves/consumes meals from
-                    // actual received lots, but no production authority reports
-                    // an unmet cooking requirement or supported recipe here.
-                    // Do not schedule a stove task merely because residents
-                    // exist; the existing daily meal accounting remains intact.
-                    MealsAtHomeCount = 0,
-                    // A month/season flag is not evidence that a household hearth
-                    // needs fuel handling. No installed-equipment/burn-state
-                    // authority is currently wired to this driver.
-                    FuelHandlingNeeded = false,
-                    // No household cleanliness state currently supplies this
-                    // need. Ordinary cleaning remains optional and unscheduled
-                    // until a real need source exists.
-                    CleaningNeeded = false,
+                    // Campaign C-24 (DEF-010, Decision 6): the cooking need is
+                    // measured from the meal authority's own served-meal
+                    // records for today (meals eaten at home), not assumed
+                    // from residents existing. DriveDailyNeeds runs before
+                    // this drive in the same OnDayChanged, so today's records
+                    // are already written. A household whose larder is empty
+                    // serves no meals at home and gets no meal-prep task —
+                    // the shortfall is a shopping need, not a cooking task.
+                    // Planning the task credits family labour only; it serves
+                    // no meal and changes no meal count (DEF-015 untouched).
+                    MealsAtHomeCount = DomesticNeedAuthorities.MealsAtHomeToday(
+                        hub.MealLog, household.id, absoluteDayIndex),
+                    // Campaign C-24 (DEF-010, Decision 6): fuel handling is
+                    // needed when the household burns fuel today (the heating
+                    // authority's own forecast: season, members, stove and
+                    // heat-retention tiers) and has fuel on hand to handle.
+                    // No fuel on hand means nothing to handle — the shortfall
+                    // is a procurement need. The fuel itself is still consumed
+                    // only by HouseholdReserveEvaluator (DEF-019 untouched).
+                    FuelHandlingNeeded = DomesticNeedAuthorities.FuelHandlingNeeded(
+                        household, absoluteDayIndex),
+                    // Campaign C-24 (DEF-010, Decision 6): cleaning comes from
+                    // the driver's accumulated-use tracker (one unit per
+                    // occupant per day; need at 14 person-days; a completed
+                    // Chores task resets it). No cleanliness state existed
+                    // before this package.
+                    CleaningNeeded = hub.DomesticLaborDriver.CleaningNeeded(household.id),
                     ColdSeason = coldSeason,
                     HasAnimals = HouseholdOwnsAnimals(household.id, members),
                 };
@@ -3622,27 +4045,30 @@ namespace LandLedgers.Orchestration.Systems
             string vehicleJourneyId,
             string originLocationId)
         {
-            if (string.IsNullOrWhiteSpace(vehicleId) || operatorPersonId < 0
-                || string.IsNullOrWhiteSpace(vehicleJourneyId)
-                || string.IsNullOrWhiteSpace(originLocationId))
-                return false;
-
             OffMapJourneyRecord vehicleJourney = OffMapJourneys.FindActiveByVehicle(vehicleId);
             OffMapJourneyRecord personJourney = OffMapJourneys.FindActiveByPerson(operatorPersonId);
-            if (vehicleJourney == null || personJourney == null
-                || !string.Equals(vehicleJourney.JourneyId, vehicleJourneyId, StringComparison.Ordinal)
-                || vehicleJourney.TravelerKind != OffMapTravelerKind.Vehicle
-                || personJourney.TravelerKind != OffMapTravelerKind.Person
-                || personJourney.PersonId != operatorPersonId
-                || !vehicleJourney.RequiresPhysicalArrivalConfirmation
-                || !personJourney.RequiresPhysicalArrivalConfirmation
-                || !vehicleJourney.PhysicalDestinationArrivalConfirmed
-                || !personJourney.PhysicalDestinationArrivalConfirmed
-                || !string.Equals(vehicleJourney.OriginLocationId, originLocationId, StringComparison.Ordinal)
-                || !string.Equals(personJourney.OriginLocationId, originLocationId, StringComparison.Ordinal)
-                || !string.Equals(vehicleJourney.DestinationLocationId, personJourney.DestinationLocationId, StringComparison.Ordinal)
-                || !string.Equals(vehicleJourney.GatewayLocationId, personJourney.GatewayLocationId, StringComparison.Ordinal))
+
+            // Campaign C (DEF-048): the pre-check below used to return false
+            // silently, so every refusal looked identical in the Console and
+            // the cause (missing journey, mismatched id, unconfirmed
+            // destination, ...) was invisible. Name the first failing check
+            // loudly, once, at the refusal — the controller calls this once
+            // per arrival attempt, so one line per refused arrival, never
+            // per tick. No retry is added: every cause named here is
+            // permanent once the return leg has started (see
+            // OriginArrivalRefusalReason), and the disposition after a
+            // refusal is Check 10 question 5, an owner decision. The
+            // destination-side method is deliberately untouched: its retry
+            // loop calls it every tick, so per-call logging there would spam.
+            string refusal = OriginArrivalRefusalReason.Describe(
+                vehicleId, operatorPersonId, vehicleJourneyId, originLocationId,
+                ToOriginArrivalJourneyState(vehicleJourney),
+                ToOriginArrivalJourneyState(personJourney));
+            if (refusal != null)
+            {
+                Debug.LogWarning(refusal, this);
                 return false;
+            }
 
             var diag = new List<string>();
             bool vehicleConfirmed = vehicleJourney.PhysicalOriginArrivalConfirmed
@@ -3658,6 +4084,27 @@ namespace LandLedgers.Orchestration.Systems
             SyncOffMapJourneysToSaveState();
             Debug.Log($"[OffMapJourney] Physical freight return confirmed: vehicle journey '{vehicleJourney.JourneyId}', operator journey '{personJourney.JourneyId}', vehicle '{vehicleId}', Ethan P{operatorPersonId}, origin '{originLocationId}'.", this);
             return true;
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-048): snapshots one journey record into the
+        /// pure refusal-reason helper's state. Null record maps to a null
+        /// snapshot (the helper names the missing journey). The traveler
+        /// kind is carried as its enum name so the helper stays free of
+        /// the journey-authority type and its Unity dependencies.
+        /// </summary>
+        private static OriginArrivalRefusalReason.JourneyState? ToOriginArrivalJourneyState(OffMapJourneyRecord record)
+        {
+            if (record == null) return null;
+            return new OriginArrivalRefusalReason.JourneyState(
+                record.JourneyId,
+                record.TravelerKind.ToString(),
+                record.PersonId,
+                record.RequiresPhysicalArrivalConfirmation,
+                record.PhysicalDestinationArrivalConfirmed,
+                record.OriginLocationId,
+                record.DestinationLocationId,
+                record.GatewayLocationId);
         }
 
         /// <summary>
@@ -3882,6 +4329,14 @@ namespace LandLedgers.Orchestration.Systems
             OpeningTransportPresentationController presentation =
                 FindAnyObjectByType<OpeningTransportPresentationController>();
             if (presentation == null) return;
+            // Campaign C (DEF-048): the movement controller, when present,
+            // remembers which journeys already had their origin arrival
+            // refused at the town return point. On a fresh-scene Continue
+            // there is no transport group at all, so this stays null and
+            // the generic line below is used — the refusal cannot be
+            // distinguished there, and is not guessed at.
+            CoupledTransportMovementController movement =
+                FindAnyObjectByType<CoupledTransportMovementController>();
 
             foreach (OffMapJourneyRecord journey in OffMapJourneys.AllJourneys())
             {
@@ -3912,8 +4367,29 @@ namespace LandLedgers.Orchestration.Systems
 
                 if (!presentation.BeginCoupledPhysicalReturn(shipment, journey, operatorPersonId))
                 {
-                    LogRefusalDayKeyed("physical-return-start:" + journey.JourneyId, absoluteDayIndex,
-                        $"[OffMapJourney] Loaded freight journey '{journey.JourneyId}' is waiting to begin its physical return: the assigned team, route, or current physical position did not validate.");
+                    // Campaign C (DEF-048): the generic line below used to
+                    // fire for every failed return start, including the
+                    // case where the team ALREADY came home and its origin
+                    // arrival was refused — a state in which "waiting to
+                    // begin its physical return" is false and the return
+                    // can never start (BeginCoupledPhysicalReturn requires
+                    // the team within 8 m of the supplier destination).
+                    // That stranded haul logged the misleading line every
+                    // day forever. Distinguish it: the refusal reason is in
+                    // the [CoupledTransport] / [OffMapJourney] warning
+                    // logged at the arrival, and no re-drive path exists —
+                    // the disposition is Check 10 question 5, an owner
+                    // decision, so this line names the state and stops there.
+                    if (movement != null && movement.HasRefusedOriginArrival(journey.JourneyId))
+                    {
+                        LogRefusalDayKeyed("physical-return-refused:" + journey.JourneyId, absoluteDayIndex,
+                            $"[OffMapJourney] Loaded freight journey '{journey.JourneyId}' cannot begin its physical return: the team already returned and its origin arrival was refused at the town return point (see the [CoupledTransport] warning for that journey); no re-drive path exists, and the haul stays active and unsettled until the owner decides the disposition (Check 10 question 5).");
+                    }
+                    else
+                    {
+                        LogRefusalDayKeyed("physical-return-start:" + journey.JourneyId, absoluteDayIndex,
+                            $"[OffMapJourney] Loaded freight journey '{journey.JourneyId}' is waiting to begin its physical return: the assigned team, route, or current physical position did not validate.");
+                    }
                 }
             }
         }
@@ -4878,7 +5354,11 @@ namespace LandLedgers.Orchestration.Systems
                         horse == null ? "A0" : null,
                         wagon == null ? "assigned wagon" : null
                     }.Where(value => value != null));
-                    LogFreightAgreementBlockerOnce("dispatch-prerequisite:" + agreement.AgreementId,
+                    // Campaign C (DEF-050): this stall retries daily but used
+                    // to log once per session, so a held shipment whose task
+                    // was never created went silent after day 1. One line
+                    // per day keeps it visible; the message is unchanged.
+                    LogRefusalDayKeyed("dispatch-prerequisite:" + agreement.AgreementId, dayIndex,
                         $"[FreightDispatch] Accepted agreement '{agreement.AgreementId}' remains prepared; dispatch assignment deferred because {missing} is unresolved.");
                     continue;
                 }
@@ -5265,8 +5745,21 @@ namespace LandLedgers.Orchestration.Systems
                 // needs service can still settle food already held by the
                 // household; the shopping loop will leave any unmet purchase
                 // need open when no valid destination can be reached.
-                Debug.LogWarning("[SimulationDrivers] No journey locations are registered; " +
-                    "daily needs will consume eligible household stock, while new errands remain blocked.");
+                // Maintenance pass 2026-11-15, Part A: an empty journey model
+                // is an expected startup / pre-generation state, so warn once
+                // per empty spell instead of once per day while it lasts.
+                // The flag resets when locations appear, so a later
+                // regression still warns once.
+                if (!noJourneyLocationsWarningLogged)
+                {
+                    noJourneyLocationsWarningLogged = true;
+                    Debug.LogWarning("[SimulationDrivers] No journey locations are registered; " +
+                        "daily needs will consume eligible household stock, while new errands remain blocked.");
+                }
+            }
+            else
+            {
+                noJourneyLocationsWarningLogged = false;
             }
 
             // PopulationManager owns the current membership registry and may
@@ -6146,8 +6639,23 @@ namespace LandLedgers.Orchestration.Systems
                 Debug.LogWarning($"[FreightAgreement] Meeting '{request.RequestId}' deferred: requester, operator, or staging building is unresolved.", this);
                 return;
             }
-            if (!IsPersonVisuallyAtBuilding(glen.id, ethan.homeBuildingId)
-                || !IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId)) return;
+            // CAMPAIGN-B (DEF-007): this was a silent return — a meeting
+            // stuck in AtMeeting because one of the two people is not
+            // physically at the staging building produced no signal at all
+            // after Glen's arrival log. The gate itself is intentional (Nov
+            // 13 physical-presence decision); the stall is now logged once
+            // per day per request, naming who is missing.
+            bool requesterPresent = IsPersonVisuallyAtBuilding(glen.id, ethan.homeBuildingId);
+            bool carrierPresent = IsPersonVisuallyAtBuilding(ethan.id, ethan.homeBuildingId);
+            if (!requesterPresent || !carrierPresent)
+            {
+                string presenceStall = FreightMeetingStallReason.DescribePresenceStall(
+                    request.RequestId, glen.id, ethan.id, ethan.homeBuildingId,
+                    requesterPresent, carrierPresent);
+                if (presenceStall != null)
+                    LogRefusalDayKeyed("freight-meeting-presence:" + request.RequestId, dayIndex, presenceStall);
+                return;
+            }
             if (request.Quote == null)
             {
                 DevelopmentTownConfiguration.BusinessDefinition carrierDefinition = null;
@@ -6183,9 +6691,18 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             int minutes = Math.Max(1, freightMeetingMinutes);
-            int startMinute = FindCommonPersonStartMinute(glen.id, ethan.id, dayIndex,
-                timeManager != null ? Mathf.FloorToInt(timeManager.TimeOfDay01 * 1440f) : 480, minutes);
-            if (startMinute < 0) return;
+            int nowMinute = timeManager != null ? Mathf.FloorToInt(timeManager.TimeOfDay01 * 1440f) : 480;
+            int startMinute = FindCommonPersonStartMinute(glen.id, ethan.id, dayIndex, nowMinute, minutes);
+            if (startMinute < 0)
+            {
+                // CAMPAIGN-B (DEF-007): this was a silent return — both
+                // people present but no common window left today. Logged
+                // once per day per request instead of going silent.
+                LogRefusalDayKeyed("freight-meeting-window:" + request.RequestId, dayIndex,
+                    FreightMeetingStallReason.DescribeNoWindowStall(
+                        request.RequestId, glen.id, ethan.id, nowMinute, minutes));
+                return;
+            }
             var trip = new FreightMeetingTripTaskData
             {
                 RequestId = request.RequestId,
@@ -7390,14 +7907,16 @@ namespace LandLedgers.Orchestration.Systems
             if (hub?.Tasks == null || agreement == null || shipment == null || freight?.Owner == null
                 || horse == null || wagon == null)
             {
-                LogFreightAgreementBlockerOnce("dispatch-context:" + agreement?.AgreementId,
+                // Campaign C (DEF-050): day-keyed, not once-only — see the
+                // note on the prerequisite branch below.
+                LogRefusalDayKeyed("dispatch-context:" + agreement?.AgreementId, dayIndex,
                     "[FreightDispatch] Prepared shipment retained; TaskAuthority, agreement, shipment, Ethan, A0, or wagon is unresolved.");
                 return;
             }
             int operatorId = freight.Owner.PersonId;
             if (operatorId < 0 || operatorId != agreement.AcceptingOperatorPersonId)
             {
-                LogFreightAgreementBlockerOnce("dispatch-operator:" + shipment.ShipmentId,
+                LogRefusalDayKeyed("dispatch-operator:" + shipment.ShipmentId, dayIndex,
                     $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains prepared; B3 operator P{operatorId} does not match accepted operator P{agreement.AcceptingOperatorPersonId}.");
                 return;
             }
@@ -7409,7 +7928,7 @@ namespace LandLedgers.Orchestration.Systems
                 || !string.Equals(shipment.physicalWagonAssetId, wagon.AssetId, StringComparison.Ordinal)
                 || shipment.physicalTransportBound)
             {
-                LogFreightAgreementBlockerOnce("dispatch-state:" + shipment.ShipmentId,
+                LogRefusalDayKeyed("dispatch-state:" + shipment.ShipmentId, dayIndex,
                     $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains prepared; accepted agreement, shipment hold, or status did not match.");
                 return;
             }
@@ -7419,7 +7938,7 @@ namespace LandLedgers.Orchestration.Systems
                 || wagon.OwnerKind != "business" || !string.Equals(wagon.OwnerId, freight.InstanceId, StringComparison.Ordinal)
                 || wagon.HitchingAnimalIds == null || !wagon.HitchingAnimalIds.Contains(horse.AnimalId.ToString()))
             {
-                LogFreightAgreementBlockerOnce("dispatch-team:" + shipment.ShipmentId,
+                LogRefusalDayKeyed("dispatch-team:" + shipment.ShipmentId, dayIndex,
                     $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains prepared; A0/wagon attachment or B3 ownership is invalid.");
                 return;
             }
@@ -7428,9 +7947,41 @@ namespace LandLedgers.Orchestration.Systems
             if (!string.IsNullOrWhiteSpace(agreement.DispatchTaskId))
             {
                 WorkTask recorded = hub.Tasks.FindTaskByIdString(agreement.DispatchTaskId);
-                if (recorded != null && string.Equals(recorded.CustomerRef, taskRef, StringComparison.Ordinal)) return;
-                LogFreightAgreementBlockerOnce("dispatch-task-missing:" + agreement.AgreementId,
-                    $"[FreightDispatch] Shipment '{shipment.ShipmentId}' retains its recorded task ID '{agreement.DispatchTaskId}', but that TaskAuthority record is unavailable; no replacement was created.");
+                if (recorded != null && string.Equals(recorded.CustomerRef, taskRef, StringComparison.Ordinal))
+                {
+                    // Campaign C (DEF-050): a recorded task that is still
+                    // open is the live path — stay silent. A terminal
+                    // recorded task strands the hold: no handler re-creates
+                    // a dispatch task for an already-prepared shipment, so
+                    // name the strand once per day instead of returning
+                    // silently. Terminal day follows the prune's anchor
+                    // (CompletedDayIndex, else CreatedDayIndex).
+                    string strand = DispatchHoldStrandReason.Describe(
+                        new DispatchHoldStrandReason.DispatchHoldTaskState(
+                            shipment.ShipmentId, agreement.AgreementId,
+                            agreement.DispatchTaskId, true, recorded.CustomerRef, taskRef,
+                            recorded.IsOpen, recorded.Status.ToString(), recorded.Outcome.ToString(),
+                            recorded.CompletedDayIndex >= 0 ? recorded.CompletedDayIndex : recorded.CreatedDayIndex,
+                            agreement.AcceptedDayIndex),
+                        dayIndex);
+                    if (strand != null)
+                        LogRefusalDayKeyed("dispatch-hold-stranded:" + shipment.ShipmentId, dayIndex, strand);
+                    return;
+                }
+                // Campaign C (DEF-050): the recorded id resolves to a
+                // different task, or to no TaskAuthority record at all
+                // (pruned 7 days after terminalizing, or lost). Either way
+                // no replacement is created — log once per day instead of
+                // once per session so the stranded hold stays visible.
+                LogRefusalDayKeyed("dispatch-task-missing:" + agreement.AgreementId, dayIndex,
+                    DispatchHoldStrandReason.Describe(
+                        new DispatchHoldStrandReason.DispatchHoldTaskState(
+                            shipment.ShipmentId, agreement.AgreementId,
+                            agreement.DispatchTaskId, recorded != null,
+                            recorded != null ? recorded.CustomerRef : string.Empty, taskRef,
+                            false, string.Empty, string.Empty, dayIndex,
+                            agreement.AcceptedDayIndex),
+                        dayIndex));
                 return;
             }
 
@@ -7442,7 +7993,10 @@ namespace LandLedgers.Orchestration.Systems
                 string recoveryRefusal = FreightProduction.ServiceAgreements.RegisterDispatchTask(
                     agreement.AgreementId, shipment.ShipmentId, existing.TaskId.ToString());
                 if (recoveryRefusal != null)
-                    LogFreightAgreementBlockerOnce("dispatch-link-existing:" + agreement.AgreementId,
+                    // Campaign C (DEF-050): day-keyed, not once-only — an
+                    // unlinked open task is a held shipment that stays
+                    // visible while it waits for its link.
+                    LogRefusalDayKeyed("dispatch-link-existing:" + agreement.AgreementId, dayIndex,
                         $"[FreightDispatch] Existing task '{existing.TaskId}' could not be linked: {recoveryRefusal}");
                 return;
             }
@@ -7740,6 +8294,37 @@ namespace LandLedgers.Orchestration.Systems
                     RegisterGeneralStoreSupplier(storeManager.BuildHouseholdTradingPort(
                         storeFeedProcurementBusiness, storeFeedRegistry));
             }
+
+            // Part B maintenance (2026-11-15): standing horse-feed
+            // reorder. The opening order was finite (20 sacks, supply
+            // exhausted on arrival) and nothing ever reordered it, so
+            // the store sold out and the freight horse starved. The
+            // planner reorders one lot on the opening order's own terms
+            // (same supplier, SKU, 15c/sack, 20-sack lot) only when
+            // coverage is below one full lot and no feed order is
+            // outstanding; it logs only when it orders or is refused.
+            // Campaign B (DEF-008): the feed counterparty is now also
+            // registered in release builds (RegisterNotionsProcurement
+            // calls RegisterReleaseHorseFeed), so the planner orders
+            // there too; it refuses loudly here only if that
+            // registration failed or was skipped.
+            var feedReorderDiag = new List<string>();
+            LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorderResult feedReorder =
+                LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorder.RunDay(
+                    new LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorderInputs
+                    {
+                        Service = storeFeedProcurement,
+                        SupplierId = LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorder.MillbrookSupplierId,
+                        SkuId = HorseFeedSku,
+                        UnitPriceCents = LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorder.FeedPriceCentsPerSack,
+                        LotSacks = LandLedgers.Economy.Businesses.GeneralStore.StoreHorseFeedReorder.OpeningLotSacks,
+                        StoreSacksOnHand = storeRuntime.GetRetailItemStockUnits(HorseFeedSku, HorseFeedCategory),
+                        DayIndex = absoluteDayIndex,
+                    }, feedReorderDiag);
+            if (feedReorder.Ordered)
+                Debug.Log("[FeedSupply] " + string.Join(" | ", feedReorderDiag), this);
+            else if (!string.IsNullOrWhiteSpace(feedReorder.Refusal))
+                Debug.LogWarning("[FeedSupply] " + feedReorder.Refusal, this);
         }
 
         private IHorseFeedStock ResolveHorseFeedStock(AnimalState horse)
@@ -8085,6 +8670,30 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// CAMPAIGN-C, DEF-025 (owner Decision 11): feeds one no-worker fact into
+        /// the task-duration diagnostics so a task with no viable worker warns on
+        /// the 1/3/7-day ladder. Diagnostic only: it never assigns, hires, or
+        /// changes any task, and it never commissions anything. Null-safe: when
+        /// the diagnostics service is not installed the feed is a no-op (the
+        /// service itself also drops unknown tasks and empty reasons).
+        /// </summary>
+        private void RecordNoWorker(string taskId, string reason, int dayIndex)
+        {
+            if (string.IsNullOrEmpty(taskId) || hub == null)
+            {
+                return;
+            }
+
+            TaskDurationDiagnostics diagnosticsService = hub.DurationDiagnostics;
+            if (diagnosticsService == null)
+            {
+                return;
+            }
+
+            diagnosticsService.RecordNoWorker(taskId, reason, dayIndex);
+        }
+
+        /// <summary>
         /// One business's blanket assignment pass: open Queued tasks and the
         /// AddLaborWorker pool (budget-derived availability) through
         /// WorkScheduler.AssignDailyWork, then ReserveAndAssignTasks
@@ -8145,8 +8754,26 @@ namespace LandLedgers.Orchestration.Systems
                 taskByTextId[task.TaskId.ToString()] = task;
             }
 
-            if (schedulerWork.Count == 0 || workers.Count == 0)
+            if (schedulerWork.Count == 0)
             {
+                return;
+            }
+
+            if (workers.Count == 0)
+            {
+                // CAMPAIGN-C, DEF-025 (owner Decision 11): the business has no
+                // workers at all, so the scheduler is never reached — every Queued
+                // task here is workerless. Feed the no-worker fact into the
+                // task-duration diagnostics so the 1/3/7-day ladder can warn.
+                // Diagnostic only; assignment behaviour is unchanged.
+                foreach (SchedulerOpenWorkItem item in schedulerWork)
+                {
+                    if (item != null)
+                    {
+                        RecordNoWorker(item.TaskId, "unassignable: no workers available", absoluteDayIndex);
+                    }
+                }
+
                 return;
             }
 
@@ -8158,6 +8785,22 @@ namespace LandLedgers.Orchestration.Systems
                     OpenWork = schedulerWork,
                     Workers = workers,
                 }, diagnostics);
+            // CAMPAIGN-C, DEF-025 (owner Decision 11): the scheduler's unassigned
+            // tasks (PersonId -1) are skipped silently by ReserveAndAssignTasks —
+            // feed their unassignable notes into the task-duration diagnostics so
+            // the 1/3/7-day ladder can warn. Diagnostic only; assignment
+            // behaviour is unchanged.
+            if (assignments != null && assignments.Assignments != null)
+            {
+                foreach (WorkAssignment assignment in assignments.Assignments)
+                {
+                    if (assignment != null && assignment.PersonId < 0)
+                    {
+                        RecordNoWorker(assignment.TaskId, assignment.Note, absoluteDayIndex);
+                    }
+                }
+            }
+
             ReserveAndAssignBusinessTasks(assignments, taskByTextId, absoluteDayIndex, diagnostics);
         }
 
@@ -8390,6 +9033,256 @@ namespace LandLedgers.Orchestration.Systems
             {
                 Debug.LogWarning("[SimulationDrivers] autonomous labor: " + string.Join(" | ", diagnostics));
             }
+        }
+
+        /// <summary>
+        /// CAMPAIGN-B (Agent B, 2026-11-15): delegated vacancy hiring, daily.
+        /// For each business with a vacant REQUIRED worker slot, resolves the
+        /// hiring actor — a Staffing delegate first, else the NPC owner — and
+        /// runs DelegatedHiringService, which posts a WordOfMouth service-role
+        /// effort when none is open and hires the earliest open inquiry at
+        /// the slot's authored baseline wage. Player-owned businesses without
+        /// a Staffing delegate are reported, never auto-hired (Canon §6.3).
+        /// Slot fills and person updates are applied in ApplyDelegatedHire.
+        /// This is the first production caller of
+        /// RecruitmentService.HireFromInquiry.
+        /// </summary>
+        private void DriveDelegatedHiring(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null || populationManager == null ||
+                populationManager.State == null)
+            {
+                return;
+            }
+
+            delegatedHiringService ??= new DelegatedHiringService();
+            var diagnostics = new List<string>();
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null || string.IsNullOrWhiteSpace(business.InstanceId) ||
+                    business.RuntimeState == null || business.RuntimeState.WorkerSlots == null)
+                {
+                    continue;
+                }
+
+                var needs = new List<HiringSlotNeed>();
+                bool anyVacantRequired = false;
+                foreach (WorkerSlotState slot in business.RuntimeState.WorkerSlots)
+                {
+                    if (slot == null)
+                    {
+                        continue;
+                    }
+
+                    needs.Add(new HiringSlotNeed
+                    {
+                        BusinessInstanceId = business.InstanceId,
+                        SlotId = slot.SlotId,
+                        SlotDisplayName = slot.SlotDisplayName,
+                        WeeklyWageCents = slot.WeeklyWageCents,
+                        RequiredForOpening = slot.RequiredForOpening,
+                        IsFilled = slot.IsFilled,
+                    });
+                    if (slot.RequiredForOpening && !slot.IsFilled)
+                    {
+                        anyVacantRequired = true;
+                    }
+                }
+                if (!anyVacantRequired)
+                {
+                    continue;
+                }
+
+                EmploymentRelationshipRegistry registry =
+                    business.RuntimeState.EmploymentRegistry ?? hub.Employments;
+                BusinessOwnerIdentity owner = business.Owner;
+                bool isPlayerOwned = owner != null && owner.OwnerKind == BusinessOwnerKind.Player;
+                int actingPersonId = -1;
+                var basis = HiringAuthorityBasis.None;
+
+                // A Staffing delegate acts first when one exists. Dormant in
+                // production today — GrantAuthority has no production callers —
+                // but the check is real and activates if grants ever exist.
+                var actorCandidates = new List<int>();
+                if (registry != null)
+                {
+                    foreach (EmploymentRelationship rel in registry.GetActiveByEmployer(business.InstanceId))
+                    {
+                        if (rel != null && rel.EmployeePersonId >= 0 && !actorCandidates.Contains(rel.EmployeePersonId))
+                        {
+                            actorCandidates.Add(rel.EmployeePersonId);
+                        }
+                    }
+                }
+                if (owner != null && owner.OwnerKind == BusinessOwnerKind.Npc && owner.PersonId >= 0 &&
+                    !actorCandidates.Contains(owner.PersonId))
+                {
+                    actorCandidates.Add(owner.PersonId);
+                }
+                foreach (int candidateId in actorCandidates)
+                {
+                    DelegatedAuthority authority = hub.Delegation.GetActiveAuthority(
+                        business.InstanceId, candidateId, absoluteDayIndex);
+                    if (authority != null && (authority.Scopes & DelegationScope.Staffing) != 0)
+                    {
+                        actingPersonId = candidateId;
+                        basis = HiringAuthorityBasis.StaffingDelegate;
+                        break;
+                    }
+                }
+
+                // No delegate: the NPC owner acts for their own business (the
+                // same owner-authority rule the hub's offer predicate uses,
+                // and the G-06 NPC-owner auto-resolution pattern).
+                if (basis == HiringAuthorityBasis.None && owner != null &&
+                    owner.OwnerKind == BusinessOwnerKind.Npc && owner.PersonId >= 0)
+                {
+                    actingPersonId = owner.PersonId;
+                    basis = HiringAuthorityBasis.NpcOwner;
+                }
+
+                BusinessInstanceState capturedBusiness = business;
+                EmploymentRelationshipRegistry capturedRegistry = registry;
+                delegatedHiringService.DriveBusinessDay(
+                    business.InstanceId, isPlayerOwned, actingPersonId, basis, needs,
+                    hub.Recruiting, registry,
+                    personId => IsHireableCandidateForDelegatedHire(personId, capturedRegistry),
+                    personId => populationManager.State.GetPerson(personId)?.DisplayName ?? string.Empty,
+                    hire => ApplyDelegatedHire(capturedBusiness, hire),
+                    absoluteDayIndex,
+                    absoluteDayIndex ^ StableBusinessRuntimeId(business.InstanceId),
+                    diagnostics);
+            }
+
+            if (diagnostics.Count > 0)
+            {
+                Debug.LogWarning("[SimulationDrivers] delegated hiring: " + string.Join(" | ", diagnostics));
+            }
+        }
+
+        /// <summary>
+        /// CAMPAIGN-B (Agent B, 2026-11-15): hireability re-check at hire time —
+        /// a real, living adult with labor access, not currently employed, and
+        /// not already assigned to any business worker slot. Mirrors the
+        /// eligibility RecruitmentService enforces when an inquiry is created.
+        /// </summary>
+        private bool IsHireableCandidateForDelegatedHire(int personId, EmploymentRelationshipRegistry registry)
+        {
+            if (populationManager?.State == null)
+            {
+                return false;
+            }
+
+            PersonState person = populationManager.State.GetPerson(personId);
+            if (person == null || person.deathDayIndex >= 0)
+            {
+                return false;
+            }
+
+            if (person.ageBand != AgeBand.Adult18Plus)
+            {
+                return false;
+            }
+
+            if (person.laborAccessLevel == LaborAccessLevel.None)
+            {
+                return false;
+            }
+
+            if (registry != null && registry.GetActiveByEmployee(personId).Count > 0)
+            {
+                return false;
+            }
+
+            if (hub.Employments != null && !ReferenceEquals(hub.Employments, registry) &&
+                hub.Employments.GetActiveByEmployee(personId).Count > 0)
+            {
+                return false;
+            }
+
+            return !IsPersonAssignedToAnyWorkerSlot(personId);
+        }
+
+        /// <summary>
+        /// CAMPAIGN-B (Agent B, 2026-11-15): true when the person already fills
+        /// a worker slot at any business (owner-operator ids are "owner:…"
+        /// strings and never match a person id).
+        /// </summary>
+        private bool IsPersonAssignedToAnyWorkerSlot(int personId)
+        {
+            if (sharedBusinessRuntime == null)
+            {
+                return false;
+            }
+
+            string workerId = personId.ToString();
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business?.RuntimeState?.WorkerSlots == null)
+                {
+                    continue;
+                }
+
+                foreach (WorkerSlotState slot in business.RuntimeState.WorkerSlots)
+                {
+                    if (slot != null && string.Equals(slot.AssignedWorkerId, workerId, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// CAMPAIGN-B (Agent B, 2026-11-15): applies a completed delegated hire
+        /// — fills the slot and updates the person's record, mirroring the
+        /// generic parts of GeneralStoreRuntimeManager.AssignPersonToStoreSlot.
+        /// professionId is intentionally left untouched: the generic path does
+        /// not mint a profession id (the store's own opening path sets
+        /// "general_store_&lt;slot&gt;"). Payroll follows automatically:
+        /// EnsureEmploymentRecordsFromSlots projects the slot (first-wins, so
+        /// the HireFromInquiry relationship stands) and SettleWeeklyPayroll
+        /// pays from the registry.
+        /// </summary>
+        private void ApplyDelegatedHire(BusinessInstanceState business, DelegatedHireResult hire)
+        {
+            if (business?.RuntimeState?.WorkerSlots == null || hire == null)
+            {
+                return;
+            }
+
+            WorkerSlotState slot = null;
+            foreach (WorkerSlotState candidate in business.RuntimeState.WorkerSlots)
+            {
+                if (candidate != null && string.Equals(candidate.SlotId, hire.SlotId, StringComparison.Ordinal))
+                {
+                    slot = candidate;
+                    break;
+                }
+            }
+            if (slot == null || slot.IsFilled)
+            {
+                return;
+            }
+
+            slot.Assign(hire.PersonId.ToString(), hire.PersonDisplayName, hire.WeeklyWageCents);
+            PersonState person = populationManager?.State?.GetPerson(hire.PersonId);
+            if (person == null)
+            {
+                return;
+            }
+
+            person.workplaceBuildingId = business.AssignedBuildingId;
+            person.professionName = slot.SlotDisplayName;
+            person.wage = new WageSnapshot
+            {
+                weeklyWage = Mathf.CeilToInt(hire.WeeklyWageCents / 100f),
+                stabilityPercent = 75, // same literal the store opening path uses
+                currencyId = "dollars",
+            };
+            person.RecordVisibleWorkerRole(slot.SlotDisplayName, hire.WeeklyWageCents);
         }
 
         /// <summary>
@@ -9503,10 +10396,17 @@ namespace LandLedgers.Orchestration.Systems
 
             BusinessInstanceState dealerBusiness = dealerBusinessWithStock ?? firstPricedDealer;
             if (dealerBusiness == null || bakeryBusiness == null) return null;
-            long pricePerBakeryUnit = (long)dealerUnitPrice * intakeUnitsPerBakeryUnit;
+            // Decision 1 (Nov 15, 2026): the configured fuel_wood price is per
+            // household BUNDLE (28c), and one bundle is 10 intake units — so
+            // the price per bakery unit is bundlePrice x 4 / 10, NOT
+            // bundlePrice x 4. The old formula treated the bundle price as a
+            // per-intake-unit price and overcharged the bakery 10x (112c
+            // instead of 11c per bakery unit).
+            long pricePerBakeryUnit = FuelConversionRates.PriceCentsPerBakeryFuelUnit(
+                dealerUnitPrice, intakeUnitsPerBakeryUnit);
             if (pricePerBakeryUnit <= 0 || pricePerBakeryUnit > int.MaxValue) return null;
 
-            return new LandLedgers.Orchestration.Player.Series2PaidDealerBakeryFuelSource(
+            var source = new LandLedgers.Orchestration.Player.Series2PaidDealerBakeryFuelSource(
                 pass9.FuelIntake,
                 dealerBusiness.InstanceId,
                 dealerBusiness.RuntimeState,
@@ -9515,6 +10415,14 @@ namespace LandLedgers.Orchestration.Systems
                 hub.Ids,
                 intakeUnitsPerBakeryUnit,
                 (int)pricePerBakeryUnit);
+            // B-18 (DEF-003): report each settled bakery sale into the
+            // dealer's cash book. The runtime is this dealer's (the holder
+            // is single-slot for the first registered dealer), so a sale is
+            // never recorded against another dealer's books.
+            if (pass9.FuelDealerRuntime != null
+                && string.Equals(pass9.FuelDealerRuntime.DealerBusinessId, dealerBusiness.InstanceId, StringComparison.Ordinal))
+                source.OnBakerySaleRecorded = pass9.FuelDealerRuntime.RecordBakerySale;
+            return source;
         }
 
         /// <summary>
@@ -10080,6 +10988,15 @@ namespace LandLedgers.Orchestration.Systems
             // This is a planning pass: physical trips settle later, only at
             // confirmed Store arrival. Do not report plans as purchases.
             var shoppingFailureByNeed = new Dictionary<string, string>(StringComparer.Ordinal);
+            // Maintenance pass 2026-11-15, Part A: trips still in flight are
+            // NOT failures. They used to be written into shoppingFailureByNeed
+            // above (as "trip …: Outbound/AtStore/…"), so every planned
+            // shopping trip opened a warning-level [Incident] for its need and
+            // every leg transition (Planned → Outbound → AtStore → …) fired a
+            // [CAUSE-CHANGED] warning as the "cause" text changed. In-flight
+            // trips are tracked separately, for the summary text only, and
+            // never reach ObserveHouseholdSupplyIncident.
+            var shoppingActiveTripByNeed = new Dictionary<string, string>(StringComparer.Ordinal);
 
             if (householdShoppingLoop != null)
                 foreach (ShoppingTripResult result in householdShoppingLoop.TripHistory)
@@ -10122,8 +11039,22 @@ namespace LandLedgers.Orchestration.Systems
                     if (trip?.Need != null)
                     {
                         string key = trip.HouseholdId + ":" + trip.Need.ItemId;
-                        if (!shoppingFailureByNeed.ContainsKey(key))
-                            shoppingFailureByNeed[key] = $"trip {trip.TripId} need {trip.Need.NeedSequence}: {trip.State}";
+                        if (trip.State == PlannedShoppingTrip.TripState.Failed)
+                        {
+                            // A failed trip is a genuine supply failure: its
+                            // recorded reason (when present) is the incident
+                            // cause. Any other active state is a trip still in
+                            // flight — recorded separately, never as a failure.
+                            if (!shoppingFailureByNeed.ContainsKey(key))
+                                shoppingFailureByNeed[key] = string.IsNullOrWhiteSpace(trip.FailureReason)
+                                    ? $"trip {trip.TripId} need {trip.Need.NeedSequence}: Failed"
+                                    : trip.FailureReason;
+                        }
+                        else if (!shoppingActiveTripByNeed.ContainsKey(key))
+                        {
+                            shoppingActiveTripByNeed[key] =
+                                $"trip {trip.TripId} need {trip.Need.NeedSequence} in progress ({trip.State})";
+                        }
                     }
 
             // Plan 02 Slice 5: one daily shopping summary line (not one line
@@ -10181,7 +11112,9 @@ namespace LandLedgers.Orchestration.Systems
                     {
                         string reason = shoppingFailureByNeed.TryGetValue(failureKey, out string recorded)
                             ? recorded
-                            : "no attempt today";
+                            : shoppingActiveTripByNeed.TryGetValue(failureKey, out string inProgress)
+                                ? inProgress
+                                : "no attempt today";
                         stillOpenParts.Add($"H{household.id} {openNeed.ItemId} ({reason})");
                     }
                 }
@@ -10195,7 +11128,9 @@ namespace LandLedgers.Orchestration.Systems
                 string longestFailureKey = longestOpenHouseholdId + ":" + longestOpenNeed.ItemId;
                 string longestReason = shoppingFailureByNeed.TryGetValue(longestFailureKey, out string longestRecorded)
                     ? longestRecorded
-                    : "no attempt today";
+                    : shoppingActiveTripByNeed.TryGetValue(longestFailureKey, out string longestInProgress)
+                        ? longestInProgress
+                        : "no attempt today";
                 int longestAgeDays = Math.Max(0, absoluteDayIndex - longestOpenNeed.CreatedDayIndex);
                 longestOpenText = $"; longest open: H{longestOpenHouseholdId} '{longestOpenNeed.ItemId}' open since day {longestOpenNeed.CreatedDayIndex} ({longestAgeDays}d) — {longestReason}";
             }
@@ -10727,11 +11662,55 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            // Campaign C (DEF-023): rehydration must have run before the first
+            // post-load tick. Two ways it can still be pending here: Rebind ran
+            // and skipped it (authorities missing — recorded loudly in
+            // ApplyRestoredShoppingTrips), or Rebind never ran after this load
+            // at all. Campaign C (DEF-065, corrected): the dev-hotkey path is
+            // NOT a no-Rebind path — every load funnels through
+            // SaveLoadManager.LoadSlotAtPath, which calls
+            // bootstrapper.MarkRestoredFromSave, which calls Rebind, so the
+            // hotkey path rebinds like Continue. A never-ran Rebind here
+            // means no bootstrapper was found at load time (SaveLoadManager
+            // logs that loudly now), a load bypassed LoadSlotAtPath, or
+            // Rebind ran before the restored trips were registered. Retry
+            // once here, before any due pops or backstop scheduling; if the
+            // retry still cannot run, fail loudly and shield this first
+            // tick's backstop only — the backstop is idempotent and re-runs
+            // every tick, so skipping it once is harmless, while running it
+            // with empty driver maps would re-schedule the leg dues and lose
+            // the MAP-ONLY service due. Later ticks run the backstop
+            // normally: the skip is already logged, and holding the
+            // backstop off forever would stall every other task's dues.
+            // This guard keeps the shopping trips from being silently
+            // corrupted on the first tick; it does not replace Rebind's
+            // other restore work (supplier adapters, diagnostics, task
+            // definitions), which runs in Rebind itself.
+            bool skippedAtRebind = shoppingRehydrateGuard.SkippedAfterLoad;
+            bool rehydratePendingAtTick = skippedAtRebind
+                || (shoppingTripDriver != null && shoppingTripDriver.NeedsRehydrateAfterLoad);
+            if (rehydratePendingAtTick)
+            {
+                ApplyRestoredShoppingTrips();
+                if (!skippedAtRebind && !shoppingRehydrateGuard.SkippedAfterLoad)
+                {
+                    Debug.LogWarning("[SimulationDrivers] Restored shopping trips rehydrated late on the first post-load tick — Rebind did not run after this load, or ran before the restored trips were registered (see DEF-065). The trips are intact; if Rebind never ran, its other restore work (supplier adapters, diagnostics, task definitions) is still missing.", this);
+                }
+            }
+            bool shieldBackstopThisTick = shoppingRehydrateGuard.TakeFirstTickGuard();
+
             // Pass IV (Worker 1): due events pop in due order BEFORE any further
             // advancement, so accelerated ticks cannot skip task completions,
             // passive completions, or deadlines.
             ProcessDueEvents();
-            SyncTaskCompletionDueEvents();
+            if (shieldBackstopThisTick)
+            {
+                Debug.LogError("[SimulationDrivers] First post-load tick with " + shoppingRehydrateGuard.SkippedTripCount + " restored shopping trip(s) still unrehydrated — skipping the task-due backstop this tick so it cannot re-schedule their leg dues (service dues are MAP-ONLY and would be lost). The trips are diagnosed in ApplyRestoredShoppingTrips. See DEF-023.", this);
+            }
+            else
+            {
+                SyncTaskCompletionDueEvents();
+            }
 
             if (timeManager != null && shoppingTripDriver != null)
             {

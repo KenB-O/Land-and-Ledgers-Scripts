@@ -145,6 +145,23 @@ namespace LandLedgers.FirstLedger
         [SerializeField]
         private int residentActorEntriesCreated;
 
+        // Campaign C (DEF-021): agent-cap truncation diagnostics. The walk in
+        // PopulateManagedAgents stops once agents.Count reaches maxActiveAgents,
+        // so residents past the examined prefix never get a visual agent. These
+        // counters name that cut (count, cap value, resident summary) instead of
+        // leaving it silent. Appended fields only; nothing renamed or reordered.
+        [SerializeField]
+        private int residentsCutByAgentCap;
+
+        [SerializeField]
+        private int lastAgentCapApplied;
+
+        [SerializeField]
+        private string lastCutResidentSummary;
+
+        [SerializeField]
+        private int explicitArrivalChecksForCutResidents;
+
         [SerializeField]
         private string lastRouteFailure;
 
@@ -162,6 +179,10 @@ namespace LandLedgers.FirstLedger
         private bool loggedNoManagedAgents;
         private bool loggedAmbientRouteFailure;
         private bool loggedScheduledRouteFailure;
+        // Campaign C (DEF-021): runtime-only cut set for the arrival check.
+        // Not serialized: re-derived on every populate.
+        private readonly HashSet<int> cutResidentIds = new();
+        private readonly HashSet<int> warnedCutArrivalPersonIds = new();
         private int lastDayIndex = -1;
         private readonly Dictionary<int, WorkCommuteEstimate> workCommuteEstimates = new();
 
@@ -262,7 +283,7 @@ namespace LandLedgers.FirstLedger
                 ? $", ScheduledBlocked={scheduledRoutesBlockedToday}, ScheduledFailures(start/target/path)={scheduledMissingStartFailuresToday}/{scheduledMissingTargetFailuresToday}/{scheduledPathFailuresToday}, LastRouteFailure={LastRouteFailure}"
                 : string.Empty;
 
-            return $"{readiness} Managed={managedPeople}, Visible={visibleStreetAgents}, ResidentsScanned={populationRecordsExamined}, NonLocalOrInvalid={recordsRejectedAsNonLocalResidents}, MissingHomeDoors={residentsMissingHomeDoorAnchors}, ActorEntriesCreated={residentActorEntriesCreated}, WorkIssued={workRoutesIssued}, ShoppingIssued={shoppingRoutesIssued}, HomeIssued={homeRoutesIssued}, AmbientStarted={ambientRoutesStartedToday}, AmbientFailures(anchor/path)={ambientAnchorFailuresToday}/{ambientPathFailuresToday}{scheduledFailures}, Last={LastMovementStatus}";
+            return $"{readiness} Managed={managedPeople}, Visible={visibleStreetAgents}, ResidentsScanned={populationRecordsExamined}, NonLocalOrInvalid={recordsRejectedAsNonLocalResidents}, MissingHomeDoors={residentsMissingHomeDoorAnchors}, ActorEntriesCreated={residentActorEntriesCreated}, CutByAgentCap={residentsCutByAgentCap}, WorkIssued={workRoutesIssued}, ShoppingIssued={shoppingRoutesIssued}, HomeIssued={homeRoutesIssued}, AmbientStarted={ambientRoutesStartedToday}, AmbientFailures(anchor/path)={ambientAnchorFailuresToday}/{ambientPathFailuresToday}{scheduledFailures}, Last={LastMovementStatus}";
         }
 
         public void InitializeIfNeeded()
@@ -331,6 +352,14 @@ namespace LandLedgers.FirstLedger
             scheduledPathFailuresToday = 0;
             lastRouteFailure = string.Empty;
             visibleStreetAgents = 0;
+            // Campaign C (DEF-021): clear the agent-cap diagnostics with the
+            // other populate state; the next populate re-derives them.
+            residentsCutByAgentCap = 0;
+            lastAgentCapApplied = 0;
+            lastCutResidentSummary = string.Empty;
+            explicitArrivalChecksForCutResidents = 0;
+            cutResidentIds.Clear();
+            warnedCutArrivalPersonIds.Clear();
             loggedNoManagedAgents = false;
             loggedAmbientRouteFailure = false;
             loggedScheduledRouteFailure = false;
@@ -592,6 +621,14 @@ namespace LandLedgers.FirstLedger
             recordsRejectedAsNonLocalResidents = 0;
             residentsMissingHomeDoorAnchors = 0;
             residentActorEntriesCreated = 0;
+            // Campaign C (DEF-021): reset the agent-cap diagnostics with the
+            // other populate counters; the walk below re-derives them.
+            residentsCutByAgentCap = 0;
+            lastAgentCapApplied = maxActiveAgents;
+            lastCutResidentSummary = string.Empty;
+            cutResidentIds.Clear();
+            explicitArrivalChecksForCutResidents = 0;
+            warnedCutArrivalPersonIds.Clear();
             PopulationState state = populationManager.State;
             for (int i = 0; i < state.people.Count && agents.Count < maxActiveAgents; i++)
             {
@@ -642,6 +679,38 @@ namespace LandLedgers.FirstLedger
 
                 agents.Add(new ManagedPersonAgent(person, mover, homeAnchor));
                 residentActorEntriesCreated++;
+            }
+
+            // Campaign C (DEF-021): the loop above stops once agents.Count
+            // reaches maxActiveAgents, so any resident past the examined prefix
+            // never gets an agent. That cut was silent; name it here (count,
+            // cap value, resident ids) and keep the ids so the arrival check
+            // can tell a cut resident apart from any other person with no agent.
+            int[] cutIndices = AgentCapTruncation.CutIndices(state.people.Count, populationRecordsExamined);
+            if (cutIndices.Length > 0)
+            {
+                residentsCutByAgentCap = cutIndices.Length;
+                List<string> cutLabels = new List<string>();
+                for (int i = 0; i < cutIndices.Length; i++)
+                {
+                    PersonState cutPerson = state.people[cutIndices[i]];
+                    cutResidentIds.Add(cutPerson.id);
+                    if (cutLabels.Count < 5)
+                    {
+                        string cutName = string.IsNullOrWhiteSpace(cutPerson.firstName)
+                            && string.IsNullOrWhiteSpace(cutPerson.lastName)
+                            ? string.Empty
+                            : (" " + cutPerson.firstName + " " + cutPerson.lastName).TrimEnd();
+                        cutLabels.Add("#" + cutPerson.id + cutName);
+                    }
+                }
+                lastCutResidentSummary = string.Join(", ", cutLabels)
+                    + (cutIndices.Length > 5 ? $" and {cutIndices.Length - 5} more" : string.Empty);
+                Debug.LogWarning(
+                    $"PopulationPathingDirector cut {residentsCutByAgentCap} resident(s) at the agent cap: " +
+                    $"people={state.people.Count}, examined={populationRecordsExamined}, cap={maxActiveAgents}, " +
+                    $"cut={lastCutResidentSummary}. Cut residents have no visual agent, so their arrival-gated tasks cannot complete.",
+                    this);
             }
 
             managedPeople = agents.Count;
@@ -1985,6 +2054,21 @@ namespace LandLedgers.FirstLedger
                     && managed.mover.RemainingPathWaypointCount == 0
                     && distanceToDestination <= Mathf.Max(0.1f, explicitTravelArrivalRadiusMeters);
                 return true;
+            }
+            // Campaign C (DEF-021): a cut resident has no agent, so every
+            // arrival-gated task for them fails this check silently. Count it
+            // and warn once per person; the populate warning names the cut.
+            if (cutResidentIds.Contains(personId))
+            {
+                explicitArrivalChecksForCutResidents++;
+                if (warnedCutArrivalPersonIds.Add(personId))
+                {
+                    Debug.LogWarning(
+                        $"PopulationPathingDirector arrival check for person #{personId} found no visual agent: " +
+                        $"the resident was cut by the agent cap (cap={lastAgentCapApplied}, cut={residentsCutByAgentCap}). " +
+                        "Arrival-gated tasks for this resident cannot complete.",
+                        this);
+                }
             }
             return false;
         }

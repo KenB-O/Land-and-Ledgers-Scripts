@@ -221,13 +221,13 @@ namespace LandLedgers.Population
         [SerializeField, Min(0), Tooltip("Finite development-town opening baker's notions in units, received into the Bakery production bin on New Game only.")]
         private int openingBakeryNotionsUnits;
         /// <summary>
-        /// Plan 10 E4 (Obj 8; D-2): the owner-supplied fuel-dealer
-        /// conversion factor — intake units per bakery fuel unit
-        /// (IntakeUnitsPerBakeryUnit for Series2DealerBakeryFuelSource).
-        /// Zero/unset by default: unset means "no dealer conversion —
-        /// fuel cannot be supplied from the dealer". The value itself is
-        /// Kennedy's (D-2); no asset edit by Muse, and the asset entry
-        /// naming it is Codex's when he supplies it. A factor of 1 would
+        /// Plan 10 E4 (Obj 8; D-2): the fuel-dealer conversion factor —
+        /// intake units per bakery fuel unit (IntakeUnitsPerBakeryUnit for
+        /// Series2DealerBakeryFuelSource). Zero/unset by default: unset
+        /// means "no dealer conversion — fuel cannot be supplied from the
+        /// dealer". D-2 DECIDED by owner Decision 1 (Nov 15, 2026): the
+        /// factor is 4 intake units per bakery fuel unit, carried in every
+        /// scenario asset as provisional calibration. A factor of 1 would
         /// be an invented conversion — never default to 1, and a factor
         /// of 0 is treated as unset everywhere it is read.
         /// </summary>
@@ -260,7 +260,7 @@ namespace LandLedgers.Population
         public int OpeningBakeryFuelUnits => openingBakeryFuelUnits;
         public int OpeningBakeryFlourPounds => openingBakeryFlourPounds;
         public int OpeningBakeryNotionsUnits => openingBakeryNotionsUnits;
-        /// <summary>Plan 10 E4: the D-2 fuel-dealer conversion factor; 0 = unset (no dealer conversion).</summary>
+        /// <summary>Plan 10 E4: the D-2 fuel-dealer conversion factor (decided by owner Decision 1: 4 intake units per bakery fuel unit); 0 = unset (no dealer conversion).</summary>
         public int FuelDealerIntakeUnitsPerBakeryUnit => fuelDealerIntakeUnitsPerBakeryUnit;
         public string OpeningHorseId => openingHorseId ?? string.Empty;
         public string OpeningWagonId => openingWagonId ?? string.Empty;

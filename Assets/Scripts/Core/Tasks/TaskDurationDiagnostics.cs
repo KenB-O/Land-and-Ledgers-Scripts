@@ -51,6 +51,16 @@ namespace LandLedgers.Tasks
         /// <see cref="TaskTimingRecord.LastProgressSeconds"/>.
         /// </summary>
         void RecordRefusal(string taskId, string method, string reason, int day);
+
+        /// <summary>
+        /// Records that the daily assignment drive found no viable worker for a task
+        /// (CAMPAIGN-C, DEF-025, owner Decision 11, §3.2 L8). <paramref name="reason"/>
+        /// is the scheduler's unassignable note verbatim; <paramref name="day"/> is the
+        /// day it was confirmed. Like a refusal it is not progress: it never moves
+        /// <see cref="TaskTimingRecord.LastProgressSeconds"/>. The streak counts
+        /// consecutive workerless days (see <see cref="TaskTimingRecord.ConsecutiveNoWorkerDays"/>).
+        /// </summary>
+        void RecordNoWorker(string taskId, string reason, int day);
     }
 
     /// <summary>
@@ -167,6 +177,27 @@ namespace LandLedgers.Tasks
         /// </summary>
         public int ConsecutiveRefusalDays { get; set; }
 
+        /// <summary>
+        /// Most recent no-worker reason fed in via RecordNoWorker (CAMPAIGN-C, DEF-025,
+        /// owner Decision 11). The scheduler's unassignable note verbatim ("unassignable:
+        /// no workers available" or the skip reasons). Names the actual blocker.
+        /// </summary>
+        public string LastNoWorkerReason { get; set; }
+
+        /// <summary>Day <see cref="LastNoWorkerReason"/> was fed in (-1 = none). CAMPAIGN-C, DEF-025.</summary>
+        public int LastNoWorkerDay { get; set; }
+
+        /// <summary>
+        /// Consecutive days on which the assignment drive confirmed no viable worker for
+        /// this task (CAMPAIGN-C, DEF-025, owner Decision 11). Unlike the refusal
+        /// streak it counts workerless days regardless of the reason text — the reason
+        /// is evidence naming the current blocker, not the explanation's identity — so a
+        /// reason change does not reset it; a gap in fed days resets it to 1, a
+        /// same-day repeat leaves it alone. Cleared when the task is assigned or
+        /// started (natural recovery: a worker exists again).
+        /// </summary>
+        public int ConsecutiveNoWorkerDays { get; set; }
+
         /// <summary>Due event id captured on entering WaitingOnPassiveProcess (survives ResumeTask clearing it on the task).</summary>
         public string LastDueEventId { get; set; }
 
@@ -219,6 +250,9 @@ namespace LandLedgers.Tasks
             LastRefusalMethod = string.Empty;
             LastRefusalDay = -1;
             ConsecutiveRefusalDays = 0;
+            LastNoWorkerReason = string.Empty;
+            LastNoWorkerDay = -1;
+            ConsecutiveNoWorkerDays = 0;
             ClosedSpans = new List<TaskTimingSpan>();
             LastDueEventId = string.Empty;
             ClockPrecision = TaskTimingClockPrecision.DayOnly;
@@ -266,6 +300,12 @@ namespace LandLedgers.Tasks
         /// <summary>DIAGNOSTIC PARAMETER — not Canon, not an authored rate (§4.2). §3.3 repeated-legitimate-explanation cap, days.</summary>
         public int EscalationDays { get; set; }
 
+        /// <summary>DIAGNOSTIC PARAMETER — not Canon, not an authored rate (§4.2). CAMPAIGN-C, DEF-025 (owner Decision 11, Nov 15, 2026): warn after approximately this many simulated days without a viable worker.</summary>
+        public int NoWorkerWarnDays { get; set; }
+
+        /// <summary>DIAGNOSTIC PARAMETER — not Canon, not an authored rate (§4.2). CAMPAIGN-C, DEF-025 (owner Decision 11, Nov 15, 2026): raise a higher-priority exception after this many days without a viable worker if unresolved. The middle rung (escalate) reuses <see cref="EscalationDays"/> (§3.3).</summary>
+        public int NoWorkerExceptionDays { get; set; }
+
         /// <summary>DIAGNOSTIC PARAMETER — not Canon, not an authored rate (§4.2). At most this many warning lines per day across all tasks.</summary>
         public int MaxWarningsPerDay { get; set; }
 
@@ -287,6 +327,8 @@ namespace LandLedgers.Tasks
             OverrunGraceSeconds = 900f;
             StallGraceSeconds = 86400f;
             EscalationDays = 3;
+            NoWorkerWarnDays = 1;
+            NoWorkerExceptionDays = 7;
             MaxWarningsPerDay = 12;
             MaxWarningsPerDefinitionPerDay = 3;
             MaxWarningsPerTaskPerDay = 1;
@@ -308,7 +350,9 @@ namespace LandLedgers.Tasks
     /// explained but the same legitimate explanation has repeated past
     /// <see cref="TaskDurationDiagnosticSettings.EscalationDays"/> (§3.3) — the
     /// diagnostic warns with the repeated reason quoted, without reclassifying the
-    /// stall as unexplained.
+    /// stall as unexplained. L8 is the exception: it warns from ~1 day per owner
+    /// Decision 11 (CAMPAIGN-C, DEF-025); the rung is carried on the verdict
+    /// (<see cref="TaskTimingVerdict.NoWorkerStage"/>).
     /// </summary>
     public enum TaskTimingVerdictKind
     {
@@ -320,9 +364,12 @@ namespace LandLedgers.Tasks
     /// <summary>
     /// Priority 4 Slice 2 — the legitimate-delay taxonomy (plan §3.2). The class
     /// letters are diagnostic labels, not Canon. NoneRecorded means no §3.2 reason
-    /// covers the span. L8 is defined but unavailable: no assignment path in source
-    /// names "no eligible worker" as a refusal (verified by grep; plan §7 C-7), so
-    /// no record ever classifies L8 in this slice.
+    /// covers the span. L8 names "no eligible worker" (CAMPAIGN-C, DEF-025, owner
+    /// Decision 11): the daily assignment drive feeds it via RecordNoWorker when
+    /// the scheduler cannot assign the task to any worker (or the business has no
+    /// workers at all), so a record CAN classify L8 in this slice. Before that
+    /// feed existed no assignment path in source named "no eligible worker" as a
+    /// refusal (verified by grep; plan §7 C-7).
     /// </summary>
     public enum TaskTimingReasonClass
     {
@@ -373,6 +420,9 @@ namespace LandLedgers.Tasks
         public int ExpectedMinutes { get; set; }
         public bool IsProvisional { get; set; }
 
+        /// <summary>CAMPAIGN-C, DEF-025 (owner Decision 11): the L8 no-worker ladder rung this verdict sits on — 0 = not an L8 ladder verdict, 1 = warn (~1 day), 2 = escalated (past EscalationDays), 3 = higher-priority exception (past NoWorkerExceptionDays).</summary>
+        public int NoWorkerStage { get; set; }
+
         public TaskTimingVerdict()
         {
             Verdict = TaskTimingVerdictKind.Legitimate;
@@ -416,8 +466,9 @@ namespace LandLedgers.Tasks
     /// schedule lookup returns Sleep/Rest windows per (personId, dayIndex) as
     /// <see cref="TaskDurationSleepWindow"/> values; the real shape it mirrors is
     /// DailyActivityPlanner's two-window wrapping sleep (evening 1320+120, morning
-    /// 0+420, both on the same day index). L8 is unavailable: no assignment path
-    /// names "no eligible worker" (plan §7 C-7).
+    /// 0+420, both on the same day index). L8 is fed by RecordNoWorker from the
+    /// daily assignment drive (CAMPAIGN-C, DEF-025, owner Decision 11); before that
+    /// feed no assignment path named "no eligible worker" (plan §7 C-7).
     /// </summary>
     public sealed class TaskDurationDiagnostics : ITaskTimingObserver
     {
@@ -450,6 +501,9 @@ namespace LandLedgers.Tasks
         private int lastSummaryDay = -1;
         private int lastEvaluationFailedDay = -1;
         private int evictedCountAtLastSummary;
+
+        /// <summary>Identities of records evicted since the last summary was emitted, in eviction order (CAMPAIGN-C, DEF-063). Cleared when the summary is emitted, at the same point as <see cref="evictedCountAtLastSummary"/>. Bounded by record churn between summaries — an eviction only happens when a new record arrives while the store is full — so this list cannot grow without bound on its own.</summary>
+        private readonly List<string> evictedSinceLastSummaryIdentities = new List<string>();
 
         public TaskDurationDiagnostics()
         {
@@ -528,7 +582,10 @@ namespace LandLedgers.Tasks
         /// day (day-keyed, <see cref="lastWarnedDay"/>). The summary is emitted at
         /// most once per day, and only when at least one overrun is open or a terminal
         /// overrun was warned that day; excess warnings are counted in its omitted
-        /// count, never silently dropped.
+        /// count, never silently dropped — and the omitted tasks' identities are
+        /// emitted on a following "[TaskDuration] omitted" line, with evicted
+        /// records' identities on a "[TaskDuration] evicted" line when any were
+        /// evicted since the last summary (CAMPAIGN-C, DEF-063).
         ///
         /// Evaluation points only (§4.2): this is called once per day by the day drive
         /// (Slice 4) and once at a terminal transition — never per tick, never per
@@ -565,6 +622,10 @@ namespace LandLedgers.Tasks
             int newCount = 0;
             int repeatingCount = 0;
             int omittedCount = 0;
+            // CAMPAIGN-C, DEF-063: the identities of the open overruns the caps
+            // omit this evaluation, in record order — the summary counts them,
+            // the omitted line below names them.
+            var omittedIdentities = new List<string>();
             int terminalWarnedToday = 0;
             TaskTimingRecord longestOpen = null;
             TaskTimingVerdict longestVerdict = null;
@@ -636,12 +697,14 @@ namespace LandLedgers.Tasks
                 if (perTask >= diagnosticSettings.MaxWarningsPerTaskPerDay)
                 {
                     omittedCount++;
+                    omittedIdentities.Add(FormatTaskIdentity(record));
                     continue;
                 }
 
                 if (warningsToday >= diagnosticSettings.MaxWarningsPerDay)
                 {
                     omittedCount++;
+                    omittedIdentities.Add(FormatTaskIdentity(record));
                     continue;
                 }
 
@@ -650,6 +713,7 @@ namespace LandLedgers.Tasks
                 if (perDefinition >= diagnosticSettings.MaxWarningsPerDefinitionPerDay)
                 {
                     omittedCount++;
+                    omittedIdentities.Add(FormatTaskIdentity(record));
                     continue;
                 }
 
@@ -672,8 +736,25 @@ namespace LandLedgers.Tasks
             {
                 Emit(FormatSummaryLine(nowDay, openOverrunCount, newCount, repeatingCount,
                     omittedCount, longestOpen, longestVerdict));
+                // CAMPAIGN-C, DEF-063: the summary counts the omitted warnings and
+                // the evicted records; these lines name them. Each is emitted only
+                // when it has something to name, and only as part of the summary
+                // emission — at most once per day, sharing the summary's fate (a
+                // second evaluation on a day whose summary was already emitted
+                // reports neither the count nor the identities for that pass, as
+                // the count already behaved before this change).
+                if (omittedIdentities.Count > 0)
+                {
+                    Emit(FormatOmittedLine(nowDay, omittedCount, omittedIdentities));
+                }
+                int evictedSinceLastSummary = EvictedRecordCount - evictedCountAtLastSummary;
+                if (evictedSinceLastSummary > 0)
+                {
+                    Emit(FormatEvictedLine(nowDay, evictedSinceLastSummary, evictedSinceLastSummaryIdentities));
+                }
                 lastSummaryDay = nowDay;
                 evictedCountAtLastSummary = EvictedRecordCount;
+                evictedSinceLastSummaryIdentities.Clear();
             }
         }
 
@@ -750,7 +831,20 @@ namespace LandLedgers.Tasks
                 + " (" + WholeSeconds(secondsSinceLastTransition) + "s ago)"
                 + " state " + record.CurrentStatus.ToString()
                 + " (" + TaskLifecyclePolicy.Describe(record.CurrentStatus) + ")"
-                + " outcome " + outcome;
+                + " outcome " + outcome
+                + NoWorkerStageLabel(verdict.NoWorkerStage);
+        }
+
+        /// <summary>CAMPAIGN-C, DEF-025: the L8 ladder rung word for the §4.1 warning line ("" when not an L8 ladder verdict). Appended after the fixed §4.1 fields, so the field order is unchanged.</summary>
+        private static string NoWorkerStageLabel(int stage)
+        {
+            switch (stage)
+            {
+                case 1: return " no-worker warn";
+                case 2: return " no-worker escalated";
+                case 3: return " no-worker EXCEPTION";
+                default: return string.Empty;
+            }
         }
 
         /// <summary>The §4.1 daily summary line. Evictions since the last summary are appended when any occurred (§4.2).</summary>
@@ -783,6 +877,28 @@ namespace LandLedgers.Tasks
             }
 
             return line;
+        }
+
+        /// <summary>One task identity in the exact fragment the warning and summary lines use: task id plus definition id.</summary>
+        private static string FormatTaskIdentity(TaskTimingRecord record)
+        {
+            return "task " + record.TaskId + " '" + record.DefinitionId + "'";
+        }
+
+        /// <summary>The §4.1 omitted-identities line (CAMPAIGN-C, DEF-063): which open overruns the §4.2 warning caps omitted this evaluation, in record order. The caps themselves are unchanged — this line names the tasks the caps hid, so a stall that would have warned on a quiet day is visible on a busy one.</summary>
+        private static string FormatOmittedLine(int nowDay, int omittedCount, List<string> omittedIdentities)
+        {
+            return "[TaskDuration] omitted day " + nowDay
+                + ": " + omittedCount + " omitted by cap: "
+                + string.Join(", ", omittedIdentities.ToArray());
+        }
+
+        /// <summary>The §4.1 evicted-identities line (CAMPAIGN-C, DEF-063): which records were evicted from the bounded store since the last summary, in eviction order. The eviction count itself is already on the summary line; this line names the records.</summary>
+        private static string FormatEvictedLine(int nowDay, int evictedCount, List<string> evictedIdentities)
+        {
+            return "[TaskDuration] evicted day " + nowDay
+                + ": " + evictedCount + " evicted: "
+                + string.Join(", ", evictedIdentities.ToArray());
         }
 
         /// <summary>
@@ -965,6 +1081,57 @@ namespace LandLedgers.Tasks
         }
 
         /// <summary>
+        /// Records that the daily assignment drive found no viable worker for a task
+        /// (CAMPAIGN-C, DEF-025, owner Decision 11, §3.2 L8). The reason string is fed
+        /// in by the caller that holds it — the scheduler's unassignable note verbatim
+        /// (WorkScheduler: "unassignable: no workers available" or the skip reasons).
+        /// A no-worker record for a task the service has no record for is dropped,
+        /// never invented: timing is only recorded for observed tasks. A no-worker
+        /// record is not progress: it never moves LastProgressSeconds and never
+        /// changes the last transition. The consecutive-day streak counts days on
+        /// which the workerless condition was confirmed, regardless of the reason
+        /// text — the reason names the current blocker, it is not the explanation's
+        /// identity — so a same-day repeat leaves it alone, the next fed day
+        /// increments it, and a gap in fed days resets it to 1.
+        /// </summary>
+        public void RecordNoWorker(string taskId, string reason, int day)
+        {
+            if (string.IsNullOrEmpty(taskId) || string.IsNullOrEmpty(reason))
+            {
+                return;
+            }
+
+            TaskTimingRecord record;
+            if (!records.TryGetValue(taskId, out record))
+            {
+                return;
+            }
+
+            int previousDay = record.LastNoWorkerDay;
+            record.LastNoWorkerReason = reason;
+            if (day == previousDay)
+            {
+                // Same-day repeat: the streak is unchanged.
+            }
+            else if (day == previousDay + 1)
+            {
+                record.ConsecutiveNoWorkerDays++;
+            }
+            else
+            {
+                record.ConsecutiveNoWorkerDays = 1;
+            }
+
+            record.LastNoWorkerDay = day;
+        }
+
+        /// <summary>EntityId overload of <see cref="RecordNoWorker(string, string, int)"/>.</summary>
+        public void RecordNoWorker(EntityId taskId, string reason, int day)
+        {
+            RecordNoWorker(taskId.ToString(), reason, day);
+        }
+
+        /// <summary>
         /// Slice 2 — the expected-vs-actual comparison and §3 classification for one
         /// record at one evaluation time (plan §3.1–§3.4). Returns null for a null
         /// record. Emits no log lines; Slice 3 turns verdicts into warnings.
@@ -978,6 +1145,8 @@ namespace LandLedgers.Tasks
         /// the task finished; P2 alone decides).
         ///
         /// UnexplainedSpanSeconds = openSpan − queueExplained − assignedExplained −
+        /// waitingExplained (the Queued / Assigned remainder: waiting for a turn is
+        /// scheduling, not work, maintenance pass 2026-11-15 Part A) −
         /// activeExplained(L3) − legitimateBlocked − expectedTravelSeconds (0 in this
         /// slice: no travel linkage exists, §2.3). Each explained term covers only
         /// the bucket it belongs to, so the terms are disjoint and their sum never
@@ -989,6 +1158,11 @@ namespace LandLedgers.Tasks
         /// continuously past EscalationDays. Horizon-bounded waits (L1 arrival day,
         /// L5 due time) run to their horizon instead — a 14-day lead does not
         /// escalate on day 4 — and are unexplained only from the horizon on (§3.6).
+        /// The L8 no-worker ladder (CAMPAIGN-C, DEF-025, owner Decision 11) is the
+        /// third escalation shape: a Queued task the assignment drive confirmed
+        /// workerless today warns from ~1 day, escalates past EscalationDays, and
+        /// raises a higher-priority exception past NoWorkerExceptionDays; the rung
+        /// is carried on the verdict (NoWorkerStage).
         /// </summary>
         public TaskTimingVerdict Classify(TaskTimingRecord record, float nowSeconds, int nowDay)
         {
@@ -1129,7 +1303,23 @@ namespace LandLedgers.Tasks
                 primaryEvidence = "sleep/rest windows (L3)";
             }
 
-            float covered = queueExplained + assignedExplained + sleepCovered + legitimateBlocked + expectedTravelSeconds;
+            // ---- Waiting for a turn is scheduling, not an overrun (maintenance
+            // pass 2026-11-15, Part A): Queued / Assigned / ResourcesReserved time
+            // is time the task spent waiting for its worker's exclusive person-time
+            // or its scheduled start window, not time spent doing the work. Before
+            // this, only the slice a refusal budget covered was explained, so a
+            // task created days ahead of its window — or queued behind the owner's
+            // other work — accrued "unexplained" span at 24 h/day and warned as
+            // an overrun (and, once completed on time, as a completed-overrun)
+            // even though the work itself never exceeded its expectation. The
+            // wait beyond any refusal budget is explained here, so the overrun
+            // predicate now measures active time (net of sleep) plus unexplained
+            // blocked time against the expectation. A genuinely stuck active
+            // task still warns: its active span is untouched by this term.
+            float waitingExplained = Math.Max(0f, queueTotal - queueExplained)
+                + Math.Max(0f, assignedTotal - assignedExplained);
+
+            float covered = queueExplained + assignedExplained + waitingExplained + sleepCovered + legitimateBlocked + expectedTravelSeconds;
             float uncovered = Math.Max(0f, openSpan - covered);
 
             float lastProgress = record.LastProgressSeconds >= 0f
@@ -1140,12 +1330,33 @@ namespace LandLedgers.Tasks
                 + diagnosticSettings.OverrunGraceSeconds);
 
             // ---- Escalation (§3.3): a legitimate reason that repeats is itself diagnostic ----
+            // CAMPAIGN-C, DEF-025 (owner Decision 11): the L8 no-worker ladder. A Queued
+            // task the assignment drive confirmed workerless today warns from ~1 day
+            // (p1 gates the span), escalates past EscalationDays, and raises a
+            // higher-priority exception past NoWorkerExceptionDays. No worker at all
+            // outranks a refusal or a dependency wait: a refusal presupposes a
+            // candidate worker. The ladder needs the feed: without a RecordNoWorker
+            // for today the streak is stale and the task stays silent (Part A guard —
+            // queued waiting alone never warns).
             bool escalates = false;
             TaskTimingReasonClass escalationClass = TaskTimingReasonClass.NoneRecorded;
             string escalationEvidence = string.Empty;
+            int noWorkerStage = 0;
             if (p1)
             {
-                if (primaryClass == TaskTimingReasonClass.L6BudgetScheduleRefusal
+                if (record.CurrentStatus == TaskStatus.Queued
+                    && record.ConsecutiveNoWorkerDays > 0
+                    && record.LastNoWorkerDay == nowDay)
+                {
+                    noWorkerStage = NoWorkerStageFor(record, diagnosticSettings);
+                    if (noWorkerStage > 0)
+                    {
+                        escalates = true;
+                        escalationClass = TaskTimingReasonClass.L8NoWorkerExists;
+                        escalationEvidence = record.LastNoWorkerReason;
+                    }
+                }
+                else if (primaryClass == TaskTimingReasonClass.L6BudgetScheduleRefusal
                     && record.ConsecutiveRefusalDays > diagnosticSettings.EscalationDays)
                 {
                     escalates = true;
@@ -1193,7 +1404,37 @@ namespace LandLedgers.Tasks
                 ExpectedActiveSeconds = expectedActiveSeconds,
                 ExpectedMinutes = expectedMinutes,
                 IsProvisional = isProvisional,
+                NoWorkerStage = noWorkerStage,
             };
+        }
+
+        /// <summary>
+        /// CAMPAIGN-C, DEF-025 (owner Decision 11): the L8 ladder rung for a record
+        /// with a live no-worker streak — 1 = warn (streak at NoWorkerWarnDays; p1
+        /// already gates the span to ~1 day), 2 = escalated (streak past
+        /// EscalationDays), 3 = higher-priority exception (streak past
+        /// NoWorkerExceptionDays). The "past N days" convention matches L6 (§3.3):
+        /// streak &gt; N, so a streak of N+1 is N days elapsed. 0 when there is no
+        /// streak, or the streak has not reached the warn threshold.
+        /// </summary>
+        private static int NoWorkerStageFor(TaskTimingRecord record, TaskDurationDiagnosticSettings diagnosticSettings)
+        {
+            if (record.ConsecutiveNoWorkerDays < diagnosticSettings.NoWorkerWarnDays)
+            {
+                return 0;
+            }
+
+            if (record.ConsecutiveNoWorkerDays > diagnosticSettings.NoWorkerExceptionDays)
+            {
+                return 3;
+            }
+
+            if (record.ConsecutiveNoWorkerDays > diagnosticSettings.EscalationDays)
+            {
+                return 2;
+            }
+
+            return 1;
         }
 
         /// <summary>Short label for a reason class ("L1" … "L8", "none recorded") for the Slice 3 warning line.</summary>
@@ -1507,6 +1748,14 @@ namespace LandLedgers.Tasks
             }
         }
 
+        /// <summary>CAMPAIGN-C, DEF-025: clears the L8 no-worker streak (natural recovery on assignment/start).</summary>
+        private static void ClearNoWorkerStreak(TaskTimingRecord record)
+        {
+            record.LastNoWorkerReason = string.Empty;
+            record.LastNoWorkerDay = -1;
+            record.ConsecutiveNoWorkerDays = 0;
+        }
+
         private void ApplyTransition(WorkTask task, string transitionKind, float nowSeconds, int nowDay)
         {
             if (task == null || string.IsNullOrEmpty(transitionKind))
@@ -1570,6 +1819,9 @@ namespace LandLedgers.Tasks
                 case "AssignTask":
                     record.AssignedSeconds = now;
                     record.AssignedDay = day;
+                    // CAMPAIGN-C, DEF-025 (owner Decision 11): natural recovery — a
+                    // worker exists for the task again, so the no-worker streak clears.
+                    ClearNoWorkerStreak(record);
                     break;
                 case "StartTask":
                     if (record.StartedSeconds < 0f)
@@ -1578,6 +1830,9 @@ namespace LandLedgers.Tasks
                         record.StartedDay = day;
                     }
 
+                    // CAMPAIGN-C, DEF-025 (owner Decision 11): natural recovery, as
+                    // for assignment — a started task has a worker.
+                    ClearNoWorkerStreak(record);
                     break;
                 case "CompleteTask":
                     record.CompletedSeconds = now;
@@ -1586,6 +1841,22 @@ namespace LandLedgers.Tasks
                     break;
                 case "CancelTask":
                 case "MarkReworkRequired":
+                    // CAMPAIGN-C, DEF-075: bound the terminal span at the
+                    // terminal transition. CompleteTask sets CompletedSeconds;
+                    // these two did not, so a cancelled (or rework-required)
+                    // task's span ran to nowSeconds and post-termination days
+                    // accrued as uncovered, warning as a completed-overrun
+                    // with reason "none recorded". Set only when unset: a
+                    // Failed task already carries the completion bound from
+                    // CompleteTask, and rework must not extend it (Failed ->
+                    // ReworkRequired is the only outbound transition from a
+                    // terminal state; terminal states otherwise have none).
+                    if (record.CompletedSeconds < 0f)
+                    {
+                        record.CompletedSeconds = now;
+                        record.CompletedDay = day;
+                    }
+
                     record.Outcome = task.Outcome;
                     break;
                 case "MarkWaitingOnDependency":
@@ -1660,12 +1931,14 @@ namespace LandLedgers.Tasks
                 // task to make room for another record. If the store holds only
                 // open records, the new observation is dropped instead.
                 string evictKey = null;
+                TaskTimingRecord evictRecord = null;
                 foreach (string candidateKey in recordOrder)
                 {
                     TaskTimingRecord candidate;
                     if (records.TryGetValue(candidateKey, out candidate) && IsTerminalStatus(candidate.CurrentStatus))
                     {
                         evictKey = candidateKey;
+                        evictRecord = candidate;
                         break;
                     }
                 }
@@ -1678,6 +1951,9 @@ namespace LandLedgers.Tasks
                 records.Remove(evictKey);
                 recordOrder.Remove(evictKey);
                 EvictedRecordCount++;
+                // CAMPAIGN-C, DEF-063: the eviction count alone hides which record
+                // was evicted. Retain the identity so the next summary names it.
+                evictedSinceLastSummaryIdentities.Add(FormatTaskIdentity(evictRecord));
             }
 
             records.Add(record.TaskId, record);

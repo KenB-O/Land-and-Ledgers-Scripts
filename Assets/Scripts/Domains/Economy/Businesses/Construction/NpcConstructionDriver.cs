@@ -99,6 +99,13 @@ namespace LandLedgers.Economy
         private readonly HashSet<string> blockedProcurementPackages = new HashSet<string>(StringComparer.Ordinal);
 
         /// <summary>
+        /// CAMPAIGN-C (DEF-020): first-seen days + once-per-day summary for
+        /// stranded procurement packages. Diagnostic only; the driver never
+        /// retries, cancels, or escalates a strand on its own.
+        /// </summary>
+        private readonly ConstructionProcurementStrandSummary strandSummary = new ConstructionProcurementStrandSummary();
+
+        /// <summary>
         /// Plan 26 (Q30b): the procurement retry-block keys, for diagnostics
         /// and tests. Keys are "projectId|packageId". The set is the live
         /// authority within a session; its persisted mirror is the Stranded
@@ -290,6 +297,13 @@ namespace LandLedgers.Economy
                 }
                 if (DriveProject(project, dayIndex, diag)) advanced++;
             }
+            // CAMPAIGN-C (DEF-020): diagnostic slice only — one day-keyed
+            // summary line naming every stranded procurement package
+            // (identity + days stranded + recorded reason) into the daily
+            // diag dump. No retry, no cancellation, no escalation: owner
+            // question (r) owns the real fix.
+            if (strandSummary.TryBuildSummaryLine(blockedProcurementPackages, StrandedReasonForKey, dayIndex, out string strandedLine))
+                diag.Add(strandedLine);
             return advanced;
         }
 
@@ -389,6 +403,28 @@ namespace LandLedgers.Economy
                     funding.StrandedReason = string.Empty;
                 }
             }
+        }
+
+        /// <summary>
+        /// CAMPAIGN-C (DEF-020): the recorded failure reason for one blocked
+        /// package key ("projectId|packageId"), or empty when the record or
+        /// the funding line is gone. Read-only: never mutates the block set
+        /// or the funding lines.
+        /// </summary>
+        private string StrandedReasonForKey(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return string.Empty;
+            int sep = key.IndexOf('|');
+            if (sep < 0) return string.Empty;
+            NpcConstructionRecord record = commissioner != null
+                ? commissioner.FindRecordForProject(key.Substring(0, sep))
+                : null;
+            NpcBuildPackageFunding funding = record != null
+                ? record.FindFunding(key.Substring(sep + 1))
+                : null;
+            return funding != null && funding.StrandedReason != null
+                ? funding.StrandedReason
+                : string.Empty;
         }
 
         private string FundAndStage(ConstructionProject project, WorkPackage package, int dayIndex, List<string> diag)

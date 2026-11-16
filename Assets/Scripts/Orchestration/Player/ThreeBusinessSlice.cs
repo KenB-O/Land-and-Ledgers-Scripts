@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.Bakery;
+using LandLedgers.Economy.Businesses.FuelDealer;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.Logging;
 using LandLedgers.Economy.Businesses.Sawmill;
@@ -156,6 +157,15 @@ namespace LandLedgers.Orchestration.Player
         public int IntakeUnitsPerBakeryUnit => intakeUnitsPerBakeryUnit;
         public int PriceCentsPerBakeryUnit => priceCentsPerBakeryUnit;
 
+        /// <summary>
+        /// B-18 (DEF-003): cash-book hook. The driver sets this to the
+        /// dealer's FuelDealerRuntime.RecordBakerySale when it builds the
+        /// source, so each settled bakery sale lands in the business's
+        /// cash book. Null when unwired: sales still settle exactly as
+        /// before, only the book entry is skipped.
+        /// </summary>
+        public FuelDealerBakerySaleRecord OnBakerySaleRecorded { get; set; }
+
         public int FuelUnitsOnHand()
         {
             return intake.TotalFuelWoodUnitsFor(dealerBusinessId) / intakeUnitsPerBakeryUnit;
@@ -187,6 +197,8 @@ namespace LandLedgers.Orchestration.Player
                 return sale?.Diagnostic ?? "Series2PaidDealerBakeryFuelSource: purchase failed; no production supply confirmed.";
 
             diag.Add($"Bakery fuel procurement: dealer '{dealerBusinessId}' sold {sale.IntakeUnits} intake unit(s) for {sale.TotalCents}c; Bakery received {sale.Units}u in lot {sale.BakeryLotId}.");
+            // B-18 (DEF-003): report the settled sale into the dealer's cash book.
+            OnBakerySaleRecorded?.Invoke(dayIndex, sale.Units, sale.IntakeUnits, sale.TotalCents, target.BusinessInstanceId, sale.BakeryLotId);
             return null;
         }
     }

@@ -25,8 +25,14 @@ namespace LandLedgers.Economy.BreadDrivers
         /// <summary>Priority 3 Slice 4: caller-supplied pipeline depth
         /// in days — how many future days of demand the pipeline should
         /// cover beyond today. 0 = today's behaviour exactly (order
-        // today's post-feed shortfall); the production default is 0
-        /// until the owner names the policy (B-1). A parameter, not a
+        /// today's post-feed shortfall). Live production value is 14:
+        /// the forwarder passes the ImportCatalog TransitDays for
+        /// bakery-notions (14 days, registered in
+        /// BakeryFlourSupply.EnsureBakeryImportables), so the live
+        /// forward target is (14+1) x one day's need. The old "default
+        /// is 0 until the owner names the policy (B-1)" is stale — the
+        /// manager has accepted documenting the existing 14-day transit
+        /// as-is (Nov 15, 2026, comment-only). A parameter, not a
         /// value: no depth is invented here.</summary>
         public int PipelineDepthDays;
     }

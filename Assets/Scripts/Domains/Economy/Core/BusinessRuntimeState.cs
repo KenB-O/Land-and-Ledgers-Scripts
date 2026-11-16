@@ -3062,9 +3062,33 @@ namespace LandLedgers.Economy
             RefreshStoredCapacityOnly();
         }
 
+        // CAMPAIGN-B (DEF-055), package 13: diagnostic layer only. These
+        // mutation primitives clamp silently (SpendCents spends
+        // Min(balance, Max(0, requested)); SetCurrentCashCents / AddCashCents clamp
+        // to Max(0, ...)), so any future unchecked caller destroys the
+        // shortfall without a trace. Every live caller pre-checks the
+        // balance or bounds the spend, so a bite is exceptional by
+        // construction — log EVERY occurrence (per-occurrence, not
+        // day-keyed): the primitives carry no day index (PayrollDayIndex
+        // is payroll-specific and -1 when unknown), and day-keying would
+        // mean threading a day through six call sites and changing public
+        // signatures for a diagnostic. Callers are daily / weekly /
+        // transactional drivers, not per-frame, so per-occurrence volume
+        // stays proportional to anomalies. No clamp-to-refuse change here:
+        // callers may rely on partial spend. The entry-level ledger is a
+        // follow-on redesign, not this package.
         public void SpendCents(int cents)
         {
+            int requested = cents;
             int spend = Mathf.Min(currentCashCents, Mathf.Max(0, cents));
+            // CAMPAIGN-B (DEF-055): the diagnostic lives in
+            // BusinessCashClampDiagnostics so it is behaviorally testable
+            // (the real runtime cannot compile in the Roslyn harness). The
+            // helper logs only when the spend actually clamps, so an
+            // in-balance or exact-balance spend stays silent. Clamp-to-refuse
+            // is unchanged; callers may rely on partial spend.
+            BusinessCashClampDiagnostics.WarnSpendClamp(BusinessId, requested, currentCashCents, spend);
+
             currentCashCents = Mathf.Max(0, currentCashCents - spend);
             RecordNetDelta(-spend);
             RefreshWeeklyCashAfter();
@@ -3073,6 +3097,10 @@ namespace LandLedgers.Economy
         public void AddCashCents(int cents)
         {
             int amount = Mathf.Max(0, cents);
+            // CAMPAIGN-B (DEF-055): diagnostic extracted to
+            // BusinessCashClampDiagnostics; logs only on a negative add.
+            BusinessCashClampDiagnostics.WarnAddClamp(BusinessId, cents, currentCashCents);
+
             currentCashCents += amount;
             RecordNetDelta(amount);
             RefreshWeeklyCashAfter();
@@ -3081,6 +3109,10 @@ namespace LandLedgers.Economy
         public void SetCurrentCashCents(int cents, bool recordNetDelta = false)
         {
             int target = Mathf.Max(0, cents);
+            // CAMPAIGN-B (DEF-055): diagnostic extracted to
+            // BusinessCashClampDiagnostics; logs only on a negative set.
+            BusinessCashClampDiagnostics.WarnSetClamp(BusinessId, cents, CurrentCashCents);
+
             int delta = target - CurrentCashCents;
             currentCashCents = target;
             if (recordNetDelta && delta != 0)

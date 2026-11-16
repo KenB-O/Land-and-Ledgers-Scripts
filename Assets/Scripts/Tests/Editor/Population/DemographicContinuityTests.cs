@@ -39,6 +39,14 @@ namespace LandLedgers.EditorTests.Population
         {
             anchor = CalendarAnchor.Default;
             timeSettings = ScriptableObject.CreateInstance<SimulationTimeSettings>();
+            // Campaign C (DEF-012): fixture reference date, set explicitly.
+            // The demographic behaviour is what these tests pin, not the
+            // opening date. The class default is the ordinary 1870-01-01
+            // opening; this fixture keeps the 1892-03-01 reference the
+            // tests were written against (a child born 1885-03-05 is 7 at
+            // the reference date).
+            timeSettings.startingYear = 1892;
+            timeSettings.startingMonth = 3;
             population = new PopulationState();
             kinship = new KinshipRegistry();
             memberships = new HouseholdMembershipRegistry();

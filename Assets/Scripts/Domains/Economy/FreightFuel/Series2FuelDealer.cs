@@ -3,6 +3,9 @@
 // create: Pass 7's adapter is the selling surface over intake lots
 // that already exist; this class owns the intake itself — sawmill
 // byproduct receipt, stock, and dispense to bakery and households.
+// The per-instance business runtime over this custody is
+// FuelDealerRuntime (B-18, Decision 3): purchasing, supplier
+// relationships, the order book, and the cash book.
 //
 // Selling is NOT duplicated here: a household retail sale goes through
 // the Pass 7 Series2FuelDealerSupplierAdapter (which dispenses and
@@ -17,12 +20,13 @@
 // through HouseholdLedger (business-to-business cash is not
 // household cash; see the Pass 7 brief correction).
 //
-// Sawmill price: the byproduct transfer currently pays the sawmill
-// NOTHING. That is not a decision smuggled in as zero: ReceiveSawmillLot
-// moves custody only and diagnoses, in plain text, that no sawmill
-// payment was made because the price, if any, is a Kennedy decision.
-// If Kennedy later sets a price, a caller settles it through the
-// business cash ports; this class must not be edited to invent one.
+// Sawmill price: DECIDED by owner Decision 1 (Nov 15, 2026) — the
+// dealer pays the sawmill 1c per intake unit for byproduct. That
+// payment is settled by the CALLER (SimulationDrivers wires it through
+// FuelDealerByproductSettlement on the actual moved delta), never
+// inside this class: ReceiveSawmillLot still moves custody only, and
+// its diagnostic names the decided price and the caller-side
+// settlement instead of the old "open decision" language.
 //
 // Dispense semantics are the intake's (Pass 2 API), never re-invented:
 // FIFO with provenance, shortfall dispenses NOTHING, emptied lots
@@ -61,10 +65,12 @@ namespace LandLedgers.Economy.FreightFuel
 
         /// <summary>
         /// Receives one sawmill byproduct lot into this dealer's yard.
-        /// Custody only: NO cash moves to the sawmill here, and the
-        /// diagnostic says so, because the sawmill price (if any) is
-        /// an open Kennedy decision, not a zero price. Returns null
-        /// on success, or the intake's refusal.
+        /// Custody only: NO cash moves to the sawmill here. The byproduct
+        /// price is DECIDED (owner Decision 1: 1c per intake unit) and is
+        /// settled by the caller through FuelDealerByproductSettlement on
+        /// the actual moved delta — this class must not invent a payment,
+        /// and the diagnostic says so. Returns null on success, or the
+        /// intake's refusal.
         /// </summary>
         public string ReceiveSawmillLot(SlabOffcutFuelLot lot, List<string> diag)
         {
@@ -72,7 +78,7 @@ namespace LandLedgers.Economy.FreightFuel
             string refusal = intake.ReceiveByproductLot(DealerBusinessId, lot, diag);
             if (refusal != null) return refusal;
             diag.Add($"Series2FuelDealer: sawmill lot received into '{DealerBusinessId}' custody; " +
-                "no sawmill payment made here — byproduct price is an open Kennedy decision, not 0c by default.");
+                "no sawmill payment made here — the 1c-per-intake-unit byproduct price (Decision 1) is settled by the caller, not by this custody move.");
             return null;
         }
 

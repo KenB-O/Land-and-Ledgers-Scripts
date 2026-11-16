@@ -519,6 +519,17 @@ namespace LandLedgers.Population
         /// <summary>
         /// Chooses the shopper. Returns the person id, or -1 with a reason
         /// when nobody can shop (C4: unavailable shopper is a real failure).
+        /// QA-15/OD-2 (availability-first, Nov 15, 2026): the choice is
+        /// availability, never sex — no woman-first, no gender-based
+        /// preference anywhere. Among eligible adults the lowest
+        /// availability score wins (fewest/lightest reservations: a
+        /// job-seeker or a worker on shift scores above a free adult, so
+        /// someone home or otherwise free is preferred over someone
+        /// working a shift); on equal scores the shortest one-way travel
+        /// from the candidate's actual location wins when
+        /// <paramref name="oneWayMinutesFor"/> is supplied (travel never
+        /// overrides availability, it only breaks ties); on a further tie
+        /// the first member in member order wins, deterministically.
         /// </summary>
         public static int ChooseShopper(
             PopulationState population,
@@ -530,7 +541,8 @@ namespace LandLedgers.Population
             WorkTimeBudgetStore budgets,
             Func<int, LandLedgers.Primitives.EntityId> personEntityId,
             out string reason,
-            OffMapJourneyAuthority offMapJourneys = null)
+            OffMapJourneyAuthority offMapJourneys = null,
+            Func<int, int> oneWayMinutesFor = null)
         {
             reason = null;
             if (population == null || memberIds == null || memberIds.Count == 0)
@@ -542,6 +554,7 @@ namespace LandLedgers.Population
             var rejections = new List<string>();
             int preferredAdult = -1;
             int preferredAdultScore = int.MaxValue;
+            int preferredAdultOneWay = int.MaxValue;
             int youngWorkerFallback = -1;
 
             for (int i = 0; i < memberIds.Count; i++)
@@ -600,10 +613,14 @@ namespace LandLedgers.Population
                 if (person.ageBand >= AgeBand.Adult18Plus)
                 {
                     int score = HouseholdAvailabilityScore(scheduleTracker, personId, dayIndex);
-                    if (preferredAdult < 0 || score < preferredAdultScore)
+                    int oneWay = OneWayMinutesFor(oneWayMinutesFor, personId);
+                    if (preferredAdult < 0
+                        || score < preferredAdultScore
+                        || (score == preferredAdultScore && oneWay < preferredAdultOneWay))
                     {
                         preferredAdult = personId;
                         preferredAdultScore = score;
+                        preferredAdultOneWay = oneWay;
                     }
                 }
                 else if (youngWorkerFallback < 0)
@@ -638,8 +655,16 @@ namespace LandLedgers.Population
         /// departures forward from <paramref name="earliestDepartureMinute"/>
         /// in 15-minute steps (the DailyActivityPlanner.ReserveInFreeGap
         /// precedent) and returns the first departure where some member can
-        /// shop, in the unchanged preference order (adult woman first, then
-        /// adult, then young worker) at each candidate departure.
+        /// shop. QA-15/OD-2 (availability-first, Nov 15, 2026): at each
+        /// candidate departure the choice is availability, never sex — no
+        /// woman-first, no gender-based preference anywhere. Among eligible
+        /// adults the lowest availability score wins (fewest/lightest
+        /// reservations, so someone home or otherwise free is preferred
+        /// over someone working a shift); on equal scores the shortest
+        /// one-way travel from the candidate's actual location wins when
+        /// <paramref name="oneWayMinutesFor"/> is supplied (travel never
+        /// overrides availability, it only breaks ties); on a further tie
+        /// the first member in member order wins, deterministically.
         ///
         /// A member is eligible at a departure when: they pass the same
         /// exclusions as ChooseShopper (known, living, old enough, on-map);
@@ -650,12 +675,27 @@ namespace LandLedgers.Population
         /// Eating: the search steps around those instead); the arrival is
         /// tradable per <paramref name="tradingCheckAtArrival"/> and leaves
         /// the in-store minutes inside opening hours; and the return leg
-        /// completes before store close and before sleep. The found departure
+        /// completes before store close and before sleep. When
+        /// <paramref name="oneWayMinutesFor"/> is supplied, the arrival
+        /// and the store-hours check are per candidate (each candidate's
+        /// own one-way from their actual location), and the latest
+        /// departure is bounded by the nearest candidate's one-way; a
+        /// candidate with no route to the store is rejected at every
+        /// departure. Without the delegate the search behaves exactly as
+        /// before (one departure-level arrival from
+        /// <paramref name="oneWayMinutes"/>). The found departure
         /// is returned through <paramref name="departureMinute"/> (-1 when
         /// no window works); the caller must route it through the single
         /// ShoppingLoopOptions.DepartureMinuteOfDay so all later math uses
         /// the same minute. Deterministic: earliest departure wins, and at
-        /// each departure the preference order decides.
+        /// each departure the availability order decides. Departures stay
+        /// inside daytime business hours (store opening to store close,
+        /// and before sleep); stepping forward to a post-shift departure
+        /// is the flexibility the rule allows when household schedules
+        /// require it. When nobody can shop in any window the search
+        /// returns -1 with the reason — the need stays open and the daily
+        /// driver retries it another day (defer and retry, never
+        /// interrupting work or inventing travel).
         /// </summary>
         public static int ChooseShopperWithWindowSearch(
             PopulationState population,
@@ -671,7 +711,8 @@ namespace LandLedgers.Population
             Func<int, LandLedgers.Primitives.EntityId> personEntityId,
             out int departureMinute,
             out string reason,
-            OffMapJourneyAuthority offMapJourneys = null)
+            OffMapJourneyAuthority offMapJourneys = null,
+            Func<int, int> oneWayMinutesFor = null)
         {
             departureMinute = -1;
             reason = null;
@@ -687,8 +728,24 @@ namespace LandLedgers.Population
             int inStore = Math.Max(1, inStoreMinutes);
             // Return leg completes before store close (1080) and before sleep
             // (1320); arrival must leave the in-store minutes inside hours.
+            // With per-candidate travel the bound uses the NEAREST
+            // candidate's one-way — the most permissive correct bound
+            // (each candidate's own arrival is checked against store hours
+            // below). Without the delegate the passed one-way bounds the
+            // search exactly as before.
+            int boundOneWay = oneWay;
+            if (oneWayMinutesFor != null)
+            {
+                boundOneWay = int.MaxValue;
+                foreach (int memberId in memberIds)
+                {
+                    int candidateOneWay = OneWayMinutesFor(oneWayMinutesFor, memberId);
+                    if (candidateOneWay < boundOneWay) boundOneWay = candidateOneWay;
+                }
+                boundOneWay = boundOneWay == int.MaxValue ? oneWay : Math.Max(1, boundOneWay);
+            }
             int latest = Math.Min(1080 - duration, 1320 - duration);
-            latest = Math.Min(latest, 1080 - oneWay - inStore);
+            latest = Math.Min(latest, 1080 - boundOneWay - inStore);
             if (earliest > latest)
             {
                 reason = $"No shopping window: the {duration}-min trip cannot fit between " +
@@ -701,16 +758,22 @@ namespace LandLedgers.Population
             for (int departure = earliest; departure <= latest; departure += 15)
             {
                 lastTried = departure;
-                int arrival = departure + oneWay;
-                string tradingProblem = tradingCheckAtArrival != null ? tradingCheckAtArrival(arrival) : null;
-                if (tradingProblem != null)
+                if (oneWayMinutesFor == null)
                 {
-                    rejections.Add($"departure {departure}: cannot trade at arrival ({tradingProblem}).");
-                    continue;
+                    // No per-candidate travel: one departure-level arrival
+                    // from the passed one-way, exactly as before.
+                    int arrival = departure + oneWay;
+                    string tradingProblem = tradingCheckAtArrival != null ? tradingCheckAtArrival(arrival) : null;
+                    if (tradingProblem != null)
+                    {
+                        rejections.Add($"departure {departure}: cannot trade at arrival ({tradingProblem}).");
+                        continue;
+                    }
                 }
 
                 int preferredAdult = -1;
                 int preferredAdultScore = int.MaxValue;
+                int preferredAdultOneWay = int.MaxValue;
                 int youngWorkerFallback = -1;
                 for (int i = 0; i < memberIds.Count; i++)
                 {
@@ -754,6 +817,15 @@ namespace LandLedgers.Population
                         }
                     }
 
+                    // Per-candidate travel, computed once: the one-way
+                    // minutes from this candidate's actual location (or
+                    // int.MaxValue when no travel input is supplied or the
+                    // candidate has no route). Travel never overrides
+                    // availability — it only breaks ties between equally
+                    // available adults, and it gates the per-candidate
+                    // arrival check below.
+                    int candidateOneWay = OneWayMinutesFor(oneWayMinutesFor, personId);
+
                     if (scheduleTracker != null)
                     {
                         if (scheduleTracker.IsFree(personId, dayIndex, departure, duration))
@@ -785,13 +857,40 @@ namespace LandLedgers.Population
                         }
                     }
 
+                    if (oneWayMinutesFor != null)
+                    {
+                        // Per-candidate travel: the arrival and the
+                        // store-hours check use this candidate's own
+                        // one-way from their actual location. A candidate
+                        // with no route cannot travel and is rejected at
+                        // every departure (their travel is unknown, never
+                        // assumed from home).
+                        if (candidateOneWay == int.MaxValue)
+                        {
+                            rejections.Add($"departure {departure}: P{personId}: no route to the store from their location.");
+                            continue;
+                        }
+
+                        string candidateTradingProblem = tradingCheckAtArrival != null
+                            ? tradingCheckAtArrival(departure + candidateOneWay)
+                            : null;
+                        if (candidateTradingProblem != null)
+                        {
+                            rejections.Add($"departure {departure}: P{personId}: cannot trade at arrival ({candidateTradingProblem}).");
+                            continue;
+                        }
+                    }
+
                     if (person.ageBand >= AgeBand.Adult18Plus)
                     {
                         int score = HouseholdAvailabilityScore(scheduleTracker, personId, dayIndex);
-                        if (preferredAdult < 0 || score < preferredAdultScore)
+                        if (preferredAdult < 0
+                            || score < preferredAdultScore
+                            || (score == preferredAdultScore && candidateOneWay < preferredAdultOneWay))
                         {
                             preferredAdult = personId;
                             preferredAdultScore = score;
+                            preferredAdultOneWay = candidateOneWay;
                         }
                     }
                     else if (youngWorkerFallback < 0)
@@ -816,6 +915,18 @@ namespace LandLedgers.Population
                 reason += " (Off-map guard not installed: no OffMapJourneyAuthority was provided.)";
             }
             return -1;
+        }
+
+        /// <summary>QA-15/OD-2: one-way travel minutes for a candidate
+        /// from their actual location, or int.MaxValue when no
+        /// per-candidate travel input is supplied (or the candidate has no
+        /// route). Travel never overrides availability — it only breaks
+        /// ties between equally available adults, and a routeless
+        /// candidate sorts last on travel.</summary>
+        private static int OneWayMinutesFor(Func<int, int> oneWayMinutesFor, int personId)
+        {
+            if (oneWayMinutesFor == null) return int.MaxValue;
+            return Math.Max(0, oneWayMinutesFor(personId));
         }
 
         private static int HouseholdAvailabilityScore(PersonScheduleTracker scheduleTracker, int personId, int dayIndex)

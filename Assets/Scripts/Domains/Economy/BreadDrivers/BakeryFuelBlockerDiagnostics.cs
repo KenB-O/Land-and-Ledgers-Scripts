@@ -10,9 +10,10 @@ namespace LandLedgers.Economy.BreadDrivers
         public int BatchesPlanned;
         public int FuelUnitsOnHand;
         /// <summary>The authored D-2 conversion factor (intake units per
-        /// bakery fuel unit), or null when unset. A factor of 0 or less is
-        /// treated as unset — never as 1, which would be an invented
-        /// conversion.</summary>
+        /// bakery fuel unit), or null when unset. Decided by owner Decision 1
+        /// (Nov 15, 2026): 4 intake units per bakery fuel unit. A factor of 0
+        /// or less is treated as unset — never as 1, which would be an
+        /// invented conversion.</summary>
         public int? AuthoredFactor;
         /// <summary>Whether a live fuel-yard intake exists in the First
         /// Ledger daily flow. False in First Ledger: the only production
@@ -35,8 +36,9 @@ namespace LandLedgers.Economy.BreadDrivers
     /// observed state and never claims a fuel unit is supplied. The
     /// forwarder builds it once per planned day; the tests pin its
     /// content for each missing-piece combination. No fuel moves here,
-    /// no source is attached or replaced, and the D-2/D-7 decisions
-    /// stay open and named.
+    /// no source is attached or replaced. D-2 was decided by owner
+    /// Decision 1 (Nov 15, 2026: 4 intake units per bakery fuel unit);
+    /// D-7 stays open and named.
     /// </summary>
     public static class BakeryFuelBlockerDiagnostics
     {
@@ -73,7 +75,7 @@ namespace LandLedgers.Economy.BreadDrivers
                 blockers.Add("no dealer source attached");
             return $"BakeryFuelBlocker: fuel {onHand}u on hand, need {need}u for {batches} batch(es) — BLOCKED: {string.Join("; ", blockers)}. " +
                 $"State: {factorClause}; {intakeClause}; {dealerClause}. " +
-                "Open decisions: D-2 (fuel-dealer conversion factor), D-7 (fuel import execution design).";
+                "Open decisions: D-7 (fuel import execution design).";
         }
     }
 }

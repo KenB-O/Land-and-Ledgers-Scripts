@@ -87,6 +87,77 @@ namespace LandLedgers.EditorTests.Economy
             }
         }
 
+        [Test]
+        public void OwnerClerkSlot_ResolvesToOwnerPersonId()
+        {
+            // CAMPAIGN-B (DEF-042): the NPC store's owner-occupied clerk
+            // slot ("owner:1", written by TryAssignOwnerOperator) resolves
+            // to the owner — before the fix int.TryParse failed and the
+            // slot was skipped, so the store had no usable clerk.
+            GameObject root = new("GeneralStoreRuntimeManager_OwnerClerk");
+            try
+            {
+                GeneralStoreRuntimeManager manager = NewManager(root);
+                SetSlots(manager,
+                    ClerkSlot("owner:1", paidActive: true, suspended: false));
+                Assert.IsTrue(manager.TryGetServiceClerkPersonId(out int personId));
+                Assert.AreEqual(1, personId);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void OwnerClerkSlotByDisplayName_IsSkipped()
+        {
+            // "owner:{name}" has no person id; it is skipped, not invented.
+            GameObject root = new("GeneralStoreRuntimeManager_OwnerClerkByName");
+            try
+            {
+                GeneralStoreRuntimeManager manager = NewManager(root);
+                SetSlots(manager,
+                    ClerkSlot("owner:Emma", paidActive: true, suspended: false),
+                    ClerkSlot("4", paidActive: true, suspended: false));
+                Assert.IsTrue(manager.TryGetServiceClerkPersonId(out int personId));
+                Assert.AreEqual(4, personId);
+
+                SetSlots(manager,
+                    ClerkSlot("owner:Emma", paidActive: true, suspended: false));
+                Assert.IsFalse(manager.TryGetServiceClerkPersonId(out _));
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void OwnerClerkSlot_ResolvesThroughStateOverload()
+        {
+            // CAMPAIGN-B (DEF-042): the state overload serves a store other
+            // than the manager's own (the dev NPC store) from its own slots.
+            GameObject root = new("GeneralStoreRuntimeManager_OwnerClerkOverload");
+            try
+            {
+                GeneralStoreRuntimeManager manager = NewManager(root);
+                BusinessRuntimeState npcState = new BusinessRuntimeState();
+                FieldInfo slotsField = typeof(BusinessRuntimeState).GetField(
+                    "workerSlots", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.NotNull(slotsField, "BusinessRuntimeState.workerSlots field missing");
+                slotsField.SetValue(npcState, new List<WorkerSlotState>(
+                    new[] { ClerkSlot("owner:1", paidActive: true, suspended: false) }));
+                Assert.IsTrue(manager.TryGetServiceClerkPersonId(npcState, out int personId));
+                Assert.AreEqual(1, personId);
+                Assert.IsFalse(manager.TryGetServiceClerkPersonId(null, out _));
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
         private static GeneralStoreRuntimeManager NewManager(GameObject root)
         {
             GeneralStoreRuntimeManager manager = root.AddComponent<GeneralStoreRuntimeManager>();

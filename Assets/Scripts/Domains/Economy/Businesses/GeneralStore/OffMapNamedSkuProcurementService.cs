@@ -359,6 +359,24 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 throw new ArgumentException("Procurement cash must belong to the same restored business.", nameof(cash));
             businessCash = cash;
         }
+
+        /// <summary>
+        /// Part B maintenance (2026-11-15): modeled-event restock of one
+        /// external counterparty's goods supply through this service's own
+        /// market, for standing reorders (see
+        /// <see cref="ExternalMarketAuthority.RestockCounterpartySupply"/>).
+        /// Creates no local stock and moves no cash. Returns false when
+        /// the service has no market or the market refuses the restock.
+        /// </summary>
+        public bool RestockSupplierSupply(string supplierId, string skuId, int units, string reason)
+        {
+            if (market == null)
+            {
+                diagnostics.Add("RestockSupplierSupply rejected: no ExternalMarketAuthority supplied.");
+                return false;
+            }
+            return market.RestockCounterpartySupply(supplierId, skuId, units, reason, diagnostics);
+        }
         public IReadOnlyList<NamedSkuOrder> Orders => orders;
         public IReadOnlyList<NamedSkuLot> Lots => lots;
         public IReadOnlyList<NamedSkuSale> Sales => sales;

@@ -32,8 +32,8 @@ namespace LandLedgers.Orchestration.Scenarios
     {
         [SerializeField] private string scenarioId = string.Empty;
         [SerializeField] private string definitionVersion = "1.0.0";
-        [SerializeField] private int startYear = 1880;
-        [SerializeField] private int startMonth = 3;
+        [SerializeField] private int startYear = 1870;
+        [SerializeField] private int startMonth = 1;
         [SerializeField] private int startDay = 1;
 
         [SerializeField] private int minResidents = 55;

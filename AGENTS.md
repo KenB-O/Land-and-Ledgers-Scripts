@@ -1,6 +1,6 @@
 # Land & Ledgers Codex Instructions
 
-This repository is a Unity project for **Land & Ledgers**, a realism-first frontier ownership and business empire sim set in a Dakota-style town in spring 1897. The game is grounded, serious, premium, readable, materially believable, and frontier-practical. World comes first, UI second.
+This repository is a Unity project for **Land & Ledgers**, a realism-first frontier ownership and business empire sim set in a Dakota-style town in spring 1870. The game is grounded, serious, premium, readable, materially believable, and frontier-practical. World comes first, UI second.
 
 ## Project Direction
 

@@ -7,6 +7,7 @@ using LandLedgers.Economy.Core;
 using LandLedgers.FirstLedger;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Pathing;
+using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.World;
@@ -537,6 +538,41 @@ namespace LandLedgers.Economy.Transport
                 : null;
             return controller != null && controller.IsLegActive
                 && controller.OperatorPersonId == personId;
+        }
+
+        /// <summary>
+        /// Campaign C (DEF-047): resumes a wagon leg from a persisted
+        /// snapshot after a load. Mirrors the Begin methods' order — board
+        /// the rider first, then start the leg — but re-enters the saved
+        /// leg at its saved distance/timer through
+        /// CoupledTransportMovementController.RestoreLeg instead of starting
+        /// it from the path start. Refuses (log + false) when there is no
+        /// leg to resume, no transport group, a leg is already active, or
+        /// the rider cannot be boarded; the wagon then stays where it
+        /// stands. A rider who must still walk to the seat refuses the
+        /// resume: the wagon must not drive away from its driver.
+        /// </summary>
+        public bool ResumeCoupledLeg(WagonLegSaveDto dto)
+        {
+            if (dto == null || !dto.isActive) return false;
+            CoupledTransportMovementController controller = ResolveMovementController();
+            if (controller == null) return false;
+            if (controller.IsLegActive)
+            {
+                Debug.LogWarning($"[CoupledTransport] Refused to resume leg '{dto.legLabel}': a leg is already active.", this);
+                return false;
+            }
+            // Bootstrap owns the live population pathing authority. Prefer
+            // the direct runtime binding, as ResolveMovementInputs does, so
+            // a resume cannot silently become riderless when Unity's global
+            // object lookup runs before the bootstrap-created director is
+            // registered.
+            PopulationPathingDirector director = populationPathingDirector != null
+                ? populationPathingDirector
+                : FindAnyObjectByType<PopulationPathingDirector>();
+            if (!TryBoardRiderForLeg(director, dto.ethanPersonId, dto.legLabel)) return false;
+            EnsureArrivalSensor(controller);
+            return controller.RestoreLeg(dto);
         }
 
         /// <summary>

@@ -45,6 +45,8 @@ namespace LandLedgers.Population
             public Func<int, EntityId> PersonEntityId;
             /// <summary>Plan 08 Slice 2 (Q03, AUD-266): the off-map journey authority handed in by the driver. Null = fail open (no off-map guard) until the driver wires it.</summary>
             public OffMapJourneyAuthority OffMapJourneys;
+            /// <summary>Package 19 (E-35 residual 2): per-candidate one-way travel minutes from each candidate's actual location to the replacement trip's supplier, handed in by the driver (same pattern as OffMapJourneys). Null = no location data — reassignment keeps the member-order tie-break until the driver wires it.</summary>
+            public Func<int, int> OneWayMinutesFor;
         }
 
         private readonly HouseholdErrandPlanRegistry plans = new HouseholdErrandPlanRegistry();
@@ -315,7 +317,7 @@ namespace LandLedgers.Population
                 ctx.Population, members, dayIndex, departure, estimate,
                 ctx.Schedules, ctx.Budgets,
                 ctx.PersonEntityId ?? (pid => EntityId.For(EntityKind.Person, pid)),
-                out string shopperReason, ctx.OffMapJourneys);
+                out string shopperReason, ctx.OffMapJourneys, ctx.OneWayMinutesFor);
             if (shopperId < 0)
             {
                 plan.MarkFailed();

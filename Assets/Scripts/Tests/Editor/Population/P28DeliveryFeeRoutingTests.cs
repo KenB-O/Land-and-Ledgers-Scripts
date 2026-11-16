@@ -34,11 +34,12 @@ namespace LandLedgers.EditorTests.Population
     /// stock 55 the goods obligation is for the 55u actually sold (6600),
     /// not the 60u planned. T10 pins the reachable credit partial-fill
     /// numbers (goods obligation 6600, freight obligation 250,
-    /// StoreReceivableCents 6600, CarrierReceivableCents 250); the C1
-    /// truing itself (sold &lt; units in credit mode) cannot trigger through
-    /// ExecuteBatch with a faithful port — SettleAtCounter re-caps units
-    /// by stockNow, so sold == units always — and is verified by source
-    /// review, mirroring the cash branch line for line.
+    /// StoreReceivableCents 6600, CarrierReceivableCents 250). The C1
+    /// branch itself (sold &lt; units in credit mode) triggers only via
+    /// the one-shot consume limit (T14, note 138 C2): stock 100 keeps
+    /// units at 60, then SellItem consumes only 55. DEF-043 trues the
+    /// obligation principal to the delivered units there (6600) while
+    /// the created principal stays 7200 for audit.
     /// D2 — T2/T7 are compile-red at the base, not green-at-base pins:
     /// both assert the new result.CarrierCashInCents field, and the
     /// fixture constructs the loop through the new ctor seams. Red-first
@@ -858,14 +859,16 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void P28_T14_CreditPartialFillStillTruesOnlyResult()
+        public void P28_T14_CreditPartialFillTruesObligation()
         {
-            // C1 regression pin, corrected per note 138 C2: the C1 branch
-            // (sold < units in credit mode) cannot trigger through
-            // ExecuteBatch with a faithful port, because the counter check
-            // re-caps units by stock. The one-shot consume limit drives
-            // it: stock 100 keeps units at 60 and the obligations at
-            // 7200/250, then SellItem consumes only 55.
+            // DEF-043: the C1 branch (sold < units in credit mode) triggers
+            // through the one-shot consume limit (note 138 C2): stock 100
+            // keeps units at 60 and the obligations at 7200/250, then
+            // SellItem consumes only 55. The obligation principal is now
+            // trued to the delivered units (6600) like the result is —
+            // the household owes only for the goods delivered. The
+            // created principal stays 7200 for audit (the CancelObligation
+            // convention), and the reduction is recorded on the obligation.
             Fixture f = DeliveryFixture(CarrierBinding.Bound, 250);
             f.Fund(100);
             f.Port.OffersTradeCreditValue = true;
@@ -892,13 +895,23 @@ namespace LandLedgers.EditorTests.Population
 
             FinancialObligation goods = f.Obligations.Find(result.ObligationId);
             Assert.IsNotNull(goods);
-            Assert.AreEqual(7200, goods.OutstandingPrincipalCents, "C1: the obligation principal stays as created, only the result is trued.");
+            Assert.AreEqual(6600, goods.OutstandingPrincipalCents, "DEF-043: the obligation covers only the delivered units.");
+            Assert.AreEqual(7200, goods.OriginalPrincipalCents, "The created principal stays for audit.");
+            Assert.AreEqual(6600, goods.TotalOutstandingCents, "The household owes only for the goods delivered.");
+            Assert.AreEqual(600, goods.PrincipalReducedCents, "The undelivered 5u x 120c is recorded as a reduction, never a payment.");
+            Assert.IsFalse(string.IsNullOrWhiteSpace(goods.PrincipalReductionReason), "The reduction carries its reason on the obligation.");
+            Assert.AreEqual(0, goods.Payments.Count, "A reduction is not a payment.");
             FinancialObligation freight = f.Obligations.Find(result.FreightObligationId);
             Assert.IsNotNull(freight);
             Assert.AreEqual(250, freight.OutstandingPrincipalCents);
+            Assert.AreEqual(0, f.Obligations.Reconcile().Count, "The authority's own conservation check stays clean after the true-up.");
             string diag = string.Join("\n", f.Diagnostics);
-            Assert.IsTrue(diag.IndexOf("INCONSISTENCY", StringComparison.Ordinal) >= 0,
-                "The C1 truing must still be loud in diagnostics: " + diag);
+            Assert.IsTrue(diag.IndexOf("reduced by 600c", StringComparison.Ordinal) >= 0,
+                "The true-up must be named in diagnostics: " + diag);
+            Assert.IsTrue(diag.IndexOf("INCONSISTENCY", StringComparison.Ordinal) < 0,
+                "No inconsistency remains once the obligation is trued: " + diag);
+            Assert.IsTrue(diag.IndexOf("manual reconciliation required", StringComparison.Ordinal) < 0,
+                "No manual reconciliation is owed once the obligation is trued: " + diag);
         }
 
         [Test]

@@ -401,48 +401,88 @@ namespace LandLedgers.FirstLedger
 
         /// <summary>Plan 16: the store's live waiting-customer queue. One per
         /// manager-bound store; created lazily on first use. Merchant ids are
-        /// refreshed from the bound business on every access so a queue created
-        /// before the business forms does not keep stale ids. Save/load of the
-        /// waiting line is NOT here: the single save slot is Agent 2's A10
-        /// Pass 9 slot (Series2Pass9Save), which is not on this branch yet —
-        /// see Plan 16 section 2. Until it lands, the live queue is lost on
-        /// save/load, exactly as today (no live queue exists today).</summary>
+        /// refreshed from the business served on every access (see
+        /// CustomerQueueForBusiness) so a queue created before the business
+        /// forms does not keep stale ids. CAMPAIGN-B (DEF-042): the queue
+        /// instance is shared — one general-store supplier is registered per
+        /// run, so one waiting line serves whichever store the shopping loop
+        /// actually uses (the player store, or the dev NPC store). Save/load
+        /// of the waiting line lives in the Pass 9 slot (Series2Pass9Save):
+        /// the DTO carries each entry's remaining and initial patience
+        /// minutes, and the live queue is bound into the Pass 9 save state at
+        /// load (FirstLedgerSliceBootstrapper.EnsurePass9SaveOwnerForRestore)
+        /// and at loop build (SimulationDrivers.BuildHouseholdShoppingLoop) —
+        /// Campaign C (DEF-073). Restore is clear-then-load into this
+        /// instance; the shopping driver resolves this same instance, so a
+        /// restored entry and its trip line up, and Rebind re-arms the
+        /// patience-tick watermark at the restored clock so decay resumes
+        /// instead of skipping or pausing. E-20 merge (Campaign B package 12):
+        /// B's DEF-042 getter refactor and C's DEF-073 Pass 9 bindings were
+        /// a comment-only collision on this text; this comment carries both.</summary>
         public CustomerQueue CustomerQueue
         {
-            get
+            get { return CustomerQueueForBusiness(currentBusiness); }
+        }
+
+        /// <summary>CAMPAIGN-B (DEF-042): the manager's single live queue,
+        /// labelled for the store being served. The queue instance is
+        /// shared: one general-store supplier is registered per run, so one
+        /// waiting line serves whichever store the shopping loop actually
+        /// uses (the player store, or the dev NPC store). Merchant ids are
+        /// refreshed from the given business on every access, so lost-sale
+        /// records name the store the customer actually waited at.</summary>
+        public CustomerQueue CustomerQueueForBusiness(BusinessInstanceState business)
+        {
+            if (customerQueue == null)
             {
-                if (customerQueue == null)
-                {
-                    customerQueue = new CustomerQueue();
-                }
-                customerQueue.MerchantBusinessId = currentBusiness != null
-                    ? currentBusiness.InstanceId
-                    : "general-store";
-                customerQueue.MerchantName = currentBusiness != null
-                    ? currentBusiness.RuntimeDisplayName
-                    : "General Store";
-                return customerQueue;
+                customerQueue = new CustomerQueue();
             }
+            customerQueue.MerchantBusinessId = business != null
+                ? business.InstanceId
+                : "general-store";
+            customerQueue.MerchantName = business != null
+                ? business.RuntimeDisplayName
+                : "General Store";
+            return customerQueue;
         }
 
         /// <summary>Plan 16: first paid-active clerk_helper slot's person id, or
         /// false when no clerk slot is paid-active. The TendCustomer assignee comes
         /// from here; a customer with no clerk waits in the queue (no task is
-        /// created for them in this slice). Slot identification mirrors
-        /// GetGeneralStoreRoleDisplayName (:2731, "clerk_helper"); the worker
-        /// id parse mirrors FindPersonForWorkerSlot (:3087-3097,
-        /// int.TryParse on slot.AssignedWorkerId).</summary>
+        /// created for them in this slice). CAMPAIGN-B (DEF-042): an
+        /// owner-occupied clerk slot ("owner:{personId}", written by
+        /// BusinessRuntimeState.TryAssignOwnerOperator) resolves to the owner's
+        /// person id — the owner occupying the clerk slot is a real assignment,
+        /// not a missing clerk. A slot recorded by owner display name
+        /// ("owner:{name}") has no person id and is skipped, as is any other
+        /// unparseable id. The parse itself is WorkerSlotPersonId.TryParse.
+        /// Slot identification mirrors
+        /// GetGeneralStoreRoleDisplayName ("clerk_helper"). NOTE:
+        /// FindPersonForWorkerSlot still resolves plain integer ids only;
+        /// it is the labour-availability seam, not the service-clerk seam,
+        /// and is intentionally untouched by this fix.</summary>
         public bool TryGetServiceClerkPersonId(out int personId)
         {
+            return TryGetServiceClerkPersonId(runtimeState, out personId);
+        }
+
+        /// <summary>CAMPAIGN-B (DEF-042): clerk lookup against an explicit
+        /// business runtime state, so a store other than this manager's own
+        /// (player) business — the dev NPC store — resolves its clerk from
+        /// its own slots. Same scan as the parameterless form; the state is
+        /// supplied by the caller (SimulationDrivers) instead of the
+        /// manager's own runtimeState field. A null state resolves nothing.</summary>
+        public bool TryGetServiceClerkPersonId(BusinessRuntimeState state, out int personId)
+        {
             personId = -1;
-            if (runtimeState == null || runtimeState.WorkerSlots == null)
+            if (state == null || state.WorkerSlots == null)
             {
                 return false;
             }
 
-            for (int i = 0; i < runtimeState.WorkerSlots.Count; i++)
+            for (int i = 0; i < state.WorkerSlots.Count; i++)
             {
-                WorkerSlotState slot = runtimeState.WorkerSlots[i];
+                WorkerSlotState slot = state.WorkerSlots[i];
                 if (slot == null || !slot.IsPaidActive)
                 {
                     continue;
@@ -453,7 +493,7 @@ namespace LandLedgers.FirstLedger
                     continue;
                 }
 
-                if (int.TryParse(slot.AssignedWorkerId, out int parsed))
+                if (WorkerSlotPersonId.TryParse(slot.AssignedWorkerId, out int parsed))
                 {
                     personId = parsed;
                     return true;

@@ -274,6 +274,49 @@ namespace LandLedgers.Economy.Core
         }
 
         /// <summary>
+        /// Part B maintenance (2026-11-15): the supply-side twin of
+        /// <see cref="RestockCounterparty"/>. Counterparty goods supply
+        /// was finite with a budget-only restock and NO way to replenish
+        /// goods at all, so every finite external order (e.g. the General
+        /// Store's opening 20-sack horse-feed order from Millbrook) could
+        /// be bought exactly once and then never again — the store could
+        /// never restock feed and the freight horse would starve. This is
+        /// the modeled event that replenishes goods supply: the caller
+        /// names the counterparty, goods, units, and reason, and the
+        /// restock is logged. It creates no local stock and moves no
+        /// cash; a later RecordExternalPurchase still debits the supply
+        /// and still requires payment on arrival. Returns false when the
+        /// counterparty or goods id is unknown, or the unit count is not
+        /// positive — nothing is restocked then.
+        /// </summary>
+        public bool RestockCounterpartySupply(string counterpartyId, string goodsId, int additionalUnits, string reason, List<string> diagnostics)
+        {
+            List<string> log = diagnostics ?? this.diagnostics;
+            ExternalCounterparty counterparty = GetCounterparty(counterpartyId);
+            if (counterparty == null)
+            {
+                log.Add($"RestockCounterpartySupply rejected: unknown counterparty '{counterpartyId}'.");
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(goodsId))
+            {
+                log.Add("RestockCounterpartySupply rejected: a goods id is required.");
+                return false;
+            }
+            if (additionalUnits <= 0)
+            {
+                log.Add($"RestockCounterpartySupply rejected: {counterparty.DisplayName} supply of '{goodsId}' needs a positive unit count.");
+                return false;
+            }
+
+            counterparty.SupplyUnits ??= new Dictionary<string, int>(StringComparer.Ordinal);
+            counterparty.SupplyUnits.TryGetValue(goodsId, out int current);
+            counterparty.SupplyUnits[goodsId] = Math.Max(0, current) + additionalUnits;
+            log.Add($"RestockCounterpartySupply: {counterparty.DisplayName} supply of '{goodsId}' +{additionalUnits}u ({reason}); now {counterparty.SupplyUnits[goodsId]}u.");
+            return true;
+        }
+
+        /// <summary>
         /// Boundary reconciliation: explicit accounting of cash that crossed the
         /// boundary. Inflows are new local money (NOT conserved from local
         /// cash); outflows are local money that left. Net is the boundary's

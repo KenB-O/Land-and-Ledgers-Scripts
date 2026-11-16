@@ -59,18 +59,24 @@ namespace LandLedgers.EditorTests.Time
         }
 
         [Test]
-        public void ScenarioStart_Is1892_03_01_Tuesday()
+        public void ScenarioStart_Is1870_01_01_Saturday()
         {
             var settings = ScriptableObject.CreateInstance<SimulationTimeSettings>();
             int startDay = settings.GetScenarioStartAbsoluteDayIndex();
 
-            Assert.AreEqual(4383, startDay, "Days between 1880-03-01 and 1892-03-01.");
+            // Campaign C (DEF-012): the ordinary opening precedes the
+            // anchor, so the start is no longer floored to the anchor date.
+            Assert.AreEqual(-3712, startDay, "Days between 1870-01-01 and the 1880-03-01 anchor.");
 
-            SimulationDate date = settings.BuildDateFromAbsoluteDay(startDay);
-            Assert.AreEqual(1892, date.Year);
-            Assert.AreEqual(3, date.Month);
-            Assert.AreEqual(1, date.DayOfMonth);
-            Assert.AreEqual(1, date.DayOfWeekIndex, "1892-03-01 was a Tuesday.");
+            // BuildDateFromAbsoluteDay clamps pre-anchor days to the anchor,
+            // so the start resolves through the anchor itself — the same
+            // mechanism the clock's calendarDayOffset uses.
+            CalendarAnchor anchor = settings.Anchor;
+            anchor.FromAbsoluteDay(startDay, out int y, out int m, out int d);
+            Assert.AreEqual(1870, y);
+            Assert.AreEqual(1, m);
+            Assert.AreEqual(1, d);
+            Assert.AreEqual(5, GregorianDateMath.DayOfWeekMondayZero(y, m, d), "1870-01-01 was a Saturday.");
         }
 
         [Test]

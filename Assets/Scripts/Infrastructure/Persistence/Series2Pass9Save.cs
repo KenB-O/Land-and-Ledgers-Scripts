@@ -386,6 +386,9 @@ namespace LandLedgers.Persistence
         public LandLedgers.Economy.Businesses.Bakery.BakeryStagedProductionChain.BakeryChainSaveDto StagedBakeryChain;
 
         public FuelYardByproductIntake.FuelYardByproductIntakeSaveDto FuelIntake;
+
+        /// <summary>B-18 (DEF-003): Fuel Dealer runtime state (suppliers, orders, cash book, policy). Additive; old saves leave it null and load with a fresh runtime — the honest old-save default.</summary>
+        public LandLedgers.Economy.Businesses.FuelDealer.FuelDealerRuntime.FuelDealerRuntimeSaveDto FuelDealerRuntime;
         public FreightShipmentService.FreightServiceSaveDto Freight;
         public Pass9FuelSourceParamsDto FuelSourceParams;
 
@@ -466,6 +469,16 @@ namespace LandLedgers.Persistence
         public LandLedgers.Time.DueEventScheduler StagedBakeryDueEvents;
 
         public FuelYardByproductIntake FuelIntake;
+
+        /// <summary>
+        /// B-18 (DEF-003, Decision 3): the live per-instance Fuel Dealer
+        /// runtime (purchasing, supplier relationships, order book, cash
+        /// book) for the first formed dealer. Created by
+        /// SimulationDrivers at registration (or on first transfer) and
+        /// reused after load — never replaced, so Restore is clear-then-load
+        /// into the live holder. Null until a dealer is formed.
+        /// </summary>
+        public LandLedgers.Economy.Businesses.FuelDealer.FuelDealerRuntime FuelDealerRuntime;
         public FreightProductionDriver FreightDriver;
         public Series2CarrierSettlement CarrierSettlement;
         public Series2DealerBakeryFuelSource FuelSource;
@@ -486,7 +499,44 @@ namespace LandLedgers.Persistence
         public LandLedgers.Economy.Businesses.Sawmill.SawmillShopRuntime Sawmill;
         public LandLedgers.Economy.Businesses.LumberYard.LumberYardShopRuntime LumberYard;
         public LandLedgers.Economy.Businesses.Logging.LoggingCampSite LoggingCamp;
-        public LandLedgers.Economy.GeneralStore.CustomerQueue CustomerQueue;
+
+        /// <summary>
+        /// QA-29: the live store waiting-customer queue. Bound by the
+        /// bootstrapper before the Pass 9 restore
+        /// (EnsurePass9SaveOwnerForRestore) and at loop build
+        /// (SimulationDrivers.BuildHouseholdShoppingLoop).
+        ///
+        /// Campaign C (DEF-028): a queue section that arrives while no
+        /// queue is bound is HELD in pendingCustomerQueue, not dropped,
+        /// and the bind drains it into the queue (LoadFromSaveDto,
+        /// clear-then-load). The drain runs before the first post-load
+        /// tick, so the queue holds no live entries the drain could
+        /// wipe; a second bind after the drain is a no-op (pending is
+        /// cleared on drain). Follows the RestoredStagedBakeryChain
+        /// precedent in this file (a DTO recovered by Restore, applied
+        /// when its owner appears) — except the drain here is automatic
+        /// at bind time, so no consumer call is needed.
+        /// </summary>
+        private LandLedgers.Economy.GeneralStore.CustomerQueue customerQueue;
+        private LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto pendingCustomerQueue;
+
+        /// <summary>Campaign C (DEF-028): true while a queue section recovered by Restore waits for a queue to bind.</summary>
+        public bool HasPendingCustomerQueue => pendingCustomerQueue != null;
+
+        public LandLedgers.Economy.GeneralStore.CustomerQueue CustomerQueue
+        {
+            get => customerQueue;
+            set
+            {
+                customerQueue = value;
+                if (customerQueue != null && pendingCustomerQueue != null)
+                {
+                    LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto deferred = pendingCustomerQueue;
+                    pendingCustomerQueue = null;
+                    customerQueue.LoadFromSaveDto(deferred);
+                }
+            }
+        }
 
         /// <summary>
         /// Slice S2: live per-business equipment registers, held here so
@@ -530,8 +580,60 @@ namespace LandLedgers.Persistence
         /// </summary>
         public LandLedgers.Economy.Businesses.Bakery.BakeryStagedProductionChain.BakeryChainSaveDto RestoredStagedBakeryChain;
 
+        /// <summary>
+        /// B-18 (DEF-003): fuel-intake DTO recovered by the last Restore
+        /// when no live intake holder existed yet (fresh Continue: the
+        /// driver creates the holder lazily). SimulationDrivers applies it
+        /// on first use through ApplyPendingFuelIntake. Null when no intake
+        /// was saved, or once applied. A null DTO on a later Restore clears
+        /// a stale pending field from an earlier load.
+        /// </summary>
+        public FuelYardByproductIntake.FuelYardByproductIntakeSaveDto RestoredFuelIntake;
+
+        /// <summary>
+        /// B-18 (DEF-003): Fuel Dealer runtime DTO recovered by the last
+        /// Restore when no live runtime holder existed yet (fresh Continue:
+        /// the driver creates the holder lazily at registration). The driver
+        /// applies it through ApplyPendingFuelDealerRuntime. Null when no
+        /// runtime was saved, or once applied. A null DTO on a later Restore
+        /// clears a stale pending field from an earlier load.
+        /// </summary>
+        public LandLedgers.Economy.Businesses.FuelDealer.FuelDealerRuntime.FuelDealerRuntimeSaveDto RestoredFuelDealerRuntime;
+
         /// <summary>Diagnostics from the most recent Capture, for the caller to log (Capture itself returns only the DTO, following the Pass XL coordinator pattern).</summary>
         public List<string> LastCaptureDiagnostics = new List<string>();
+
+        /// <summary>
+        /// B-18 (DEF-003): applies a pending fuel-intake DTO held by
+        /// Restore, now that the live holder exists. No-op when nothing is
+        /// pending or the holder is not created yet (the pending DTO stays
+        /// for a later application). Clear-then-load, so applying twice is
+        /// the same as applying once.
+        /// </summary>
+        public void ApplyPendingFuelIntake()
+        {
+            if (RestoredFuelIntake == null || FuelIntake == null) return;
+            FuelIntake.LoadFromSaveDto(RestoredFuelIntake);
+            RestoredFuelIntake = null;
+        }
+
+        /// <summary>
+        /// B-18 (DEF-003): applies a pending Fuel Dealer runtime DTO held
+        /// by Restore, now that the live holder exists. No-op when nothing
+        /// is pending or the holder is not created yet (the pending DTO
+        /// stays for a later application). Returns the refusal when the
+        /// pending DTO belongs to another dealer (identity guard) — the
+        /// pending DTO is dropped, never applied to the wrong business.
+        /// </summary>
+        public string ApplyPendingFuelDealerRuntime()
+        {
+            if (RestoredFuelDealerRuntime == null || FuelDealerRuntime == null) return null;
+            LandLedgers.Economy.Businesses.FuelDealer.FuelDealerRuntime.FuelDealerRuntimeSaveDto dto = RestoredFuelDealerRuntime;
+            RestoredFuelDealerRuntime = null;
+            if (!FuelDealerRuntime.LoadFromSaveDto(dto))
+                return "Series2Pass9Save: pending Fuel Dealer runtime state refused (dealer id mismatch); dealer state NOT restored.";
+            return null;
+        }
 
         public Series2Pass9SaveDto Capture(List<string> diag)
         {
@@ -736,6 +838,17 @@ namespace LandLedgers.Persistence
             else if (diag != null)
             {
                 diag.Add("Series2Pass9Save: no fuel-yard intake supplied; fuel lots saved empty (the intake already had a DTO — it only needed this wiring).");
+            }
+
+            // B-18 (DEF-003): the Fuel Dealer runtime (suppliers, orders,
+            // cash book, policy). A null holder captures as an empty section.
+            if (FuelDealerRuntime != null)
+            {
+                dto.FuelDealerRuntime = FuelDealerRuntime.CaptureSaveDto();
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no Fuel Dealer runtime supplied; dealer orders, suppliers and cash book saved empty.");
             }
 
             // QA-29: timber stand registry (stands + timber-rights grants).
@@ -1161,14 +1274,46 @@ namespace LandLedgers.Persistence
             // drive after load. A null DTO clears a stale pending
             // field from an earlier load.
             RestoredStagedBakeryChain = dto.StagedBakeryChain;
-            // Pass 8 fuel intake lots (DTO already existed).
+            // Pass 8 fuel intake lots (DTO already existed). B-18 (DEF-003):
+            // when the live holder does not exist yet (fresh Continue: the
+            // driver creates it lazily), hold the DTO as pending instead of
+            // dropping the lots — the driver applies it on first use through
+            // ApplyPendingFuelIntake. A null DTO clears a stale pending
+            // field from an earlier load.
             if (FuelIntake != null)
             {
                 FuelIntake.LoadFromSaveDto(dto.FuelIntake);
+                RestoredFuelIntake = null;
             }
             else if (dto.FuelIntake != null && dto.FuelIntake.Lots != null && dto.FuelIntake.Lots.Count > 0)
             {
-                diag.Add("Series2Pass9Save: fuel intake lots present in save but no intake supplied; fuel lots NOT restored.");
+                RestoredFuelIntake = dto.FuelIntake;
+                diag.Add("Series2Pass9Save: fuel intake lots present in save but no intake supplied yet; held as pending for the driver to apply.");
+            }
+            else
+            {
+                RestoredFuelIntake = null;
+            }
+
+            // B-18 (DEF-003): the Fuel Dealer runtime. Same pending rule as
+            // the intake above: restore in place when the holder exists
+            // (clear-then-load, with the dealer-id identity guard), hold as
+            // pending when it does not exist yet, clear a stale pending
+            // field when the DTO is null.
+            if (FuelDealerRuntime != null)
+            {
+                if (!FuelDealerRuntime.LoadFromSaveDto(dto.FuelDealerRuntime))
+                    diag.Add("Series2Pass9Save: Fuel Dealer runtime state refused (dealer id mismatch); dealer state NOT restored.");
+                RestoredFuelDealerRuntime = null;
+            }
+            else if (dto.FuelDealerRuntime != null)
+            {
+                RestoredFuelDealerRuntime = dto.FuelDealerRuntime;
+                diag.Add("Series2Pass9Save: Fuel Dealer runtime state present in save but no runtime supplied yet; held as pending for the driver to apply.");
+            }
+            else
+            {
+                RestoredFuelDealerRuntime = null;
             }
 
             // QA-29: timber stand registry.
@@ -1243,7 +1388,11 @@ namespace LandLedgers.Persistence
             }
             else if (dto.CustomerQueue != null && dto.CustomerQueue.Waiting != null && dto.CustomerQueue.Waiting.Count > 0)
             {
-                diag.Add("Series2Pass9Save: customer queue present in save but no customer queue supplied; queue NOT restored.");
+                // Campaign C (DEF-028): defer, do not drop. The bind
+                // (BuildHouseholdShoppingLoop, Rebind) drains this into
+                // the live queue when it appears.
+                pendingCustomerQueue = dto.CustomerQueue;
+                diag.Add("Series2Pass9Save: customer queue present in save but no customer queue supplied yet; queue held pending the queue bind (DEF-028), not dropped.");
             }
 
             // Slice S2: equipment registers — clear-then-load, idempotent.

@@ -4,10 +4,12 @@
 // had no production caller and no production suppliers. This driver is the
 // plug-in point: it owns one service plus a supplier list, and DriveDaily
 // runs the daily review + advance for the day. The manager wires it into
-// OnDayChanged with the supplier list EMPTY for now, so the daily review
-// places no orders and says so once per day, while the weekly off-map
-// reorder keeps working unchanged. P3's regional businesses register
-// themselves here; nothing about the drive changes when they do.
+// OnDayChanged and registers the twelve authored regional adapters
+// (Slice 16/17: RegionalSupplierSet.CreateAll, Ashford + Redfield) into
+// both the player and the NPC driver before reviewing demand, so the
+// daily review now places real orders; the no-supplier notice fires
+// only if the list is genuinely empty. The separate weekly off-map
+// reorder keeps working unchanged for uncovered categories.
 //
 // The driver is deliberately boring: one drive per day (a second call the
 // same day is a no-op), the reorder threshold is caller-supplied, and the

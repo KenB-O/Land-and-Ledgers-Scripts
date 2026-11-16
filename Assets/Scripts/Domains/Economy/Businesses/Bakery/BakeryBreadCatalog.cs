@@ -161,8 +161,17 @@ namespace LandLedgers.Economy.Businesses.Bakery
         /// </summary>
         public const string FuelItemId = "bakery-fuelwood";
 
-        /// <summary>D1D TUNING: cordwood units burned per oven firing.</summary>
-        public const int FuelUnitsPerFiring = 1;
+        /// <summary>
+        /// D1D TUNING: cordwood units burned per oven firing. Derived from the
+        /// Decision 1 fuel conversions (FuelConversionRates): a 12 lb flour
+        /// batch burns ~4 kg of dry wood per firing, and one bakery fuel
+        /// unit is 4 intake units (~4 kg), so a reference firing burns
+        /// exactly 1 unit. The value is a static readonly, not a const, so
+        /// the derivation stays live: change the batch size or the
+        /// conversion and the firing consumption follows.
+        /// </summary>
+        public static readonly int FuelUnitsPerFiring =
+            FuelConversionRates.BakeryFuelUnitsPerFiring(BreadFlourPerBatch);
 
         /// <summary>
         /// D1D TUNING: wholesale planning lead days — accounts due within this

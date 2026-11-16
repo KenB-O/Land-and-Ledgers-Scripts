@@ -1,5 +1,5 @@
 // Worker D: Autonomous Labor, Phase G - standing instructions.
-// Canon CE1-13.2 instruction semantics:
+// Canon XXXI Part IX §§9.1-9.6 + §5.2 instruction semantics:
 //   Do Once          - one specified action, then consumed. The manager may
 //                      execute the named act exactly one time; after execution
 //                      the instruction is spent and never fires again.
@@ -17,7 +17,7 @@ using System.Collections.Generic;
 
 namespace LandLedgers.Economy.Labor
 {
-    /// <summary>Canon CE1-13.2 instruction kinds.</summary>
+    /// <summary>Canon XXXI Part IX §§9.1-9.6 + §5.2 instruction kinds.</summary>
     public enum InstructionKind
     {
         /// <summary>One specified action, then consumed.</summary>
@@ -47,7 +47,7 @@ namespace LandLedgers.Economy.Labor
         /// </summary>
         public string TargetActKind = string.Empty;
 
-        /// <summary>Human-readable objective or prohibition text (canon 13.2).</summary>
+        /// <summary>Human-readable objective or prohibition text (Canon XXXI Part V §5.2).</summary>
         public string Objective = string.Empty;
 
         /// <summary>

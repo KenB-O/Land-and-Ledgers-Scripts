@@ -30,6 +30,21 @@ namespace LandLedgers.Population
         public IReadOnlyList<string> Diagnostics => diagnostics;
 
         /// <summary>
+        /// W-G2 (Agent G, expanded campaign 2026-11-16): rest quality
+        /// from last night's sleep (SleepingPlaceRegistry.
+        /// LastRestQuality01), handed in by the owner —
+        /// SimulationDrivers.DriveDailyNeeds sets it from the hub's
+        /// per-household registries. Null = no rest effect (1.0): the
+        /// first night, or a household with no registry yet, never
+        /// penalises work capacity. The service never constructs or
+        /// finds the registry itself.
+        /// </summary>
+        public Func<int, float> RestQualityForPerson { get; set; }
+
+        private float RestQualityFor(int personId) =>
+            RestQualityForPerson != null ? RestQualityForPerson(personId) : 1f;
+
+        /// <summary>
         /// Pass VIII Worker 7: a person's usable work minutes combine nutrition
         /// AND health. A seriously injured or ill provider keeps their
         /// employment record but loses usable minutes — disability bites as
@@ -334,7 +349,7 @@ namespace LandLedgers.Population
                 {
                     WorkTimeBudget budget = budgetStore.GetOrCreate(
                         EntityId.For(EntityKind.Person, p.id));
-                    budget.SetCapacityMultiplier(WorkCapacityFactor(p, conditionDebuffsSuppressed));
+                    budget.SetCapacityMultiplier(WorkCapacityFactor(p, conditionDebuffsSuppressed, RestQualityFor(p.id)));
                 }
             }
             int missed = totalDailyNeed - mealsEaten;
@@ -437,7 +452,7 @@ namespace LandLedgers.Population
                 {
                     WorkTimeBudget budget = budgetStore.GetOrCreate(
                         EntityId.For(EntityKind.Person, p.id));
-                    budget.SetCapacityMultiplier(WorkCapacityFactor(p, conditionDebuffsSuppressed));
+                    budget.SetCapacityMultiplier(WorkCapacityFactor(p, conditionDebuffsSuppressed, RestQualityFor(p.id)));
                 }
             }
 

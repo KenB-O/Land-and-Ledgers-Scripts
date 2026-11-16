@@ -851,6 +851,27 @@ namespace LandLedgers.FirstLedger
             if (systemsHub != null && saveLoadManager?.Series2Pass9State?.HouseholdFurnishingRegisters != null)
                 foreach (HouseholdFurnishingRegister restored in saveLoadManager.Series2Pass9State.HouseholdFurnishingRegisters)
                     systemsHub.RegisterHouseholdFurnishings(restored);
+            // W-G2 (Agent G, expanded campaign 2026-11-16): re-mirror
+            // the surviving sleep asset holds into the hub's
+            // per-household sleeping-place registries, so the sleep
+            // driver reads tonight's reservations on Continue. The
+            // furnishing register was just re-attached above, so the
+            // registry derived from it sees the restored assets; the
+            // asset hold (ReservedBy "sleep:P:D") is the authoritative
+            // record and the mirror is rebuilt from it. Floor nights do
+            // not survive a load (they hold no asset, so there is nothing
+            // to re-mirror) — the sleeper simply has no live reservation
+            // until the next day's planning re-reserves, which is the
+            // fail-open the driver already applies. Rest quality on the
+            // re-mirrored nights uses the registry's current night
+            // conditions (defaults: no cold penalty) until the next
+            // planning sets them from the heating authority.
+            if (systemsHub != null && saveLoadManager?.Series2Pass9State?.HouseholdFurnishingRegisters != null)
+                foreach (HouseholdFurnishingRegister restored in saveLoadManager.Series2Pass9State.HouseholdFurnishingRegisters)
+                {
+                    if (restored == null) continue;
+                    systemsHub.SleepingPlaceRegistryFor(restored.HouseholdId).RebuildFromRegister();
+                }
             // Slice S9: restore the Pass 9 off-map journeys into the live
             // authority after a load. Null-safe end to end: a null DTO
             // restores empty (old saves carry no section).

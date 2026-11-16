@@ -271,13 +271,21 @@ namespace LandLedgers.EditorTests.Integration
             // sleep activities). The registry itself escapes the scan
             // because HouseholdShelterSuitabilityEvaluator.Evaluate
             // (Domains/World/Property, outside the owning directory) takes
-            // it; its records have no reference outside Domains/Population
-            // yet, so they are classified feature-internal here, the same
-            // precedent as the construction cluster and
-            // HouseholdShelterSuitability. When Agent G wires the sleep
-            // driver (SimulationDrivers), the records gain production
-            // callers outside the directory and should leave the baseline.
-            "SleepingPlace", "SleepingPlaceReservation",
+            // it.
+            // W-G2 (Agent G, expanded campaign 2026-11-16): SleepingPlace
+            // LEAVES the baseline here — SimulationDrivers.
+            // ResolveSleepMovement (Orchestration/Systems, outside the
+            // owning directory) takes it, a genuine production caller
+            // under the scan's direct-name rule (the R-13 precedent).
+            // SleepingPlaceReservation STAYS: its production callers are
+            // the sleep tick driver and the planner, both inside
+            // Domains/Population, so the rule still counts it as
+            // feature-internal — the same precedent as the construction
+            // cluster and HouseholdShelterSuitability. Removing it would
+            // fail AssemblyScan_EveryScannedType_IsAccountedFor; the
+            // driver lives in Domains/Population by the folder-ownership
+            // rules, so its reference cannot count as out-of-directory.
+            "SleepingPlaceReservation",
             "SkillTaskDurationEstimator",
             "SmithingRecipe", "SocietyReconciliation", "StageLaborBaseline", "StagedBakeryBatch",
             "StagedBakeryBatchSaveDto", "StandingInstruction", "StandingInstructionRegister", "StandingInstructionSaveDto",

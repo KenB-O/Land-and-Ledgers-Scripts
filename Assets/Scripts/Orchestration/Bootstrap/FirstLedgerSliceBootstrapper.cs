@@ -842,6 +842,15 @@ namespace LandLedgers.FirstLedger
             if (systemsHub != null && saveLoadManager?.Series2Pass9State?.EquipmentRegisters != null)
                 foreach (BusinessEquipmentRegister restored in saveLoadManager.Series2Pass9State.EquipmentRegisters)
                     systemsHub.RegisterBusinessEquipment(restored);
+            // B0 (Agent B): re-attach the Pass 9 household furnishing
+            // registers restored from the save into the hub's
+            // per-household dictionary, so furnishing lookups read the
+            // restored assets and bindings on Continue. Same rule as
+            // S2: the save data is authoritative; re-registering
+            // replaces by household id, never merges, and is idempotent.
+            if (systemsHub != null && saveLoadManager?.Series2Pass9State?.HouseholdFurnishingRegisters != null)
+                foreach (HouseholdFurnishingRegister restored in saveLoadManager.Series2Pass9State.HouseholdFurnishingRegisters)
+                    systemsHub.RegisterHouseholdFurnishings(restored);
             // Slice S9: restore the Pass 9 off-map journeys into the live
             // authority after a load. Null-safe end to end: a null DTO
             // restores empty (old saves carry no section).

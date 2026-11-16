@@ -120,6 +120,32 @@ namespace LandLedgers.World
         }
 
         /// <summary>
+        /// B0 (Agent B): records the economic owner and acquisition source from
+        /// the furnishing binding at install time. Physical association alone
+        /// leaves these blank; only an install through
+        /// HouseholdFurnishingRegister fills them, so a placement with no
+        /// binding never looks owned.
+        /// </summary>
+        public void SetEconomicRecord(string ownerId, string sourceId)
+        {
+            economicOwnerId = ownerId ?? string.Empty;
+            acquisitionSourceId = sourceId ?? string.Empty;
+        }
+
+        /// <summary>
+        /// B0 (Agent B): clears the economic record when the binding ends
+        /// (remove, move to a different placement component, or transfer).
+        /// The placement component itself stays in the scene; only the
+        /// ownership claim is withdrawn, so the bare placement is reported
+        /// as unauthorised rather than silently adopted.
+        /// </summary>
+        public void ClearEconomicRecord()
+        {
+            economicOwnerId = string.Empty;
+            acquisitionSourceId = string.Empty;
+        }
+
+        /// <summary>
         /// Associates this independently placed scene/runtime object with one
         /// building instance. Passing null removes an explicit association;
         /// a parent BuildingFootprintAuthority, if present, remains the fallback.

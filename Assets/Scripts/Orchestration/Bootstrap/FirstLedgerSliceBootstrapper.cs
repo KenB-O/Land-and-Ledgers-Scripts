@@ -1752,6 +1752,34 @@ namespace LandLedgers.FirstLedger
             if (pass9 != null && !pass9.EquipmentRegisters.Exists(existing => existing != null
                     && string.Equals(existing.BusinessInstanceId, workshop.InstanceId, StringComparison.Ordinal)))
                 pass9.EquipmentRegisters.Add(register);
+            // G-1 (W-G4 Workstream 1, premises binding): the workshop
+            // works from the owner's home (the Millward home, ordinal 7
+            // in the integration tree) — the D-5 carpenter's workshop
+            // design carries living quarters, and no dedicated workshop
+            // building exists in the dev town. The binding is the live
+            // runtime mechanism (AssignedBuildingId, read by the journey
+            // network and the drivers, persisted in the business save
+            // DTO) and is idempotent: on Continue the restored
+            // assignment stands and TryAssignPremises is a no-op, so
+            // this runs on NewGame and Continue alike. The roster
+            // requirement is deliberately NOT changed here: it drives
+            // formation-time trait matching, which cannot name Don's
+            // specific home — the explicit post-formation binding is
+            // the precise mechanism.
+            populationManager ??= FindAnyObjectByType<PopulationManager>();
+            PersonState ownerPerson = populationManager?.State?.GetPerson(ownerPersonId);
+            if (ownerPerson == null || ownerPerson.homeBuildingId < 0)
+            {
+                Debug.LogError($"[WorldStartup] Carpentry workshop '{carpentryKey}' premises refused: owner '{ownerPersonKey}' has no home building assigned — the workshop runs without premises until the owner has a home.", this);
+            }
+            else if (workshop.TryAssignPremises(ownerPerson.homeBuildingId))
+            {
+                Debug.Log($"[WorldStartup] Carpentry workshop '{carpentryKey}' ({workshop.InstanceId}): premises bound to the owner's home building {ownerPerson.homeBuildingId}.", this);
+            }
+            else
+            {
+                Debug.Log($"[WorldStartup] Carpentry workshop '{carpentryKey}' ({workshop.InstanceId}): premises already bound to building {workshop.AssignedBuildingId}.", this);
+            }
             Debug.Log($"[WorldStartup] Carpentry workshop '{carpentryKey}' ({workshop.InstanceId}): {templateMessage} {endowmentReport}", this);
             foreach (string line in diag) Debug.Log($"[WorldStartup] {line}", this);
         }

@@ -31,6 +31,28 @@ namespace LandLedgers.Economy.Equipment
             Assets.Add(asset);
         }
 
+        /// <summary>
+        /// G-1 (W-G4 Workstream 1): removes an asset from the register.
+        /// The seller-side removal for a completed sale — the D-7
+        /// pattern is transfer-then-deregister, and the business
+        /// register follows it: a piece sold to a household leaves the
+        /// workshop register the moment its title moves, so the
+        /// make-to-stock cap and the transferable-value floor stop
+        /// counting it. Refuses when the asset is not registered. There
+        /// is no binding guard here (unlike the household register):
+        /// the business register holds no placement bindings.
+        /// Returns null on success.
+        /// </summary>
+        public string TryDeregisterAsset(string assetId)
+        {
+            if (string.IsNullOrWhiteSpace(assetId))
+                return "BusinessEquipmentRegister.TryDeregisterAsset: asset id is required.";
+            if (Assets == null || !Assets.Exists(a => a != null && a.AssetId == assetId))
+                return $"BusinessEquipmentRegister.TryDeregisterAsset: asset {assetId} is not registered to business {BusinessInstanceId}.";
+            Assets.RemoveAll(a => a != null && a.AssetId == assetId);
+            return null;
+        }
+
         public void RegisterKit(ToolKitInstance kit)
         {
             if (kit == null || string.IsNullOrWhiteSpace(kit.InstanceId)) return;

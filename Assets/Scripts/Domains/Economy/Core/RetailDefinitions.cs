@@ -16,7 +16,16 @@ namespace LandLedgers.Economy
         Clothing = 2,
         Household = 3,
         Hardware = 4,
-        Medicine = 5
+        Medicine = 5,
+
+        // Agent F, slice F2 (expanded campaign 2026-11-16): furniture is
+        // its own demand group, so furniture demand is never grouped with
+        // household-goods demand. Append-only: existing values unchanged.
+        // Both switches over this enum have default arms (store need
+        // priority falls to 9, household reserve demand falls to
+        // generalGoodsNeed), so no switch change is needed for the new
+        // value; a durable good belongs at the lowest urgency in both.
+        Furniture = 6
     }
 
     [Serializable]

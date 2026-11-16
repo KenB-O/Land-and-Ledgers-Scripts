@@ -294,6 +294,19 @@ namespace LandLedgers.EditorTests.Integration
             // callers outside the directory and the records should
             // leave the baseline with it.
             "DiningPlaceRegistry", "DiningSeat", "DiningTable", "DiningSeatReservation",
+            // B5 (Agent B, expanded campaign 2026-11-16): the storage
+            // binding, registry and display allocation of
+            // FurnishingStorageBinding.cs. They are the working records
+            // of the wired storage feature — constructed and consumed
+            // inside FurnishingStorageBinding and read by the tests;
+            // they have no reference outside Domains/Economy/Storage
+            // yet, so they are classified feature-internal here, the
+            // same precedent as the B1 sleeping-place and B4 dining
+            // records above. StorageVisibility is an enum and needs no
+            // entry. When Agent G wires the storage driver
+            // (SimulationDrivers), the registry gains production callers
+            // outside the directory and these should leave the baseline.
+            "FurnishingStorageBinding", "FurnishingStorageRegistry", "FurnishingDisplayAllocation",
             "SkillTaskDurationEstimator",
             "SmithingRecipe", "SocietyReconciliation", "StageLaborBaseline", "StagedBakeryBatch",
             "StagedBakeryBatchSaveDto", "StandingInstruction", "StandingInstructionRegister", "StandingInstructionSaveDto",

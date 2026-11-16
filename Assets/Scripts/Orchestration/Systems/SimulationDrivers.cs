@@ -2254,6 +2254,257 @@ namespace LandLedgers.Orchestration.Systems
         private readonly List<NpcConstructionRequest> npcConstructionRequests = new List<NpcConstructionRequest>();
 
         /// <summary>
+        /// C-6 (expanded campaign 2026-11-16, shared with F): queued yard
+        /// retail delivery requests. Transient, like npcConstructionRequests:
+        /// a request enqueued by the buyer-side flow (F) is driven the next
+        /// day. The delivery obligation itself persists in the yard's
+        /// DeliveryRegister; only the drive request is transient, so
+        /// requests must be re-queued after a Continue.
+        /// </summary>
+        private readonly List<LumberYardRetailDeliveryRequest> yardRetailDeliveryRequests = new List<LumberYardRetailDeliveryRequest>();
+
+        /// <summary>
+        /// C-6: queues a yard retail delivery for the next daily drive.
+        /// Refuses duplicates per sale (one delivery order per sale) and
+        /// requests that name no sale, no destination, or no buyer business.
+        /// The buyer is a business here: the delivery charge settles from
+        /// a business cash port, and no household cash port adapter exists
+        /// yet — a household buyer is F's buyer-side work, not this queue.
+        /// Returns the refusal, or null.
+        /// </summary>
+        public string QueueYardRetailDelivery(LumberYardRetailDeliveryRequest request)
+        {
+            if (request == null)
+                return "A yard retail delivery request is required.";
+            if (!request.SaleId.IsValid)
+                return "A yard retail delivery request names the yard sale it fulfills.";
+            if (string.IsNullOrWhiteSpace(request.DestinationLabel)
+                || string.IsNullOrWhiteSpace(request.DestinationBusinessInstanceId))
+                return "A yard retail delivery request names its destination.";
+            if (string.IsNullOrWhiteSpace(request.BuyerBusinessId))
+                return "A yard retail delivery request names the buying business — the delivery charge settles from a business cash port, never a household here.";
+            foreach (LumberYardRetailDeliveryRequest queued in yardRetailDeliveryRequests)
+            {
+                if (queued != null && queued.SaleId.Equals(request.SaleId))
+                    return "The same yard sale already has a queued retail delivery.";
+            }
+            yardRetailDeliveryRequests.Add(request);
+            return null;
+        }
+
+        /// <summary>
+        /// C-6: the daily yard retail delivery drive. Runs right after the
+        /// sawmill-to-yard transfer, so the day's sawn lumber is in the
+        /// yard before a retail delivery reads it. FIFO: each queued request
+        /// is executed once; success drops it from the queue, a refusal
+        /// keeps it queued for the next day's retry with a once-per-day
+        /// warning. The service owns the delivery rules (quote, settlement,
+        /// freight, idempotency); this driver only resolves the production
+        /// bindings — yard, buyer and carrier businesses, rate card, wagon,
+        /// crew — from live state, fresh each drive.
+        /// </summary>
+        private void DriveYardRetailDeliveries(int absoluteDayIndex)
+        {
+            if (yardRetailDeliveryRequests.Count == 0) return;
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogRefusalDayKeyed("yard-retail-delivery:no-business-runtime", absoluteDayIndex,
+                    "[SimulationDrivers] yard retail delivery skipped: shared business runtime is missing.");
+                return;
+            }
+            if (hub == null)
+            {
+                LogRefusalDayKeyed("yard-retail-delivery:no-hub", absoluteDayIndex,
+                    "[SimulationDrivers] yard retail delivery skipped: simulation hub is missing.");
+                return;
+            }
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            BusinessInstanceState yardBusiness = null;
+            BusinessInstanceState carrierBusiness = null;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (yardBusiness == null && business.BusinessType == BusinessType.LumberYard) yardBusiness = business;
+            }
+            if (yardBusiness == null)
+            {
+                LogRefusalDayKeyed("yard-retail-delivery:no-yard", absoluteDayIndex,
+                    "[SimulationDrivers] yard retail delivery skipped: no lumber yard business in the town.");
+                return;
+            }
+            LumberYardShopRuntime yard = hub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+            if (yard == null)
+            {
+                LogRefusalDayKeyed("yard-retail-delivery:no-yard-runtime", absoluteDayIndex,
+                    "[SimulationDrivers] yard retail delivery skipped: no live lumber yard runtime for '" + yardBusiness.InstanceId + "'.");
+                return;
+            }
+            if (!FreightBusinessResolver.TryResolveFreightBusiness(businesses, out carrierBusiness))
+            {
+                LogRefusalDayKeyed("yard-retail-delivery:no-carrier", absoluteDayIndex,
+                    "[SimulationDrivers] yard retail delivery skipped: no freight business to carry lumber.");
+                return;
+            }
+            DevelopmentTownConfiguration.BusinessDefinition carrierDefinition = null;
+            if (developmentTownConfiguration == null
+                || !developmentTownConfiguration.TryGetBusiness(developmentTownConfiguration.FreightBusinessKey, out carrierDefinition)
+                || carrierDefinition?.freightRateCard == null)
+            {
+                LogRefusalDayKeyed("yard-retail-delivery:no-rate-card", absoluteDayIndex,
+                    "[SimulationDrivers] yard retail delivery skipped: the freight business has no configured rate card.");
+                return;
+            }
+            EquipmentAsset wagon = hub.TransportAssets != null ? hub.TransportAssets.Get("opening-freight-wagon") : null;
+            if (wagon == null)
+            {
+                LogRefusalDayKeyed("yard-retail-delivery:no-wagon", absoluteDayIndex,
+                    "[SimulationDrivers] yard retail delivery skipped: wagon 'opening-freight-wagon' does not exist — no phantom transport.");
+                return;
+            }
+            if (!string.Equals(wagon.OwnerKind, "business", System.StringComparison.Ordinal)
+                || !string.Equals(wagon.OwnerId, carrierBusiness.InstanceId, System.StringComparison.Ordinal))
+            {
+                LogRefusalDayKeyed("yard-retail-delivery:wagon-owner", absoluteDayIndex,
+                    "[SimulationDrivers] yard retail delivery skipped: wagon 'opening-freight-wagon' is not owned by freight business '" + carrierBusiness.InstanceId + "'.");
+                return;
+            }
+            if (FreightProduction == null || FreightProduction.Service == null)
+            {
+                LogRefusalDayKeyed("yard-retail-delivery:no-freight-service", absoluteDayIndex,
+                    "[SimulationDrivers] yard retail delivery skipped: no freight shipment service is bound.");
+                return;
+            }
+            int driverPersonId = carrierBusiness.Owner != null ? carrierBusiness.Owner.PersonId : -1;
+            if (driverPersonId < 0)
+            {
+                LogRefusalDayKeyed("yard-retail-delivery:no-driver", absoluteDayIndex,
+                    "[SimulationDrivers] yard retail delivery skipped: freight business '" + carrierBusiness.InstanceId + "' has no owner person — no driver.");
+                return;
+            }
+            int loaderPersonId = yardBusiness.Owner != null ? yardBusiness.Owner.PersonId : -1;
+            if (loaderPersonId < 0)
+            {
+                LogRefusalDayKeyed("yard-retail-delivery:no-loader", absoluteDayIndex,
+                    "[SimulationDrivers] yard retail delivery skipped: lumber yard '" + yardBusiness.InstanceId + "' has no owner person — no loader.");
+                return;
+            }
+            var draftAnimals = new List<EntityId>();
+            if (hub.Animals != null && hub.Animals.ActiveAnimals != null)
+            {
+                foreach (AnimalState candidate in hub.Animals.ActiveAnimals)
+                {
+                    if (candidate != null && candidate.IsActive && candidate.Species == AnimalSpecies.Horse
+                        && candidate.OwnerKind == AnimalOwnerKind.Business
+                        && string.Equals(candidate.OwnerId, carrierBusiness.InstanceId, System.StringComparison.Ordinal))
+                        draftAnimals.Add(candidate.AnimalId);
+                }
+            }
+            if (draftAnimals.Count == 0)
+            {
+                LogRefusalDayKeyed("yard-retail-delivery:no-animals", absoluteDayIndex,
+                    "[SimulationDrivers] yard retail delivery skipped: freight business '" + carrierBusiness.InstanceId + "' has no active horse — no draft animals.");
+                return;
+            }
+
+            var service = new LumberYardRetailDelivery(yard, FreightProduction.Service, new List<string>());
+            var diag = new List<string>();
+            int delivered = 0;
+            int refused = 0;
+            // FIFO over a snapshot: success drops the request, a refusal
+            // keeps it queued for the next day's retry.
+            var pending = new List<LumberYardRetailDeliveryRequest>(yardRetailDeliveryRequests);
+            foreach (LumberYardRetailDeliveryRequest request in pending)
+            {
+                if (request == null) { yardRetailDeliveryRequests.Remove(request); continue; }
+                LumberYardSaleRecord sale = null;
+                foreach (LumberYardSaleRecord candidate in yard.SalesHistory)
+                {
+                    if (candidate != null && candidate.SaleId.Equals(request.SaleId)) { sale = candidate; break; }
+                }
+                if (sale == null)
+                {
+                    LogRefusalDayKeyed("yard-retail-delivery:no-sale:" + request.SaleId, absoluteDayIndex,
+                        "[SimulationDrivers] yard retail delivery waits: sale '" + request.SaleId + "' is not in the yard's history yet.");
+                    refused++;
+                    continue;
+                }
+                BusinessInstanceState buyerBusiness = null;
+                for (int i = 0; i < businesses.Count; i++)
+                {
+                    BusinessInstanceState business = businesses[i];
+                    if (business != null && string.Equals(business.InstanceId, request.BuyerBusinessId, System.StringComparison.Ordinal))
+                    {
+                        buyerBusiness = business;
+                        break;
+                    }
+                }
+                if (buyerBusiness == null)
+                {
+                    LogRefusalDayKeyed("yard-retail-delivery:no-buyer:" + request.SaleId, absoluteDayIndex,
+                        "[SimulationDrivers] yard retail delivery waits: buyer business '" + request.BuyerBusinessId + "' for sale '" + request.SaleId + "' is not in the town.");
+                    refused++;
+                    continue;
+                }
+                int unloaderPersonId = buyerBusiness.Owner != null ? buyerBusiness.Owner.PersonId : -1;
+                if (unloaderPersonId < 0)
+                {
+                    LogRefusalDayKeyed("yard-retail-delivery:no-unloader:" + request.SaleId, absoluteDayIndex,
+                        "[SimulationDrivers] yard retail delivery waits: buyer business '" + buyerBusiness.InstanceId + "' has no owner person — no unloader.");
+                    refused++;
+                    continue;
+                }
+                if (loaderPersonId == driverPersonId || loaderPersonId == unloaderPersonId || driverPersonId == unloaderPersonId)
+                {
+                    LogRefusalDayKeyed("yard-retail-delivery:crew-collision:" + request.SaleId, absoluteDayIndex,
+                        "[SimulationDrivers] yard retail delivery waits: the loader, driver and unloader must be distinct people for sale '" + request.SaleId + "'.");
+                    refused++;
+                    continue;
+                }
+                if (buyerBusiness.RuntimeState == null || carrierBusiness.RuntimeState == null)
+                {
+                    LogRefusalDayKeyed("yard-retail-delivery:no-cash:" + request.SaleId, absoluteDayIndex,
+                        "[SimulationDrivers] yard retail delivery waits: no formed business runtime state for the buyer or the carrier of sale '" + request.SaleId + "' — the delivery charge settles from real cash, never unpaid.");
+                    refused++;
+                    continue;
+                }
+                var execution = new LumberYardRetailDeliveryExecution
+                {
+                    RateCard = carrierDefinition.freightRateCard,
+                    Wagon = wagon,
+                    BuyerCash = new Series2BusinessRuntimeCashPort(buyerBusiness.RuntimeState),
+                    CarrierCash = new Series2BusinessRuntimeCashPort(carrierBusiness.RuntimeState),
+                    LoaderId = EntityId.For(EntityKind.Person, loaderPersonId),
+                    DriverId = EntityId.For(EntityKind.Person, driverPersonId),
+                    DraftAnimalIds = draftAnimals,
+                    UnloaderId = EntityId.For(EntityKind.Person, unloaderPersonId),
+                    Tasks = hub.Tasks,
+                    Budgets = hub.WorkTimeBudgets,
+                    Schedules = hub.PersonSchedules,
+                };
+                string refusal = service.ExecuteRetailDelivery(sale, request, execution, absoluteDayIndex, diag);
+                if (refusal == null)
+                {
+                    yardRetailDeliveryRequests.Remove(request);
+                    delivered++;
+                }
+                else
+                {
+                    LogRefusalDayKeyed("yard-retail-delivery:refused:" + request.SaleId, absoluteDayIndex,
+                        "[SimulationDrivers] yard retail delivery refused for sale '" + request.SaleId + "': " + refusal);
+                    refused++;
+                }
+            }
+            if (delivered > 0 || refused > 0)
+            {
+                Debug.Log("[SimulationDrivers] yard retail delivery: " + delivered + " delivered, " + refused
+                    + " waiting (queued " + yardRetailDeliveryRequests.Count + ").", this);
+            }
+            foreach (string line in diag) Debug.Log(line, this);
+        }
+
+        /// <summary>
         /// Pass XI WS2: the daily NPC construction drive. Advances hub
         /// projects through the production driver (fund/stage, labor,
         /// advance, complete, occupy, cancel via the driver API) and
@@ -4023,6 +4274,10 @@ namespace LandLedgers.Orchestration.Systems
             // ByproductStock), so the order between them is narrative,
             // not a correctness dependency.
             DriveSawmillToYardTransfer(absoluteDayIndex);
+            // C-6: a retail sale's lumber travels by the real freight
+            // chain the day after the buyer-side flow queues it — the
+            // day's sawn lumber is already in the yard (above).
+            DriveYardRetailDeliveries(absoluteDayIndex);
             // D1: the mill's byproduct lots move into the Fuel Dealer's
             // intake by custody before the bakery plans its wholesale
             // day, so the paid-source builder (when D-F2 lands) sees the

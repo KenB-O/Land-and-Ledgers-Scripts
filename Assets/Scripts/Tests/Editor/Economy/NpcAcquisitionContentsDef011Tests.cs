@@ -23,6 +23,19 @@ namespace LandLedgers.EditorTests.Financing
     /// no structure value); the included-fixture value must sit outside the
     /// structure value, never double-counted.
     ///
+    /// D-7 (Agent D, expanded campaign 2026-11-16): the closing transfer
+    /// itself — included items move seller register → buyer register
+    /// through the single transfer authority and install for the buyer
+    /// through the normal install path (same building, same placement,
+    /// capability carried forward); excluded movables are removed by
+    /// the seller to custody; excluded fixtures stay held in place as
+    /// the seller's property; stove fuel returns to the seller's reserve
+    /// before the stove leaves the register; conservation is re-checked
+    /// at close; and a transfer that cannot run (or fails mid-way)
+    /// fails loudly with a full unwind — nothing moved on failure.
+    /// The plan must name the building the selection covers
+    /// (BuildingInstanceId binding, D-7).
+    ///
     /// Prices and the structure value here are TEST-LOCAL calibration only
     /// (the price func is the caller's real price data in production —
     /// Agent F's prices; no production price is invented in this file).
@@ -112,6 +125,9 @@ namespace LandLedgers.EditorTests.Financing
                     BuyerName = "household:" + BuyerHouseholdId,
                     SellerName = "household:" + SellerHouseholdId,
                     ParcelId = parcelId,
+                    // D-7: the plan names the building the contents
+                    // selection covers — the binding ValidatePlan enforces.
+                    BuildingInstanceId = BuildingInstanceId,
                     SpaceId = spaceId,
                     OccupantPersonIds = new List<int> { 201, 202 },
                     AgreedPriceCents = priceCents,
@@ -174,23 +190,47 @@ namespace LandLedgers.EditorTests.Financing
             return item.AddComponent<BuildingEquipmentPlacement>();
         }
 
-        private static void InstallAsset(
+        private static BuildingEquipmentPlacement InstallAsset(
             HouseholdFurnishingRegister register,
             BuildingFootprintAuthority building,
             string assetId,
-            int buildingInstanceId = BuildingInstanceId)
+            int buildingInstanceId = BuildingInstanceId,
+            FurnishingCapabilityKind capabilityKind = FurnishingCapabilityKind.None,
+            string capabilityReferenceId = "")
         {
             BuildingEquipmentPlacement placement = MakePlacement(assetId, default);
             string error = register.TryInstall(assetId, placement, building, buildingInstanceId, 0,
-                FurnishingCapabilityKind.None, string.Empty,
+                capabilityKind, capabilityReferenceId,
                 FurnishingAcquisitionSource.ScenarioEndowment, "endowment-qa-town-1",
                 out FurnishingPlacementBinding binding);
             Assert.IsNull(error, error);
             Assert.NotNull(binding);
+            return placement;
         }
 
         /// <summary>The seller's furnished house: bed, table, chair, stove, shelf installed in building 101.</summary>
         private static HouseholdFurnishingRegister MakeFurnishedSellerRegister()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> ignoredPlacements,
+                out BuildingFootprintAuthority ignoredBuilding);
+            return register;
+        }
+
+        /// <summary>
+        /// D-7: the seller's furnished house, with the scene placements
+        /// tracked by placement id (the fake resolver's map) and the
+        /// building authority returned. The bed carries its sleeping-place
+        /// capability and the stove its stove-workstation capability, so
+        /// the transfer can prove the capability carries forward to the
+        /// buyer and the stove registry can derive the stove for the
+        /// fuel-settlement test. The plain helper above delegates here;
+        /// the capabilities do not affect the D-6 plan-time assertions
+        /// (Validate / Revalidate / conservation never read them).
+        /// </summary>
+        private static HouseholdFurnishingRegister MakeFurnishedSellerRegisterTracked(
+            out Dictionary<string, BuildingEquipmentPlacement> placementsById,
+            out BuildingFootprintAuthority building)
         {
             var register = MakeRegister();
             Assert.IsNull(register.TryRegisterAsset(MakeAsset("bed-1", "furniture.bed")));
@@ -198,12 +238,20 @@ namespace LandLedgers.EditorTests.Financing
             Assert.IsNull(register.TryRegisterAsset(MakeAsset("chair-1", "furniture.chair")));
             Assert.IsNull(register.TryRegisterAsset(MakeAsset("stove-1", "furniture.cooking-stove")));
             Assert.IsNull(register.TryRegisterAsset(MakeAsset("shelf-1", "furniture.shelf")));
-            BuildingFootprintAuthority building = MakeBuilding("seller-house");
-            InstallAsset(register, building, "bed-1");
-            InstallAsset(register, building, "table-1");
-            InstallAsset(register, building, "chair-1");
-            InstallAsset(register, building, "stove-1");
-            InstallAsset(register, building, "shelf-1");
+            building = MakeBuilding("seller-house");
+            BuildingEquipmentPlacement bed = InstallAsset(register, building, "bed-1",
+                BuildingInstanceId, FurnishingCapabilityKind.SleepingPlace, "sleeping-place-bed-1");
+            BuildingEquipmentPlacement table = InstallAsset(register, building, "table-1");
+            BuildingEquipmentPlacement chair = InstallAsset(register, building, "chair-1");
+            BuildingEquipmentPlacement stove = InstallAsset(register, building, "stove-1",
+                BuildingInstanceId, FurnishingCapabilityKind.StoveWorkstation, "stove");
+            BuildingEquipmentPlacement shelf = InstallAsset(register, building, "shelf-1");
+            placementsById = new Dictionary<string, BuildingEquipmentPlacement>();
+            foreach (BuildingEquipmentPlacement placement in new[] { bed, table, chair, stove, shelf })
+            {
+                Assert.IsFalse(string.IsNullOrWhiteSpace(placement.PlacementId), "the install must mint a placement id.");
+                placementsById[placement.PlacementId] = placement;
+            }
             return register;
         }
 
@@ -222,12 +270,87 @@ namespace LandLedgers.EditorTests.Financing
             return f;
         }
 
+        /// <summary>D-7: the test placement resolver — the fixture's placements, keyed by placement id.</summary>
+        private sealed class FakePlacementResolver : IContentsPlacementResolver
+        {
+            private readonly Dictionary<string, BuildingEquipmentPlacement> byPlacementId;
+            private readonly BuildingFootprintAuthority building;
+            private readonly HashSet<string> unresolvablePlacementIds;
+
+            public FakePlacementResolver(Dictionary<string, BuildingEquipmentPlacement> byPlacementId,
+                BuildingFootprintAuthority building, HashSet<string> unresolvablePlacementIds = null)
+            {
+                this.byPlacementId = byPlacementId;
+                this.building = building;
+                this.unresolvablePlacementIds = unresolvablePlacementIds ?? new HashSet<string>();
+            }
+
+            public bool TryResolvePlacement(string placementId, int buildingInstanceId,
+                out BuildingEquipmentPlacement placement, out BuildingFootprintAuthority buildingOut)
+            {
+                placement = null;
+                buildingOut = null;
+                if (buildingInstanceId != BuildingInstanceId) return false;
+                if (string.IsNullOrWhiteSpace(placementId) || unresolvablePlacementIds.Contains(placementId)) return false;
+                if (!byPlacementId.TryGetValue(placementId, out placement)) return false;
+                buildingOut = building;
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// D-7: resolves the first N calls, then fails — a mid-transfer
+        /// defect the pre-flight cannot see (the pre-flight already
+        /// passed). The rollback is exercised for real: items transferred
+        /// before the failure must come back.
+        /// </summary>
+        private sealed class CountingResolver : IContentsPlacementResolver
+        {
+            private readonly FakePlacementResolver inner;
+            private readonly int succeedCalls;
+            private int calls;
+
+            public CountingResolver(FakePlacementResolver inner, int succeedCalls)
+            {
+                this.inner = inner;
+                this.succeedCalls = succeedCalls;
+            }
+
+            public bool TryResolvePlacement(string placementId, int buildingInstanceId,
+                out BuildingEquipmentPlacement placement, out BuildingFootprintAuthority building)
+            {
+                calls++;
+                if (calls > succeedCalls)
+                {
+                    placement = null;
+                    building = null;
+                    return false;
+                }
+                return inner.TryResolvePlacement(placementId, buildingInstanceId, out placement, out building);
+            }
+        }
+
+        /// <summary>D-7: one close call with the contents transfer inputs wired (buyer register + resolver + stove settlement).</summary>
+        private static NpcAcquisitionResult CloseContentsDeal(Fixture f, NpcAcquisitionPlan plan,
+            HouseholdFurnishingRegister seller, HouseholdFurnishingRegister buyer,
+            IContentsPlacementResolver resolver, int? structureCents = StructureValueCents,
+            HouseholdStoveRegistry sellerStoves = null, HouseholdState sellerHousehold = null)
+        {
+            return f.Acquisition.CloseAcquisition(
+                f.Ids, plan, f.Authority, f.Registry, f.Cash, f.Titles, f.Housing,
+                f.Negotiations, f.ClosingService, f.CreditEngine, f.Workflow, Day, f.Events, f.Diag,
+                seller, structureCents, buyer, resolver, sellerStoves, sellerHousehold);
+        }
+
         [Test]
         public void Contents_All_Validates_AndCloses_CashAndTitleConserved()
         {
             var f = MakeDealFixture();
             string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
-            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            var resolver = new FakePlacementResolver(placements, building);
             PropertyContentsSelection contents = BuildAllFor(register);
             // Bed 10000 + table 8000 + chair 3000 + stove 12000 + shelf 2000 = 35000.
             Assert.AreEqual(35000, contents.TotalContentsValueCents);
@@ -237,10 +360,7 @@ namespace LandLedgers.EditorTests.Financing
 
             Assert.IsNull(f.Acquisition.ValidatePlan(plan, f.Titles, f.Negotiations, f.Cash, f.Diag, register, StructureValueCents));
 
-            NpcAcquisitionResult result = f.Acquisition.CloseAcquisition(
-                f.Ids, plan, f.Authority, f.Registry, f.Cash, f.Titles, f.Housing,
-                f.Negotiations, f.ClosingService, f.CreditEngine, f.Workflow, Day, f.Events, f.Diag,
-                register, StructureValueCents);
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, buyerRegister, resolver);
             Assert.IsTrue(result.Closed, result.FailureReason);
             Assert.AreEqual("household:" + BuyerHouseholdId, f.Titles.CurrentHolder("parcel-farm"));
             Assert.AreEqual(300000 - price, f.Cash.FindStore("household:" + BuyerHouseholdId).ReadBalanceCents());
@@ -252,6 +372,38 @@ namespace LandLedgers.EditorTests.Financing
                 if (line.Contains("contents re-validated at close")) revalidated = true;
             }
             Assert.IsTrue(revalidated, "the close must record the contents re-validation.");
+
+            // D-7: every item moved seller register → buyer register, in
+            // the same building, at the same placement, capability
+            // carried forward; the seller holds nothing.
+            Assert.AreEqual(0, register.Assets.Count);
+            Assert.AreEqual(0, register.Bindings.Count);
+            Assert.AreEqual(0, register.Validate().Count);
+            Assert.AreEqual(5, buyerRegister.Assets.Count);
+            Assert.AreEqual(5, buyerRegister.Bindings.Count);
+            Assert.AreEqual(0, buyerRegister.Validate().Count);
+            foreach (string assetId in new[] { "bed-1", "table-1", "chair-1", "stove-1", "shelf-1" })
+            {
+                EquipmentAsset asset = buyerRegister.FindAsset(assetId);
+                Assert.NotNull(asset, assetId);
+                Assert.AreEqual("household", asset.OwnerKind);
+                Assert.AreEqual(BuyerHouseholdId.ToString(), asset.OwnerId);
+                Assert.AreEqual("building:" + BuildingInstanceId, asset.LocationId);
+                FurnishingPlacementBinding binding = buyerRegister.LiveBindingFor(assetId);
+                Assert.NotNull(binding, assetId);
+                Assert.AreEqual(BuildingInstanceId, binding.BuildingInstanceId);
+                Assert.AreEqual(FurnishingAcquisitionSource.Purchase, binding.AcquisitionSource);
+                Assert.AreEqual("property-acquisition:plan-1", binding.AcquisitionSourceId);
+            }
+            FurnishingPlacementBinding bedBinding = buyerRegister.LiveBindingFor("bed-1");
+            Assert.AreEqual(FurnishingCapabilityKind.SleepingPlace, bedBinding.CapabilityKind);
+            Assert.AreEqual("sleeping-place-bed-1", bedBinding.CapabilityReferenceId);
+            FurnishingPlacementBinding stoveBinding = buyerRegister.LiveBindingFor("stove-1");
+            Assert.AreEqual(FurnishingCapabilityKind.StoveWorkstation, stoveBinding.CapabilityKind);
+            Assert.AreEqual("stove", stoveBinding.CapabilityReferenceId);
+            Assert.AreEqual(5, result.TransferredContentsAssetIds.Count);
+            Assert.AreEqual(0, result.RemovedContentsAssetIds.Count);
+            Assert.AreEqual(0, result.HeldInPlaceContentsAssetIds.Count);
         }
 
         [Test]
@@ -407,7 +559,8 @@ namespace LandLedgers.EditorTests.Financing
         {
             var f = MakeDealFixture();
             string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
-            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
             List<FurnishingContentsItem> items = PropertyContentsSelection.ListEligibleContents(register, BuildingInstanceId);
             // No Movable: fixtures only; the bed is excluded (RemovedBySeller).
             PropertyContentsSelection contents = PropertyContentsSelection.BuildNoMovable(items, "household",
@@ -419,13 +572,15 @@ namespace LandLedgers.EditorTests.Financing
 
             // Between agreement and close the seller sells the excluded bed
             // elsewhere: the seller's own property leaving is a note, not a
-            // breach — the close still succeeds.
+            // breach — the close still succeeds. The transfer does not
+            // touch the bed (it is no longer the seller's to remove), but
+            // the other excluded movables are removed to seller custody
+            // and the fixtures transfer to the buyer.
             register.FindAsset("bed-1").OwnerId = "8";
 
-            NpcAcquisitionResult result = f.Acquisition.CloseAcquisition(
-                f.Ids, plan, f.Authority, f.Registry, f.Cash, f.Titles, f.Housing,
-                f.Negotiations, f.ClosingService, f.CreditEngine, f.Workflow, Day, f.Events, f.Diag,
-                register, StructureValueCents);
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            var resolver = new FakePlacementResolver(placements, building);
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, buyerRegister, resolver);
             Assert.IsTrue(result.Closed, result.FailureReason);
             bool noted = false;
             foreach (string line in f.Diag)
@@ -433,6 +588,21 @@ namespace LandLedgers.EditorTests.Financing
                 if (line.Contains("excluded") && line.Contains("bed-1")) noted = true;
             }
             Assert.IsTrue(noted, "the excluded bed leaving must be reported as a note.");
+            Assert.AreEqual(2, result.TransferredContentsAssetIds.Count);
+            Assert.IsTrue(result.TransferredContentsAssetIds.Contains("stove-1"));
+            Assert.IsTrue(result.TransferredContentsAssetIds.Contains("shelf-1"));
+            Assert.AreEqual(2, result.RemovedContentsAssetIds.Count);
+            Assert.IsTrue(result.RemovedContentsAssetIds.Contains("table-1"));
+            Assert.IsTrue(result.RemovedContentsAssetIds.Contains("chair-1"));
+            Assert.NotNull(buyerRegister.FindAsset("stove-1"));
+            Assert.NotNull(buyerRegister.LiveBindingFor("stove-1"));
+            Assert.AreEqual("household:" + SellerHouseholdId, register.FindAsset("table-1").LocationId);
+            Assert.IsNull(register.LiveBindingFor("table-1"));
+            // The bed was never touched: still installed in the seller's
+            // register (the seller's own sale elsewhere moves it, not
+            // this transfer), still owned by household 8.
+            Assert.AreEqual("8", register.FindAsset("bed-1").OwnerId);
+            Assert.NotNull(register.LiveBindingFor("bed-1"));
         }
 
         [Test]
@@ -440,7 +610,8 @@ namespace LandLedgers.EditorTests.Financing
         {
             var f = MakeDealFixture();
             string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
-            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
             List<FurnishingContentsItem> items = PropertyContentsSelection.ListEligibleContents(register, BuildingInstanceId);
             PropertyContentsSelection contents = PropertyContentsSelection.BuildNoMovable(items, "household",
                 SellerHouseholdId.ToString(), BuildingInstanceId, Day, PriceForKind);
@@ -453,11 +624,25 @@ namespace LandLedgers.EditorTests.Financing
             plan.Contents = contents;
 
             Assert.IsNull(f.Acquisition.ValidatePlan(plan, f.Titles, f.Negotiations, f.Cash, f.Diag, register, StructureValueCents));
-            NpcAcquisitionResult result = f.Acquisition.CloseAcquisition(
-                f.Ids, plan, f.Authority, f.Registry, f.Cash, f.Titles, f.Housing,
-                f.Negotiations, f.ClosingService, f.CreditEngine, f.Workflow, Day, f.Events, f.Diag,
-                register, StructureValueCents);
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            var resolver = new FakePlacementResolver(placements, building);
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, buyerRegister, resolver);
             Assert.IsTrue(result.Closed, result.FailureReason);
+            // D-7: the fixtures moved to the buyer; every movable was
+            // removed by the seller to custody; nothing is held in place.
+            Assert.AreEqual(2, result.TransferredContentsAssetIds.Count);
+            Assert.IsTrue(result.TransferredContentsAssetIds.Contains("stove-1"));
+            Assert.IsTrue(result.TransferredContentsAssetIds.Contains("shelf-1"));
+            Assert.AreEqual(3, result.RemovedContentsAssetIds.Count);
+            Assert.AreEqual(0, result.HeldInPlaceContentsAssetIds.Count);
+            Assert.AreEqual(2, buyerRegister.Assets.Count);
+            Assert.AreEqual(2, buyerRegister.Bindings.Count);
+            Assert.AreEqual(0, buyerRegister.Validate().Count);
+            foreach (string assetId in new[] { "bed-1", "table-1", "chair-1" })
+            {
+                Assert.AreEqual("household:" + SellerHouseholdId, register.FindAsset(assetId).LocationId);
+                Assert.IsNull(register.LiveBindingFor(assetId));
+            }
         }
 
         [Test]
@@ -465,7 +650,8 @@ namespace LandLedgers.EditorTests.Financing
         {
             var f = MakeDealFixture();
             string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
-            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
             List<FurnishingContentsItem> items = PropertyContentsSelection.ListEligibleContents(register, BuildingInstanceId);
             PropertyContentsSelection contents = PropertyContentsSelection.BuildCustom(items,
                 new List<string> { "bed-1" }, "household",
@@ -478,11 +664,37 @@ namespace LandLedgers.EditorTests.Financing
             plan.Contents = contents;
 
             Assert.IsNull(f.Acquisition.ValidatePlan(plan, f.Titles, f.Negotiations, f.Cash, f.Diag, register, StructureValueCents));
-            NpcAcquisitionResult result = f.Acquisition.CloseAcquisition(
-                f.Ids, plan, f.Authority, f.Registry, f.Cash, f.Titles, f.Housing,
-                f.Negotiations, f.ClosingService, f.CreditEngine, f.Workflow, Day, f.Events, f.Diag,
-                register, StructureValueCents);
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            var resolver = new FakePlacementResolver(placements, building);
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, buyerRegister, resolver);
             Assert.IsTrue(result.Closed, result.FailureReason);
+            // D-7: only the bed moved. The excluded fixtures (stove,
+            // shelf) stay installed as the seller's property in the
+            // building the buyer now owns — held in place, ownership and
+            // binding untouched. The other movables were removed by the
+            // seller to custody.
+            Assert.AreEqual(1, result.TransferredContentsAssetIds.Count);
+            Assert.IsTrue(result.TransferredContentsAssetIds.Contains("bed-1"));
+            Assert.AreEqual(2, result.HeldInPlaceContentsAssetIds.Count);
+            Assert.IsTrue(result.HeldInPlaceContentsAssetIds.Contains("stove-1"));
+            Assert.IsTrue(result.HeldInPlaceContentsAssetIds.Contains("shelf-1"));
+            Assert.AreEqual(2, result.RemovedContentsAssetIds.Count);
+            Assert.IsTrue(result.RemovedContentsAssetIds.Contains("table-1"));
+            Assert.IsTrue(result.RemovedContentsAssetIds.Contains("chair-1"));
+            Assert.AreEqual(1, buyerRegister.Assets.Count);
+            Assert.NotNull(buyerRegister.LiveBindingFor("bed-1"));
+            foreach (string assetId in new[] { "stove-1", "shelf-1" })
+            {
+                EquipmentAsset asset = register.FindAsset(assetId);
+                Assert.NotNull(asset, assetId);
+                Assert.AreEqual(SellerHouseholdId.ToString(), asset.OwnerId);
+                Assert.AreEqual("building:" + BuildingInstanceId, asset.LocationId);
+                Assert.NotNull(register.LiveBindingFor(assetId));
+            }
+            BuildingEquipmentPlacement stovePlacement = placements[register.LiveBindingFor("stove-1").PlacementId];
+            Assert.AreEqual(SellerHouseholdId.ToString(), stovePlacement.EconomicOwnerId);
+            Assert.AreEqual(0, register.Validate().Count);
+            Assert.AreEqual(0, buyerRegister.Validate().Count);
         }
 
         [Test]
@@ -552,6 +764,291 @@ namespace LandLedgers.EditorTests.Financing
                 if (line.Contains("contents conservation") && line.Contains("not checked")) noted = true;
             }
             Assert.IsTrue(noted, "a skipped conservation check must be recorded in diagnostics, never silent.");
+        }
+
+        // ---- D-7: the closing transfer ----
+
+        [Test]
+        public void Transfer_StoveFuel_ReturnsToSellerReserve()
+        {
+            var f = MakeDealFixture();
+            string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            // The seller's stove holds 6 fuel-wood units from a 10-unit reserve.
+            var sellerHousehold = new HouseholdState { id = SellerHouseholdId };
+            HouseholdReserveState reserve = sellerHousehold.GetReserve(HouseholdReserveCatalog.FuelWoodCategoryId);
+            Assert.NotNull(reserve, "a household must have a fuel-wood reserve.");
+            reserve.currentUnits = 10;
+            var sellerStoves = new HouseholdStoveRegistry(SellerHouseholdId, register);
+            sellerStoves.RebuildFromRegister();
+            Assert.NotNull(sellerStoves.FindStove("stove-1"));
+            Assert.IsNull(sellerStoves.TryFeedStove("stove-1", 6, sellerHousehold, f.Diag));
+            Assert.AreEqual(4, reserve.currentUnits);
+            Assert.AreEqual(6, sellerStoves.FuelWoodUnitsOnHand("stove-1"));
+
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            var resolver = new FakePlacementResolver(placements, building);
+            PropertyContentsSelection contents = BuildAllFor(register);
+            int price = StructureValueCents + contents.TotalContentsValueCents;
+            NpcAcquisitionPlan plan = f.BasePlan("parcel-farm", spaceId, price);
+            plan.Contents = contents;
+
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, buyerRegister, resolver,
+                StructureValueCents, sellerStoves, sellerHousehold);
+            Assert.IsTrue(result.Closed, result.FailureReason);
+            // The fuel was never priced in the contents: it returns to
+            // the seller's reserve, the stove transfers empty, and no
+            // orphaned fuel is left in the seller's stove registry.
+            Assert.AreEqual(10, reserve.currentUnits);
+            sellerStoves.RebuildFromRegister();
+            Assert.AreEqual(0, sellerStoves.Validate().Count);
+            Assert.AreEqual(0, sellerStoves.FuelWoodUnitsOnHand("stove-1"));
+            var buyerStoves = new HouseholdStoveRegistry(BuyerHouseholdId, buyerRegister);
+            buyerStoves.RebuildFromRegister();
+            Assert.NotNull(buyerStoves.FindStove("stove-1"));
+            Assert.AreEqual(0, buyerStoves.FuelWoodUnitsOnHand("stove-1"));
+        }
+
+        [Test]
+        public void Transfer_NoBuyerRegister_RefusedBeforeMoneyMoves()
+        {
+            var f = MakeDealFixture();
+            string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            var resolver = new FakePlacementResolver(placements, building);
+            PropertyContentsSelection contents = BuildAllFor(register);
+            int price = StructureValueCents + contents.TotalContentsValueCents;
+            NpcAcquisitionPlan plan = f.BasePlan("parcel-farm", spaceId, price);
+            plan.Contents = contents;
+
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, null, resolver);
+            Assert.IsFalse(result.Closed);
+            Assert.AreEqual(NpcAcquisitionFailureKind.ContentsRefused, result.FailureKind);
+            Assert.IsTrue(result.FailureReason.Contains("no buyer furnishing register"), result.FailureReason);
+            Assert.IsTrue(result.UnwoundCleanly);
+            Assert.AreEqual(300000, f.Cash.FindStore("household:" + BuyerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual(5000, f.Cash.FindStore("household:" + SellerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual("household:" + SellerHouseholdId, f.Titles.CurrentHolder("parcel-farm"));
+            Assert.AreEqual(5, register.Assets.Count);
+            Assert.AreEqual(5, register.Bindings.Count);
+        }
+
+        [Test]
+        public void Transfer_NoResolver_RefusedBeforeMoneyMoves()
+        {
+            var f = MakeDealFixture();
+            string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            PropertyContentsSelection contents = BuildAllFor(register);
+            int price = StructureValueCents + contents.TotalContentsValueCents;
+            NpcAcquisitionPlan plan = f.BasePlan("parcel-farm", spaceId, price);
+            plan.Contents = contents;
+
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, buyerRegister, null);
+            Assert.IsFalse(result.Closed);
+            Assert.AreEqual(NpcAcquisitionFailureKind.ContentsRefused, result.FailureKind);
+            Assert.IsTrue(result.FailureReason.Contains("no placement resolver"), result.FailureReason);
+            Assert.IsTrue(result.UnwoundCleanly);
+            Assert.AreEqual(300000, f.Cash.FindStore("household:" + BuyerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual(5, register.Assets.Count);
+            Assert.AreEqual(0, buyerRegister.Assets.Count);
+        }
+
+        [Test]
+        public void Transfer_ReservedAsset_RefusedBeforeMoneyMoves()
+        {
+            var f = MakeDealFixture();
+            string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            var resolver = new FakePlacementResolver(placements, building);
+            PropertyContentsSelection contents = BuildAllFor(register);
+            int price = StructureValueCents + contents.TotalContentsValueCents;
+            NpcAcquisitionPlan plan = f.BasePlan("parcel-farm", spaceId, price);
+            plan.Contents = contents;
+            Assert.IsNull(f.Acquisition.ValidatePlan(plan, f.Titles, f.Negotiations, f.Cash, f.Diag, register, StructureValueCents));
+
+            // Between agreement and close the bed is reserved for a task:
+            // the single transfer authority refuses a reserved asset, so
+            // the pre-flight fails the deal before any money moves.
+            Assert.IsNull(register.FindAsset("bed-1").Reserve("task-1", "meal prep"));
+
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, buyerRegister, resolver);
+            Assert.IsFalse(result.Closed);
+            Assert.AreEqual(NpcAcquisitionFailureKind.ContentsRefused, result.FailureKind);
+            Assert.IsTrue(result.FailureReason.Contains("bed-1"), result.FailureReason);
+            Assert.IsTrue(result.FailureReason.Contains("reserved"), result.FailureReason);
+            Assert.IsTrue(result.UnwoundCleanly);
+            Assert.AreEqual(300000, f.Cash.FindStore("household:" + BuyerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual(5000, f.Cash.FindStore("household:" + SellerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual("household:" + SellerHouseholdId, f.Titles.CurrentHolder("parcel-farm"));
+            Assert.AreEqual(5, register.Assets.Count);
+            Assert.AreEqual(5, register.Bindings.Count);
+            Assert.AreEqual(0, buyerRegister.Assets.Count);
+        }
+
+        [Test]
+        public void Transfer_PlanBuildingMismatch_RefusedAtPlan()
+        {
+            var f = MakeDealFixture();
+            f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PropertyContentsSelection contents = BuildAllFor(register);
+            NpcAcquisitionPlan plan = f.BasePlan("parcel-farm", "space-x", StructureValueCents + contents.TotalContentsValueCents);
+            plan.Contents = contents;
+            plan.BuildingInstanceId = 102;
+
+            string problem = f.Acquisition.ValidatePlan(plan, f.Titles, f.Negotiations, f.Cash, f.Diag, register, StructureValueCents);
+            Assert.NotNull(problem);
+            Assert.IsTrue(problem.Contains("102"), problem);
+            Assert.IsTrue(problem.Contains("101"), problem);
+        }
+
+        [Test]
+        public void Transfer_PlanBuildingUnbound_RefusedAtPlan()
+        {
+            var f = MakeDealFixture();
+            f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegister();
+            PropertyContentsSelection contents = BuildAllFor(register);
+            NpcAcquisitionPlan plan = f.BasePlan("parcel-farm", "space-x", StructureValueCents + contents.TotalContentsValueCents);
+            plan.Contents = contents;
+            plan.BuildingInstanceId = -1;
+
+            string problem = f.Acquisition.ValidatePlan(plan, f.Titles, f.Negotiations, f.Cash, f.Diag, register, StructureValueCents);
+            Assert.NotNull(problem);
+            Assert.IsTrue(problem.Contains("no building instance"), problem);
+        }
+
+        [Test]
+        public void Transfer_ConservationRecheckedAtClose()
+        {
+            var f = MakeDealFixture();
+            string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            var resolver = new FakePlacementResolver(placements, building);
+            PropertyContentsSelection contents = BuildAllFor(register);
+            int price = StructureValueCents + contents.TotalContentsValueCents;
+            NpcAcquisitionPlan plan = f.BasePlan("parcel-farm", spaceId, price);
+            plan.Contents = contents;
+            Assert.IsNull(f.Acquisition.ValidatePlan(plan, f.Titles, f.Negotiations, f.Cash, f.Diag, register, StructureValueCents));
+
+            // The structure value at close (190000) no longer matches the
+            // plan (200000): the close re-checks conservation and fails
+            // loudly, before any money moves.
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, buyerRegister, resolver, 190000);
+            Assert.IsFalse(result.Closed);
+            Assert.AreEqual(NpcAcquisitionFailureKind.ContentsRefused, result.FailureKind);
+            Assert.IsTrue(result.FailureReason.Contains("190000"), result.FailureReason);
+            Assert.IsTrue(result.UnwoundCleanly);
+            Assert.AreEqual(300000, f.Cash.FindStore("household:" + BuyerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual(5, register.Assets.Count);
+            Assert.AreEqual(0, buyerRegister.Assets.Count);
+        }
+
+        [Test]
+        public void Transfer_PlacementUnresolvable_RefusedBeforeMoneyMoves()
+        {
+            var f = MakeDealFixture();
+            string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            // The bed's placement component is gone (a retired scene
+            // object): the pre-flight fails the deal before any money
+            // moves — the transfer never invents a placement.
+            string bedPlacementId = register.LiveBindingFor("bed-1").PlacementId;
+            var resolver = new FakePlacementResolver(placements, building,
+                new HashSet<string> { bedPlacementId });
+            PropertyContentsSelection contents = BuildAllFor(register);
+            int price = StructureValueCents + contents.TotalContentsValueCents;
+            NpcAcquisitionPlan plan = f.BasePlan("parcel-farm", spaceId, price);
+            plan.Contents = contents;
+
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, buyerRegister, resolver);
+            Assert.IsFalse(result.Closed);
+            Assert.AreEqual(NpcAcquisitionFailureKind.ContentsRefused, result.FailureKind);
+            Assert.IsTrue(result.FailureReason.Contains("bed-1"), result.FailureReason);
+            Assert.IsTrue(result.UnwoundCleanly);
+            Assert.AreEqual(300000, f.Cash.FindStore("household:" + BuyerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual(5, register.Assets.Count);
+            Assert.AreEqual(0, buyerRegister.Assets.Count);
+        }
+
+        [Test]
+        public void Transfer_Rollback_RestoresSellerRegister_OnMidTransferFailure()
+        {
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            PropertyContentsSelection contents = BuildAllFor(register);
+            // The internal pre-flight resolves 5 placements (calls 1-5);
+            // the execution resolves the bed (call 6, succeeds — the bed
+            // transfers) and then the table (call 7, fails). The rollback
+            // must restore the bed, and nothing stands moved.
+            var resolver = new CountingResolver(new FakePlacementResolver(placements, building), 6);
+            var diag = new List<string>();
+            PropertyContentsTransferResult transfer = PropertyContentsTransfer.TransferAtClose(
+                contents, register, buyerRegister, resolver, "property-acquisition:plan-1", Day, null, null, diag);
+            Assert.IsFalse(transfer.Succeeded);
+            Assert.IsTrue(transfer.Problems.Count > 0);
+            Assert.IsTrue(string.Join("; ", transfer.Problems).Contains("table-1"), string.Join("; ", transfer.Problems));
+            Assert.AreEqual(0, transfer.RollbackProblems.Count);
+            Assert.AreEqual(0, transfer.TransferredAssetIds.Count);
+            Assert.AreEqual(0, transfer.RemovedBySellerAssetIds.Count);
+            Assert.AreEqual(5, register.Assets.Count);
+            Assert.AreEqual(5, register.Bindings.Count);
+            Assert.AreEqual(0, register.Validate().Count);
+            Assert.AreEqual(0, buyerRegister.Assets.Count);
+            Assert.AreEqual(0, buyerRegister.Bindings.Count);
+            Assert.AreEqual(0, buyerRegister.Validate().Count);
+            foreach (string assetId in new[] { "bed-1", "table-1", "chair-1", "stove-1", "shelf-1" })
+            {
+                Assert.AreEqual(SellerHouseholdId.ToString(), register.FindAsset(assetId).OwnerId);
+                Assert.AreEqual("building:" + BuildingInstanceId, register.FindAsset(assetId).LocationId);
+                Assert.NotNull(register.LiveBindingFor(assetId));
+            }
+        }
+
+        [Test]
+        public void Transfer_MidTransferFailure_UnwindsCashAndTitle()
+        {
+            var f = MakeDealFixture();
+            string spaceId = f.RegisterFarmstead("parcel-farm", "household:" + SellerHouseholdId);
+            HouseholdFurnishingRegister register = MakeFurnishedSellerRegisterTracked(
+                out Dictionary<string, BuildingEquipmentPlacement> placements, out BuildingFootprintAuthority building);
+            HouseholdFurnishingRegister buyerRegister = MakeRegister(BuyerHouseholdId);
+            PropertyContentsSelection contents = BuildAllFor(register);
+            int price = StructureValueCents + contents.TotalContentsValueCents;
+            NpcAcquisitionPlan plan = f.BasePlan("parcel-farm", spaceId, price);
+            plan.Contents = contents;
+            // Call count: the close's pre-flight resolves 5 placements
+            // (calls 1-5), TransferAtClose's own pre-flight resolves 5
+            // more (6-10), the execution resolves the bed (call 11,
+            // succeeds — the bed transfers, and the cash leg has already
+            // moved) and then the table (call 12, fails). The deal must
+            // unwind the cash and roll the bed back.
+            var resolver = new CountingResolver(new FakePlacementResolver(placements, building), 11);
+            NpcAcquisitionResult result = CloseContentsDeal(f, plan, register, buyerRegister, resolver);
+            Assert.IsFalse(result.Closed);
+            Assert.AreEqual(NpcAcquisitionFailureKind.ContentsRefused, result.FailureKind);
+            Assert.IsTrue(result.FailureReason.Contains("table-1"), result.FailureReason);
+            Assert.IsTrue(result.UnwoundCleanly);
+            Assert.AreEqual(300000, f.Cash.FindStore("household:" + BuyerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual(5000, f.Cash.FindStore("household:" + SellerHouseholdId).ReadBalanceCents());
+            Assert.AreEqual("household:" + SellerHouseholdId, f.Titles.CurrentHolder("parcel-farm"));
+            Assert.AreEqual(0, result.TransferredContentsAssetIds.Count);
+            Assert.AreEqual(5, register.Assets.Count);
+            Assert.AreEqual(5, register.Bindings.Count);
+            Assert.AreEqual(0, register.Validate().Count);
+            Assert.AreEqual(0, buyerRegister.Assets.Count);
         }
     }
 }

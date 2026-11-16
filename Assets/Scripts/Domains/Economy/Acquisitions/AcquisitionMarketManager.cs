@@ -8287,6 +8287,15 @@ namespace LandLedgers.Economy
             // Items can be sold, moved, or damaged between agreement and
             // closing; on failure the deal FAILS LOUDLY and unwinds
             // exactly like a title refusal — never silently drops an item.
+            // D-7: the registers resolved here are carried to the transfer
+            // after the close (closeSellerRegister / closeBuyerRegister);
+            // the pre-flight runs in the same block, before any money
+            // moves, so a reserved asset, an unresolvable placement, or
+            // a buyer-register conflict fails the deal before funding.
+            // Conservation is NOT checked in this flow: no structure
+            // value exists here yet (Agent F's split, F6).
+            HouseholdFurnishingRegister closeSellerRegister = null;
+            HouseholdFurnishingRegister closeBuyerRegister = null;
             if (deal.Contents != null)
             {
                 string contentsProblem = RevalidateDealContentsAtClose(deal, out List<string> contentsNotes);
@@ -8298,6 +8307,34 @@ namespace LandLedgers.Economy
                     deal.closingFailureSummary = contentsProblem;
                     RefreshDealWorkflowReadouts(listing, deal);
                     ApplyDealFailure(deal, contentsProblem, false, out message);
+                    return false;
+                }
+                closeSellerRegister = SellerFurnishingRegisterForBuilding?.Invoke(deal.Contents.BuildingInstanceId);
+                closeBuyerRegister = BuyerFurnishingRegisterForBuilding?.Invoke(deal.Contents.BuildingInstanceId);
+                if (closeSellerRegister == null || closeBuyerRegister == null || ContentsPlacementResolver == null)
+                {
+                    string missing = closeSellerRegister == null
+                        ? "no seller furnishing register is available"
+                        : closeBuyerRegister == null
+                            ? "no buyer furnishing register is available"
+                            : "no placement resolver is available";
+                    deal.closingFailureCause = AcquisitionClosingFailureCause.ContentsRefused;
+                    deal.closingFailureSummary = $"the deal carries contents terms but {missing} — the transfer cannot run; nothing moved.";
+                    RefreshDealWorkflowReadouts(listing, deal);
+                    ApplyDealFailure(deal, deal.closingFailureSummary, false, out message);
+                    return false;
+                }
+                List<string> transferProblems = PropertyContentsTransfer.CanTransfer(
+                    deal.Contents, closeSellerRegister, closeBuyerRegister, ContentsPlacementResolver,
+                    out List<string> transferNotes);
+                foreach (string note in transferNotes)
+                    Debug.Log($"[Acquisitions] Contents transfer — {note}", this);
+                if (transferProblems.Count > 0)
+                {
+                    deal.closingFailureCause = AcquisitionClosingFailureCause.ContentsRefused;
+                    deal.closingFailureSummary = "contents transfer cannot run at close: " + string.Join("; ", transferProblems) + " — the deal fails before any money moves.";
+                    RefreshDealWorkflowReadouts(listing, deal);
+                    ApplyDealFailure(deal, deal.closingFailureSummary, false, out message);
                     return false;
                 }
             }
@@ -8341,6 +8378,41 @@ namespace LandLedgers.Economy
             {
                 RefundSpend(finalDueCents, $"{listing.title} closing balance");
                 return false;
+            }
+
+            // D-7: the contents transfer runs after the deal closes (the
+            // title leg is inside Complete*Acquisition). The pre-flight
+            // already ran before any money moved, and nothing mutates the
+            // registers between the pre-flight and here (one synchronous
+            // call stack), so a failure here is a mid-transfer defect
+            // only — the transfer rolls its own items back, the failure
+            // is logged loudly, and the deal stays closed (title moved;
+            // manual reconciliation required, like the NPC flow's
+            // title-verification failure). It never voids the close.
+            // Stove fuel settlement is skipped in this flow (the seller's
+            // stove registry + household seams are G's wiring — the
+            // transfer records the skip loudly).
+            if (deal.Contents != null)
+            {
+                var transferDiag = new List<string>();
+                PropertyContentsTransferResult transfer = PropertyContentsTransfer.TransferAtClose(
+                    deal.Contents, closeSellerRegister, closeBuyerRegister, ContentsPlacementResolver,
+                    "property-acquisition:" + deal.listingId, GetCurrentDayIndex(), null, null, transferDiag);
+                foreach (string line in transferDiag)
+                    Debug.Log($"[Acquisitions] {line}", this);
+                if (!transfer.Succeeded)
+                {
+                    string transferFailure = "contents transfer failed after closing: " + string.Join("; ", transfer.Problems)
+                        + (transfer.RollbackProblems.Count > 0
+                            ? " ROLLBACK INCOMPLETE: " + string.Join("; ", transfer.RollbackProblems)
+                            : " The contents were rolled back.");
+                    Debug.LogError($"[Acquisitions] {transferFailure} The deal stays closed (title moved) — manual reconciliation required.", this);
+                    deal.statusText += " " + transferFailure;
+                }
+                else
+                {
+                    Debug.Log($"[Acquisitions] Contents transferred at close — {transfer.TransferredAssetIds.Count} item(s) to the buyer, {transfer.RemovedBySellerAssetIds.Count} removed by the seller, {transfer.HeldInPlaceAssetIds.Count} held in place.", this);
+                }
             }
 
             // DEF-069 (Decision 12): the earnest is part of the price. The
@@ -9037,6 +9109,34 @@ namespace LandLedgers.Economy
         /// the register. A deal with no contents terms never calls it.
         /// </summary>
         public Func<int, HouseholdFurnishingRegister> SellerFurnishingRegisterForBuilding { get; set; }
+
+        /// <summary>
+        /// D-7: the buyer's (player's) household furnishing register,
+        /// resolved by building instance id — the transfer target at
+        /// close. G wires it: the driver knows the player household id
+        /// and returns the hub's register for it; the building id is the
+        /// same key as the seller seam. Null = no buyer register wired:
+        /// a deal carrying contents terms then fails loudly at close
+        /// before any money moves, because the transfer has nowhere to
+        /// install the contents. A deal with no contents terms never
+        /// calls it.
+        /// </summary>
+        public Func<int, HouseholdFurnishingRegister> BuyerFurnishingRegisterForBuilding { get; set; }
+
+        /// <summary>
+        /// D-7: resolves a contents item's scene placement for the
+        /// closing transfer (placement component + building authority,
+        /// by the seller binding's placement id). G wires the production
+        /// implementation (scene lookup through the building authority's
+        /// registered placements); tests fake it. Null = no resolver
+        /// wired: a deal carrying contents terms then fails loudly at
+        /// close before any money moves. Stove fuel settlement in the
+        /// player flow needs the seller's stove registry + household as
+        /// well — those seams are G's wiring, and the manager passes
+        /// null for them today: the transfer records the skipped
+        /// settlement loudly rather than silently orphaning fuel.
+        /// </summary>
+        public IContentsPlacementResolver ContentsPlacementResolver { get; set; }
 
         /// <summary>
         /// DEF-069: marks a held earnest escrow disputed. The funds are

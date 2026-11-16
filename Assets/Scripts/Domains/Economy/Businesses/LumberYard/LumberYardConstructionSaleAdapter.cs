@@ -44,6 +44,15 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             int hardwareUnits = 0;
             int lumberPrice = -1;
             int hardwarePrice = -1;
+            // C-9: the sale line must carry the requirement's own display
+            // name, not a hard-coded label. The site stockpile matches
+            // delivered lines to the package requirements by exact display
+            // name, and every production design names lumber "lumber" —
+            // the hard-coded "Lumber" label stranded paid-for materials at
+            // the site, unstaged, on every real chain run. One consistent
+            // name per kind, same shape as the price-consistency rule.
+            string lumberDisplayName = null;
+            string hardwareDisplayName = null;
             foreach (ConstructionMaterialRequirement requirement in requirements)
             {
                 if (requirement == null || !requirement.IsCoherent)
@@ -61,12 +70,20 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                     case ConstructionMaterialKind.Lumber:
                         if (lumberPrice >= 0 && lumberPrice != price)
                             return "Lumber Yard sales require one consistent lumber unit price per package.";
+                        if (lumberDisplayName != null
+                            && !string.Equals(lumberDisplayName, requirement.MaterialDisplayName, StringComparison.Ordinal))
+                            return "Lumber Yard sales require one consistent lumber display name per package.";
+                        lumberDisplayName = requirement.MaterialDisplayName;
                         lumberPrice = price;
                         lumberUnits = checked(lumberUnits + requirement.RequiredUnits);
                         break;
                     case ConstructionMaterialKind.Hardware:
                         if (hardwarePrice >= 0 && hardwarePrice != price)
                             return "Lumber Yard sales require one consistent hardware unit price per package.";
+                        if (hardwareDisplayName != null
+                            && !string.Equals(hardwareDisplayName, requirement.MaterialDisplayName, StringComparison.Ordinal))
+                            return "Lumber Yard sales require one consistent hardware display name per package.";
+                        hardwareDisplayName = requirement.MaterialDisplayName;
                         hardwarePrice = price;
                         hardwareUnits = checked(hardwareUnits + requirement.RequiredUnits);
                         break;
@@ -98,7 +115,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                     : ConstructionMaterialKind.Hardware;
                 sale.Lines.Add(new ConstructionMaterialSaleLine
                 {
-                    DisplayName = materialKind == ConstructionMaterialKind.Lumber ? "Lumber" : "Nails and hardware",
+                    DisplayName = materialKind == ConstructionMaterialKind.Lumber ? lumberDisplayName : hardwareDisplayName,
                     Units = line.UnitsSold,
                     UnitLabel = "units",
                     UnitPriceCents = line.UnitPriceCents,

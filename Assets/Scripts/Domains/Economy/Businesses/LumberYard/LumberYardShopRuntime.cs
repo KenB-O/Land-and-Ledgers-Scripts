@@ -202,6 +202,58 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 nailsUnits, nailsUnitPriceCents, dayIndex, diag);
         }
 
+        /// <summary>
+        /// D6 (F-D2-3): the kind-level construction sale — same atomicity
+        /// and loud refusal as the bucket entry, but the hardware leg is
+        /// fulfilled PER KIND: every kind line must be covered in full by
+        /// real lots of that kind, or the whole sale is refused and nothing
+        /// is consumed. A shortfall in one kind never borrows from another
+        /// kind or from the mixed SimpleHardware bucket. The sale record
+        /// carries one dispense line per kind lot, so the adapter can
+        /// record one sale line per kind sold. The bucket entry above is
+        /// kept for direct yard callers (and the on-account path, which
+        /// still bucket-fills — follow-up); construction procurement goes
+        /// through this entry via the sale adapter.
+        /// </summary>
+        public LumberYardSaleRecord TrySellToConstructionProject(
+            string projectId,
+            int lumberUnits, int lumberUnitPriceCents,
+            List<LumberYardHardwareKindLine> hardwareKindLines, int hardwareUnitPriceCents,
+            int dayIndex,
+            List<string> diag)
+        {
+            return ExecuteConstructionSalePerKind(projectId, lumberUnits, lumberUnitPriceCents,
+                hardwareKindLines, hardwareUnitPriceCents, dayIndex, diag);
+        }
+
+        /// <summary>
+        /// D6: the lumber leg of a construction sale, shared by the bucket
+        /// and kind-level entries — the named project's earmarked lumber
+        /// first, ordinary sale inventory for the remainder. Returns the
+        /// sale line, or null when nothing was requested.
+        /// </summary>
+        private LumberYardMaterialSaleLine WithdrawLumberSaleLine(
+            string projectId, int lumberUnits, int lumberUnitPriceCents, List<string> diag)
+        {
+            if (lumberUnits <= 0) return null;
+            var lines = new List<LumberYardLumberDispenseLine>();
+            lines.AddRange(lumberStock.TryWithdrawProjectStock(lumberUnits, projectId, null, null, diag));
+            int takenSoFar = 0;
+            foreach (var line in lines) takenSoFar += line.UnitsTaken;
+            int remainder = lumberUnits - takenSoFar;
+            if (remainder > 0)
+                lines.AddRange(lumberStock.TryWithdrawUnits(remainder, null, null, diag));
+            int taken = 0;
+            foreach (var line in lines) taken += line.UnitsTaken;
+            return new LumberYardMaterialSaleLine
+            {
+                ResourceKind = ConstructionResourceKind.Lumber,
+                UnitsSold = taken,
+                UnitPriceCents = Math.Max(0, lumberUnitPriceCents),
+                LumberLines = lines,
+            };
+        }
+
         private LumberYardSaleRecord ExecuteConstructionSale(
             string projectId,
             int lumberUnits, int lumberUnitPriceCents,
@@ -251,25 +303,8 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 DayIndex = dayIndex,
             };
 
-            if (lumberUnits > 0)
-            {
-                var lines = new List<LumberYardLumberDispenseLine>();
-                lines.AddRange(lumberStock.TryWithdrawProjectStock(lumberUnits, projectId, null, null, diag));
-                int takenSoFar = 0;
-                foreach (var line in lines) takenSoFar += line.UnitsTaken;
-                int remainder = lumberUnits - takenSoFar;
-                if (remainder > 0)
-                    lines.AddRange(lumberStock.TryWithdrawUnits(remainder, null, null, diag));
-                int taken = 0;
-                foreach (var line in lines) taken += line.UnitsTaken;
-                record.Lines.Add(new LumberYardMaterialSaleLine
-                {
-                    ResourceKind = ConstructionResourceKind.Lumber,
-                    UnitsSold = taken,
-                    UnitPriceCents = Math.Max(0, lumberUnitPriceCents),
-                    LumberLines = lines,
-                });
-            }
+            var lumberLine = WithdrawLumberSaleLine(projectId, lumberUnits, lumberUnitPriceCents, diag);
+            if (lumberLine != null) record.Lines.Add(lumberLine);
 
             if (nailsUnits > 0)
             {
@@ -289,6 +324,134 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             diag.Add($"LumberYardShopRuntime ({businessInstanceId}): sold to project '{projectId}' — "
                 + $"{record.UnitsSoldFor(ConstructionResourceKind.Lumber)} lumber, "
                 + $"{record.UnitsSoldFor(ConstructionResourceKind.Nails)} nails/hardware, "
+                + $"total {record.TotalCents}¢ (sale {record.SaleId}). Provenance on every lot.");
+            return record;
+        }
+
+        /// <summary>
+        /// D6: the kind-level construction sale behind the per-kind entry.
+        /// ATOMIC per kind: every kind line is checked first — on any
+        /// kind shortfall the sale is refused LOUDLY and nothing is
+        /// consumed. On success, real lots are withdrawn per kind (FIFO
+        /// within the kind) and the sale record carries every lot's
+        /// provenance with its kind, so the adapter records one sale line
+        /// per kind sold. Money moves through ledger authorities; the
+        /// record carries the agreed prices for posting.
+        /// </summary>
+        private LumberYardSaleRecord ExecuteConstructionSalePerKind(
+            string projectId,
+            int lumberUnits, int lumberUnitPriceCents,
+            List<LumberYardHardwareKindLine> hardwareKindLines, int hardwareUnitPriceCents,
+            int dayIndex,
+            List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (idRegistry == null)
+            {
+                diag.Add("LumberYardShopRuntime: no EntityIdRegistry — sale refused.");
+                return null;
+            }
+            if (string.IsNullOrWhiteSpace(projectId))
+            {
+                diag.Add("LumberYardShopRuntime: construction sales name their project — anonymous sales refused.");
+                return null;
+            }
+            lumberUnits = Math.Max(0, lumberUnits);
+            var wanted = new List<LumberYardHardwareKindLine>();
+            int hardwareUnits = 0;
+            if (hardwareKindLines != null)
+            {
+                var seenKinds = new HashSet<LumberYardHardwareKind>();
+                foreach (LumberYardHardwareKindLine line in hardwareKindLines)
+                {
+                    if (line == null)
+                    {
+                        diag.Add($"LumberYardShopRuntime ({businessInstanceId}): kind-level sale to project '{projectId}' refused — a null kind line names no kind.");
+                        return null;
+                    }
+                    if (line.Units <= 0)
+                    {
+                        diag.Add($"LumberYardShopRuntime ({businessInstanceId}): kind-level sale to project '{projectId}' refused — kind '{line.Kind}' names {line.Units} units; a kind line needs positive units.");
+                        return null;
+                    }
+                    if (line.Kind == LumberYardHardwareKind.SimpleHardware)
+                    {
+                        diag.Add($"LumberYardShopRuntime ({businessInstanceId}): kind-level sale to project '{projectId}' refused — mixed SimpleHardware is not a fulfillable kind; a kind-level sale names real piece kinds (door hinge, iron latch, door handle) or nails.");
+                        return null;
+                    }
+                    if (!seenKinds.Add(line.Kind))
+                    {
+                        diag.Add($"LumberYardShopRuntime ({businessInstanceId}): kind-level sale to project '{projectId}' refused — kind '{line.Kind}' is named twice; one line per kind.");
+                        return null;
+                    }
+                    wanted.Add(line);
+                    hardwareUnits += line.Units;
+                }
+            }
+            if (lumberUnits == 0 && hardwareUnits == 0)
+            {
+                diag.Add("LumberYardShopRuntime: nothing requested — no sale recorded.");
+                return null;
+            }
+
+            // D2C: the named project's earmarked stock (Canon §6.4) is available
+            // to THIS project, drawn first; ordinary sale inventory covers the
+            // remainder. Other projects and retail never see earmarked stock.
+            int projectReserved = lumberStock.EarmarkedUnitsForProject(projectId, null, null);
+            int lumberAvailable = lumberStock.AvailableUnitsForSale(null, null) + projectReserved;
+            var shortKinds = new List<string>();
+            foreach (LumberYardHardwareKindLine line in wanted)
+            {
+                int have = hardwareStock.AvailableUnits(line.Kind);
+                if (have < line.Units)
+                    shortKinds.Add($"need {line.Units} {LumberYardHardwareKindNames.DisplayNameFor(line.Kind)} / have {have}");
+            }
+            if (lumberAvailable < lumberUnits || shortKinds.Count > 0)
+            {
+                diag.Add($"LumberYardShopRuntime ({businessInstanceId}): SALE REFUSED to project '{projectId}' — "
+                    + $"shortfall (need {lumberUnits} lumber / have {lumberAvailable}; "
+                    + (shortKinds.Count > 0
+                        ? "hardware kinds short: " + string.Join("; ", shortKinds.ToArray())
+                        : "hardware kinds covered")
+                    + "). Empty shelves stay empty; nothing invented, nothing consumed.");
+                return null;
+            }
+
+            var record = new LumberYardSaleRecord
+            {
+                SaleId = idRegistry.Allocate(EntityKind.Contract),
+                BuyerLabel = projectId.Trim(),
+                IsConstructionSale = true,
+                DayIndex = dayIndex,
+            };
+
+            var lumberLine = WithdrawLumberSaleLine(projectId, lumberUnits, lumberUnitPriceCents, diag);
+            if (lumberLine != null) record.Lines.Add(lumberLine);
+
+            if (hardwareUnits > 0)
+            {
+                var lines = new List<LumberYardHardwareDispenseLine>();
+                foreach (LumberYardHardwareKindLine line in wanted)
+                    lines.AddRange(hardwareStock.TryWithdrawUnits(line.Units, line.Kind, diag));
+                int taken = 0;
+                foreach (var line in lines) taken += line.UnitsTaken;
+                record.Lines.Add(new LumberYardMaterialSaleLine
+                {
+                    ResourceKind = ConstructionResourceKind.Nails,
+                    UnitsSold = taken,
+                    UnitPriceCents = Math.Max(0, hardwareUnitPriceCents),
+                    HardwareLines = lines,
+                });
+            }
+
+            salesHistory.Add(record);
+            var kindSummary = new List<string>();
+            foreach (LumberYardHardwareKindLine line in wanted)
+                kindSummary.Add($"{line.Units} {LumberYardHardwareKindNames.DisplayNameFor(line.Kind)}");
+            diag.Add($"LumberYardShopRuntime ({businessInstanceId}): sold to project '{projectId}' — "
+                + $"{record.UnitsSoldFor(ConstructionResourceKind.Lumber)} lumber, "
+                + $"{record.UnitsSoldFor(ConstructionResourceKind.Nails)} nails/hardware "
+                + (kindSummary.Count > 0 ? "(" + string.Join(", ", kindSummary.ToArray()) + "), " : string.Empty)
                 + $"total {record.TotalCents}¢ (sale {record.SaleId}). Provenance on every lot.");
             return record;
         }

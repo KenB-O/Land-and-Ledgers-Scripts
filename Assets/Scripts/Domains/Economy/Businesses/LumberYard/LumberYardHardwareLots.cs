@@ -15,11 +15,87 @@ namespace LandLedgers.Economy.Businesses.LumberYard
     /// from eastern ironworks — tracked separately for honesty, sold as one
     /// bucket (the construction quote line is already "Nails / Simple
     /// Hardware").
+    ///
+    /// D6 (F-D2-3): the forged piece kinds are real data now, not a
+    /// SupplierNote sentence. A lot holds ONE kind: nails, one door hinge,
+    /// one iron latch, or one door handle per unit. SimpleHardware remains
+    /// the kind for mixed or unitemized forged pieces (legacy lots and the
+    /// one-time bootstrap endowment) — it is NOT a fulfillable piece kind:
+    /// a kind-level sale never draws a hinge from a mixed lot, because the
+    /// lot cannot prove it holds one. Serialized enum, append-only.
     /// </summary>
     public enum LumberYardHardwareKind
     {
         Nails = 0,
         SimpleHardware = 1,
+        /// <summary>D6: one forged door hinge (smith kind "door-hinge").</summary>
+        DoorHinge = 2,
+        /// <summary>D6: one forged iron latch (smith kind "iron-latch").</summary>
+        IronLatch = 3,
+        /// <summary>D6: one forged door handle (smith kind "door-handle").</summary>
+        DoorHandle = 4,
+    }
+
+    /// <summary>
+    /// D6: one kind line of a kind-level hardware sale — how many units of
+    /// one real piece kind a construction sale needs. The yard's per-kind
+    /// sale entry takes these; the adapter builds them from the
+    /// requirement's kind breakdown.
+    /// </summary>
+    [Serializable]
+    public sealed class LumberYardHardwareKindLine
+    {
+        public LumberYardHardwareKind Kind = LumberYardHardwareKind.Nails;
+        public int Units;
+
+        public LumberYardHardwareKindLine() { }
+    }
+
+    /// <summary>
+    /// D6: the canonical display name of one hardware kind — the name the
+    /// construction sale lines and the site stockpile match on. The forged
+    /// piece names are the smith's own kind strings
+    /// (BlacksmithRuntime.DoorHingeKind / IronLatchKind / DoorHandleKind);
+    /// "nails" is the imported-nails name the construction probe already
+    /// uses. SimpleHardware has no piece name — it is a mixed bucket, not
+    /// a fulfillable kind, so TryKindForDisplayName refuses it.
+    /// </summary>
+    public static class LumberYardHardwareKindNames
+    {
+        public const string Nails = "nails";
+        public const string DoorHinge = "door-hinge";
+        public const string IronLatch = "iron-latch";
+        public const string DoorHandle = "door-handle";
+        public const string SimpleHardware = "simple hardware";
+
+        public static string DisplayNameFor(LumberYardHardwareKind kind)
+        {
+            switch (kind)
+            {
+                case LumberYardHardwareKind.Nails: return Nails;
+                case LumberYardHardwareKind.DoorHinge: return DoorHinge;
+                case LumberYardHardwareKind.IronLatch: return IronLatch;
+                case LumberYardHardwareKind.DoorHandle: return DoorHandle;
+                default: return SimpleHardware;
+            }
+        }
+
+        /// <summary>
+        /// True when the name is a fulfillable piece kind (nails or one
+        /// forged piece). The mixed bucket name is refused: no kind-level
+        /// sale is ever filled from unitemized stock.
+        /// </summary>
+        public static bool TryKindForDisplayName(string displayName, out LumberYardHardwareKind kind)
+        {
+            kind = LumberYardHardwareKind.Nails;
+            if (string.IsNullOrWhiteSpace(displayName)) return false;
+            string name = displayName.Trim();
+            if (string.Equals(name, Nails, StringComparison.Ordinal)) { kind = LumberYardHardwareKind.Nails; return true; }
+            if (string.Equals(name, DoorHinge, StringComparison.Ordinal)) { kind = LumberYardHardwareKind.DoorHinge; return true; }
+            if (string.Equals(name, IronLatch, StringComparison.Ordinal)) { kind = LumberYardHardwareKind.IronLatch; return true; }
+            if (string.Equals(name, DoorHandle, StringComparison.Ordinal)) { kind = LumberYardHardwareKind.DoorHandle; return true; }
+            return false;
+        }
     }
 
     /// <summary>
@@ -260,7 +336,8 @@ namespace LandLedgers.Economy.Businesses.LumberYard
 
         /// <summary>
         /// Withdraws up to the requested units, oldest acquisitions first,
-        /// nails before simple hardware when no kind filter is given (the
+        /// nails before forged pieces and identified pieces before
+        /// unitemized simple hardware when no kind filter is given (the
         /// construction bucket is "Nails / Simple Hardware" — nails are the
         /// primary fill). Records the dispense lines with provenance. A
         /// shortfall returns fewer lines — never invented units.
@@ -275,7 +352,8 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             SortFifo();
 
             int remaining = units;
-            // Nails-first pass, then simple hardware, when unfiltered.
+            // Nails-first pass, then identified forged pieces in kind
+            // order, then unitemized simple hardware, when unfiltered.
             var passKinds = new List<LumberYardHardwareKind?>();
             if (kindFilter.HasValue)
             {
@@ -284,6 +362,9 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             else
             {
                 passKinds.Add(LumberYardHardwareKind.Nails);
+                passKinds.Add(LumberYardHardwareKind.DoorHinge);
+                passKinds.Add(LumberYardHardwareKind.IronLatch);
+                passKinds.Add(LumberYardHardwareKind.DoorHandle);
                 passKinds.Add(LumberYardHardwareKind.SimpleHardware);
             }
 

@@ -147,6 +147,26 @@ namespace LandLedgers.Economy
     }
 
     /// <summary>
+    /// D6 (F-D2-3): one per-kind line inside a hardware requirement — how
+    /// many units of ONE real piece kind (door hinge, iron latch, door
+    /// handle, nails) the requirement needs. The display name is the
+    /// canonical kind name the yard lots and the site stockpile match on
+    /// (LumberYardHardwareKindNames). A requirement with no kind lines is
+    /// a bucket requirement: the sale/stage path derives the mix from the
+    /// D2 door+window calibration (ConstructionHardwareKindBreakdown) and
+    /// refuses rather than guesses when the total is not a whole number
+    /// of door+window pairs.
+    /// </summary>
+    [Serializable]
+    public sealed class ConstructionHardwareKindLine
+    {
+        public string DisplayName = string.Empty;
+        public int Units;
+
+        public ConstructionHardwareKindLine() { }
+    }
+
+    /// <summary>
     /// D4G: one material requirement inside a spec section — DATA. The
     /// provenance requirement names real suppliers or lot references; the
     /// yard/sawmill lot systems remain the authority for what exists.
@@ -166,6 +186,13 @@ namespace LandLedgers.Economy
         public string SupplierDisplayName = string.Empty;
         public string LotReferenceId = string.Empty;  // references an existing lot (yard/sawmill), never copied data
         public string Notes = string.Empty;
+        /// <summary>
+        /// D6: the per-kind breakdown of a hardware requirement, when the
+        /// authoring design states it (one line per piece kind, summing to
+        /// RequiredUnits). Empty means the mix is derived at sale/stage
+        /// time from the D2 calibration, never invented per sale.
+        /// </summary>
+        public List<ConstructionHardwareKindLine> HardwareKindLines = new List<ConstructionHardwareKindLine>();
 
         public ConstructionMaterialRequirement() { }
 

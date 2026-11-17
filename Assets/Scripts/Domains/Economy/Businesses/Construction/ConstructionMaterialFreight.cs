@@ -169,6 +169,115 @@ namespace LandLedgers.Economy
     }
 
     /// <summary>
+    /// D6 (F-D2-3): the one place a hardware requirement's unit total
+    /// becomes per-kind lines (door hinge, iron latch, door handle,
+    /// nails). The mix comes from exactly two sources, in this order:
+    ///
+    /// 1. The requirement's own HardwareKindLines, when the authoring
+    ///    design states them — validated here (known kind names only,
+    ///    positive units, no kind twice, summing exactly to
+    ///    RequiredUnits).
+    /// 2. The D2 door+window calibration (ProductionDesignPresets header):
+    ///    per door 4 forged pieces (2 hinges, 1 latch, 1 handle) + 2
+    ///    nails units; per window 2 forged pieces (1 hinge, 1 latch) + 1
+    ///    nails unit. One door + one window is 9 units: 3 hinges, 2
+    ///    latches, 1 handle, 3 nails. All three production designs pair
+    ///    doors and windows equally (settler 1+1 = 9, family and workshop
+    ///    2+2 = 18), so a bucket requirement's mix is its unit total in
+    ///    whole pairs. PROVISIONAL, like the calibration itself: a future
+    ///    design with unequal doors and windows must carry explicit kind
+    ///    lines, because the pair rule cannot derive its mix.
+    ///
+    /// A bucket total that is not a whole number of pairs refuses here
+    /// with the mix named unknown — the sale and the staging both call
+    /// this helper, so both sides always agree on the mix and neither
+    /// ever guesses one. Kind lines are priced at the requirement's
+    /// bucket price by the sale path (the price port prices the whole
+    /// hardware requirement from the first stocked lot); per-kind
+    /// pricing is a follow-up, not smuggled in here.
+    /// </summary>
+    public static class ConstructionHardwareKindBreakdown
+    {
+        /// <summary>Units in one door + one window pair (D2 calibration).</summary>
+        public const int UnitsPerDoorWindowPair = 9;
+        /// <summary>Door hinges in one pair: 2 per door + 1 per window.</summary>
+        public const int HingesPerPair = 3;
+        /// <summary>Iron latches in one pair: 1 per door + 1 per window.</summary>
+        public const int LatchesPerPair = 2;
+        /// <summary>Door handles in one pair: 1 per door, none per window.</summary>
+        public const int HandlesPerPair = 1;
+        /// <summary>Nails units in one pair: 2 per door + 1 per window.</summary>
+        public const int NailsPerPair = 3;
+
+        /// <summary>The imported-nails kind name (the construction probe already uses "nails").</summary>
+        public const string NailsDisplayName = "nails";
+
+        /// <summary>True when the name is one of the four fulfillable hardware kinds.</summary>
+        public static bool IsKnownKindDisplayName(string displayName)
+        {
+            if (string.IsNullOrWhiteSpace(displayName)) return false;
+            string name = displayName.Trim();
+            return string.Equals(name, NailsDisplayName, StringComparison.Ordinal)
+                || string.Equals(name, BlacksmithRuntime.DoorHingeKind, StringComparison.Ordinal)
+                || string.Equals(name, BlacksmithRuntime.IronLatchKind, StringComparison.Ordinal)
+                || string.Equals(name, BlacksmithRuntime.DoorHandleKind, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Resolves a hardware requirement to its per-kind lines. Returns
+        /// null on success (lines in <paramref name="lines"/>); a refusal
+        /// otherwise — the caller refuses the sale or the staging with it,
+        /// nothing is consumed and nothing is guessed.
+        /// </summary>
+        public static string TryBreakdown(ConstructionMaterialRequirement requirement,
+            out List<ConstructionHardwareKindLine> lines)
+        {
+            lines = new List<ConstructionHardwareKindLine>();
+            if (requirement == null)
+                return "ConstructionHardwareKindBreakdown: no hardware requirement — a kind mix cannot be derived from nothing.";
+            if (requirement.MaterialKind != ConstructionMaterialKind.Hardware)
+                return $"ConstructionHardwareKindBreakdown: requirement '{requirement.RequirementId}' is {requirement.MaterialKind}, not hardware — no kind mix applies.";
+            if (requirement.RequiredUnits <= 0)
+                return $"ConstructionHardwareKindBreakdown: hardware requirement '{requirement.RequirementId}' names {requirement.RequiredUnits} units — a kind mix needs a positive total.";
+
+            if (requirement.HardwareKindLines != null && requirement.HardwareKindLines.Count > 0)
+            {
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                int sum = 0;
+                foreach (ConstructionHardwareKindLine kindLine in requirement.HardwareKindLines)
+                {
+                    if (kindLine == null)
+                        return $"ConstructionHardwareKindBreakdown: hardware requirement '{requirement.RequirementId}' carries a null kind line — refusing.";
+                    if (!IsKnownKindDisplayName(kindLine.DisplayName))
+                        return $"ConstructionHardwareKindBreakdown: hardware requirement '{requirement.RequirementId}' names unknown kind '{kindLine.DisplayName}' — only door-hinge, iron-latch, door-handle and nails are fulfillable kinds.";
+                    if (kindLine.Units <= 0)
+                        return $"ConstructionHardwareKindBreakdown: hardware requirement '{requirement.RequirementId}' names {kindLine.Units} '{kindLine.DisplayName}' — a kind line needs positive units.";
+                    if (!seen.Add(kindLine.DisplayName.Trim()))
+                        return $"ConstructionHardwareKindBreakdown: hardware requirement '{requirement.RequirementId}' names '{kindLine.DisplayName}' twice — one line per kind.";
+                    sum += kindLine.Units;
+                    lines.Add(new ConstructionHardwareKindLine
+                    {
+                        DisplayName = kindLine.DisplayName.Trim(),
+                        Units = kindLine.Units,
+                    });
+                }
+                if (sum != requirement.RequiredUnits)
+                    return $"ConstructionHardwareKindBreakdown: hardware requirement '{requirement.RequirementId}' kind lines sum to {sum} units, not its {requirement.RequiredUnits} — refusing rather than staging a partial mix.";
+                return null;
+            }
+
+            if (requirement.RequiredUnits % UnitsPerDoorWindowPair != 0)
+                return $"ConstructionHardwareKindBreakdown: hardware requirement '{requirement.RequirementId}' names {requirement.RequiredUnits} units with no per-kind breakdown, and {requirement.RequiredUnits} is not a whole number of door+window pairs ({UnitsPerDoorWindowPair} units each) — the kind mix is unknown; refusing rather than guessing. A design with unequal doors and windows must carry explicit kind lines.";
+            int pairs = requirement.RequiredUnits / UnitsPerDoorWindowPair;
+            lines.Add(new ConstructionHardwareKindLine { DisplayName = BlacksmithRuntime.DoorHingeKind, Units = HingesPerPair * pairs });
+            lines.Add(new ConstructionHardwareKindLine { DisplayName = BlacksmithRuntime.IronLatchKind, Units = LatchesPerPair * pairs });
+            lines.Add(new ConstructionHardwareKindLine { DisplayName = BlacksmithRuntime.DoorHandleKind, Units = HandlesPerPair * pairs });
+            lines.Add(new ConstructionHardwareKindLine { DisplayName = NailsDisplayName, Units = NailsPerPair * pairs });
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Pass VIII Worker 3: the supplier-side sale authority for construction
     /// procurement. The runtime adapter implements this against the real
     /// business runtimes (e.g. the lumber yard's
@@ -293,6 +402,12 @@ namespace LandLedgers.Economy
         /// <summary>
         /// All-or-nothing check: every requirement covered in full by the
         /// stockpile. Nothing is consumed by the check itself.
+        ///
+        /// D6: a hardware requirement is covered only when EVERY kind it
+        /// needs is on site in full (door hinges, iron latches, door
+        /// handles, nails, per its kind breakdown) — a bucket total never
+        /// stands in for the kinds. A requirement whose kind mix cannot
+        /// be resolved is not covered.
         /// </summary>
         public bool CoversAll(List<ConstructionMaterialRequirement> requirements)
         {
@@ -300,6 +415,18 @@ namespace LandLedgers.Economy
             foreach (ConstructionMaterialRequirement requirement in requirements)
             {
                 if (requirement == null || !requirement.IsCoherent) return false;
+                if (requirement.MaterialKind == ConstructionMaterialKind.Hardware)
+                {
+                    List<ConstructionHardwareKindLine> kindLines;
+                    if (ConstructionHardwareKindBreakdown.TryBreakdown(requirement, out kindLines) != null)
+                        return false;
+                    foreach (ConstructionHardwareKindLine kindLine in kindLines)
+                    {
+                        if (kindLine == null || AvailableUnits(kindLine.DisplayName) < kindLine.Units)
+                            return false;
+                    }
+                    continue;
+                }
                 if (AvailableUnits(requirement.MaterialDisplayName) < requirement.RequiredUnits)
                     return false;
             }
@@ -310,6 +437,13 @@ namespace LandLedgers.Economy
         /// Consumes the requirements FIFO with provenance. The caller must
         /// have verified <see cref="CoversAll"/> first; on any shortfall this
         /// refuses and consumes NOTHING.
+        ///
+        /// D6: a hardware requirement consumes per kind from the matching
+        /// on-site lines — a package needing 2 hinges + 1 latch + 1 handle
+        /// takes exactly those kinds, never a bucket total in their place.
+        /// The consumed line recorded for the requirement keeps the
+        /// requirement's own display name and total (the D2 audit shape),
+        /// with the per-kind provenance joined.
         /// </summary>
         public string ConsumeForPackage(WorkPackage package, int dayIndex, List<string> diag,
             out List<ConsumedMaterialLine> consumed)
@@ -320,21 +454,44 @@ namespace LandLedgers.Economy
                 return $"ConstructionSiteStockpile: package '{package.PackageId}' is not fully covered by the on-site stockpile — nothing consumed, no synthetic stock.";
             foreach (ConstructionMaterialRequirement requirement in package.Materials)
             {
-                int needed = Math.Max(0, requirement.RequiredUnits);
-                var provenanceParts = new List<string>();
-                foreach (StockpileLine line in Lines)
+                // D6: what this requirement consumes, as (display name,
+                // units) pairs — one pair per kind for hardware, the
+                // requirement itself for every other kind.
+                var toConsume = new List<ConstructionHardwareKindLine>();
+                if (requirement.MaterialKind == ConstructionMaterialKind.Hardware)
                 {
-                    if (needed <= 0) break;
-                    if (line == null || line.Units <= 0) continue;
-                    if (!string.Equals(line.DisplayName, requirement.MaterialDisplayName, StringComparison.Ordinal)) continue;
-                    int take = Math.Min(needed, line.Units);
-                    line.Units -= take;
-                    needed -= take;
-                    if (!string.IsNullOrWhiteSpace(line.Provenance))
-                        provenanceParts.Add(line.Provenance);
+                    List<ConstructionHardwareKindLine> kindLines;
+                    string breakdownRefusal = ConstructionHardwareKindBreakdown.TryBreakdown(requirement, out kindLines);
+                    if (breakdownRefusal != null)
+                        return $"ConstructionSiteStockpile: package '{package.PackageId}' hardware requirement '{requirement.RequirementId}' has no resolvable kind mix — {breakdownRefusal} Nothing consumed.";
+                    toConsume.AddRange(kindLines);
                 }
-                if (needed > 0)
-                    return $"ConstructionSiteStockpile: shortfall on '{requirement.MaterialDisplayName}' mid-consume — refusing (this is a bug: CoversAll passed).";
+                else
+                {
+                    toConsume.Add(new ConstructionHardwareKindLine
+                    {
+                        DisplayName = requirement.MaterialDisplayName,
+                        Units = Math.Max(0, requirement.RequiredUnits),
+                    });
+                }
+                var provenanceParts = new List<string>();
+                foreach (ConstructionHardwareKindLine kindLine in toConsume)
+                {
+                    int kindNeeded = Math.Max(0, kindLine.Units);
+                    foreach (StockpileLine line in Lines)
+                    {
+                        if (kindNeeded <= 0) break;
+                        if (line == null || line.Units <= 0) continue;
+                        if (!string.Equals(line.DisplayName, kindLine.DisplayName, StringComparison.Ordinal)) continue;
+                        int take = Math.Min(kindNeeded, line.Units);
+                        line.Units -= take;
+                        kindNeeded -= take;
+                        if (!string.IsNullOrWhiteSpace(line.Provenance))
+                            provenanceParts.Add(line.Provenance);
+                    }
+                    if (kindNeeded > 0)
+                        return $"ConstructionSiteStockpile: shortfall on '{kindLine.DisplayName}' mid-consume — refusing (this is a bug: CoversAll passed).";
+                }
                 consumed.Add(new ConsumedMaterialLine
                 {
                     DisplayName = requirement.MaterialDisplayName,

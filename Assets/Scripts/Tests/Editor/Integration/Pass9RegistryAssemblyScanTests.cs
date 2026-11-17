@@ -239,6 +239,15 @@ namespace LandLedgers.EditorTests.Integration
             // AssetAppraisalResult / AssetSaleRecord above. The signal
             // never orders; the driver reads it and decides.
             "LumberYardHardwareReorderPolicy", "LumberYardHardwareReorderSignal",
+            // D6 (2026-11-17): "LumberYardHardwareKindLine" is the
+            // kind-level sale's data-only kind line (one real piece kind
+            // + units) — consumed inside the yard hardware feature by
+            // the kind-level sale path (the sale adapter builds the lines
+            // from the requirement's kind breakdown, the yard's per-kind
+            // sale entry consumes them), the same precedent as
+            // AssetAppraisalResult / AssetSaleRecord above. The line
+            // never sells; the yard fulfills it from real lots.
+            "LumberYardHardwareKindLine",
             "ManagerActivityLog", "ManagerActivityRecord", "ManagerActivitySaveDto", "ManagerBorrowExecutor",
             "ManagerDecisionExecutionLedger", "ManagerExecutedActionRecord", "ManagerExecutionContext", "ManagerOpenRecruitmentExecutor",
             "ManagerOrderMaintenanceExecutor", "ManagerPendingRequest", "ManagerPriceChangeExecutor", "ManagerProcureExecutor",

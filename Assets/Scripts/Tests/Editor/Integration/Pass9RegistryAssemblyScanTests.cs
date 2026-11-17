@@ -67,6 +67,16 @@ namespace LandLedgers.EditorTests.Integration
             // that registration — not a component consumed by any wired feature,
             // so it does not belong in the feature-internal baseline below.
             "Series2FuelDealerSupplierAdapter",
+            // S3 (Agent S3, universal business campaign 2026-11-17): the
+            // household vertical slice orchestrator and its scripted
+            // purchase executor are test-driven slice scaffolding. Both
+            // are constructed only by HouseholdVerticalSliceTests and
+            // HouseholdVerticalSlicePhaseHTests, never by production code.
+            // ScriptedPurchaseExecutor is the HF-5 test double superseded
+            // in production by EmbodiedPurchaseExecutor (see its doc
+            // comment); the slice keeps it so the HF-5 chain stays pinned
+            // without the real journey/ledger machinery.
+            "HouseholdVerticalSlice", "ScriptedPurchaseExecutor",
         };
 
         // Mirror of UnwiredSystemsRegistryTests.CandidateTypes (hand-audited,
@@ -435,6 +445,145 @@ namespace LandLedgers.EditorTests.Integration
             "ThreeBusinessFuelSaleResult", "ThreeBusinessSliceRunReport",
             // Read models (wired EnterpriseValuationReadModel):
             "EnterpriseValuationResult",
+            // S3 (Agent S3, universal business campaign 2026-11-17): four
+            // types with genuine same-directory production consumers, so
+            // the scan's direct-name rule cannot see them — feature-internal
+            // on the SleepingPlaceReservation precedent (same-directory
+            // production callers count as feature-internal).
+            // HouseholdConstructionMaterialSource and
+            // HouseholdInventoryToolCustody are constructed by
+            // SimulationDrivers.CreateHouseholdConstructionMaterialSource
+            // (line 2251) and CreateHouseholdToolCustody (line 2259) in
+            // Orchestration/Systems, the same directory as their declaring
+            // file ProductionRuntimeAdapters.cs; the material source is
+            // wired into the construction driver
+            // (driver.MaterialSourceByHousehold, line 2820) and the custody
+            // is consumed at line 2914. ConstructionFreightPlanFactory is
+            // constructed by SimulationDrivers.TryBindConstructionProcurement
+            // (line 2395, same directory as its declaring file) — G1 owns
+            // the freight-chain audit and should revisit this entry if the
+            // factory's wiring changes. HouseholdCleanlinessRecord is the
+            // data carrier of the cleanliness feature, constructed and
+            // consumed inside HouseholdCleanlinessTracker.cs and held by
+            // DomesticLaborDriver.cs (Domains/Population, the same
+            // directory as its declaring file).
+            "HouseholdConstructionMaterialSource", "HouseholdInventoryToolCustody",
+            "ConstructionFreightPlanFactory", "HouseholdCleanlinessRecord",
+            // S3 continued (Agent S3, universal business campaign
+            // 2026-11-17): the remaining 70 unaccounted types from the
+            // same scan run, classified cluster by cluster from a
+            // per-type evidence pass (evidence table:
+            // /home/hatch/ll-ubc-s3-pass9-evidence2.txt — declaring file,
+            // same-directory production consumers, test consumers).
+            // Every type below is a record, DTO, result, inputs, params,
+            // policy, book, register, or component consumed inside its
+            // own feature — none has an out-of-directory production
+            // caller, and none is a standalone unwired system (those
+            // belong in Docs/UnwiredSystems.md, not here). Where the
+            // feature's entry runtime itself stays registered unwired
+            // (sawmill, blacksmith, lumber yard), the records follow
+            // the sawmill-cluster precedent already in this baseline.
+            // Population / household: HouseholdCleanlinessTracker is held
+            // as a field by DomesticLaborDriver; HouseholdErrandPlan is
+            // consumed by HouseholdErrandCoordinator; the food-charge
+            // records are the data of HouseholdFoodChargeReconciliation.
+            "HouseholdCleanlinessTracker", "HouseholdErrandPlan",
+            "HouseholdFoodChargeRecord", "WantChargeTotals", "DayFoodChargeSummary",
+            // Construction: the evaluation/loan-terms records are consumed
+            // by NpcConstructionDriver and NpcConstructionNeedEvaluator;
+            // the strand summary is consumed by NpcConstructionDriver.
+            "NpcConstructionEvaluation", "NpcConstructionLoanTerms",
+            "ConstructionProcurementStrandSummary",
+            // Generic business: the capability set is consumed by
+            // AcquisitionInterfaceModel, GenericBusinessFormation,
+            // GenericBusinessTemplates, and GenericBusinessUnityAdapter;
+            // the recipe detail types are its components (ProductionRecipe
+            // inputs/outputs/phases, substitutions consumed in-file).
+            // A1 owns the generic-business area and should revisit these
+            // entries if that feature's wiring changes.
+            "CapabilityFeasibilityInput", "GenericBusinessCapabilitySet",
+            "ProductionRecipeInput", "ProductionRecipeOutput",
+            "ProductionInputSubstitution", "ProductionRecipePhase",
+            "EquipmentPurchaseLine",
+            // Furniture purchase: the service is constructed by
+            // FurnitureStorePurchase, which also consumes the install
+            // handler and the purchase line; the vendor stock is the
+            // F-lane purchase flow's data, test-exercised.
+            "FurniturePurchaseLine", "FurniturePurchaseService",
+            "StoreFurnitureVendorStock", "FurniturePurchaseInstallHandler",
+            // Wheelwright: the build orders, recipes, spare-parts shelf,
+            // used-wagon records, and customer-account books are the
+            // working records of WheelwrightRuntime, which consumes or
+            // holds them (same directory); the customer-account terms
+            // are test-exercised.
+            "WheelwrightBuildRecipe", "WheelwrightBuildOrder",
+            "WheelwrightBuildOrderBook", "SparePartBatch",
+            "WheelwrightSparePartsShelf", "UsedWagonRecord",
+            "WheelwrightSettlementTerms", "WheelwrightCustomerAccount",
+            "WheelwrightAccountBook",
+            // Blacksmith repair queue: the quote/offer/plan/pickup/lien
+            // records and the priority policy are the data of
+            // RepairQueueEconomy.cs, test-exercised; the entry
+            // BlacksmithRuntime stays registered unwired (sawmill
+            // precedent).
+            "RepairQuotePartLine", "RepairQuoteOffer", "RepairShopDayPlan",
+            "RepairPriorityPolicy", "RepairPickupRecord", "ArtisanLienClaim",
+            // Boarding house: the boarder/room/bed/nightly/rent records
+            // are consumed by BoardingHouseShopRuntime,
+            // BoardingLodgingBridge, BoardingHouseReservations, and
+            // BoardingHouseBoarderRegister (same directory);
+            // BoardingBedAssignment is the room.OccupiedBeds element,
+            // consumed in-file.
+            "BoarderRecord", "BoardingRoom", "BoardingBedAssignment",
+            "BoardingNightlyPlacement", "RentArrearsRecord", "EvictionNotice",
+            // Lumber yard: the contractor-credit, cull-disposal,
+            // delivery, hardware-lot, project-stockpile, and pricing
+            // records are consumed by LumberYardShopRuntime,
+            // LumberYardRetailDelivery, and LumberYardConstructionSales
+            // (same directory) or in-file; the entry LumberYardShopRuntime
+            // stays registered unwired (sawmill precedent). G1 owns the
+            // lumber-chain audit and should revisit these entries if
+            // that feature's wiring changes.
+            "LumberYardContractorAccount", "LumberYardContractorInvoice",
+            "LumberYardContractorInvoiceLine", "LumberYardContractorLedger",
+            "LumberYardSettlementTerms", "LumberYardCullDisposalRecord",
+            "LumberYardCullDisposalRegister", "LumberYardDeliveryOrder",
+            "LumberYardDeliveryPolicy", "LumberYardDeliveryRegister",
+            "LumberYardHardwareDispenseLine", "LumberYardHardwareStock",
+            "LumberYardProjectStockpile", "LumberYardEarmarkEvent",
+            "LumberYardGradePriceEntry",
+            // Carpentry: the supplies-purchase inputs/result are the data
+            // of CarpentrySuppliesPurchase, test-exercised.
+            "CarpentrySuppliesPurchaseInputs", "CarpentrySuppliesPurchaseResult",
+            // Logging: the log-lot custody record is consumed by
+            // LoggingOperationRuntime (same directory).
+            "LogLotCustodyRecord",
+            // Retail: the lost-sale event is the retail feature's data,
+            // test-exercised.
+            "LostSaleEvent",
+            // Buildings authoring: the floor/polygon authoring records
+            // are the data of BuildingFootprintAuthority; the floor
+            // record is also referenced by the Editor-subdirectory
+            // BuildingPrefabAuthoringValidator (same feature by the
+            // scan's directory rule); both are test-exercised.
+            "InteriorFloorAuthoring", "InteriorPolygonAuthoring",
+            // Financing / contents: the contents-negotiation request and
+            // result are consumed by NpcPropertyAcquisition (same
+            // directory).
+            "NpcContentsBuyerRequest", "NpcContentsNegotiationResult",
+            // Persistence DTOs: the same precedent as the Pass9*Dto
+            // cluster already in this baseline — save DTOs of the wired
+            // save paths, consumed in-file (Series2Pass9Save) or by
+            // SaveDtos.cs (EntityIdCursorDto, same directory).
+            "EntityIdCursorDto", "Pass9HandheldContainerDto",
+            "Pass9HandheldContainerEntryDto", "Pass9PersonHandOccupancyDto",
+            "Pass9WholesaleShelfLotDto",
+            // Regional: the supplier cash row is consumed by
+            // RegionalSupplierAdapter (same directory).
+            "RegionalSupplierCashRow",
+            // Furniture valuation: the contents split is the valuation
+            // feature's data, test-exercised.
+            "StructureContentsSplit",
         };
 
         private static string ResolveRepoRoot()

@@ -7,16 +7,17 @@ The first narrow startup-recovery checkpoint is published, but the active Unity-
 ## A. Source state
 
 - Branch: `codex/expanded-unity-verification-2026-11-16`
-- Published recovery checkpoint: `a81f9264d4bd04b2fdb6cbe51e2a0468af68a034` (`Fail closed on invalid development town startup`). Remote `origin` was queried directly with `git ls-remote`; it returned the same SHA.
+- Published recovery checkpoint: `a81f9264d4bd04b2fdb6cbe51e2a0468af68a034` (`Fail closed on invalid development town startup`).
+- Published handoff/source checkpoint: `a18e842bca197d5b436e0c7ceed939284c2fe321` on `codex/expanded-unity-verification-2026-11-16`. Remote `origin` was queried directly with `git ls-remote`; it returned this exact SHA. This branch is based on the published Muse integration above.
 - Parent Muse integration: `muse/expanded-integration-2026-11-16` at `cbd8e2ce1b901919f908f54a9e23318bc5189734`, previously published and verified.
 - Owner-local modified scene/prefab/font/terrain metadata and large local asset additions remain outside the commit. They were not staged. The Main Scene remains dirty and unsaved.
-- This document and the playtest utility/protocol are not yet part of the published checkpoint until their follow-up commit is verified.
+- The protocol, schema, run index, Editor utility, and this handoff are included in `a18e842b`.
 
 ## B. Unity status
 
 - Editor: Unity `6000.4.2f1`, project `F:\Land & Ledgers`; original Editor was left running, currently responsive in Edit Mode, not compiling, not in Play Mode. Main Scene remains dirty; it was not saved, reloaded or discarded.
 - Latest source compile completed without errors (`failed=false`, `errors=[]`).
-- Focused EditMode: configuration validation 2/2 passed; startup generation-gate 1/1 passed. `DevelopmentTownConfigurationTests`: 2 passed / 3 failed because Unity's loaded asset omitted serialized entries present on disk (details below).
+- Focused EditMode: `DevelopmentTownConfigurationValidationTests` 2/2 passed; `TownWorldStartupGenerationGateTests` 1/1 passed. The combined `DevelopmentTownConfiguration` name filter returned 8 total: 5 passed / 3 failed. The three `DevelopmentTownConfigurationTests` failures are because Unity's loaded asset omitted serialized entries present on disk (details below).
 - Prior full suite evidence from the expanded integration review: 8071 total, 7906 passed, 165 failed, 0 skipped. The 165 are **unclassified**, not presumed baseline failures. The older Muse Roslyn count is not Unity Test Runner evidence.
 - No new PlayMode run or 60-day simulation was performed in this recovery. The owner-provided short-playtest log summary had no attached raw export path. Previous full Console export is at `F:\Land & Ledgers Verification Evidence\Unity-Editor-full-console-expanded-integration-2026-11-16.log` (133,176,037 bytes; SHA-256 `B687565F0C8BBC38124970E1AF23375F63EB0CAB9A4980B7EDA8E07E46D70EC8`).
 - The Unity AI Assistant relay/bus connection failure is classified as tooling/transport evidence, not a gameplay defect. It is separate from the confirmed bootstrap failure.
@@ -38,7 +39,7 @@ Regression evidence: invalid/valid configuration tests 2/2; shell-generation pol
 - Protocol: `Reports/Playtests/PLAYTEST_60_DAY_PROTOCOL.md`
 - Run index: `Reports/Playtests/PLAYTEST_RUN_INDEX.md`
 - Diagnostic schema: `Reports/Playtests/PLAYTEST_DIAGNOSTIC_SCHEMA.md`
-- Editor utility: `Assets/Scripts/Editor/Playtests/Playtest60DayRunnerWindow.cs`, menu `Land & Ledgers > Diagnostics > 60-Day Playtest Runner`.
+- Editor utility: `Assets/Scripts/Editor/Playtests/Playtest60DayRunnerWindow.cs`, menu `Land & Ledgers > Diagnostics > 60-Day Playtest Runner`. It compiled in the original Editor with no errors.
 - The runner uses the real TimeManager/day event, requires deterministic existing town seed settings, gates startup before counting day 1, writes raw timestamped Unity logs plus JSONL, CSV, entity snapshots, final metadata/report, and marks unavailable data as `NOT_CAPTURED`.
 - No 60-day run has been completed. No run ID or console checksum exists. Run artifacts are not invented.
 

@@ -366,6 +366,7 @@ namespace LandLedgers.Orchestration.Systems
         private readonly HashSet<string> sawmillTransferWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> hardwareTransferWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> hardwareImportWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> glassImportWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> sawmillProductionWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> fellingWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> logHaulWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
@@ -2568,6 +2569,106 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// F1 (workstream F, glass leg): the lumber yard's daily
+        /// window-glass import drive. Mirrors the sawmill transfer
+        /// drive's yard resolution (Pass 9 primary, hub fallback) and
+        /// the D3 nails import drive: the driver receives due imports
+        /// first, then evaluates the covered-stock policy — a
+        /// replenishment arriving today never triggers a second order
+        /// the same day. The yard resolves Pass 9 primary, hub fallback,
+        /// as in the sawmill drive. The cash port binds fresh each drive
+        /// from the yard business runtime state; when the yard has no
+        /// runtime state the port stays null and the driver orders on
+        /// honest credit only, never on cash it cannot prove. The
+        /// liability ledger and id registry come from the hub (always
+        /// available).
+        /// </summary>
+        private void DriveLumberYardGlassImports(int absoluteDayIndex)
+        {
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogGlassImportWarningOnce("no-business-runtime",
+                    "Lumber yard glass import skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogGlassImportWarningOnce("no-pass9",
+                    "Lumber yard glass import skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            BusinessInstanceState yardBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.LumberYard)
+                {
+                    if (yardBusiness == null) yardBusiness = business;
+                    else LogGlassImportWarningOnce("second-yard",
+                        $"Second LumberYard business '{business.InstanceId}' is unwired: the glass import orders for the first yard only.");
+                }
+            }
+
+            LumberYardShopRuntime yard = pass9.LumberYard;
+            if (yard == null)
+            {
+                if (yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId))
+                {
+                    LogGlassImportWarningOnce("no-yard",
+                        "Lumber yard glass import skipped: no formed LumberYard business is present in the shared runtime.");
+                    return;
+                }
+
+                LogGlassImportWarningOnce("holder-fallback-yard",
+                    $"Lumber yard glass import: Pass 9 yard holder is null; resolving the formed LumberYard '{yardBusiness.InstanceId}' through the hub (empty runtime until the bootstrapper owns it).");
+                yard = hub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+                if (yard == null)
+                {
+                    LogGlassImportWarningOnce("hub-no-yard",
+                        "Lumber yard glass import skipped: hub returned no yard runtime.");
+                    return;
+                }
+            }
+
+            LumberYardGlassImportDriver driver = hub.LumberYardGlassImportDriver;
+            if (driver == null)
+            {
+                LogGlassImportWarningOnce("no-driver",
+                    "Lumber yard glass import skipped: no lumber yard glass import driver is registered in the hub.");
+                return;
+            }
+
+            if (yardBusiness?.RuntimeState != null)
+            {
+                driver.YardCash = new Series2BusinessRuntimeCashPort(yardBusiness.RuntimeState);
+            }
+            else
+            {
+                driver.YardCash = null;
+                LogGlassImportWarningOnce("no-yard-cash",
+                    "Lumber yard glass import: no formed LumberYard business runtime state — cash orders are unavailable and the driver orders on honest credit only.");
+            }
+            driver.LiabilityLedger = hub.Liabilities;
+            driver.IdRegistry = hub.Ids;
+
+            string summary = driver.Drive(absoluteDayIndex);
+            Debug.Log($"[GlassImport] Day {absoluteDayIndex}: {summary}", this);
+        }
+
+        private void LogGlassImportWarningOnce(string key, string message)
+        {
+            string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
+            if (glassImportWarningsLogged.Add(warningKey)) Debug.LogWarning("[GlassImport] " + message, this);
+        }
+
+        /// <summary>
         /// F7 yard-transfer wiring: runs one open transfer job once and
         /// handles its refusal. An intake refusal leaves the job Planned
         /// and the retry safe (note 100 Q2); a failed job is reconciled
@@ -3647,6 +3748,15 @@ namespace LandLedgers.Orchestration.Systems
         {
             if (driver == null || hub == null) return;
             hub.RegisterBlacksmithCoalImportDriver(driver);
+
+        /// F1 (workstream F, glass leg): registers the lumber yard
+        /// window-glass import driver with the hub. Forwarder only — no
+        /// BindBusiness-style side effects (note 100 Q6 boundary).
+        /// </summary>
+        public void RegisterLumberYardGlassImportDriver(LumberYardGlassImportDriver driver)
+        {
+            if (driver == null || hub == null) return;
+            hub.RegisterLumberYardGlassImportDriver(driver);
         }
 
         // CAMPAIGN-B (DEF-042): resolve the general-store business a shopping
@@ -5421,6 +5531,11 @@ namespace LandLedgers.Orchestration.Systems
             // receive due imports, then order when the covered-stock
             // signal fires.
             DriveBlacksmithCoalImports(absoluteDayIndex);
+            // F1 (workstream F, glass leg): the day's glass import work
+            // runs with the yard's daily intake, before retail deliveries
+            // read yard stock — a delivery landing today is on the
+            // shelves before anything downstream prices or sells it.
+            DriveLumberYardGlassImports(absoluteDayIndex);
             // C-6: a retail sale's lumber travels by the real freight
             // chain the day after the buyer-side flow queues it — the
             // day's sawn lumber is already in the yard (above).

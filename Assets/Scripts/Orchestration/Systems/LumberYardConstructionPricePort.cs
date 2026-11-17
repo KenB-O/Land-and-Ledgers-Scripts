@@ -26,9 +26,12 @@ namespace LandLedgers.Orchestration.Systems
     /// already on the lot, the first stocked lot in FIFO order, which is
     /// the order the yard itself withdraws in. A lot with no readable
     /// unit cost, or no stocked hardware lot at all, refuses with minus
-    /// one rather than inventing a price. Masonry, paint, glass, roofing
+    /// one rather than inventing a price. Glass is priced the same way,
+    /// from the first stocked glass lot (import cost, 25c per pane);
+    /// no stocked glass lot means no price, so a glazed commission is
+    /// refused until the import lands. Masonry, paint, roofing
     /// and anything else return minus one; they are never mapped to
-    /// lumber or hardware.
+    /// lumber, hardware, or glass.
     ///
     /// Never moves money. Never creates a lot, never seeds stock, never
     /// calls the bootstrap endowment. Never touches the category level
@@ -59,6 +62,10 @@ namespace LandLedgers.Orchestration.Systems
             {
                 return FirstStockedHardwareUnitCost();
             }
+            if (requirement.MaterialKind == ConstructionMaterialKind.Glass)
+            {
+                return FirstStockedGlassUnitCost();
+            }
             return -1;
         }
 
@@ -71,6 +78,22 @@ namespace LandLedgers.Orchestration.Systems
             foreach (LumberYardHardwareLot lot in yard.HardwareStock.Lots)
             {
                 if (lot == null || lot.HardwareUnits <= 0) continue;
+                return lot.UnitCostCents <= 0 ? -1 : lot.UnitCostCents;
+            }
+            return -1;
+        }
+
+        /// <summary>F1: unit cost of the first stocked glass lot, in the
+        /// order the yard withdraws in. Minus one when no stocked lot
+        /// carries a readable unit cost — no glass in the yard means no
+        /// glass price, and a glazed commission is refused until the
+        /// import lands.</summary>
+        private int FirstStockedGlassUnitCost()
+        {
+            if (yard.GlassStock == null || yard.GlassStock.Lots == null) return -1;
+            foreach (LumberYardGlassLot lot in yard.GlassStock.Lots)
+            {
+                if (lot == null || lot.GlassPanes <= 0) continue;
                 return lot.UnitCostCents <= 0 ? -1 : lot.UnitCostCents;
             }
             return -1;

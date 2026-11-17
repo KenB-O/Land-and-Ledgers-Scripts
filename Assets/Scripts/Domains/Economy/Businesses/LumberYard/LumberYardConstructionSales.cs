@@ -22,6 +22,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         public int UnitPriceCents;
         public List<LumberYardLumberDispenseLine> LumberLines = new List<LumberYardLumberDispenseLine>();
         public List<LumberYardHardwareDispenseLine> HardwareLines = new List<LumberYardHardwareDispenseLine>();
+        public List<LumberYardGlassDispenseLine> GlassLines = new List<LumberYardGlassDispenseLine>();
 
         public LumberYardMaterialSaleLine() { }
 
@@ -39,6 +40,11 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             {
                 if (line == null) continue;
                 lines.Add($"{line.UnitsTaken} {line.HardwareKind} from yard lot {line.LotId}: {line.ProvenanceChain}");
+            }
+            foreach (var line in GlassLines)
+            {
+                if (line == null) continue;
+                lines.Add($"{line.UnitsTaken} glass panes from yard lot {line.LotId}: {line.ProvenanceChain}");
             }
             return lines;
         }

@@ -258,6 +258,15 @@ namespace LandLedgers.EditorTests.Integration
             // AssetAppraisalResult / AssetSaleRecord above. The signal
             // never orders; the driver reads it and decides.
             "LumberYardHardwareReorderPolicy", "LumberYardHardwareReorderSignal",
+            // F1 (2026-11-17): "LumberYardGlassReorderPolicy" is the
+            // yard's window-glass reorder policy and
+            // "LumberYardGlassReorderSignal" is its data-only signal —
+            // both consumed inside the yard glass feature by
+            // LumberYardGlassImportDriver (the wired driver, registered
+            // in the hub and driven by SimulationDrivers), the same
+            // precedent as the nails policy/signal above. The signal
+            // never orders; the driver reads it and decides.
+            "LumberYardGlassReorderPolicy", "LumberYardGlassReorderSignal",
             "ManagerActivityLog", "ManagerActivityRecord", "ManagerActivitySaveDto", "ManagerBorrowExecutor",
             "ManagerDecisionExecutionLedger", "ManagerExecutedActionRecord", "ManagerExecutionContext", "ManagerOpenRecruitmentExecutor",
             "ManagerOrderMaintenanceExecutor", "ManagerPendingRequest", "ManagerPriceChangeExecutor", "ManagerProcureExecutor",
@@ -558,6 +567,14 @@ namespace LandLedgers.EditorTests.Integration
             "WheelwrightSparePartsShelf", "UsedWagonRecord",
             "WheelwrightSettlementTerms", "WheelwrightCustomerAccount",
             "WheelwrightAccountBook",
+            // F1 (2026-11-17): "WindowGlassRequirements" is the glazed
+            // build's glass registry — window counts and the glass
+            // requirement builder — consumed inside the Construction
+            // feature by ConstructionProjectExecutor,
+            // NpcConstructionCommissioner and NpcConstructionDriver
+            // (same directory), the same precedent as the Construction
+            // feature cluster above.
+            "WindowGlassRequirements",
             // Blacksmith repair queue: the quote/offer/plan/pickup/lien
             // records and the priority policy are the data of
             // RepairQueueEconomy.cs, test-exercised; the entry
@@ -574,8 +591,8 @@ namespace LandLedgers.EditorTests.Integration
             "BoarderRecord", "BoardingRoom", "BoardingBedAssignment",
             "BoardingNightlyPlacement", "RentArrearsRecord", "EvictionNotice",
             // Lumber yard: the contractor-credit, cull-disposal,
-            // delivery, hardware-lot, project-stockpile, and pricing
-            // records are consumed by LumberYardShopRuntime,
+            // delivery, hardware-lot and glass-lot, project-stockpile,
+            // and pricing records are consumed by LumberYardShopRuntime,
             // LumberYardRetailDelivery, and LumberYardConstructionSales
             // (same directory) or in-file; the entry LumberYardShopRuntime
             // stays registered unwired (sawmill precedent). G1 owns the
@@ -587,6 +604,7 @@ namespace LandLedgers.EditorTests.Integration
             "LumberYardCullDisposalRegister", "LumberYardDeliveryOrder",
             "LumberYardDeliveryPolicy", "LumberYardDeliveryRegister",
             "LumberYardHardwareDispenseLine", "LumberYardHardwareStock",
+            "LumberYardGlassDispenseLine", "LumberYardGlassStock",
             "LumberYardProjectStockpile", "LumberYardEarmarkEvent",
             "LumberYardGradePriceEntry",
             // Carpentry: the supplies-purchase inputs/result are the data

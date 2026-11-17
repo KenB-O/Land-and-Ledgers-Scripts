@@ -10,7 +10,8 @@ namespace LandLedgers.Economy
     {
         Lumber = 0,
         Nails = 1,
-        Labor = 2
+        Labor = 2,
+        Glass = 3
     }
 
     public enum ConstructionProjectKind

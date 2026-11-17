@@ -2364,6 +2364,7 @@ namespace LandLedgers.FirstLedger
             }
 
             foreach (string diagnostic in systemsHub.LoadHardwareDriverSectionsFromSaveDto(systems))
+            foreach (string diagnostic in systemsHub.LoadGlassDriverSectionFromSaveDto(systems))
             {
                 Debug.LogWarning($"[SaveLoad] {diagnostic}");
             }
@@ -2691,6 +2692,68 @@ namespace LandLedgers.FirstLedger
             // D3 (F-D2-2): bind the nails import driver into the daily
             // flow. Runs on NewGame and restore alike.
             ConfigureLumberYardHardwareImportWiring(yardBusiness, pass9);
+
+            // F1 (workstream F, glass leg): window glass arrives by
+            // import — register the material ("glass-panes", Pittsburgh
+            // glassworks via railhead) so the import driver has a
+            // legitimate route to order through. The registration is
+            // idempotent; the import driver's constructor ensures it
+            // again defensively.
+            var glassImportDiag = new List<string>();
+            LumberYardSupply.EnsureGlassImportable(glassImportDiag);
+            foreach (string line in glassImportDiag) Debug.Log($"[LumberYardRuntime] {line}", this);
+
+            // F1: bind the glass import driver into the daily flow.
+            // Runs on NewGame and restore alike.
+            ConfigureLumberYardGlassImportWiring(yardBusiness, pass9);
+        }
+
+        /// <summary>
+        /// F1 (workstream F, glass leg): binds the lumber yard
+        /// window-glass import driver. Mirrors D3's
+        /// ConfigureLumberYardHardwareImportWiring: the hub holds the
+        /// single shared driver, the bootstrapper constructs it when
+        /// absent (against the live yard runtime) and registers it on
+        /// SimulationDrivers for the daily drive. Runs on NewGame and
+        /// restore alike (called from ConfigureLiveLumberYardSaveOwner).
+        /// </summary>
+        private void ConfigureLumberYardGlassImportWiring(BusinessInstanceState yardBusiness, Series2Pass9SaveState pass9)
+        {
+            if (yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId) || pass9 == null)
+            {
+                Debug.LogWarning("[GlassImport] Wiring was not created: no authored LumberYard business instance, or no Pass 9 state.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[GlassImport] Wiring was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                Debug.LogWarning("[GlassImport] Wiring was not created: SimulationDrivers is missing.", this);
+                return;
+            }
+
+            LumberYardShopRuntime liveYardRuntime = systemsHub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+            if (liveYardRuntime == null)
+            {
+                Debug.LogWarning("[GlassImport] Wiring was not created: hub returned no yard runtime.", this);
+                return;
+            }
+
+            LumberYardGlassImportDriver driver = systemsHub.LumberYardGlassImportDriver;
+            if (driver == null)
+            {
+                driver = new LumberYardGlassImportDriver(liveYardRuntime, new List<string>());
+            }
+            drivers.RegisterLumberYardGlassImportDriver(driver);
+
+            Debug.Log($"[GlassImport] Bootstrap wired the lumber yard glass import driver for yard '{yardBusiness.InstanceId}'.", this);
         }
 
         // D1: mirrors ConfigureLiveLumberYardSaveOwner for the sawmill.

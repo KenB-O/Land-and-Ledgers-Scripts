@@ -358,6 +358,19 @@ namespace LandLedgers.Economy
         /// <summary>Phase D: one work package per design phase, in sequence order.</summary>
         public string CreateWorkPackages(ConstructionProject project, BuildingDesign design, int dayIndex, List<string> diag)
         {
+            return CreateWorkPackages(project, design, false, dayIndex, diag);
+        }
+
+        /// <summary>
+        /// F1: one work package per design phase, in sequence order, plus
+        /// — for a GLAZED build only — the window-glass requirement on
+        /// the openings package. Glass is never a universal requirement:
+        /// glazedWindows false builds exactly the unglazed packages, and
+        /// a glazed build refuses loudly when the design has no openings
+        /// phase or no recorded window count, rather than guessing.
+        /// </summary>
+        public string CreateWorkPackages(ConstructionProject project, BuildingDesign design, bool glazedWindows, int dayIndex, List<string> diag)
+        {
             diag = diag ?? diagnostics;
             if (project == null || design == null)
                 return "ConstructionProjectExecutor.CreateWorkPackages: project and design required.";
@@ -369,6 +382,7 @@ namespace LandLedgers.Economy
             var ordered = new List<BuildingDesignPhase>(design.Phases ?? new List<BuildingDesignPhase>());
             ordered.Sort((a, b) => a.Sequence.CompareTo(b.Sequence));
             string previousPackageId = null;
+            WorkPackage openingsPackage = null;
             foreach (BuildingDesignPhase phase in ordered)
             {
                 if (phase == null) continue;
@@ -386,9 +400,19 @@ namespace LandLedgers.Economy
                 if (previousPackageId != null) package.DependsOnPackageIds.Add(previousPackageId);
                 project.WorkPackages.Add(package);
                 previousPackageId = package.PackageId;
+                if (string.Equals(package.PhaseName, WindowGlassRequirements.OpeningsPhaseName, StringComparison.Ordinal))
+                    openingsPackage = package;
+            }
+            if (glazedWindows)
+            {
+                if (openingsPackage == null)
+                    return $"ConstructionProjectExecutor.CreateWorkPackages: design '{design.DesignId}' has no '{WindowGlassRequirements.OpeningsPhaseName}' phase — a glazed build cannot place its glass, refused rather than guessed.";
+                string glassProblem = WindowGlassRequirements.AppendToOpeningsPackage(openingsPackage, design.DesignId, diag);
+                if (glassProblem != null)
+                    return "ConstructionProjectExecutor.CreateWorkPackages: " + glassProblem;
             }
             project.Status = ConstructionProjectStatus.WorkPackagesCreated;
-            diag.Add($"ConstructionProjectExecutor: project '{project.ProjectId}' — {project.WorkPackages.Count} work package(s) created from design '{design.DesignId}'.");
+            diag.Add($"ConstructionProjectExecutor: project '{project.ProjectId}' — {project.WorkPackages.Count} work package(s) created from design '{design.DesignId}'{(glazedWindows ? " (glazed windows)" : string.Empty)}.");
             return null;
         }
 

@@ -25,6 +25,49 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         public const string HardwareImportMaterialId = "nails-hardware";
 
         /// <summary>
+        /// F1: the import material id for window glass panes
+        /// (LumberYardGlassImportDriver orders this id).
+        /// </summary>
+        public const string GlassImportMaterialId = "glass-panes";
+
+        /// <summary>
+        /// F1: registers window glass panes as an importable material
+        /// (EQU-1 extension path, the same honest pattern as the
+        /// hardware registration above). The origin is the Pittsburgh
+        /// glassworks, via the same railhead the town already uses for
+        /// iron stock and hardware — Pittsburgh was a glassmaking centre
+        /// alongside its ironworks, and no local glassmaking industry is
+        /// created for this pass.
+        ///
+        /// Price 25c per pane is a PROVISIONAL calibration for the owner
+        /// to correct. Anchor: BLS Bulletin 440 (Wholesale Prices
+        /// 1890-1926) carries "window glass, single, B, f.o.b. works"
+        /// per 50-square-foot box; at 1890s wholesale of roughly $2-3 a
+        /// box a 10x12 light (0.83 sq ft) runs ~3-5c at the works, and a
+        /// fragile manufactured pane landed 220 miles by rail, with
+        /// breakage, handling and yard margin, lands well above works
+        /// price — inside the game's band (lumber board 40c, nails unit
+        /// 30c import, simple hardware 45c yard). Transit 14 days and
+        /// distance 220 mi match the hardware leg on the same corridor.
+        /// </summary>
+        public static void EnsureGlassImportable(List<string> diag)
+        {
+            string problem = ImportCatalog.RegisterMaterial(new ImportMaterial(
+                GlassImportMaterialId, "Window glass panes (one pane = one window light)",
+                "Pittsburgh glassworks, via railhead", 220, 14, 25));
+            if (problem != null && diag != null)
+            {
+                diag.Add($"LumberYardSupply: glass import registration: {problem}");
+            }
+            else if (diag != null)
+            {
+                ImportMaterial material = ImportCatalog.Get(GlassImportMaterialId);
+                diag.Add($"LumberYardSupply: glass importable — '{material.DisplayName}' from "
+                    + $"{material.OriginName} ({material.DistanceMiles} mi, {material.TransitDays} days transit).");
+            }
+        }
+
+        /// <summary>
         /// Registers nails/simple hardware as an importable material (EQU-1
         /// extension path). The origin matches the blacksmith's iron source
         /// (Pittsburgh ironworks, via railhead) — the same trade corridor the

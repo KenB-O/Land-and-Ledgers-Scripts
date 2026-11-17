@@ -106,6 +106,8 @@ namespace LandLedgers.Persistence
         public BlacksmithIronImportDriver.BlacksmithIronImportDriverSaveDto blacksmithIronImportDriver = new();
         /// <summary>D5 (D4 follow-up): the smith's forge-coal import driver — one shared instance.</summary>
         public BlacksmithCoalImportDriver.BlacksmithCoalImportDriverSaveDto blacksmithCoalImportDriver = new();
+        /// <summary>F1 (workstream F, glass leg): the lumber yard window-glass import driver — one shared instance.</summary>
+        public LumberYardGlassImportDriver.LumberYardGlassImportDriverSaveDto lumberYardGlassImportDriver = new();
         public NpcFormationAssetRegisterSaveDto npcFormationAssets = new();
         public List<NpcBusinessLifeRecordSaveDto> npcBusinessLifecycle = new();
         public NpcBusinessInvestigationSaveDto npcBusinessInvestigation = new();

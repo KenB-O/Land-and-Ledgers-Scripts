@@ -12,7 +12,8 @@ namespace LandLedgers.Economy
     /// Every design is lumber plus door hardware: lumber and hardware are
     /// the only materials the production price port can price and the yard
     /// can supply (LumberYardConstructionPricePort returns -1 for masonry,
-    /// paint, glass, roofing and anything else). A design naming any other
+    /// paint, roofing and anything else — glass is priced from the first
+    /// stocked lot since F1). A design naming any other
     /// material refuses at evaluation — cost unknowable, never guessed —
     /// so no design here may invent a supplier or a price.
     ///

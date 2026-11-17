@@ -84,9 +84,13 @@ namespace LandLedgers.Economy.Equipment
             // registers nothing.
             var hires = new List<(DevelopmentTownConfiguration.BusinessEmployeeDefinition entry, int personId, string employmentId)>();
             var seenPersons = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (DevelopmentTownConfiguration.BusinessEmployeeDefinition entry in configuration.OpeningEmployees)
+            // K1: direct owner-record iteration. The deleted OpeningEmployees
+            // view flattened each business's opening.employees; the owning
+            // business is already resolved above, so iterate its employees
+            // directly with the same null guard.
+            foreach (DevelopmentTownConfiguration.BusinessEmployeeDefinition entry in business.opening?.employees ?? Array.Empty<DevelopmentTownConfiguration.BusinessEmployeeDefinition>())
             {
-                if (entry == null || !string.Equals(entry.businessKey, businessKey, StringComparison.OrdinalIgnoreCase)) continue;
+                if (entry == null) continue;
                 if (string.IsNullOrWhiteSpace(entry.personKey) || string.IsNullOrWhiteSpace(entry.role)
                     || entry.weeklyWageCents <= 0)
                 {

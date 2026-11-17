@@ -6410,7 +6410,7 @@ namespace LandLedgers.FirstLedger
         {
             report = string.Empty;
             error = string.Empty;
-            if (configuration == null || !configuration.TryGetBusiness(businessKey, out _)
+            if (configuration == null || !configuration.TryGetBusiness(businessKey, out DevelopmentTownConfiguration.BusinessDefinition slot)
                 || business?.RuntimeState == null || business.Owner == null
                 || business.Owner.OwnerKind != BusinessOwnerKind.Npc || definition == null)
             {
@@ -6418,14 +6418,12 @@ namespace LandLedgers.FirstLedger
                 return false;
             }
 
-            DevelopmentTownConfiguration.BusinessOpeningInventory businessInventory = null;
-            foreach (DevelopmentTownConfiguration.BusinessOpeningInventory candidate in configuration.OpeningInventory)
-                if (candidate != null && string.Equals(candidate.businessKey, businessKey, StringComparison.OrdinalIgnoreCase))
-                {
-                    businessInventory = candidate;
-                    break;
-                }
-            if (businessInventory == null)
+            // K1: direct owner-record iteration. The deleted OpeningInventory
+            // view projected this business's opening.inventory array; read
+            // it from the owning record. Empty inventory keeps the same
+            // no-stock report.
+            DevelopmentTownConfiguration.OpeningInventoryItem[] businessInventory = slot.opening?.inventory;
+            if (businessInventory == null || businessInventory.Length == 0)
             {
                 report = $"No opening inventory is configured for business '{businessKey}'; no goods were seeded.";
                 return true;
@@ -6445,7 +6443,7 @@ namespace LandLedgers.FirstLedger
                 if (items[i] != null && !string.IsNullOrWhiteSpace(items[i].ItemId)) itemById[items[i].ItemId] = items[i];
 
             var stockReport = new StringBuilder();
-            foreach (DevelopmentTownConfiguration.OpeningInventoryItem range in businessInventory.items ?? Array.Empty<DevelopmentTownConfiguration.OpeningInventoryItem>())
+            foreach (DevelopmentTownConfiguration.OpeningInventoryItem range in businessInventory)
             {
                 if (range == null || !configuration.TryResolveOpeningInventory(businessKey, range.itemId, scenarioSeed, out int quantity))
                 {

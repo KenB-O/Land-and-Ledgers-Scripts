@@ -1576,21 +1576,20 @@ namespace LandLedgers.FirstLedger
             if (enableDevelopmentTownConfiguration && configuration != null)
             {
                 int developmentSeed = townWorld?.Settings != null ? townWorld.Settings.seed : 0;
-                foreach (DevelopmentTownConfiguration.BusinessOpeningInventory entry in configuration.OpeningInventory)
+                // K1: direct owner-record iteration. The deleted
+                // OpeningInventory view projected the opening.inventory
+                // array of each business that had one.
+                foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
                 {
-                    if (entry == null || !configuration.TryGetBusiness(entry.businessKey, out DevelopmentTownConfiguration.BusinessDefinition slot))
-                    {
-                        Debug.LogError("[WorldStartup] Development opening inventory has an unresolved business key.", this);
-                        return;
-                    }
+                    if (slot == null || slot.opening?.inventory == null || slot.opening.inventory.Length == 0) continue;
                     BusinessType type = ToBusinessType(slot.operationId);
                     BusinessInstanceState business = FindDevelopmentBusiness(type);
                     if (business?.RuntimeState == null)
                     {
-                        Debug.LogError($"[WorldStartup] Opening inventory for '{entry.businessKey}' refused: the configured business runtime does not exist.", this);
+                        Debug.LogError($"[WorldStartup] Opening inventory for '{slot.key}' refused: the configured business runtime does not exist.", this);
                         return;
                     }
-                    if (!ScenarioOpeningStockEndowment.TryApply(configuration, entry.businessKey, business,
+                    if (!ScenarioOpeningStockEndowment.TryApply(configuration, slot.key, business,
                             storeRuntime?.StoreDefinition, developmentSeed,
                             timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
                             out string inventoryReport, out string inventoryError))
@@ -3315,6 +3314,35 @@ namespace LandLedgers.FirstLedger
         }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
+        // K1: direct owner-record iteration for household opening cash.
+        // The deleted HouseholdCashTargets view anchored each authored
+        // household on its first member with target openingCashCents, and
+        // returned the stored generated array when no households were
+        // authored. This local helper preserves both branches for the cash
+        // loops below without reintroducing a public derived view.
+        private static IEnumerable<DevelopmentTownConfiguration.HouseholdCashTarget> EnumerateHouseholdCashTargets(
+            DevelopmentTownConfiguration configuration)
+        {
+            if (configuration.Households.Count > 0)
+            {
+                foreach (DevelopmentTownConfiguration.HouseholdDefinition household in configuration.Households)
+                {
+                    if (household?.memberPersonKeys == null || household.memberPersonKeys.Length == 0) continue;
+                    yield return new DevelopmentTownConfiguration.HouseholdCashTarget
+                    {
+                        anchorPersonKey = household.memberPersonKeys[0],
+                        targetCashCents = household.openingCashCents,
+                    };
+                }
+            }
+            else
+            {
+                foreach (DevelopmentTownConfiguration.HouseholdCashTarget target in
+                    configuration.Settings.generatedHouseholdOpeningCash ?? Array.Empty<DevelopmentTownConfiguration.HouseholdCashTarget>())
+                    yield return target;
+            }
+        }
+
         private void ApplyDevelopmentTownOpeningCash()
         {
             DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
@@ -3328,13 +3356,16 @@ namespace LandLedgers.FirstLedger
                 foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
                 {
                     if (candidate?.RuntimeState == null) continue;
-                    foreach (DevelopmentTownConfiguration.BusinessCashTarget target in configuration.BusinessCashTargets)
+                    // K1: direct owner-record iteration. The deleted
+                    // BusinessCashTargets view projected one entry per
+                    // business from openingCashCents.
+                    foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
                     {
-                        if (!configuration.TryGetBusiness(target.businessKey, out DevelopmentTownConfiguration.BusinessDefinition slot)) continue;
+                        if (slot == null) continue;
                         int ownerId = configuration.ResolveRuntimePersonId(slot.ownerPersonKey);
                         if (candidate.BusinessType == ToBusinessType(slot.operationId)
-                            && candidate.Owner?.PersonId == ownerId && !businessesByKey.ContainsKey(target.businessKey))
-                            businessesByKey.Add(target.businessKey, candidate);
+                            && candidate.Owner?.PersonId == ownerId && !businessesByKey.ContainsKey(slot.key))
+                            businessesByKey.Add(slot.key, candidate);
                     }
                     if (candidate.BusinessType == BusinessType.GeneralStore) markerBusiness = candidate;
                 }
@@ -3350,22 +3381,23 @@ namespace LandLedgers.FirstLedger
             const string source = "DevelopmentTownConfiguration NewGame opening allocation";
             const string reason = "One-time scenario-authored starting cash balance for development testing liquidity";
 
-            foreach (DevelopmentTownConfiguration.BusinessCashTarget target in configuration.BusinessCashTargets)
+            // K1: direct owner-record iteration (see the build loop above).
+            foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
             {
-                if (!businessesByKey.TryGetValue(target.businessKey, out BusinessInstanceState business))
+                if (slot == null || !businessesByKey.TryGetValue(slot.key, out BusinessInstanceState business))
                 {
-                    Debug.LogError($"[DevelopmentFinance] Business '{target.businessKey}' allocation refused: its runtime is missing.", this);
+                    Debug.LogError($"[DevelopmentFinance] Business '{slot?.key}' allocation refused: its runtime is missing.", this);
                     return;
                 }
                 string allocationId = "small-prompt-8-development-cash:source=expanded-scenario:reason=opening-liquidity:business=" + business.BusinessType;
                 if (!business.RuntimeState.HasAppliedScenarioEndowment(allocationId)
-                    && business.RuntimeState.CurrentCashCents > target.targetCashCents)
+                    && business.RuntimeState.CurrentCashCents > slot.openingCashCents)
                 {
-                    Debug.LogError($"[DevelopmentFinance] {target.businessKey} allocation refused: actual starting balance {business.RuntimeState.CurrentCashCents}c exceeds configured target {target.targetCashCents}c.", this);
+                    Debug.LogError($"[DevelopmentFinance] {slot.key} allocation refused: actual starting balance {business.RuntimeState.CurrentCashCents}c exceeds configured target {slot.openingCashCents}c.", this);
                     return;
                 }
             }
-            foreach (DevelopmentTownConfiguration.HouseholdCashTarget target in configuration.HouseholdCashTargets)
+            foreach (DevelopmentTownConfiguration.HouseholdCashTarget target in EnumerateHouseholdCashTargets(configuration))
             {
                 int personId = configuration.ResolveRuntimePersonId(target.anchorPersonKey);
                 PersonState person = populationManager.State.GetPerson(personId);
@@ -3384,20 +3416,22 @@ namespace LandLedgers.FirstLedger
                 }
             }
 
-            foreach (DevelopmentTownConfiguration.BusinessCashTarget target in configuration.BusinessCashTargets)
+            // K1: direct owner-record iteration (see the build loop above).
+            foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
             {
-                BusinessInstanceState business = businessesByKey[target.businessKey];
+                if (slot == null) continue;
+                BusinessInstanceState business = businessesByKey[slot.key];
                 string allocationId = "small-prompt-8-development-cash:source=expanded-scenario:reason=opening-liquidity:business=" + business.BusinessType;
                 BusinessRuntimeState cash = business.RuntimeState;
                 if (cash.HasAppliedScenarioEndowment(allocationId)) continue;
                 int before = cash.CurrentCashCents;
-                int amount = target.targetCashCents - before;
+                int amount = slot.openingCashCents - before;
                 if (amount > 0) cash.AddCashCents(amount);
                 cash.RecordAppliedScenarioEndowment(allocationId);
-                Debug.Log($"[DevelopmentFinance] opening allocation applied: source='{source}', reason='{reason}', recipient='{target.businessKey}' ({business.InstanceId}), amount={amount}c, balance={before}->{cash.CurrentCashCents}c.", this);
+                Debug.Log($"[DevelopmentFinance] opening allocation applied: source='{source}', reason='{reason}', recipient='{slot.key}' ({business.InstanceId}), amount={amount}c, balance={before}->{cash.CurrentCashCents}c.", this);
             }
 
-            foreach (DevelopmentTownConfiguration.HouseholdCashTarget target in configuration.HouseholdCashTargets)
+            foreach (DevelopmentTownConfiguration.HouseholdCashTarget target in EnumerateHouseholdCashTargets(configuration))
             {
                 PersonState person = populationManager.State.GetPerson(configuration.ResolveRuntimePersonId(target.anchorPersonKey));
                 HouseholdLedger ledger = systemsHub.HouseholdLedgers.Get(person.householdId);
@@ -3462,28 +3496,32 @@ namespace LandLedgers.FirstLedger
             foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
             {
                 if (candidate?.RuntimeState == null) continue;
-                foreach (DevelopmentTownConfiguration.BusinessCashTarget target in configuration.BusinessCashTargets)
+                // K1: direct owner-record iteration. The deleted
+                // BusinessCashTargets view projected one entry per business
+                // from openingCashCents.
+                foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
                 {
-                    if (!configuration.TryGetBusiness(target.businessKey, out DevelopmentTownConfiguration.BusinessDefinition slot)) continue;
+                    if (slot == null) continue;
                     int ownerId = configuration.ResolveRuntimePersonId(slot.ownerPersonKey);
                     if (candidate.BusinessType == ToBusinessType(slot.operationId)
-                        && candidate.Owner?.PersonId == ownerId && !businessesByKey.ContainsKey(target.businessKey))
-                        businessesByKey.Add(target.businessKey, candidate);
+                        && candidate.Owner?.PersonId == ownerId && !businessesByKey.ContainsKey(slot.key))
+                        businessesByKey.Add(slot.key, candidate);
                 }
             }
 
             var authored = new OpeningEconomyAudit.AuthoredOpening();
             var actual = new OpeningEconomyAudit.ActualOpening();
-            foreach (DevelopmentTownConfiguration.BusinessCashTarget target in configuration.BusinessCashTargets)
+            foreach (DevelopmentTownConfiguration.BusinessDefinition slot in configuration.Businesses)
             {
-                authored.BusinessCashTargets[target.businessKey] = target.targetCashCents;
-                if (businessesByKey.TryGetValue(target.businessKey, out BusinessInstanceState business))
+                if (slot == null) continue;
+                authored.BusinessCashTargets[slot.key] = slot.openingCashCents;
+                if (businessesByKey.TryGetValue(slot.key, out BusinessInstanceState business))
                 {
-                    actual.BusinessCash[target.businessKey] = business.RuntimeState.CurrentCashCents;
+                    actual.BusinessCash[slot.key] = business.RuntimeState.CurrentCashCents;
                 }
             }
 
-            foreach (DevelopmentTownConfiguration.HouseholdCashTarget target in configuration.HouseholdCashTargets)
+            foreach (DevelopmentTownConfiguration.HouseholdCashTarget target in EnumerateHouseholdCashTargets(configuration))
             {
                 authored.HouseholdCashTargets[target.anchorPersonKey] = target.targetCashCents;
                 int personId = configuration.ResolveRuntimePersonId(target.anchorPersonKey);

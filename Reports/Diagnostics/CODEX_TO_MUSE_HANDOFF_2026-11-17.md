@@ -15,7 +15,7 @@ The first narrow startup-recovery checkpoint is published, but the active Unity-
 
 ## B. Unity status
 
-- Editor: Unity `6000.4.2f1`, project `F:\Land & Ledgers`; original Editor was left running, currently responsive in Edit Mode, not compiling, not in Play Mode. Main Scene remains dirty; it was not saved, reloaded or discarded.
+- Editor: Unity `6000.4.2f1`, project `F:\Land & Ledgers`; original Editor was left running, currently responsive in Edit Mode, not compiling, not in Play Mode. Final `scene list_open` reported `Assets/Main Scene.unity` loaded, active, `isDirty=false`; its on-disk file remains Git-modified by owner work. I did not save, reload or discard it.
 - Latest source compile completed without errors (`failed=false`, `errors=[]`).
 - Focused EditMode: `DevelopmentTownConfigurationValidationTests` 2/2 passed; `TownWorldStartupGenerationGateTests` 1/1 passed. The combined `DevelopmentTownConfiguration` name filter returned 8 total: 5 passed / 3 failed. The three `DevelopmentTownConfigurationTests` failures are because Unity's loaded asset omitted serialized entries present on disk (details below).
 - Prior full suite evidence from the expanded integration review: 8071 total, 7906 passed, 165 failed, 0 skipped. The 165 are **unclassified**, not presumed baseline failures. The older Muse Roslyn count is not Unity Test Runner evidence.

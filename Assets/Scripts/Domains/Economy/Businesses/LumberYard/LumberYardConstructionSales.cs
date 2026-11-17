@@ -58,6 +58,11 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         public bool IsConstructionSale;
         public int DayIndex;
         public List<LumberYardMaterialSaleLine> Lines = new List<LumberYardMaterialSaleLine>();
+        // G1: a voided sale stays in the history for audit — its units
+        // were returned to stock and its value refunded or un-billed —
+        // but it must never sell twice, invoice, or deliver again.
+        public bool Voided;
+        public int VoidedDayIndex = -1;
 
         public LumberYardSaleRecord() { }
 

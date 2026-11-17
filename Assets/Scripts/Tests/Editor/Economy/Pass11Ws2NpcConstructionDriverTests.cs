@@ -143,6 +143,26 @@ namespace LandLedgers.EditorTests.Economy
                 sale = s;
                 return null;
             }
+
+            // G1: voids a recorded sale in full — every unit returns to
+            // stock, the record stays for audit.
+            public readonly HashSet<string> VoidedSaleIds = new HashSet<string>();
+            public string TryVoidSale(ConstructionMaterialSale sale, int dayIndex, List<string> diagnostics, out int voidedCents)
+            {
+                voidedCents = 0;
+                if (sale == null || string.IsNullOrWhiteSpace(sale.SaleId)) return "no sale to void.";
+                if (!Sales.Contains(sale)) return $"FakeSalePort: unknown sale '{sale.SaleId}' — nothing to void.";
+                if (VoidedSaleIds.Contains(sale.SaleId)) return $"FakeSalePort: sale '{sale.SaleId}' is already voided.";
+                foreach (ConstructionMaterialSaleLine line in sale.Lines)
+                {
+                    if (line == null) continue;
+                    if (!Stock.ContainsKey(line.DisplayName)) Stock[line.DisplayName] = 0;
+                    Stock[line.DisplayName] += Math.Max(0, line.Units);
+                    voidedCents += line.LineTotalCents;
+                }
+                VoidedSaleIds.Add(sale.SaleId);
+                return null;
+            }
         }
 
         private sealed class FakeGoodsSupplier : IGoodsSupplier
@@ -500,25 +520,34 @@ namespace LandLedgers.EditorTests.Economy
             ConstructionProject project = driver.Commission(c.CabinRequest(), c.Parcels, 10, c.Diag);
             Assert.IsNotNull(project, string.Join("; ", c.Diag));
 
-            // The wagon cannot carry the load: the sale stands at the
-            // supplier, but nothing reaches the site and the package waits.
+            // The wagon cannot carry the load: the failed leg unwinds
+            // the sale (units back to the supplier, buyer refunded in
+            // full), nothing reaches the site, and the package waits.
             Assert.AreEqual(0, driver.Drive(11, c.Diag));
             Assert.AreEqual(WorkPackageStatus.Ready, project.WorkPackages[0].Status);
             Assert.AreEqual(1, c.SalePort.Sales.Count, "the failed leg bought once");
-            Assert.AreEqual(100000 - 2000, c.HouseholdLedger.GetBalanceCents());
+            Assert.IsTrue(c.SalePort.VoidedSaleIds.Contains(c.SalePort.Sales[0].SaleId),
+                "the failed sale was voided, not left standing");
+            Assert.AreEqual(100000, c.HouseholdLedger.GetBalanceCents());
+            Assert.AreEqual(0, c.YardPurse.ReadBalanceCents());
 
             // The next drive must NOT buy the materials a second time.
             Assert.AreEqual(0, driver.Drive(12, c.Diag));
             Assert.AreEqual(1, c.SalePort.Sales.Count, "a blind retry would double-buy the stranded lot");
 
             // An explicit retry decision with a wagon that can carry the load
-            // completes the package; the first lot stays supplier-held (the
-            // service semantic), it is neither lost nor double-staged.
+            // completes the package; the first sale stays voided (units
+            // returned, cash refunded) and the retry buys fresh — the lot
+            // is neither lost nor double-staged.
             port.WagonMassKg = 100000f;
             driver.AllowProcurementRetry(project, project.WorkPackages[0]);
             Assert.AreEqual(1, driver.Drive(13, c.Diag));
             Assert.AreEqual(WorkPackageStatus.MaterialsStaged, project.WorkPackages[0].Status);
             Assert.AreEqual(2, c.SalePort.Sales.Count);
+            Assert.AreEqual(1, c.SalePort.VoidedSaleIds.Count);
+            Assert.IsFalse(c.SalePort.VoidedSaleIds.Contains(c.SalePort.Sales[1].SaleId));
+            Assert.AreEqual(100000 - 2000, c.HouseholdLedger.GetBalanceCents());
+            Assert.AreEqual(2000, c.YardPurse.ReadBalanceCents());
         }
 
         [Test]

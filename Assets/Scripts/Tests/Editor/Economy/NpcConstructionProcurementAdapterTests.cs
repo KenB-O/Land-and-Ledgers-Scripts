@@ -87,6 +87,26 @@ namespace LandLedgers.EditorTests.Economy
                 sale = s;
                 return null;
             }
+
+            // G1: voids a recorded sale in full — every unit returns to
+            // stock, the record stays for audit.
+            public readonly HashSet<string> VoidedSaleIds = new HashSet<string>();
+            public string TryVoidSale(ConstructionMaterialSale sale, int dayIndex, List<string> diagnostics, out int voidedCents)
+            {
+                voidedCents = 0;
+                if (sale == null || string.IsNullOrWhiteSpace(sale.SaleId)) return "no sale to void.";
+                if (!Sales.Contains(sale)) return $"FakeSalePort: unknown sale '{sale.SaleId}' — nothing to void.";
+                if (VoidedSaleIds.Contains(sale.SaleId)) return $"FakeSalePort: sale '{sale.SaleId}' is already voided.";
+                foreach (ConstructionMaterialSaleLine line in sale.Lines)
+                {
+                    if (line == null) continue;
+                    if (!Stock.ContainsKey(line.DisplayName)) Stock[line.DisplayName] = 0;
+                    Stock[line.DisplayName] += Math.Max(0, line.Units);
+                    voidedCents += line.LineTotalCents;
+                }
+                VoidedSaleIds.Add(sale.SaleId);
+                return null;
+            }
         }
 
         private sealed class FakeGoodsSupplier : IGoodsSupplier
@@ -335,7 +355,7 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void FreightRefusal_LeavesSaleStanding_NothingInStockpile()
+        public void FreightRefusal_UnwindsSale_NothingInStockpile()
         {
             var c = new Chain();
             c.FundHousehold(7, 100000);
@@ -349,11 +369,16 @@ namespace LandLedgers.EditorTests.Economy
             string problem = adapter.ProcureAndStage(project, framing, record, 11, c.Diag);
             Assert.IsNotNull(problem);
             StringAssert.Contains("blocked pre-load", problem);
-            // The sale stands and was paid (real purchase, buyer goods at
-            // the yard) but NOTHING reached the site stockpile.
+            StringAssert.Contains("unwound", problem);
+            // G1: the failed freight leg unwinds the sale — the record
+            // stays for audit (voided), its units return to the supplier,
+            // the buyer is refunded in full, and NOTHING reached the site
+            // stockpile, so the package stays Ready for a clean retry.
             Assert.AreEqual(1, c.SalePort.Sales.Count);
-            Assert.AreEqual(100000 - 24000, c.HouseholdLedger.GetBalanceCents());
-            Assert.AreEqual(24000, c.YardPurse.ReadBalanceCents());
+            Assert.IsTrue(c.SalePort.VoidedSaleIds.Contains(c.SalePort.Sales[0].SaleId));
+            Assert.AreEqual(10000, c.SalePort.Stock["lumber"]);
+            Assert.AreEqual(100000, c.HouseholdLedger.GetBalanceCents());
+            Assert.AreEqual(0, c.YardPurse.ReadBalanceCents());
             Assert.IsNotNull(adapter.LastStockpile);
             Assert.AreEqual(0, adapter.LastStockpile.AvailableUnits("lumber"));
             Assert.AreEqual(WorkPackageStatus.Ready, framing.Status);

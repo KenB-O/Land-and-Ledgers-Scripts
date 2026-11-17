@@ -132,5 +132,29 @@ namespace LandLedgers.Economy.Businesses.LumberYard
 
             return null;
         }
+
+        /// <summary>
+        /// G1: voids a recorded yard sale in full through the yard
+        /// runtime — every unit returns to saleable stock, the record is
+        /// kept marked voided for audit, and the voided value is returned
+        /// for the caller to refund or un-bill. Returns the refusal, or
+        /// null on success.
+        /// </summary>
+        public string TryVoidSale(
+            ConstructionMaterialSale sale,
+            int dayIndex,
+            List<string> diagnostics,
+            out int voidedCents)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            voidedCents = 0;
+            if (yard == null)
+                return "Lumber Yard sale adapter has no yard runtime.";
+            if (sale == null || string.IsNullOrWhiteSpace(sale.SaleId))
+                return "Voiding a construction sale requires the recorded sale.";
+            if (!string.Equals(sale.SupplierBusinessId, yard.BusinessInstanceId, StringComparison.Ordinal))
+                return "Named construction supplier does not match this Lumber Yard.";
+            return yard.VoidSale(sale.SaleId, dayIndex, diagnostics, out voidedCents);
+        }
     }
 }

@@ -431,6 +431,15 @@ namespace LandLedgers.Persistence
         /// </summary>
         public List<HouseholdStoveFuelStoreDto> HouseholdStoveFuelStores = new List<HouseholdStoveFuelStoreDto>();
 
+        /// <summary>
+        /// G-4 (Agent G): live storage bindings, held here so the Pass
+        /// 9 seam persists them. The hub/state owns the per-household
+        /// storage registries; the bootstrap restores the saved bindings
+        /// into them after a load. A household with no entry holds no
+        /// storage bindings.
+        /// </summary>
+        public List<FurnishingStorageBindingSaveDto> HouseholdStorageBindings = new List<FurnishingStorageBindingSaveDto>();
+
         /// <summary>Additive person-hand snapshots; older saves deserialize this as an empty list.</summary>
         public List<Pass9PersonHandOccupancyDto> PersonHands = new List<Pass9PersonHandOccupancyDto>();
 
@@ -582,6 +591,18 @@ namespace LandLedgers.Persistence
         /// fuel in any stove.
         /// </summary>
         public List<HouseholdStoveFuelStoreDto> HouseholdStoveFuelStores = new List<HouseholdStoveFuelStoreDto>();
+
+        /// <summary>
+        /// G-4 (Agent G, expanded campaign 2026-11-16): storage
+        /// bindings — the bind parameters plus placed lots per binding
+        /// (FurnishingStorageBindingSaveDto). Additive; old saves leave
+        /// this empty and load with no bindings — the honest old-save
+        /// default (bindings that were never tracked were never bound
+        /// after a load). The B0 placement stamp (StorageZone
+        /// capability) still persists through the furnishing registers;
+        /// this list is what re-binds the fixtures from it.
+        /// </summary>
+        public List<FurnishingStorageBindingSaveDto> HouseholdStorageBindings = new List<FurnishingStorageBindingSaveDto>();
 
         /// <summary>Live person hand authority; bound by SimulationDrivers and restored in place.</summary>
         public PersonHandOccupancyRegistry PersonHands;
@@ -814,6 +835,103 @@ namespace LandLedgers.Persistence
             }
 
             diag.Add($"Series2Pass9SaveState.SyncRegistersFromHub: equipment adopted {adoptedEquipment} ({string.Join(", ", adoptedEquipmentIds)}), replaced {replacedEquipment}, skipped-empty {skippedEmptyEquipment}, state-only kept {keptStateOnlyEquipment} ({string.Join(", ", keptStateOnlyEquipmentIds)}); furnishings adopted {adoptedFurnishings} ({string.Join(", ", adoptedFurnishingIds)}), replaced {replacedFurnishings}, skipped-empty {skippedEmptyFurnishings}, state-only kept {keptStateOnlyFurnishings} ({string.Join(", ", keptStateOnlyFurnishingIds)}).");
+        }
+
+        /// <summary>
+        /// G-4 (Agent G, expanded campaign 2026-11-16): sync the live
+        /// stove fuel stores into the Pass 9 state list BEFORE the
+        /// coordinator Capture snapshots them — otherwise a stove fed
+        /// after NewGame is silently lost at save, because the state
+        /// list is the only persistence path for fuel stores and
+        /// CaptureFuelStores had no production caller (B2's item,
+        /// W-G1 follow-up).
+        ///
+        /// Clear-then-load, deliberately NOT the adopt-only rule
+        /// SyncRegistersFromHub applies to registers: fuel is fully
+        /// determined by the live registries at save time, there is no
+        /// authored state-only fuel (B2: old saves leave the list
+        /// empty), and RestoreFuelStores is itself clear-then-load — a
+        /// kept state-only entry would be fuel for a stove that no
+        /// longer holds it. Null-safe end to end: a null enumerable or
+        /// a null state list skips the sync with a diagnostic; null
+        /// registry entries are skipped; never throws. Idempotent:
+        /// syncing twice before a save produces the same state. One
+        /// summary line is appended to diag per call.
+        /// </summary>
+        public void SyncFuelStoresFromHub(IEnumerable<HouseholdStoveRegistry> stoves, List<string> diag)
+        {
+            diag = diag ?? new List<string>();
+            if (HouseholdStoveFuelStores == null)
+            {
+                diag.Add("Series2Pass9SaveState.SyncFuelStoresFromHub: HouseholdStoveFuelStores list is null; fuel sync skipped.");
+                return;
+            }
+            if (stoves == null)
+            {
+                diag.Add("Series2Pass9SaveState.SyncFuelStoresFromHub: no hub stove registries supplied; fuel sync skipped.");
+                return;
+            }
+            var captured = new List<HouseholdStoveFuelStoreDto>();
+            var householdsWithFuel = new HashSet<int>();
+            foreach (HouseholdStoveRegistry registry in stoves)
+            {
+                if (registry == null) continue;
+                foreach (HouseholdStoveFuelStoreDto store in registry.CaptureFuelStores())
+                {
+                    if (store == null) continue;
+                    captured.Add(store);
+                    householdsWithFuel.Add(store.HouseholdId);
+                }
+            }
+            HouseholdStoveFuelStores.Clear();
+            HouseholdStoveFuelStores.AddRange(captured);
+            diag.Add($"Series2Pass9SaveState.SyncFuelStoresFromHub: captured {captured.Count} fuel stores for {householdsWithFuel.Count} households.");
+        }
+
+        /// <summary>
+        /// G-4 (Agent G, expanded campaign 2026-11-16): sync the live
+        /// storage bindings into the Pass 9 state list BEFORE the
+        /// coordinator Capture snapshots them — otherwise a binding
+        /// made after NewGame is silently lost at save, because the
+        /// state list is the only persistence path for bind parameters
+        /// (B5's follow-up, correcting B5's claim that bindings
+        /// re-derive after Continue).
+        ///
+        /// Clear-then-load, same reasoning as SyncFuelStoresFromHub:
+        /// bindings are live-derived from the B0 registers, there is no
+        /// authored state-only binding (TryBindFixture has no production
+        /// caller yet), and the bootstrapper restore is clear-then-load
+        /// per binding. Null-safe end to end; never throws. Idempotent.
+        /// One summary line is appended to diag per call.
+        /// </summary>
+        public void SyncStorageBindingsFromHub(IEnumerable<FurnishingStorageRegistry> storages, List<string> diag)
+        {
+            diag = diag ?? new List<string>();
+            if (HouseholdStorageBindings == null)
+            {
+                diag.Add("Series2Pass9SaveState.SyncStorageBindingsFromHub: HouseholdStorageBindings list is null; storage sync skipped.");
+                return;
+            }
+            if (storages == null)
+            {
+                diag.Add("Series2Pass9SaveState.SyncStorageBindingsFromHub: no hub storage registries supplied; storage sync skipped.");
+                return;
+            }
+            var captured = new List<FurnishingStorageBindingSaveDto>();
+            var householdsWithBindings = new HashSet<int>();
+            foreach (FurnishingStorageRegistry registry in storages)
+            {
+                if (registry == null) continue;
+                foreach (FurnishingStorageBindingSaveDto binding in registry.CaptureBindings())
+                {
+                    if (binding == null) continue;
+                    captured.Add(binding);
+                    householdsWithBindings.Add(binding.HouseholdId);
+                }
+            }
+            HouseholdStorageBindings.Clear();
+            HouseholdStorageBindings.AddRange(captured);
+            diag.Add($"Series2Pass9SaveState.SyncStorageBindingsFromHub: captured {captured.Count} storage bindings for {householdsWithBindings.Count} households.");
         }
 
         public Series2Pass9SaveDto Capture(List<string> diag)
@@ -1139,6 +1257,21 @@ namespace LandLedgers.Persistence
             else if (diag != null)
             {
                 diag.Add("Series2Pass9Save: no stove fuel stores supplied; stove fuel section saved empty.");
+            }
+
+            // G-4: storage bindings. Deep-copied, so later live mutation
+            // cannot rewrite the saved section.
+            if (HouseholdStorageBindings != null && HouseholdStorageBindings.Count > 0)
+            {
+                foreach (FurnishingStorageBindingSaveDto binding in HouseholdStorageBindings)
+                {
+                    if (binding == null) continue;
+                    dto.HouseholdStorageBindings.Add(CopyFurnishingStorageBinding(binding));
+                }
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no storage bindings supplied; storage bindings section saved empty.");
             }
 
             if (PersonHands != null)
@@ -1639,6 +1772,16 @@ namespace LandLedgers.Persistence
                 HouseholdStoveFuelStores.Add(CopyHouseholdStoveFuelStore(saved));
             }
 
+            // G-4: storage bindings — clear-then-load, idempotent. Old
+            // saves carry no section and restore as no bindings;
+            // restoring twice rebuilds the same bindings, never duplicates.
+            HouseholdStorageBindings.Clear();
+            foreach (FurnishingStorageBindingSaveDto saved in dto.HouseholdStorageBindings ?? new List<FurnishingStorageBindingSaveDto>())
+            {
+                if (saved == null) continue;
+                HouseholdStorageBindings.Add(CopyFurnishingStorageBinding(saved));
+            }
+
             if (PersonHands != null)
             {
                 var restoredHands = new List<HandOccupancy>();
@@ -1813,6 +1956,32 @@ namespace LandLedgers.Persistence
                 StoveAssetId = source.StoveAssetId ?? string.Empty,
                 FuelWoodUnits = source.FuelWoodUnits,
             };
+        }
+
+        private static FurnishingStorageBindingSaveDto CopyFurnishingStorageBinding(FurnishingStorageBindingSaveDto source)
+        {
+            var copy = new FurnishingStorageBindingSaveDto
+            {
+                HouseholdId = source.HouseholdId,
+                AssetId = source.AssetId ?? string.Empty,
+                ZoneId = source.ZoneId ?? string.Empty,
+                BuildingInstanceId = source.BuildingInstanceId,
+                PlacementId = source.PlacementId ?? string.Empty,
+                Visibility = source.Visibility,
+                DisplayMeshCap = source.DisplayMeshCap,
+                AllowedReserveCategoryId = source.AllowedReserveCategoryId ?? string.Empty,
+                AllowedItemIds = new List<string>(source.AllowedItemIds ?? new List<string>()),
+                MassCapacity = source.MassCapacity,
+                VolumeCapacity = source.VolumeCapacity,
+            };
+            if (source.PlacedLots != null)
+                foreach (StoredLotReference placed in source.PlacedLots)
+                {
+                    if (placed == null) continue;
+                    copy.PlacedLots.Add(new StoredLotReference(
+                        placed.InventoryAuthorityId, placed.LotId, placed.Load));
+                }
+            return copy;
         }
 
         private static HouseholdFurnishingRegister CopyHouseholdFurnishingRegister(HouseholdFurnishingRegister source)

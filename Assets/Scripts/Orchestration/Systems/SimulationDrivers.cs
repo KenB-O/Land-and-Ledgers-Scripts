@@ -4868,6 +4868,10 @@ namespace LandLedgers.Orchestration.Systems
         /// business held itself is listed with the former owner as
         /// landlord. A release failure is logged loudly — a building that
         /// cannot be released is never silently kept.
+        /// B3: this method is a thin adapter now — the decision logic
+        /// lives in the harness-compiled CommercialLeaseCloseHandler
+        /// (same order, same diagnostics, same decisions); it resolves
+        /// the ids here and passes the production ports.
         /// </summary>
         private void ReleaseClosedBusinessPremises(
             NpcBusinessLifecycleDriver.NpcLifecycleBusinessInfo info,
@@ -4886,83 +4890,32 @@ namespace LandLedgers.Orchestration.Systems
             }
             else
             {
-                string releaseRefusal = sharedBusinessRuntime.ReleaseNpcBusinessPremises(buildingId);
-                if (releaseRefusal != null)
-                {
-                    diag.Add($"CommercialLease: {releaseRefusal}");
-                }
-                else
-                {
-                    CommercialLeaseMarket market = hub.CommercialLeaseMarket;
-                    CommercialLeaseAgreement lease = market.FindActiveLeaseForBusiness(info.BusinessInstanceId);
-                    if (lease != null)
+                int plotId = -1;
+                if (sharedBusinessRuntime.TryGetBusinessPremisesPlotId(info.Business, out int resolvedPlotId))
+                    plotId = resolvedPlotId;
+                new CommercialLeaseCloseHandler().HandleClosedBusiness(
+                    info.BusinessInstanceId, buildingId, plotId,
+                    record?.FounderPersonId ?? -1, record?.OwnerName ?? string.Empty,
+                    new CommercialLeaseCloseHandler.ClosePorts
                     {
-                        market.EndLease(lease, dayIndex, diag);
-                        RefundLeaseDeposit(lease, dayIndex, diag);
-                    }
-                    else
-                    {
-                        int plotId = -1;
-                        if (sharedBusinessRuntime.TryGetBusinessPremisesPlotId(info.Business, out int resolvedPlotId))
-                            plotId = resolvedPlotId;
-                        market.ListBuilding(buildingId, plotId,
-                            record?.FounderPersonId ?? -1, record?.OwnerName ?? string.Empty,
-                            dayIndex, diag);
-                    }
-                }
+                        Market = hub.CommercialLeaseMarket,
+                        ReleasePremises = sharedBusinessRuntime.ReleaseNpcBusinessPremises,
+                        LedgerByPersonId = landlordPersonId =>
+                        {
+                            int householdId = ResolvePersonHouseholdId(landlordPersonId);
+                            return householdId >= 0 && hub.HouseholdLedgers != null
+                                ? hub.HouseholdLedgers.GetOrCreate(householdId) : null;
+                        },
+                        LedgerByHouseholdId = householdId =>
+                            householdId >= 0 && hub.HouseholdLedgers != null
+                                ? hub.HouseholdLedgers.GetOrCreate(householdId) : null,
+                        Obligations = hub.FinancialObligations,
+                    },
+                    dayIndex, diag);
             }
 
             if (diag.Count > 0)
                 Debug.Log("[SimulationDrivers] closed-business premises release: " + string.Join(" | ", diag));
-        }
-
-        /// <summary>
-        /// B2: refunds a lease deposit on a clean lease end. The deposit
-        /// is refunded only when no rent Payable on the lease is still
-        /// unsettled; otherwise it is held and the reason is logged — the
-        /// offset against arrears is a follow-up, not a silent loss.
-        /// </summary>
-        private void RefundLeaseDeposit(CommercialLeaseAgreement lease, int dayIndex, List<string> diag)
-        {
-            if (lease == null || lease.DepositPaidCents <= 0) return;
-            bool arrearsOutstanding = false;
-            if (hub?.FinancialObligations != null)
-            {
-                foreach (string payableId in lease.RentPayableIds)
-                {
-                    FinancialObligation payable = hub.FinancialObligations.Find(payableId);
-                    if (payable != null && !payable.Settled) { arrearsOutstanding = true; break; }
-                }
-            }
-
-            if (arrearsOutstanding)
-            {
-                diag.Add($"CommercialLease: lease '{lease.AgreementId}' deposit {lease.DepositPaidCents}c HELD — rent arrears are still outstanding on the lease (offset against arrears is a follow-up).");
-                return;
-            }
-
-            int landlordHouseholdId = ResolvePersonHouseholdId(lease.LandlordPersonId);
-            int tenantHouseholdId = lease.TenantHouseholdId;
-            HouseholdLedger landlordLedger = landlordHouseholdId >= 0 && hub?.HouseholdLedgers != null
-                ? hub.HouseholdLedgers.GetOrCreate(landlordHouseholdId) : null;
-            HouseholdLedger tenantLedger = tenantHouseholdId >= 0 && hub?.HouseholdLedgers != null
-                ? hub.HouseholdLedgers.GetOrCreate(tenantHouseholdId) : null;
-            if (landlordLedger == null || tenantLedger == null)
-            {
-                diag.Add($"CommercialLease: lease '{lease.AgreementId}' deposit {lease.DepositPaidCents}c NOT refunded — " +
-                    $"landlord ledger {(landlordLedger == null ? "missing" : "found")} / tenant ledger {(tenantLedger == null ? "missing" : "found")}.");
-                return;
-            }
-
-            string refundRefusal = landlordLedger.TryTransferTo(tenantLedger, dayIndex,
-                lease.DepositPaidCents,
-                $"lease deposit refund for {lease.AgreementId} (lease ended)",
-                HouseholdIncomeSource.OtherDocumented, lease.AgreementId,
-                $"lease deposit refund for {lease.AgreementId}",
-                "person:" + lease.LandlordPersonId);
-            diag.Add(refundRefusal == null
-                ? $"CommercialLease: lease '{lease.AgreementId}' deposit {lease.DepositPaidCents}c refunded to H{tenantHouseholdId}."
-                : $"CommercialLease: lease '{lease.AgreementId}' deposit refund FAILED: {refundRefusal}.");
         }
 
         private bool PersonOwnsBusiness(int personId)

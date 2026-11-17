@@ -616,9 +616,15 @@ namespace LandLedgers.FirstLedger
 
         /// <summary>
         /// Builds the household-facing port for a specific NPC store. Items
-        /// are included only when the profile declares the SKU, the household
-        /// catalog uses the same unit, and this Business has identified stock
-        /// for that SKU. A category total is never projected onto its SKUs.
+        /// are included only when the profile declares the SKU, the store unit
+        /// converts to the household unit, and the owner has set a positive
+        /// selling price for the SKU. Stock is NOT checked here: a port offer
+        /// stays honest because the shopping loop enforces stock at
+        /// evaluation time (GeneralStoreSupplierAdapter.OffersItem requires
+        /// stock above zero, and EvaluateCandidates rejects zero stock).
+        /// The runtime feed SKU is the one exception: it is offered only
+        /// when identified physical lots back it. A category total is never
+        /// projected onto its SKUs.
         /// </summary>
         public GeneralStoreTradingPort BuildHouseholdTradingPort(BusinessInstanceState npcBusiness)
         {

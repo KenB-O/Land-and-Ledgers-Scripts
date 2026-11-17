@@ -8,6 +8,7 @@ using LandLedgers.Economy.Valuation;
 using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 using LandLedgers.Progression;
 using LandLedgers.Reputation;
 using LandLedgers.Time;
@@ -254,6 +255,10 @@ namespace LandLedgers.Economy
         public string businessDisplayName;
         public string businessTypeDisplayName;
         public string ownerDisplayName;
+        // UBC A2: the seller's person id when the seller is an NPC person
+        // (BusinessOwnerIdentity.PersonId). -1 when the seller has no person
+        // record. The proceeds path credits this person's household.
+        public int sellerPersonId = -1;
         public string buildingDisplayName;
         public string title;
         public string reason;
@@ -731,6 +736,42 @@ namespace LandLedgers.Economy
 
         [SerializeField]
         private SimulationSystemsHub systemsHub;
+
+        /// <summary>
+        /// UBC A2: the household-cash authority, mirroring the seam on
+        /// SharedBusinessRuntimeManager and GeneralStoreRuntimeManager.
+        /// Assigned by bootstrap from SimulationSystemsHub.HouseholdLedgers;
+        /// falls back to a hub lookup when unset. Seller proceeds are
+        /// credited through this ledger — the single household-cash truth
+        /// (Canon 13.2). Null only when no hub exists.
+        /// </summary>
+        public HouseholdLedgerRegistry HouseholdLedgers { get; set; }
+
+        private HouseholdLedgerRegistry ResolvedHouseholdLedgers
+        {
+            get
+            {
+                if (HouseholdLedgers == null)
+                {
+                    HouseholdLedgers = FindAnyObjectByType<SimulationSystemsHub>()?.HouseholdLedgers;
+                }
+
+                return HouseholdLedgers;
+            }
+        }
+
+        /// <summary>
+        /// UBC A2: the single debt authority for the seller-proceeds fallback
+        /// (mirrors SharedBusinessRuntimeManager.ObligationAuthority). When a
+        /// seller cannot be credited through a household ledger, the proceeds
+        /// become a named Payable here instead of vanishing. Falls back to
+        /// the hub's authority when unset; bootstrap wiring is a follow-up,
+        /// the hub fallback covers production.
+        /// </summary>
+        public FinancialObligationAuthority ObligationAuthority { get; set; }
+
+        /// <summary>UBC A2: id allocator paired with <see cref="ObligationAuthority"/>.</summary>
+        public EntityIdRegistry ObligationIdRegistry { get; set; }
 
         [Header("Listing Caps")]
         [SerializeField, Range(1, 8)]
@@ -8120,6 +8161,10 @@ namespace LandLedgers.Economy
                 businessDisplayName = businessDisplayName,
                 businessTypeDisplayName = businessTypeDisplayName,
                 ownerDisplayName = ownerDisplayName,
+                sellerPersonId = mappedBusiness != null && mappedBusiness.Owner != null
+                    && mappedBusiness.Owner.OwnerKind == BusinessOwnerKind.Npc
+                    ? mappedBusiness.Owner.PersonId
+                    : -1,
                 buildingDisplayName = buildingDisplayName,
                 title = title,
                 reason = reason,
@@ -9015,6 +9060,10 @@ namespace LandLedgers.Economy
             listing.playerOwned = true;
 
             string acquiredLabel = !string.IsNullOrWhiteSpace(listing.businessDisplayName) ? listing.businessDisplayName : listing.title;
+            // UBC A2: capture the seller before the listing is rewritten to
+            // the player below — the proceeds path and the sale terms need
+            // the seller's name and person id.
+            string sellerDisplayName = listing.ownerDisplayName;
             if (sharedBusinessRuntime != null
                 && sharedBusinessRuntime.TryTransferBusinessToPlayer(
                     building.id,
@@ -9029,16 +9078,60 @@ namespace LandLedgers.Economy
                 sharedBusinessRuntime.RecordAcquisitionValuation(
                     acquiredBusiness,
                     deal != null ? deal.estimatedValueCents : 0);
-                string openingCashMessage = ApplyPostAcquisitionOpeningCash(acquiredBusiness, deal != null ? deal.sellerMotive : GetSellerMotive(listing.reason));
+                // UBC A2: the cash price the seller receives is the final
+                // price minus any seller-financed principal (the note is a
+                // separate obligation, recorded by RecordSellerFinanceAtClose,
+                // not cash at closing). The earnest and the closing balance
+                // together make up that cash price.
+                int sellerCashPriceCents = Mathf.Max(0, finalPriceCents - (deal != null ? deal.sellerFinancedPrincipalCents : 0));
+                string openingCashMessage = ApplyPostAcquisitionOpeningCash(
+                    acquiredBusiness,
+                    deal != null ? deal.sellerMotive : GetSellerMotive(listing.reason),
+                    listing.sellerPersonId,
+                    sellerDisplayName,
+                    out int sellerCashWithdrawalCents,
+                    out string sellerProceedsNote);
+                int deliveredPriceCents = CreditSellerProceeds(
+                    listing.sellerPersonId, sellerDisplayName, sellerCashPriceCents,
+                    acquiredBusiness != null ? acquiredBusiness.InstanceId : listing.businessInstanceId,
+                    out string priceProceedsNote);
+                sharedBusinessRuntime.RecordPlayerAcquisitionTerms(
+                    acquiredBusiness,
+                    sellerDisplayName,
+                    listing.sellerPersonId,
+                    deliveredPriceCents,
+                    sellerCashWithdrawalCents);
                 playerPortfolio?.RegisterCurrentBusinessCashCheckpoint(acquiredBusiness, GetCurrentWeekKey(), true);
                 string integrationBrief = BuildPostCloseIntegrationBrief(listing, deal, finalPriceCents);
-                message = $"{acquiredLabel} closed for {FormatMoney(finalPriceCents)}. Earnest credited: {FormatMoney(deal.earnestMoneyCents)}. {fundingMessage} {transferMessage} {openingCashMessage} {integrationBrief}".Trim();
+                message = $"{acquiredLabel} closed for {FormatMoney(finalPriceCents)}. Earnest credited: {FormatMoney(deal.earnestMoneyCents)}. {fundingMessage} {transferMessage} {openingCashMessage} {sellerProceedsNote} {priceProceedsNote} {integrationBrief}".Trim();
             }
             else
             {
+                // UBC A2: the deal still closed (title moved) even though the
+                // runtime transfer failed, so the seller is still paid when a
+                // real business changed hands. Terms are recorded when the
+                // business can still be resolved.
+                int sellerCashPriceCents = Mathf.Max(0, finalPriceCents - (deal != null ? deal.sellerFinancedPrincipalCents : 0));
+                string priceProceedsNote = string.Empty;
+                BusinessInstanceState unresolvedBusiness = !string.IsNullOrWhiteSpace(listing.businessInstanceId)
+                    ? sharedBusinessRuntime?.FindByBuildingId(building.id)
+                    : null;
+                if (unresolvedBusiness != null)
+                {
+                    int deliveredPriceCents = CreditSellerProceeds(
+                        listing.sellerPersonId, sellerDisplayName, sellerCashPriceCents,
+                        listing.businessInstanceId, out priceProceedsNote);
+                    sharedBusinessRuntime.RecordPlayerAcquisitionTerms(
+                        unresolvedBusiness,
+                        sellerDisplayName,
+                        listing.sellerPersonId,
+                        deliveredPriceCents,
+                        0);
+                }
+
                 string integrationBrief = BuildPostCloseIntegrationBrief(listing, deal, finalPriceCents);
                 message = !string.IsNullOrWhiteSpace(listing.businessInstanceId)
-                    ? $"{acquiredLabel} closed for {FormatMoney(finalPriceCents)}. Earnest credited: {FormatMoney(deal.earnestMoneyCents)}. {fundingMessage} Ownership recorded on the site. {integrationBrief}".Trim()
+                    ? $"{acquiredLabel} closed for {FormatMoney(finalPriceCents)}. Earnest credited: {FormatMoney(deal.earnestMoneyCents)}. {fundingMessage} Ownership recorded on the site. {priceProceedsNote} {integrationBrief}".Trim()
                     : $"{acquiredLabel} closed for {FormatMoney(finalPriceCents)}. Earnest credited: {FormatMoney(deal.earnestMoneyCents)}. {fundingMessage} Held as an improved site. {integrationBrief}".Trim();
             }
 
@@ -9168,8 +9261,117 @@ namespace LandLedgers.Economy
             };
         }
 
-        private string ApplyPostAcquisitionOpeningCash(BusinessInstanceState business, SellerMotive motive)
+        /// <summary>
+        /// UBC A2: credits a seller's proceeds to the seller's personal cash.
+        /// The purchase price is the seller's money, and business cash the
+        /// seller withdrew before closing is too — neither may vanish. The
+        /// credit lands on the seller's household ledger (the single
+        /// household-cash truth, Canon 13.2) as SaleProceeds with the
+        /// acquisition as its provenance reference. When no household can be
+        /// reached, the amount becomes a named Payable the player owes the
+        /// seller (one debt authority, never a silent loss); when even that
+        /// is unavailable the method returns 0 and names the undelivered
+        /// amount loudly in the note, so the loss is visible, never silent.
+        /// Returns the amount actually delivered (ledger credit or Payable).
+        /// </summary>
+        public int CreditSellerProceeds(
+            int sellerPersonId,
+            string sellerDisplayName,
+            int amountCents,
+            string businessInstanceId,
+            out string note)
         {
+            note = string.Empty;
+            int amount = Mathf.Max(0, amountCents);
+            if (amount <= 0)
+            {
+                return 0;
+            }
+
+            string sellerName = string.IsNullOrWhiteSpace(sellerDisplayName) ? "seller" : sellerDisplayName.Trim();
+            string businessRef = string.IsNullOrWhiteSpace(businessInstanceId) ? "business" : businessInstanceId.Trim();
+            int dayIndex = GetCurrentDayIndex();
+            string reference = "acquisition:" + businessRef;
+
+            // Preferred path: the seller's household ledger.
+            int householdId = ResolveSellerHouseholdId(sellerPersonId);
+            HouseholdLedgerRegistry ledgers = ResolvedHouseholdLedgers;
+            if (householdId >= 0 && ledgers != null)
+            {
+                HouseholdLedger ledger = ledgers.GetOrCreate(householdId);
+                string rejection = ledger?.RecordInflow(
+                    dayIndex, amount, HouseholdIncomeSource.SaleProceeds, reference,
+                    $"sale of business '{businessRef}' to Player", "Player");
+                if (rejection == null)
+                {
+                    note = $"{FormatMoney(amount)} paid to {sellerName}.";
+                    return amount;
+                }
+
+                Debug.LogWarning($"[Acquisitions] Seller proceeds for {sellerName} were rejected by the household ledger: {rejection}", this);
+            }
+
+            // Fallback: a named Payable the player owes the seller, so the
+            // money is a settleable debt rather than a silent loss.
+            FinancialObligationAuthority authority = ObligationAuthority ?? FindAnyObjectByType<SimulationSystemsHub>()?.FinancialObligations;
+            EntityIdRegistry ids = ObligationIdRegistry ?? FindAnyObjectByType<SimulationSystemsHub>()?.Ids;
+            string creditor = sellerPersonId >= 0 ? $"person:{sellerPersonId}" : sellerName;
+            FinancialObligation payable = authority?.Create(
+                ids, FinancialObligationKind.Payable, "player", creditor, amount, dayIndex,
+                $"Seller proceeds owed for business {businessRef}",
+                $"seller proceeds for business {businessRef}",
+                sourceEconomicEventId: reference);
+            if (payable != null)
+            {
+                note = $"{FormatMoney(amount)} owed to {sellerName} as a payable (household credit unavailable).";
+                return amount;
+            }
+
+            // Fail-loud: no ledger, no debt authority. The amount is NOT
+            // delivered and the note says so plainly.
+            note = $"SELLER PROCEEDS UNDELIVERED: {FormatMoney(amount)} owed to {sellerName} could not be credited (no seller household and no debt authority).";
+            Debug.LogError($"[Acquisitions] {note}", this);
+            return 0;
+        }
+
+        /// <summary>
+        /// UBC A2: resolves a seller person id to their household id through
+        /// the population state. Returns -1 when the seller has no person
+        /// record or no household — the proceeds path then falls back to a
+        /// named Payable instead of guessing a household.
+        /// </summary>
+        private int ResolveSellerHouseholdId(int sellerPersonId)
+        {
+            if (sellerPersonId < 0)
+            {
+                return -1;
+            }
+
+            PopulationManager population = populationManager ?? FindAnyObjectByType<PopulationManager>();
+            PersonState person = population?.State?.GetPerson(sellerPersonId);
+            return person != null ? person.householdId : -1;
+        }
+
+        /// <summary>
+        /// UBC A2: sets the opening operating cash after an acquisition. The
+        /// motive-based target is the seller's pre-close withdrawal: business
+        /// cash above the target is the seller's money and is credited to the
+        /// seller through CreditSellerProceeds, never destroyed. When the
+        /// seller cannot be credited at all, the excess stays in the business
+        /// (openingCash = previousCash) and the note says so — the default is
+        /// that cash stays with what was bought. Out params report the
+        /// withdrawal so the sale terms can record it.
+        /// </summary>
+        private string ApplyPostAcquisitionOpeningCash(
+            BusinessInstanceState business,
+            SellerMotive motive,
+            int sellerPersonId,
+            string sellerDisplayName,
+            out int sellerCashWithdrawalCents,
+            out string sellerProceedsNote)
+        {
+            sellerCashWithdrawalCents = 0;
+            sellerProceedsNote = string.Empty;
             if (business == null || business.RuntimeState == null)
             {
                 return "Opening operating cash could not be adjusted because the business runtime is unavailable.";
@@ -9180,9 +9382,29 @@ namespace LandLedgers.Economy
             int payroll = runtime.FilledWeeklyPayrollCents;
             int survivalReserve = SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business);
             int openingCash = CalculatePostAcquisitionOpeningCashCents(previousCash, payroll, survivalReserve, motive);
-            runtime.SetCurrentCashCents(openingCash, false);
+            int excessCash = Mathf.Max(0, previousCash - openingCash);
             string motiveText = FormatSellerMotive(motive);
-            return $"Opening operating cash set to {FormatMoney(openingCash)} from {motiveText} sale condition; seller cash of {FormatMoney(previousCash)} was not acquired.";
+            if (excessCash > 0)
+            {
+                int delivered = CreditSellerProceeds(
+                    sellerPersonId, sellerDisplayName, excessCash, business.InstanceId, out sellerProceedsNote);
+                if (delivered >= excessCash)
+                {
+                    sellerCashWithdrawalCents = excessCash;
+                }
+                else
+                {
+                    // The seller could not be credited, so the withdrawal
+                    // does not happen: the cash stays with the business.
+                    openingCash = previousCash;
+                    sellerProceedsNote = string.IsNullOrWhiteSpace(sellerProceedsNote)
+                        ? $"Seller cash withdrawal of {FormatMoney(excessCash)} could not be delivered, so the cash stays with the business."
+                        : sellerProceedsNote + $" The {FormatMoney(excessCash)} stays with the business.";
+                }
+            }
+
+            runtime.SetCurrentCashCents(openingCash, false);
+            return $"Opening operating cash set to {FormatMoney(openingCash)} from {motiveText} sale condition.";
         }
 
         private static int CalculatePostAcquisitionOpeningCashCents(
@@ -9319,6 +9541,10 @@ namespace LandLedgers.Economy
             RecordLandAppreciationPurchase(plot, building, listing.askingPriceCents, purchasedImprovementState);
             listing.playerOwned = true;
             string acquiredLabel = !string.IsNullOrWhiteSpace(listing.businessDisplayName) ? listing.businessDisplayName : listing.title;
+            // UBC A2: capture the seller before the listing is rewritten to
+            // the player below — the proceeds path and the sale terms need
+            // the seller's name and person id.
+            string sellerDisplayName = listing.ownerDisplayName;
             if (sharedBusinessRuntime != null
                 && sharedBusinessRuntime.TryTransferBusinessToPlayer(
                     building.id,
@@ -9333,14 +9559,54 @@ namespace LandLedgers.Economy
                 sharedBusinessRuntime.RecordAcquisitionValuation(
                     acquiredBusiness,
                     listing.askingPriceCents);
-                string openingCashMessage = ApplyPostAcquisitionOpeningCash(acquiredBusiness, GetSellerMotive(listing.reason));
+                // UBC A2: the asking price is the seller's money. The direct
+                // purchase has no earnest and no seller financing, so the full
+                // asking price is the cash price.
+                string openingCashMessage = ApplyPostAcquisitionOpeningCash(
+                    acquiredBusiness,
+                    GetSellerMotive(listing.reason),
+                    listing.sellerPersonId,
+                    sellerDisplayName,
+                    out int sellerCashWithdrawalCents,
+                    out string sellerProceedsNote);
+                int deliveredPriceCents = CreditSellerProceeds(
+                    listing.sellerPersonId, sellerDisplayName, listing.askingPriceCents,
+                    acquiredBusiness != null ? acquiredBusiness.InstanceId : listing.businessInstanceId,
+                    out string priceProceedsNote);
+                sharedBusinessRuntime.RecordPlayerAcquisitionTerms(
+                    acquiredBusiness,
+                    sellerDisplayName,
+                    listing.sellerPersonId,
+                    deliveredPriceCents,
+                    sellerCashWithdrawalCents);
                 playerPortfolio?.RegisterCurrentBusinessCashCheckpoint(acquiredBusiness, GetCurrentWeekKey(), true);
-                lastPurchaseSummary = $"{acquiredLabel} purchased for {FormatMoney(listing.askingPriceCents)}. {transferMessage} {openingCashMessage}";
+                lastPurchaseSummary = $"{acquiredLabel} purchased for {FormatMoney(listing.askingPriceCents)}. {transferMessage} {openingCashMessage} {sellerProceedsNote} {priceProceedsNote}";
             }
             else
             {
+                // UBC A2: the purchase still closed (title moved) even though
+                // the runtime transfer failed, so the seller is still paid
+                // when a real business changed hands. Terms are recorded when
+                // the business can still be resolved.
+                string priceProceedsNote = string.Empty;
+                BusinessInstanceState unresolvedBusiness = !string.IsNullOrWhiteSpace(listing.businessInstanceId)
+                    ? sharedBusinessRuntime?.FindByBuildingId(building.id)
+                    : null;
+                if (unresolvedBusiness != null)
+                {
+                    int deliveredPriceCents = CreditSellerProceeds(
+                        listing.sellerPersonId, sellerDisplayName, listing.askingPriceCents,
+                        listing.businessInstanceId, out priceProceedsNote);
+                    sharedBusinessRuntime.RecordPlayerAcquisitionTerms(
+                        unresolvedBusiness,
+                        sellerDisplayName,
+                        listing.sellerPersonId,
+                        deliveredPriceCents,
+                        0);
+                }
+
                 lastPurchaseSummary = !string.IsNullOrWhiteSpace(listing.businessInstanceId)
-                    ? $"{acquiredLabel} purchased for {FormatMoney(listing.askingPriceCents)}. Ownership recorded on the site."
+                    ? $"{acquiredLabel} purchased for {FormatMoney(listing.askingPriceCents)}. Ownership recorded on the site. {priceProceedsNote}"
                     : $"{acquiredLabel} purchased for {FormatMoney(listing.askingPriceCents)}. Held as an improved site until operator assignment and business activation are implemented.";
             }
 

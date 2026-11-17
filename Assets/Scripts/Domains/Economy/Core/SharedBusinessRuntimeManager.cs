@@ -2756,12 +2756,21 @@ namespace LandLedgers.Economy
             }
 
             BusinessOwnerIdentity formerOwner = business.Owner;
+            business.TransferToPlayerOwnership();
+
+            // UBC A2: the former owner is NOT silently kept on as an
+            // employee. Employment requires an agreement, and the sale terms
+            // carry no transition arrangement yet, so the former owner leaves
+            // the business's employment set at closing. Only the
+            // owner-operator slot is cleared; a genuine hired-worker slot is
+            // untouched. (Replaces the A1-era EnsureOwnerOperatorStaffing
+            // call here, which inserted the seller as an operator without
+            // any agreement.)
             if (formerOwner != null && formerOwner.OwnerKind != BusinessOwnerKind.Player)
             {
-                business.EnsureOwnerOperatorStaffing(formerOwner);
+                business.RuntimeState.RemoveOwnerOperator(formerOwner);
             }
 
-            business.TransferToPlayerOwnership();
             business.ResolveWeeklyBaselineThroughput();
             business.ResolveDailyBaselineService();
             int weekKey = GetCurrentWeekKey();
@@ -2799,6 +2808,39 @@ namespace LandLedgers.Economy
             message = $"{business.RuntimeDisplayName} is now player-owned.{storeBindingNote}";
             status = message;
             return true;
+        }
+
+        /// <summary>
+        /// UBC A2: records the sale terms on the PLAYER acquisition path, so
+        /// the terms (price, included assets, transition terms) survive
+        /// save/load exactly as the to-Town path already records them. Called
+        /// by the acquisition closes AFTER the opening-cash adjustment, so
+        /// includedCash is the post-adjustment cash on hand. The seller's
+        /// display name is passed in because by call time the owner is
+        /// already the player. A direct TryTransferBusinessToPlayer call on
+        /// its own still records no terms: the market close is the
+        /// acquisition path, and only it knows the price the seller was paid.
+        /// </summary>
+        public void RecordPlayerAcquisitionTerms(
+            BusinessInstanceState business,
+            string sellerDisplayName,
+            int sellerPersonId,
+            int purchasePriceCents,
+            int sellerCashWithdrawalCents)
+        {
+            if (business == null)
+            {
+                return;
+            }
+
+            BusinessSaleTerms terms = BuildSaleTerms(
+                business,
+                "Player",
+                sellerDisplayName,
+                sellerPersonId,
+                purchasePriceCents,
+                sellerCashWithdrawalCents);
+            business.RecordSaleTerms(terms);
         }
 
         /// <summary>
@@ -3096,7 +3138,25 @@ namespace LandLedgers.Economy
             business.SetOwner(BusinessOwnerIdentity.Town(receiver));
             business.ResolveWeeklyBaselineThroughput();
             business.ResolveDailyBaselineService();
-            message = $"{business.RuntimeDisplayName} transferred to {receiver}. {terms.BuildSummary()}";
+
+            // UBC A2: the reverse of the A1 bind. A store sold to Town is no
+            // longer a player store, so the player store runtime must let it
+            // go; otherwise it would keep running weekly payroll, reorder and
+            // distribution for a store the player no longer owns, while the
+            // NPC restock driver stays locked out. The NPC driver resumes
+            // naturally once the runtime holds no current business.
+            string storeUnbindNote = string.Empty;
+            if (business.BusinessType == BusinessType.GeneralStore
+                || business.BusinessType == BusinessType.Generic)
+            {
+                GeneralStoreRuntimeManager storeRuntime = generalStoreRuntime ?? FindAnyObjectByType<GeneralStoreRuntimeManager>();
+                if (storeRuntime != null && !storeRuntime.TryUnbindPlayerBusiness(business, out string unbindMessage))
+                {
+                    storeUnbindNote = $" Note: the store runtime could not release this business ({unbindMessage}).";
+                }
+            }
+
+            message = $"{business.RuntimeDisplayName} transferred to {receiver}. {terms.BuildSummary()}{storeUnbindNote}";
             status = message;
             return true;
         }
@@ -3154,6 +3214,37 @@ namespace LandLedgers.Economy
                 inventoryStatement,
                 employeeStatement,
                 dayIndex);
+        }
+
+        /// <summary>
+        /// UBC A2: the same closing snapshot as BuildSaleTerms, plus the
+        /// seller's identity and the cash the seller actually received. The
+        /// seller's name is passed in because the owner is already the player
+        /// by the time the player-path terms are recorded. The transition
+        /// arrangement records the factual outcome until the deal flow grows
+        /// a transition term: the former owner holds no operator role after
+        /// closing and no transition arrangement was agreed.
+        /// </summary>
+        private BusinessSaleTerms BuildSaleTerms(
+            BusinessInstanceState business,
+            string buyerDisplayName,
+            string sellerDisplayName,
+            int sellerPersonId,
+            int purchasePriceCents,
+            int sellerCashWithdrawalCents)
+        {
+            BusinessSaleTerms baseTerms = BuildSaleTerms(business, buyerDisplayName);
+            return new BusinessSaleTerms(
+                string.IsNullOrWhiteSpace(sellerDisplayName) ? baseTerms.SellerDisplayName : sellerDisplayName.Trim(),
+                baseTerms.BuyerDisplayName,
+                baseTerms.IncludedCashCents,
+                baseTerms.InventoryStatement,
+                baseTerms.EmployeeOfferStatement,
+                baseTerms.ClosingDayIndex,
+                sellerPersonId,
+                purchasePriceCents,
+                sellerCashWithdrawalCents,
+                "Former owner holds no operator role after closing; no transition arrangement was agreed.");
         }
 
         public bool TryStartPlayerBusinessAtShell(BusinessType businessType, int buildingId, out BusinessInstanceState business, out string message)

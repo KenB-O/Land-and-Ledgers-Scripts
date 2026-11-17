@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
+using LandLedgers.World.Property;
 
 namespace LandLedgers.Economy.Creation
 {
@@ -54,6 +55,21 @@ namespace LandLedgers.Economy.Creation
             /// away on that ground.
             /// </summary>
             public Func<NpcOpportunity, NpcEquipmentOption> EquipmentFinder;
+            /// <summary>
+            /// B2: the commercial lease market. When set, the weekly drive
+            /// re-seeds it from the town's actual unassigned commercial
+            /// buildings, and formation against a lease option pays the
+            /// deposit and first rent before creation and signs the lease
+            /// after it. Null means no leaseable premises exist.
+            /// </summary>
+            public CommercialLeaseMarket LeaseMarket;
+            /// <summary>
+            /// B2: the town's actual unassigned commercial buildings, as
+            /// (building, plot) refs. When null, the market is not
+            /// re-seeded weekly. Seeded listings carry no landlord and are
+            /// never offered until a landlord is known.
+            /// </summary>
+            public Func<List<CommercialLeasePremisesRef>> UnassignedCommercialPremises;
             public int InvestigationMinutes = 120;
             public int WorkingCapitalCents = 2000;
             /// <summary>Minimum distinct witness days before recognition.</summary>
@@ -95,6 +111,18 @@ namespace LandLedgers.Economy.Creation
             {
                 diag.Add("Entrepreneurship: population or creation port missing — nothing evaluated.");
                 return;
+            }
+
+            // B2: re-seed the lease market from the town's actual
+            // unassigned commercial buildings. Idempotent: buildings with
+            // a listing are skipped. Seeded listings carry no landlord
+            // and are never offered; the market gains a landlord when a
+            // building is released by a closing business.
+            if (ctx.LeaseMarket != null && ctx.UnassignedCommercialPremises != null)
+            {
+                List<CommercialLeasePremisesRef> unassigned = ctx.UnassignedCommercialPremises();
+                if (unassigned != null)
+                    ctx.LeaseMarket.SeedFromPremises(unassigned, dayIndex, diag);
             }
 
             foreach (PersonState person in ctx.Population.people)
@@ -379,7 +407,15 @@ namespace LandLedgers.Economy.Creation
                 };
             }
 
-            if (equipment != null)
+            // B2: fixtures included in a commercial lease are part of the
+            // leased premises, not owned equipment — they are never a
+            // formation asset and never liquidate on close. The equipment
+            // option is evidence for the investigation only.
+            bool leasedFixtures = equipment != null
+                && string.Equals(equipment.ItemId, CommercialLeaseCalibration.LeasedFixturesItemId, StringComparison.Ordinal)
+                && equipment.Provenance != null
+                && equipment.Provenance.StartsWith(CommercialLeaseCalibration.LeasedFixturesProvenancePrefix, StringComparison.Ordinal);
+            if (equipment != null && !leasedFixtures)
             {
                 intent.Assets.Add(new NpcFormationAsset
                 {
@@ -389,6 +425,89 @@ namespace LandLedgers.Economy.Creation
                     CostCents = equipment.CostCents,
                     Provenance = equipment.Provenance,
                 });
+            }
+
+            // B2: a formation against a leased shop pays the deposit and
+            // the first month's rent BEFORE creation (first month +
+            // deposit is what a tenant pays at signing), and signs the
+            // lease only after the business exists. On a creation refusal
+            // both payments are refunded in full — the founder pays for
+            // no shop he did not get.
+            CommercialLeaseListing leaseListing = null;
+            int leaseDepositCents = 0;
+            int leaseFirstRentCents = 0;
+            HouseholdLedger founderLedger = null;
+            HouseholdLedger landlordLedger = null;
+            if (ctx.LeaseMarket != null && premises != null && premises.Tenure == NpcPremisesTenure.Rented
+                && !string.IsNullOrWhiteSpace(premises.AgreementRef))
+            {
+                leaseListing = ctx.LeaseMarket.FindListingById(premises.AgreementRef);
+                if (leaseListing == null || !leaseListing.IsOfferable)
+                {
+                    diag.Add($"Entrepreneurship: formation for P{person.id} refused — the lease listing '{premises.AgreementRef}' is not offerable.");
+                    ctx.Events?.Record(dayIndex, NpcBusinessEventKind.FormationAborted, person.id, string.Empty,
+                        $"P{person.id} formation refused: lease listing '{premises.AgreementRef}' is not offerable.");
+                    return;
+                }
+
+                leaseDepositCents = leaseListing.DepositCents;
+                leaseFirstRentCents = leaseListing.MonthlyRentCents;
+                int leaseUpfrontCents = leaseDepositCents + leaseFirstRentCents;
+                if (leaseUpfrontCents != premises.UpfrontCostCents)
+                {
+                    diag.Add($"Entrepreneurship: formation for P{person.id} refused — lease listing '{leaseListing.ListingId}' " +
+                        $"charges {leaseUpfrontCents}c upfront (deposit {leaseDepositCents}c + first rent {leaseFirstRentCents}c) " +
+                        $"but the premises option carries {premises.UpfrontCostCents}c. The finder and the listing disagree; nothing moved.");
+                    ctx.Events?.Record(dayIndex, NpcBusinessEventKind.FormationAborted, person.id, string.Empty,
+                        $"P{person.id} formation refused: lease upfront {leaseUpfrontCents}c disagrees with the premises option {premises.UpfrontCostCents}c.");
+                    return;
+                }
+
+                int founderHouseholdId = HouseholdOf(person.id, ctx);
+                int landlordHouseholdId = HouseholdOf(leaseListing.LandlordPersonId, ctx);
+                founderLedger = ctx.Ledgers != null && founderHouseholdId >= 0 ? ctx.Ledgers.Get(founderHouseholdId) : null;
+                landlordLedger = ctx.Ledgers != null && landlordHouseholdId >= 0 ? ctx.Ledgers.Get(landlordHouseholdId) : null;
+                if (founderLedger == null || landlordLedger == null)
+                {
+                    diag.Add($"Entrepreneurship: formation for P{person.id} refused — founder ledger " +
+                        $"{(founderLedger == null ? "missing" : "found")} / landlord ledger {(landlordLedger == null ? "missing" : "found")} " +
+                        $"(founder H{founderHouseholdId}, landlord P{leaseListing.LandlordPersonId} H{landlordHouseholdId}). No lease payment moved.");
+                    ctx.Events?.Record(dayIndex, NpcBusinessEventKind.FormationAborted, person.id, string.Empty,
+                        $"P{person.id} formation refused: founder or landlord ledger missing for the lease payment.");
+                    return;
+                }
+
+                string depositRefusal = founderLedger.TryTransferTo(landlordLedger, dayIndex, leaseDepositCents,
+                    $"lease deposit for building {leaseListing.BuildingId} via {leaseListing.ListingId}",
+                    HouseholdIncomeSource.OtherDocumented, leaseListing.ListingId,
+                    $"lease deposit held for {leaseListing.ListingId} (refundable on lease end)",
+                    "person:" + person.id);
+                if (depositRefusal != null)
+                {
+                    diag.Add($"Entrepreneurship: formation for P{person.id} refused — lease deposit transfer failed: {depositRefusal}");
+                    ctx.Events?.Record(dayIndex, NpcBusinessEventKind.FormationAborted, person.id, string.Empty,
+                        $"P{person.id} formation refused: lease deposit transfer failed.");
+                    return;
+                }
+
+                string firstRentRefusal = founderLedger.TryTransferTo(landlordLedger, dayIndex, leaseFirstRentCents,
+                    $"first month commercial rent for building {leaseListing.BuildingId} via {leaseListing.ListingId}",
+                    HouseholdIncomeSource.CommercialRentReceived, leaseListing.ListingId,
+                    $"first month commercial rent for building {leaseListing.BuildingId} via {leaseListing.ListingId}",
+                    "person:" + person.id);
+                if (firstRentRefusal != null)
+                {
+                    string depositRefundRefusal = landlordLedger.TryTransferTo(founderLedger, dayIndex, leaseDepositCents,
+                        $"lease deposit refund for {leaseListing.ListingId} (first rent transfer failed)",
+                        HouseholdIncomeSource.OtherDocumented, leaseListing.ListingId,
+                        $"lease deposit refund for {leaseListing.ListingId}",
+                        "person:" + leaseListing.LandlordPersonId);
+                    diag.Add($"Entrepreneurship: formation for P{person.id} refused — first rent transfer failed: {firstRentRefusal}. " +
+                        $"Deposit refund {(depositRefundRefusal == null ? "returned" : "FAILED: " + depositRefundRefusal)}.");
+                    ctx.Events?.Record(dayIndex, NpcBusinessEventKind.FormationAborted, person.id, string.Empty,
+                        $"P{person.id} formation refused: first rent transfer failed; deposit refund {(depositRefundRefusal == null ? "returned" : "FAILED")}.");
+                    return;
+                }
             }
 
             string refusal = ctx.CreationPort.TryCreateBusiness(intent, diag, out NpcCreatedBusiness created);
@@ -403,10 +522,61 @@ namespace LandLedgers.Economy.Creation
 
             if (refusal != null || created == null)
             {
-                diag.Add($"Entrepreneurship: formation for P{person.id} refused: {refusal ?? "no business returned"} — no business created.");
+                // B2: a refused creation refunds the deposit and first
+                // rent in full — the founder pays for no shop he did not
+                // get. The refunds cannot fail in the same tick (the
+                // landlord just received both), but a failure is logged
+                // loudly instead of hidden.
+                if (leaseListing != null && founderLedger != null && landlordLedger != null)
+                {
+                    string depositRefund = landlordLedger.TryTransferTo(founderLedger, dayIndex, leaseDepositCents,
+                        $"lease deposit refund for {leaseListing.ListingId} (formation refused)",
+                        HouseholdIncomeSource.OtherDocumented, leaseListing.ListingId,
+                        $"lease deposit refund for {leaseListing.ListingId}",
+                        "person:" + leaseListing.LandlordPersonId);
+                    string rentRefund = landlordLedger.TryTransferTo(founderLedger, dayIndex, leaseFirstRentCents,
+                        $"first month rent refund for {leaseListing.ListingId} (formation refused)",
+                        HouseholdIncomeSource.CommercialRentReceived, leaseListing.ListingId,
+                        $"first month rent refund for {leaseListing.ListingId}",
+                        "person:" + leaseListing.LandlordPersonId);
+                    diag.Add($"Entrepreneurship: formation for P{person.id} refused: {refusal ?? "no business returned"} — no business created. " +
+                        $"Lease deposit refund {(depositRefund == null ? "returned" : "FAILED: " + depositRefund)}; " +
+                        $"first rent refund {(rentRefund == null ? "returned" : "FAILED: " + rentRefund)}.");
+                }
+                else
+                {
+                    diag.Add($"Entrepreneurship: formation for P{person.id} refused: {refusal ?? "no business returned"} — no business created.");
+                }
+
                 ctx.Events?.Record(dayIndex, NpcBusinessEventKind.FormationAborted, person.id, string.Empty,
                     $"P{person.id} formation refused after Proceed verdict: {refusal ?? "no business returned"}.");
                 return;
+            }
+
+            // B2: the business exists — sign the lease. The first month
+            // is prepaid, so the rent settlement starts at period 1. An
+            // activation failure here cannot happen after the pre-checks
+            // above (the listing was offerable a moment ago in the same
+            // tick); if it ever does, the business is formed and the
+            // payments are recorded on the ledgers by their reasons, and
+            // the failure is logged loudly for a human to reconcile —
+            // never silently continued as if a lease existed.
+            if (leaseListing != null)
+            {
+                CommercialLeaseAgreement agreement = ctx.LeaseMarket.ActivateLease(leaseListing,
+                    person.id, intent.FounderHouseholdId, created.InstanceId,
+                    leaseDepositCents, firstRentPeriodPrepaid: true, dayIndex, diag);
+                if (agreement == null)
+                {
+                    diag.Add($"Entrepreneurship: P{person.id} formed '{created.DisplayName}' ({created.InstanceId}) but the lease " +
+                        $"on '{leaseListing.ListingId}' could NOT be activated — deposit {leaseDepositCents}c and first rent " +
+                        $"{leaseFirstRentCents}c were paid and are recorded on the ledgers; the lease must be reconciled by hand.");
+                }
+                else
+                {
+                    diag.Add($"Entrepreneurship: P{person.id} signed lease '{agreement.AgreementId}' for building {leaseListing.BuildingId} " +
+                        $"(deposit {leaseDepositCents}c, first month {leaseFirstRentCents}c prepaid).");
+                }
             }
 
             // The opportunity is acted on: a later week must not form a

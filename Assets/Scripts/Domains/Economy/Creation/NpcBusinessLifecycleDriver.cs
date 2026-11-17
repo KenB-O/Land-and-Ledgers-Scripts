@@ -50,6 +50,13 @@ namespace LandLedgers.Economy.Creation
             /// built-in per-type tuning table (<see cref="DefaultSurvivalReserveCents"/>).
             /// </summary>
             public Func<NpcLifecycleBusinessInfo, int> SurvivalReserveCents;
+            /// <summary>
+            /// B2: invoked (when set) for a business that closes during
+            /// this week's evaluation, with its info and life record. The
+            /// production binding releases the building back to the
+            /// runtime and re-lists it on the commercial lease market.
+            /// </summary>
+            public Action<NpcLifecycleBusinessInfo, NpcBusinessLifeRecord> OnBusinessClosed;
             public int DayIndex;
         }
 
@@ -109,6 +116,10 @@ namespace LandLedgers.Economy.Creation
                 // real credit-loop borrow path (BorrowForBusiness) stays
                 // available for a later pass with a production lender wired.
                 lifecycle.EvaluateWeek(record, reserve, seekSpend, context, null, null, diag);
+                // B2: a business that closed this week returns its
+                // building to the market through the caller's hook.
+                if (record.State == NpcBusinessLifeState.Closed)
+                    ctx.OnBusinessClosed?.Invoke(info, record);
             }
         }
 

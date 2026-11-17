@@ -95,6 +95,15 @@ namespace LandLedgers.EditorTests.Integration
             "BakeryStagedProductionChain", "ForgeRepairChain",
             "StoreRestockService",
             "RealDemandSource",
+            // S4 (Agent S4, universal business campaign 2026-11-17):
+            // VetService and FarrierService are the entry services of
+            // the vet and farrier features in VetServices.cs. Both are
+            // fully implemented with no production caller outside their
+            // owning directory, so they are registered unwired in
+            // Docs/UnwiredSystems.md (HouseholdMoveService R-13
+            // precedent) and listed here as candidates so the
+            // registry test enforces the registration both ways.
+            "VetService", "FarrierService",
         };
 
         // Pass IX baseline of feature-internal types (see fixture summary).
@@ -584,6 +593,29 @@ namespace LandLedgers.EditorTests.Integration
             // Furniture valuation: the contents split is the valuation
             // feature's data, test-exercised.
             "StructureContentsSplit",
+            // S4 (Agent S4, universal business campaign 2026-11-17):
+            // the five VetServices.cs records below are the data of the
+            // animal-services (vet / farrier) feature — the same
+            // precedent as the blacksmith repair-queue and boarding-house
+            // record clusters above. VetPractitioner and
+            // VetServiceAgreement are consumed inside VetServices.cs
+            // itself (RegisterPractitioner / RegisterAgreement and the
+            // CallOut lookup); AnimalTreatment is iterated by
+            // VetHerdHealth and dispensed against by VetMedicineSupply
+            // (same directory); VetInvoice is held by VetHerdVisit and
+            // settled by VetMedicineSupply (same directory);
+            // MedicineLot is declared only and currently unreferenced
+            // outside its declaration — the live lot type is
+            // VetMedicineLot in VetMedicineSupply.cs. None has an
+            // out-of-directory production caller, and none is a
+            // standalone unwired system (those belong in
+            // Docs/UnwiredSystems.md, not here). The feature's two
+            // entry services, VetService and FarrierService, ARE
+            // registered unwired instead — see the registry and the
+            // candidate list above. Full per-type evidence:
+            // /home/hatch/ll-ubc-s4-pass9-evidence.txt.
+            "AnimalTreatment", "MedicineLot", "VetInvoice",
+            "VetPractitioner", "VetServiceAgreement",
         };
 
         private static string ResolveRepoRoot()

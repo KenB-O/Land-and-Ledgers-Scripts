@@ -65,6 +65,8 @@ found, the test fails loudly rather than passing silently.
 | ForgeRepairChain | Domains/Economy/Businesses/Blacksmith/ForgeRepairChain.cs | Domains/Economy/Businesses/Blacksmith | (none) |
 | RealDemandSource | Domains/Economy/Core/RealDemandSource.cs | Domains/Economy/Core | (none) |
 | HouseholdMoveService | Domains/World/Property/HouseholdMoveService.cs | Domains/World/Property | (none) |
+| VetService | Domains/Economy/AnimalServices/VetServices.cs | Domains/Economy/AnimalServices | (none) |
+| FarrierService | Domains/Economy/AnimalServices/VetServices.cs | Domains/Economy/AnimalServices | (none) |
 | ScenarioFailureNoticeBoard | Orchestration/Scenarios/Generation/ScenarioFailureNoticeBoard.cs | Orchestration/Scenarios/Generation | (none) |
 | ButcherRuntime | Domains/Economy/Businesses/Butcher/ButcherRuntime.cs | Domains/Economy/Businesses/Butcher | Orchestration/Systems/SimulationSystemsHub.cs; Domains/Economy/Businesses/GeneralStore/StoreButchery.cs; Domains/Economy/Farming/FarmLivestock.cs; Domains/Economy/Farming/Integration/CullFlow.cs |
 | TanneryRuntime | Domains/Economy/Businesses/Tannery/TanneryRuntime.cs | Domains/Economy/Businesses/Tannery | (none) |
@@ -357,6 +359,27 @@ found, the test fails loudly rather than passing silently.
   path requires whole-household atomicity; acquisition closing
   occupancy does not state relocation vs second property, so routing
   it without a relocation flag would change its semantics).
+- `VetService` and `FarrierService` (S4, universal business campaign
+  2026-11-17) are the entry services of the vet and farrier features
+  in `Domains/Economy/AnimalServices/VetServices.cs`. `VetService`
+  runs a call-out over a real JRN route (both ways), treats each
+  animal individually, and invoices every line; `FarrierService`
+  shoes one horse at a time (legacy `ShoeHorse`) and fits shoes one
+  hoof at a time (D1 `FitShoes`, consuming forged horseshoes from
+  `BlacksmithRuntime`). Both are fully implemented and covered by
+  editor tests only — no live driver constructs or calls either one.
+  The only same-directory consumer is `VetHerdVisitService`
+  (`VetHerdHealth.cs`), which takes a `VetService` as a
+  caller-supplied parameter and never constructs one, so under the
+  caller rule that is intra-feature, not wiring. D1's "deliberately
+  wired" note was about `BlacksmithRuntime` gaining a production
+  reference FROM `FarrierService.FitShoes`, not about `FarrierService`
+  gaining a caller. Remove a row the day a live driver outside
+  `Domains/Economy/AnimalServices` constructs or calls the service.
+  The five records in the same file (`VetPractitioner`,
+  `VetServiceAgreement`, `AnimalTreatment`, `MedicineLot`,
+  `VetInvoice`) are NOT registered here — they are the feature's data
+  and are classified feature-internal in the Pass 9 baseline instead.
 
 ## Audited production-reachable systems (NOT registry entries)
 
@@ -804,3 +827,14 @@ note records their audited status so the question does not reopen:
   sawing), no stock in live play until F6 + D-F0 co-location, and no
   sale until D-F1 — those are Priority D / F6 follow-ons, not registry
   questions.
+- Universal business campaign S4 (2026-11-17): `VetService` and
+  `FarrierService` registered as UNWIRED — the vet and farrier entry
+  services in `Domains/Economy/AnimalServices/VetServices.cs`, fully
+  implemented and test-covered, with no production caller outside
+  their owning directory (D1 added the file to the harness subset,
+  which exposed all seven of its types to the Pass 9 assembly scan;
+  the five records in the same file were classified feature-internal
+  in the scan baseline instead, and the two services were registered
+  here as the standalone unwired systems). Remove a row when a live
+  driver outside `Domains/Economy/AnimalServices` constructs or
+  calls the service.

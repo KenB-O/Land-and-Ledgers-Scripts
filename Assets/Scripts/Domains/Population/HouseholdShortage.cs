@@ -85,6 +85,23 @@ namespace LandLedgers.Population
         /// fuel shortage. Recognition is never inferred from current stock,
         /// so recognized-but-out-of-stock demand remains visible as well. A
         /// null predicate leaves seller availability unknown.
+        /// I1-M1 (2026-11-17): <paramref name="mealPriorityOrder"/>, when
+        /// supplied, allocates food needs in meal-priority order against one
+        /// shared cover total, because meals consume one item per serving,
+        /// first available in priority order -- foods are substitutes, not
+        /// additions. The held total counts every priority food already in
+        /// the larder, so a household stocked with a lower-priority food
+        /// does not demand a full target of the top food on top of it.
+        /// Without it each item's need was sized for the full
+        /// target independently and one household demanded roughly six times
+        /// the food it eats. <paramref name="isPurchasableNow"/>, when
+        /// supplied, says whether the item can actually be bought today
+        /// (recognized by a known seller and currently stocked); a
+        /// higher-priority need counts toward the shared cover only when it
+        /// is purchasable, so a stockout falls back to the next food instead
+        /// of blocking it. A null purchasability predicate counts a need as
+        /// cover. Both parameters are optional: callers that pass neither
+        /// get exactly today's per-item behaviour.
         /// </summary>
         public void Evaluate(
             HouseholdState household,
@@ -95,7 +112,9 @@ namespace LandLedgers.Population
             int upcomingObligationCents,
             int expectedIncomeCents,
             int dayIndex,
-            Func<string, bool> isRecognizedByKnownSeller = null)
+            Func<string, bool> isRecognizedByKnownSeller = null,
+            IReadOnlyList<string> mealPriorityOrder = null,
+            Func<string, bool> isPurchasableNow = null)
         {
             if (household == null || inventory == null)
             {
@@ -106,11 +125,66 @@ namespace LandLedgers.Population
             int day = Mathf.Max(0, dayIndex);
             if (expectedDailyUseByItem != null)
             {
-                foreach (KeyValuePair<string, int> use in expectedDailyUseByItem)
+                if (mealPriorityOrder == null)
                 {
-                    EvaluateItem(household, inventory, use.Key, Mathf.Max(0, use.Value),
-                        isColdSeason, supplyAccess, upcomingObligationCents, expectedIncomeCents, day,
-                        isRecognizedByKnownSeller);
+                    foreach (KeyValuePair<string, int> use in expectedDailyUseByItem)
+                    {
+                        EvaluateItem(household, inventory, use.Key, Mathf.Max(0, use.Value),
+                            isColdSeason, supplyAccess, upcomingObligationCents, expectedIncomeCents, day,
+                            isRecognizedByKnownSeller);
+                    }
+                }
+                else
+                {
+                    // I1-M1: one shared cover total, allocated in meal-priority
+                    // order. The held total counts every priority food the
+                    // household already holds (meals eat any of them, first
+                    // available in priority order); planned days accumulate
+                    // only from higher-priority needs that are purchasable,
+                    // so a stockout falls back to the next food instead of
+                    // blocking it. Items outside the priority list keep
+                    // today's independent evaluation; fuel is evaluated
+                    // separately below and never shares food cover.
+                    float totalHeldDays = 0f;
+                    foreach (string itemId in mealPriorityOrder)
+                    {
+                        if (string.IsNullOrWhiteSpace(itemId)
+                            || !expectedDailyUseByItem.TryGetValue(itemId, out int dailyUse)
+                            || dailyUse <= 0)
+                        {
+                            continue;
+                        }
+
+                        totalHeldDays += inventory.EstimateDaysOfSupply(itemId, dailyUse);
+                    }
+
+                    float plannedDays = 0f;
+                    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (string itemId in mealPriorityOrder)
+                    {
+                        if (string.IsNullOrWhiteSpace(itemId)
+                            || !expectedDailyUseByItem.TryGetValue(itemId, out int dailyUse))
+                        {
+                            continue;
+                        }
+
+                        seen.Add(itemId);
+                        EvaluateAllocatedItem(household, inventory, itemId, Mathf.Max(0, dailyUse),
+                            isColdSeason, supplyAccess, upcomingObligationCents, expectedIncomeCents, day,
+                            isRecognizedByKnownSeller, isPurchasableNow, totalHeldDays, ref plannedDays);
+                    }
+
+                    foreach (KeyValuePair<string, int> use in expectedDailyUseByItem)
+                    {
+                        if (seen.Contains(use.Key))
+                        {
+                            continue;
+                        }
+
+                        EvaluateItem(household, inventory, use.Key, Mathf.Max(0, use.Value),
+                            isColdSeason, supplyAccess, upcomingObligationCents, expectedIncomeCents, day,
+                            isRecognizedByKnownSeller);
+                    }
                 }
             }
 
@@ -182,6 +256,176 @@ namespace LandLedgers.Population
 
                 return false;
             };
+        }
+
+        /// <summary>
+        /// I1-M1 (2026-11-17): builds the purchasability predicate the
+        /// shortage drive passes into Evaluate alongside the recognition
+        /// predicate — the same known-seller rule, plus current stock:
+        /// a supplier in the directory that a household member legitimately
+        /// knows, that recognizes the item, and that currently holds at
+        /// least one unit of it. Stock is consulted here only to decide
+        /// whether a higher-priority need can actually be filled today (and
+        /// therefore counts toward the shared cover); a recognized-but-
+        /// out-of-stock item still opens its own need, exactly as the
+        /// recognition predicate leaves it.
+        /// </summary>
+        public static Func<string, bool> KnownSellerPurchasabilityPredicate(
+            SupplierDirectory suppliers,
+            ShopperSellerKnowledge knowledge,
+            IEnumerable<int> memberIds)
+        {
+            var members = new HashSet<int>();
+            if (memberIds != null)
+            {
+                foreach (int memberId in memberIds)
+                {
+                    members.Add(memberId);
+                }
+            }
+
+            return itemId =>
+            {
+                if (string.IsNullOrWhiteSpace(itemId) || suppliers == null || knowledge == null || members.Count == 0)
+                {
+                    return false;
+                }
+
+                foreach (IGoodsSupplier supplier in suppliers.All)
+                {
+                    if (supplier == null || !(supplier is IItemResolvingSupplier resolving))
+                    {
+                        continue;
+                    }
+
+                    bool recognized = supplier is IItemCatalogSupplier catalog
+                        ? catalog.RecognizesItem(itemId)
+                        : !string.IsNullOrWhiteSpace(resolving.CategoryForItem(itemId));
+                    if (!recognized || resolving.ItemStockUnits(itemId) <= 0)
+                    {
+                        continue;
+                    }
+
+                    foreach (int memberId in members)
+                    {
+                        if (knowledge.Knows(memberId, supplier.SupplierBusinessId))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            };
+        }
+
+        /// <summary>
+        /// I1-M1 (2026-11-17): one food item's share of the household's
+        /// shared cover. <paramref name="totalHeldDays"/> is the days of
+        /// food the household already holds across all priority foods --
+        /// its own stock is already counted in that total, because meals
+        /// eat any priority food, first available in priority order. The
+        /// effective cover adds the days higher-priority needs will add
+        /// when they are bought (<paramref name="plannedDays"/>), so the
+        /// household demands the food it actually eats: the top food covers
+        /// the shortfall first and lower foods open only for what remains.
+        /// A created need counts toward the cover only when the item is
+        /// purchasable today (null predicate counts as purchasable), so a
+        /// stockout falls back to the next food instead of blocking it.
+        /// Infinite cover (daily use at or below zero) fulfils the item,
+        /// exactly as today's per-item evaluation does, and is never added
+        /// to the planned total.
+        /// </summary>
+        private void EvaluateAllocatedItem(
+            HouseholdState household,
+            HouseholdInventory inventory,
+            string itemId,
+            int dailyUseUnits,
+            bool isColdSeason,
+            HouseholdSupplyAccess supplyAccess,
+            int upcomingObligationCents,
+            int expectedIncomeCents,
+            int dayIndex,
+            Func<string, bool> isRecognizedByKnownSeller,
+            Func<string, bool> isPurchasableNow,
+            float totalHeldDays,
+            ref float plannedDays)
+        {
+            if (string.IsNullOrWhiteSpace(itemId) || HouseholdItemCatalog.Get(itemId) == null)
+            {
+                return;
+            }
+
+            // The item's own held stock is already inside totalHeldDays,
+            // so the effective cover is that total plus what higher-
+            // priority needs will add when bought.
+            float effectiveDays = dailyUseUnits > 0
+                ? totalHeldDays + plannedDays
+                : float.PositiveInfinity;
+
+            HouseholdPurchasingNeed openNeed = needs.GetOpenNeed(household.id, itemId);
+            if (effectiveDays >= FulfilledDaysThreshold)
+            {
+                if (openNeed != null)
+                {
+                    openNeed.Status = PurchasingNeedStatus.Fulfilled;
+                    openNeed.LastEvaluatedDayIndex = dayIndex;
+                }
+
+                return;
+            }
+
+            // Adequate for now, against the shared cover rather than this
+            // item alone: keep the open need fresh but do not grow it.
+            if (effectiveDays > LowDaysThreshold)
+            {
+                if (openNeed != null)
+                {
+                    openNeed.LastEvaluatedDayIndex = dayIndex;
+                }
+
+                return;
+            }
+
+            float targetDays = Mathf.Max(LowDaysThreshold, TargetDaysThreshold);
+            int unitsNeeded = Mathf.CeilToInt(
+                Mathf.Max(0f, targetDays - effectiveDays) * Mathf.Max(1, dailyUseUnits));
+
+            bool hasKnownSeller = isRecognizedByKnownSeller == null
+                || isRecognizedByKnownSeller(itemId);
+            float urgency = Mathf.Clamp01(1f - effectiveDays / Mathf.Max(0.01f, LowDaysThreshold));
+            if (isColdSeason && string.Equals(itemId, HouseholdItemCatalog.FuelWoodId, StringComparison.OrdinalIgnoreCase))
+            {
+                urgency = Mathf.Max(urgency, 0.7f);
+            }
+
+            string reason = $"{itemId}: {effectiveDays:0.0} days of shared food cover at {dailyUseUnits}/day " +
+                $"(threshold {LowDaysThreshold:0.0}d)" +
+                (isColdSeason ? ", cold season" : string.Empty) +
+                (hasKnownSeller ? string.Empty : ", no known seller currently recognizes this item");
+
+            if (!hasKnownSeller)
+            {
+                diagnostics.Add($"H{household.id} has an open '{itemId}' shortage, but no known seller currently offers it");
+            }
+
+            if (openNeed == null)
+            {
+                openNeed = needs.CreateNeed(household.id, itemId, dayIndex);
+            }
+
+            openNeed.UnitsNeeded = Math.Max(unitsNeeded, 1);
+            openNeed.Urgency01 = urgency;
+            openNeed.ReasonSummary = reason;
+            openNeed.LastEvaluatedDayIndex = dayIndex;
+            openNeed.Status = PurchasingNeedStatus.Open;
+            openNeed.SuggestedResponses = BuildSuggestedResponses(
+                itemId, supplyAccess, upcomingObligationCents, expectedIncomeCents, urgency);
+
+            if (isPurchasableNow == null || isPurchasableNow(itemId))
+            {
+                plannedDays += (float)openNeed.UnitsNeeded / Mathf.Max(1, dailyUseUnits);
+            }
         }
 
         private void EvaluateItem(

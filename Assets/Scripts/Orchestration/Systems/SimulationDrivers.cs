@@ -13451,6 +13451,16 @@ namespace LandLedgers.Orchestration.Systems
                     // later lets the need open the next day.
                     isRecognizedByKnownSeller: HouseholdShortageMonitor.KnownSellerRecognitionPredicate(
                         supplierDirectory, sellerKnowledge,
+                        householdMemberships?.GetActiveMembers(household.id)),
+                    // I1-M1: allocate food needs in meal-priority order against
+                    // one shared cover total, so the household demands the food
+                    // it actually eats instead of one full diet per item. A
+                    // higher-priority need counts toward the cover only when
+                    // the item is purchasable today (known seller, stocked),
+                    // so a stockout falls back to the next food.
+                    mealPriorityOrder: policy.MealItemPriority,
+                    isPurchasableNow: HouseholdShortageMonitor.KnownSellerPurchasabilityPredicate(
+                        supplierDirectory, sellerKnowledge,
                         householdMemberships?.GetActiveMembers(household.id)));
             }
 

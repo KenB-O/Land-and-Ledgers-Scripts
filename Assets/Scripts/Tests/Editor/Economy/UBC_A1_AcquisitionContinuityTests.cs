@@ -1,0 +1,377 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using LandLedgers.Economy;
+using LandLedgers.Economy.Financing;
+using LandLedgers.Persistence;
+using LandLedgers.Population;
+using LandLedgers.World;
+using NUnit.Framework;
+using UnityEditor;
+using UnityEngine;
+
+namespace LandLedgers.Editor.Economy
+{
+    /// <summary>
+    /// UBC lane A1: business acquisition continuity, brief section 18 scenarios
+    /// A through G. The required scenario is the NPC General Store: after the
+    /// player acquires it, the same enterprise (same business id, same stock,
+    /// same agreements, same cash and liabilities) must keep operating under
+    /// the store runtime, with no phantom second business.
+    /// Unity EditMode tests: this file needs the real town assets and the
+    /// acquisition cluster (SharedBusinessRuntimeManager, store runtime,
+    /// portfolio, market), which the Roslyn harness does not compile.
+    /// </summary>
+    public sealed class UbcA1AcquisitionContinuityTests
+    {
+        private const int TestOwnerCashCents = 500_000;
+
+        [Test]
+        public void AcquiredGeneralStoreKeepsBusinessId()
+        {
+            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+            string instanceId = store.InstanceId;
+            Assert.IsFalse(string.IsNullOrWhiteSpace(instanceId), "The opening store must have a stable business id.");
+
+            Assert.IsTrue(
+                context.SharedBusinessRuntime.TryTransferBusinessToPlayer(store.AssignedBuildingId, out BusinessInstanceState transferred, out string message),
+                message);
+
+            Assert.AreSame(store, transferred, "Transfer must move the same business object, not a replacement.");
+            Assert.AreEqual(instanceId, transferred.InstanceId, "Business id must survive the sale.");
+            Assert.AreEqual(BusinessOwnerKind.Player, transferred.Owner.OwnerKind);
+            Assert.AreSame(store, context.SharedBusinessRuntime.FindByInstanceId(instanceId));
+        }
+
+        [Test]
+        public void AcquiredGeneralStoreInventoryIsNotDuplicated()
+        {
+            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+
+            List<(string CategoryId, int Units)> before = SnapshotStock(store);
+            if (before.Count > 0)
+            {
+                context.SetBusinessStock(store, before[0].CategoryId, 37);
+                before = SnapshotStock(store);
+                Assert.AreEqual(37, before[0].Units);
+            }
+
+            Assert.IsTrue(
+                context.SharedBusinessRuntime.TryTransferBusinessToPlayer(store.AssignedBuildingId, out _, out string message),
+                message);
+
+            List<(string CategoryId, int Units)> after = SnapshotStock(store);
+            Assert.AreEqual(before.Count, after.Count, "Transfer must not add or drop stock categories.");
+            for (int i = 0; i < before.Count; i++)
+            {
+                Assert.AreEqual(before[i].CategoryId, after[i].CategoryId);
+                Assert.AreEqual(before[i].Units, after[i].Units, $"Stock for {before[i].CategoryId} must be preserved exactly, not duplicated.");
+            }
+        }
+
+        [Test]
+        public void TransferAgreementNamingAcquiredStoreSurvivesTransfer()
+        {
+            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+            BusinessInstanceState sawmill = context.GetBusiness(BusinessType.Sawmill);
+
+            BusinessTransferAgreementState agreement = new();
+            agreement.Configure(
+                "a1_sawmill_to_store",
+                sawmill.InstanceId,
+                store.InstanceId,
+                "lumber",
+                "lumber",
+                BusinessTransferAllocationMode.FixedUnits,
+                5,
+                BusinessCadence.Weekly,
+                1,
+                BusinessTransferPricingMode.Market,
+                1f,
+                2,
+                LocalRecurringOrderHaulingResponsibility.Seller,
+                true,
+                9);
+            context.SetTransferAgreements(agreement);
+
+            Assert.IsTrue(
+                context.SharedBusinessRuntime.TryTransferBusinessToPlayer(store.AssignedBuildingId, out _, out string message),
+                message);
+
+            BusinessTransferAgreementState surviving = context.SharedBusinessRuntime.TransferAgreements
+                .FirstOrDefault(candidate => candidate != null && candidate.AgreementId == "a1_sawmill_to_store");
+            Assert.NotNull(surviving, "A transfer agreement naming the acquired store must survive the sale.");
+            Assert.AreEqual(sawmill.InstanceId, surviving.SourceBusinessInstanceId);
+            Assert.AreEqual(store.InstanceId, surviving.DestinationBusinessInstanceId);
+            Assert.IsTrue(surviving.Active, "The agreement must stay active after the sale.");
+        }
+
+        [Test]
+        public void TransferPreservesCashAndLiabilities()
+        {
+            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+            context.SetBusinessCash(store, 40000);
+            SetAccruedLiability(store, 12000);
+            int ownerCashBefore = context.PlayerPortfolio.OwnerCashCents;
+
+            Assert.IsTrue(
+                context.SharedBusinessRuntime.TryTransferBusinessToPlayer(store.AssignedBuildingId, out _, out string message),
+                message);
+
+            Assert.AreEqual(40000, store.RuntimeState.CurrentCashCents, "The transfer itself must not change business cash.");
+            Assert.AreEqual(12000, store.RuntimeState.AccruedLiabilityCents, "Accrued liabilities travel with the business.");
+            Assert.AreEqual(ownerCashBefore, context.PlayerPortfolio.OwnerCashCents, "The transfer itself must not move owner cash.");
+
+            BusinessInstanceSaveDto dto = store.CaptureSaveDto();
+            Assert.AreEqual(40000, dto.runtime.currentCashCents);
+            Assert.AreEqual(12000, dto.runtime.accruedLiabilityCents);
+            BusinessInstanceState restored = BusinessInstanceState.FromSaveDto(dto);
+            Assert.NotNull(restored);
+            Assert.AreEqual(store.InstanceId, restored.InstanceId);
+            Assert.NotNull(restored.RuntimeState);
+            Assert.AreEqual(40000, restored.RuntimeState.CurrentCashCents);
+            Assert.AreEqual(12000, restored.RuntimeState.AccruedLiabilityCents);
+        }
+
+        [Test]
+        public void AcquiredGeneralStoreIsBoundToStoreRuntimeAndSettlesWeekly()
+        {
+            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+            Assert.IsNull(context.StoreRuntime.CurrentBusiness, "No player store is bound before acquisition.");
+
+            Assert.IsTrue(
+                context.SharedBusinessRuntime.TryTransferBusinessToPlayer(store.AssignedBuildingId, out _, out string message),
+                message);
+
+            Assert.AreSame(store, context.StoreRuntime.CurrentBusiness, "The acquired store must be bound to the store runtime by the transfer.");
+            Assert.AreSame(store.RuntimeState, context.StoreRuntime.RuntimeState);
+            Assert.AreEqual(store.RuntimeState.CurrentCashCents, context.StoreRuntime.CurrentCashCents);
+
+            context.StoreRuntime.ResolveWeeklyPayrollAndReorder();
+            Assert.IsFalse(
+                context.StoreRuntime.Status.Contains("No player General Store has been formed yet"),
+                "Weekly settlement must run for the acquired store instead of early-returning on a missing store.");
+        }
+
+        [Test]
+        public void AcquiredStoreBindingRefusalIsSurfacedWhenRuntimeIsBusy()
+        {
+            using TestWorld context = TestWorld.Create();
+            context.CreatePlayerStoreForAccounting();
+            BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+
+            Assert.IsTrue(
+                context.SharedBusinessRuntime.TryTransferBusinessToPlayer(store.AssignedBuildingId, out _, out string message),
+                message);
+
+            Assert.AreEqual(BusinessOwnerKind.Player, store.Owner.OwnerKind, "The sale itself still completes.");
+            Assert.AreNotSame(store, context.StoreRuntime.CurrentBusiness, "The runtime keeps the store it already manages.");
+            StringAssert.Contains("could not take over", message, "A refused binding must be visible in the transfer message, never silent.");
+        }
+
+        [Test]
+        public void AcquiredStoreCanConfigureAdditionalLegitimateCapability()
+        {
+            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+
+            Assert.IsTrue(
+                context.SharedBusinessRuntime.TryTransferBusinessToPlayer(store.AssignedBuildingId, out _, out string message),
+                message);
+
+            Assert.IsTrue(
+                store.TryConfigureGenericRetailLine(new GenericRetailProductLine("general_goods", "storage", 10f, 20f, 5f, 100), 0.1f),
+                "The acquired store must accept a new retail line through the ordinary capability system.");
+            Assert.IsTrue(
+                store.GenericConfiguration.Retail.ProductLines.Any(line => line != null && line.ProductId == "general_goods"),
+                "The configured line must be recorded on the acquired business.");
+            store.AddCapability("retail");
+            Assert.IsTrue(store.HasCapability("retail"));
+        }
+
+        [Test]
+        public void TransferCreatesNoPhantomBusiness()
+        {
+            using TestWorld context = TestWorld.Create();
+            int countBefore = context.SharedBusinessRuntime.Businesses.Count;
+            HashSet<string> idsBefore = new(context.SharedBusinessRuntime.Businesses
+                .Where(business => business != null)
+                .Select(business => business.InstanceId));
+            BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+
+            Assert.IsTrue(
+                context.SharedBusinessRuntime.TryTransferBusinessToPlayer(store.AssignedBuildingId, out _, out string message),
+                message);
+
+            Assert.AreEqual(countBefore, context.SharedBusinessRuntime.Businesses.Count, "Transfer must not create or destroy a business.");
+            Assert.AreEqual(1, context.SharedBusinessRuntime.Businesses.Count(business => business != null && business.InstanceId == store.InstanceId));
+            Assert.AreSame(store, context.SharedBusinessRuntime.FindByType(BusinessType.GeneralStore));
+            Assert.IsTrue(idsBefore.SetEquals(context.SharedBusinessRuntime.Businesses
+                .Where(business => business != null)
+                .Select(business => business.InstanceId)), "The business set must be identical before and after the sale.");
+        }
+
+        private static List<(string CategoryId, int Units)> SnapshotStock(BusinessInstanceState business)
+        {
+            List<(string, int)> snapshot = new();
+            foreach (CategoryStockState stock in business.RuntimeState.CategoryStock)
+            {
+                if (stock == null || string.IsNullOrWhiteSpace(stock.CategoryId))
+                {
+                    continue;
+                }
+
+                snapshot.Add((stock.CategoryId, stock.CurrentStockUnits));
+            }
+
+            return snapshot;
+        }
+
+        private static void SetAccruedLiability(BusinessInstanceState business, int cents)
+        {
+            FieldInfo field = typeof(BusinessRuntimeState).GetField("accruedLiabilityCents", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(field, "BusinessRuntimeState.accruedLiabilityCents should exist.");
+            field.SetValue(business.RuntimeState, Mathf.Max(0, cents));
+        }
+
+        private sealed class TestWorld : IDisposable
+        {
+            private readonly GameObject root;
+            private readonly TownGenerationSettings settings;
+
+            public TownWorldController TownWorld { get; }
+            public PopulationManager PopulationManager { get; }
+            public GeneralStoreRuntimeManager StoreRuntime { get; }
+            public SharedBusinessRuntimeManager SharedBusinessRuntime { get; }
+            public AcquisitionMarketManager AcquisitionMarket { get; }
+            public PlayerPortfolioManager PlayerPortfolio { get; }
+
+            private TestWorld(GameObject root, TownGenerationSettings settings)
+            {
+                this.root = root;
+                this.settings = settings;
+                TownWorld = root.AddComponent<TownWorldController>();
+                PopulationManager = root.AddComponent<PopulationManager>();
+                StoreRuntime = root.AddComponent<GeneralStoreRuntimeManager>();
+                SharedBusinessRuntime = root.AddComponent<SharedBusinessRuntimeManager>();
+                AcquisitionMarket = root.AddComponent<AcquisitionMarketManager>();
+                PlayerPortfolio = root.AddComponent<PlayerPortfolioManager>();
+            }
+
+            public static TestWorld Create()
+            {
+                TownGenerationSettings sourceSettings = AssetDatabase.LoadAssetAtPath<TownGenerationSettings>("Assets/Core/World/DefaultTownGenerationSettings.asset");
+                GeneralStoreBusinessDefinition storeDefinition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>("Assets/Core/Economy/GeneralStoreBusinessDefinition.asset");
+                Assert.NotNull(sourceSettings);
+                Assert.NotNull(storeDefinition);
+
+                TownGenerationSettings settings = UnityEngine.Object.Instantiate(sourceSettings);
+                GameObject root = new("UBC A1 Acquisition Continuity Test World");
+                TestWorld context = new(root, settings);
+                context.TownWorld.Configure(settings, null, null);
+                context.TownWorld.GenerateTownShell();
+                context.SeedLaborPool(24);
+                context.PlayerPortfolio.Configure(null, null);
+                context.StoreRuntime.Configure(context.TownWorld, context.PopulationManager, null, storeDefinition, null, null, context.PlayerPortfolio);
+                Assert.IsTrue(context.StoreRuntime.InitializeIfNeeded(), context.StoreRuntime.Status);
+                context.SharedBusinessRuntime.Configure(context.TownWorld, null, context.PopulationManager, null, context.StoreRuntime, context.PlayerPortfolio);
+                context.SharedBusinessRuntime.InitializeIfNeeded(context.StoreRuntime.CurrentBusiness);
+                context.PlayerPortfolio.InitializeFromLegacyBusinessCash(context.StoreRuntime, context.SharedBusinessRuntime);
+                context.PlayerPortfolio.AddOwnerCash(TestOwnerCashCents, "UBC A1 test working capital");
+                context.AcquisitionMarket.Configure(context.TownWorld, context.StoreRuntime, context.SharedBusinessRuntime, context.PopulationManager, null, null, context.PlayerPortfolio);
+                context.AcquisitionMarket.RebuildMarket();
+                return context;
+            }
+
+            public void CreatePlayerStoreForAccounting()
+            {
+                Assert.IsTrue(
+                    SharedBusinessRuntime.TryCreatePlayerBusiness(
+                        BusinessType.GeneralStore,
+                        "A1 Accounting Test Store",
+                        out BusinessInstanceState business,
+                        out string formationMessage),
+                    formationMessage);
+                Assert.IsTrue(StoreRuntime.TryBindFormedPlayerBusiness(business, out string bindMessage), bindMessage);
+            }
+
+            public void Dispose()
+            {
+                if (root != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(root);
+                }
+
+                if (settings != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(settings);
+                }
+            }
+
+            public BusinessInstanceState GetBusiness(BusinessType businessType)
+            {
+                BusinessInstanceState business = SharedBusinessRuntime.FindByType(businessType);
+                Assert.NotNull(business, $"Expected shared {businessType} business in the default town.");
+                Assert.NotNull(business.RuntimeState, $"Expected shared {businessType} runtime state.");
+                return business;
+            }
+
+            public void SetBusinessStock(BusinessInstanceState business, string categoryId, int units)
+            {
+                Assert.NotNull(business);
+                CategoryStockState stock = business.RuntimeState.GetCategoryStock(categoryId);
+                Assert.NotNull(stock, $"{business.BusinessType} category {categoryId} should exist.");
+                stock.SetCurrentStockForTests(units);
+            }
+
+            public void SetBusinessCash(BusinessInstanceState business, int cashCents)
+            {
+                Assert.NotNull(business);
+                int target = Mathf.Max(0, cashCents);
+                int current = business.RuntimeState.CurrentCashCents;
+                if (current > target)
+                {
+                    business.RuntimeState.SpendCents(current - target);
+                    return;
+                }
+
+                business.RuntimeState.AddCashCents(target - current);
+            }
+
+            public void SetTransferAgreements(params BusinessTransferAgreementState[] agreements)
+            {
+                FieldInfo field = typeof(SharedBusinessRuntimeManager).GetField("transferAgreements", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.NotNull(field, "SharedBusinessRuntimeManager.transferAgreements should exist.");
+                field.SetValue(SharedBusinessRuntime, new List<BusinessTransferAgreementState>(agreements));
+            }
+
+            public void SeedLaborPool(int count)
+            {
+                PopulationManager.State.people.Clear();
+                for (int i = 0; i < count; i++)
+                {
+                    PopulationManager.State.people.Add(new PersonState
+                    {
+                        id = i,
+                        firstName = "Worker",
+                        lastName = i.ToString("00"),
+                        age = 22,
+                        ageBand = AgeBand.Adult18Plus,
+                        laborAccessLevel = LaborAccessLevel.FullLaborMarket,
+                        householdId = -1,
+                        professionId = string.Empty,
+                        professionName = "No assigned job",
+                        homeBuildingId = -1,
+                        workplaceBuildingId = -1
+                    });
+                }
+            }
+        }
+    }
+}

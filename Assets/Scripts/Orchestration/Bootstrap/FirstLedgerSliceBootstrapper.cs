@@ -897,20 +897,24 @@ namespace LandLedgers.FirstLedger
             // household are skipped, and a household with no saved fuel
             // keeps empty stores). Storage: re-point the registry at the
             // live household inventory, so the day-boundary poll reads the
-            // restored lots. This hook sits AFTER RefreshRestoreDiagnostics
-            // on purpose: W-G2's sleeping-place rebuild hook sits directly
-            // after the furnishing re-registration loop above, and keeping
-            // the two hooks on opposite sides of the S9 block keeps the
-            // B8 and W-G2 bootstrapper edits on disjoint anchors.
+            // restored lots, then restore the saved storage bindings on
+            // top (G-4 save seam — the bind parameters now persist, so
+            // the bindings survive Continue). This hook sits after the S9
+            // block and BEFORE RefreshRestoreDiagnostics on purpose:
+            // W-G2's sleeping-place rebuild hook sits directly after the
+            // furnishing re-registration loop above, and keeping the two
+            // hooks on opposite sides of the S9 block keeps the B8 and
+            // W-G2 bootstrapper edits on disjoint anchors. (An earlier
+            // version of this comment said AFTER RefreshRestoreDiagnostics;
+            // that was wrong — the hook block sits immediately before
+            // that call. Corrected by G-4, cp91 correction 3.)
             // LIMITS, stated plainly: the fuel restore only returns fuel
-            // a save actually carried — the state's HouseholdStoveFuelStores
-            // list is still empty in production until Agent G lands the
-            // fuel-store sync (B2's item, W-G1 follow-up), so this hook
-            // restores nothing until then and must NOT be read as the sync
-            // itself. Storage bindings do NOT survive Continue (no save
-            // seam for bind parameters — B5 follow-up); the hook re-points
-            // the inventory only, and bindings re-bind from the install
-            // path when fixtures are bound again.
+            // a save actually carried — the G-4 fuel-store sync fills the
+            // state's HouseholdStoveFuelStores list at save time, so this
+            // hook restores what the last save captured. A storage
+            // binding whose saved lot no longer resolves (consumed to
+            // zero, or gone) restores without that placement; the lot
+            // itself stays in the inventory.
             if (systemsHub != null && saveLoadManager?.Series2Pass9State?.HouseholdFurnishingRegisters != null)
                 foreach (HouseholdFurnishingRegister restored in saveLoadManager.Series2Pass9State.HouseholdFurnishingRegisters)
                 {
@@ -928,7 +932,25 @@ namespace LandLedgers.FirstLedger
                     }
                     FurnishingStorageRegistry storage = systemsHub.FurnishingStorageRegistryFor(restored.HouseholdId);
                     if (storage != null)
+                    {
                         storage.RefreshInventory(systemsHub.HouseholdInventories?.Get(restored.HouseholdId));
+                        // G-4: restore this household's saved storage
+                        // bindings on top of the re-pointed inventory.
+                        // Silent when the save carried none for this
+                        // household; one log line per household otherwise.
+                        var savedBindings = new List<FurnishingStorageBindingSaveDto>();
+                        if (saveLoadManager.Series2Pass9State.HouseholdStorageBindings != null)
+                            foreach (FurnishingStorageBindingSaveDto saved in saveLoadManager.Series2Pass9State.HouseholdStorageBindings)
+                                if (saved != null && saved.HouseholdId == restored.HouseholdId)
+                                    savedBindings.Add(saved);
+                        if (savedBindings.Count > 0)
+                        {
+                            var storageDiag = new List<string>();
+                            storage.RestoreBindings(savedBindings, storageDiag);
+                            foreach (string line in storageDiag)
+                                Debug.Log("[WorldStartup] " + line, this);
+                        }
+                    }
                 }
             RefreshRestoreDiagnostics();
             if (logBootstrapSummary)

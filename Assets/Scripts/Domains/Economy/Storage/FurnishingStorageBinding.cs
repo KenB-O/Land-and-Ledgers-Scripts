@@ -47,11 +47,12 @@ namespace LandLedgers.Economy.Storage
     /// is a defect Validate() detects, not a feature: Validate derives the
     /// expected allocations and reports any mismatch.
     ///
-    /// No save seam in this slice (B1/B4 precedent): bindings are
-    /// re-derived from the register + inventory after Continue. Zone
-    /// placements are durable user state, so the seam is a documented
-    /// follow-up, not silent — the zone itself is [Serializable] and its
-    /// placements are plain lot references, so persisting them is small.
+    /// No save seam was shipped in B5; G-4 added it
+    /// (FurnishingStorageBindingSaveDto, FurnishingStorageRegistry.
+    /// CaptureBindings / RestoreBindings, Pass 9 state list
+    /// HouseholdStorageBindings): bindings now survive Continue, and
+    /// the zone itself is [Serializable] with its placements as plain
+    /// lot references, so persisting them is small.
     ///
     /// Retail exclusion (Canon §8.5A, plan §5.2): this binding is
     /// household-only. Retail fixtures use normalized allocation only; a
@@ -94,6 +95,38 @@ namespace LandLedgers.Economy.Storage
         public string SkuId = string.Empty;
         public int DisplayedUnits;
         public int MeshCount;
+    }
+
+    /// <summary>
+    /// G-4 (Agent G, expanded campaign 2026-11-16): one storage binding
+    /// as save data — the bind parameters plus the zone's placed lots,
+    /// so a binding survives Continue (B5's follow-up; this corrects
+    /// B5's claim that bindings re-derive after Continue — they did
+    /// not, the registry came back empty). The zone's capacity limits
+    /// and each placed lot's saved load travel with the binding: the
+    /// measure delegate is not persistable, and a restore must place
+    /// with the saved load, because an unmeasured load is refused on a
+    /// bounded axis rather than assumed. Allocations are NOT persisted
+    /// — they re-derive from the live inventory on restore
+    /// (RecomputeDisplay). Plain data; the Pass 9 state deep-copies it
+    /// on Capture/Restore.
+    /// </summary>
+    [Serializable]
+    public sealed class FurnishingStorageBindingSaveDto
+    {
+        public int HouseholdId;
+        public string AssetId = string.Empty;
+        public string ZoneId = string.Empty;
+        public int BuildingInstanceId;
+        public string PlacementId = string.Empty;
+        public StorageVisibility Visibility;
+        public int DisplayMeshCap = FurnishingStorageBinding.DefaultDisplayMeshCapPerSku;
+        public string AllowedReserveCategoryId = string.Empty;
+        public List<string> AllowedItemIds = new List<string>();
+        public StorageCapacityLimit MassCapacity = StorageCapacityLimit.Unknown;
+        public StorageCapacityLimit VolumeCapacity = StorageCapacityLimit.Unknown;
+        /// <summary>Placed lots with their saved loads (lot id + load measured at placement).</summary>
+        public List<StoredLotReference> PlacedLots = new List<StoredLotReference>();
     }
 
     /// <summary>
@@ -213,6 +246,43 @@ namespace LandLedgers.Economy.Storage
             StorageLoadMeasurement load = MeasureLot != null
                 ? MeasureLot(lot)
                 : StorageLoadMeasurement.Unknown;
+            var reference = new StoredLotReference(
+                CustodyTransferLog.HouseholdInventoryAuthority,
+                lotId.ToString(CultureInfo.InvariantCulture),
+                load);
+            string refusal;
+            if (!Zone.TryPlace(reference, out refusal))
+                return refusal;
+            RecomputeDisplay();
+            return null;
+        }
+
+        /// <summary>
+        /// Restores one saved placement with its saved load (G-4 save
+        /// seam). The measure delegate is not persistable, so a restore
+        /// must not re-measure: an unmeasured load is refused on a
+        /// bounded axis rather than assumed, and the bootstrapper has no
+        /// measure source. Refuses loudly (returns the reason) when the
+        /// lot does not resolve in the household inventory, holds no
+        /// units, or violates the binding's category/item restrictions;
+        /// the zone itself refuses duplicates and capacity overruns. On
+        /// success the display is recomputed. The inventory is never
+        /// changed — placement is a reference, not a transfer.
+        /// Returns null on success.
+        /// </summary>
+        public string TryPlaceLotWithLoad(int lotId, StorageLoadMeasurement load)
+        {
+            if (Inventory == null)
+                return $"FurnishingStorageBinding.TryPlaceLotWithLoad: no household inventory connected for zone {ZoneId} (household {HouseholdId}).";
+            if (Zone == null)
+                return $"FurnishingStorageBinding.TryPlaceLotWithLoad: no storage zone is bound for asset {AssetId}.";
+            HouseholdItemLot lot = FindLot(lotId);
+            if (lot == null)
+                return $"FurnishingStorageBinding.TryPlaceLotWithLoad: lot {lotId} does not resolve in household {HouseholdId} inventory ({CustodyTransferLog.HouseholdInventoryAuthority}).";
+            if (lot.QuantityUnits <= 0)
+                return $"FurnishingStorageBinding.TryPlaceLotWithLoad: lot {lotId} ({lot.ItemId}) holds no units.";
+            string restriction = CheckRestrictions(lot);
+            if (restriction != null) return restriction;
             var reference = new StoredLotReference(
                 CustodyTransferLog.HouseholdInventoryAuthority,
                 lotId.ToString(CultureInfo.InvariantCulture),
@@ -397,9 +467,11 @@ namespace LandLedgers.Economy.Storage
     /// the household's zones — the cross-zone rule lives here because no
     /// single zone can see the others.
     ///
-    /// No save seam in this slice (B1/B4 precedent): the registry is
-    /// re-derived after Continue. Call RefreshInventory after a restore so
-    /// the bindings point at the live inventory and the displays recompute.
+    /// Save seam (G-4): CaptureBindings / RestoreBindings persist the
+    /// bind parameters and placed lots through the Pass 9 state list
+    /// HouseholdStorageBindings, so bindings survive Continue. The
+    /// bootstrapper calls RefreshInventory after a restore (so the
+    /// bindings point at the live inventory) and then RestoreBindings.
     /// </summary>
     public sealed class FurnishingStorageRegistry
     {
@@ -587,6 +659,156 @@ namespace LandLedgers.Economy.Storage
                 binding.Inventory = inventory;
             }
             RecomputeDisplays();
+        }
+
+        /// <summary>
+        /// G-4: the storage bindings as save data — one DTO per live
+        /// binding, with the bind parameters and the zone's placed lots
+        /// (deep copies, so later live mutation cannot rewrite the
+        /// saved section). Allocations are not captured: they re-derive
+        /// from the live inventory on restore.
+        /// </summary>
+        public List<FurnishingStorageBindingSaveDto> CaptureBindings()
+        {
+            var captured = new List<FurnishingStorageBindingSaveDto>();
+            foreach (FurnishingStorageBinding binding in Bindings)
+            {
+                if (binding == null || binding.Zone == null || binding.Zone.Definition == null) continue;
+                var dto = new FurnishingStorageBindingSaveDto
+                {
+                    HouseholdId = HouseholdId,
+                    AssetId = binding.AssetId ?? string.Empty,
+                    ZoneId = binding.ZoneId ?? string.Empty,
+                    BuildingInstanceId = binding.BuildingInstanceId,
+                    PlacementId = binding.PlacementId ?? string.Empty,
+                    Visibility = binding.Visibility,
+                    DisplayMeshCap = binding.DisplayMeshCap,
+                    AllowedReserveCategoryId = binding.AllowedReserveCategoryId ?? string.Empty,
+                    AllowedItemIds = new List<string>(binding.AllowedItemIds ?? new List<string>()),
+                    MassCapacity = binding.Zone.Definition.MassCapacityKg,
+                    VolumeCapacity = binding.Zone.Definition.VolumeCapacityCubicMeters,
+                };
+                foreach (StoredLotReference placed in binding.Zone.Placements)
+                {
+                    if (placed == null) continue;
+                    dto.PlacedLots.Add(new StoredLotReference(
+                        placed.InventoryAuthorityId, placed.LotId, placed.Load));
+                }
+                captured.Add(dto);
+            }
+            return captured;
+        }
+
+        /// <summary>
+        /// G-4: restores saved storage bindings after Continue
+        /// (idempotent): each saved binding re-binds via TryBindFixture
+        /// with its saved parameters and re-places its saved lots with
+        /// their saved loads. A saved binding is skipped loudly (diag
+        /// line, counted) when its asset is no longer installed or
+        /// usable, is already bound, or when the derived zone id no
+        /// longer matches the saved zone id; a saved lot is skipped
+        /// loudly when it no longer resolves in the live inventory,
+        /// holds no units, is already placed in another of this
+        /// household's zones, or no longer fits the zone — the lot
+        /// itself stays in the inventory (placement is a reference,
+        /// never a transfer). A non-positive saved display cap restores
+        /// at the default instead of refusing the binding. The measure
+        /// delegate is not persistable: pass one when the caller has it
+        /// (the bootstrapper has none, so restored bindings measure
+        /// future placements as Unknown until the install-time bind
+        /// supplies one); saved placements always use their saved
+        /// loads. Returns the number of bindings restored.
+        /// </summary>
+        public int RestoreBindings(
+            IEnumerable<FurnishingStorageBindingSaveDto> saved,
+            List<string> diag,
+            Func<HouseholdItemLot, StorageLoadMeasurement> measureLot = null)
+        {
+            diag = diag ?? new List<string>();
+            int restored = 0;
+            int skippedBindings = 0;
+            int skippedLots = 0;
+            if (saved == null)
+            {
+                diag.Add("FurnishingStorageRegistry.RestoreBindings: no saved storage bindings supplied; nothing restored.");
+                return 0;
+            }
+            foreach (FurnishingStorageBindingSaveDto dto in saved)
+            {
+                if (dto == null || string.IsNullOrEmpty(dto.AssetId) || string.IsNullOrEmpty(dto.ZoneId)
+                    || dto.HouseholdId != HouseholdId)
+                {
+                    skippedBindings++;
+                    continue;
+                }
+                if (BindingForAsset(dto.AssetId) != null)
+                {
+                    diag.Add($"FurnishingStorageRegistry.RestoreBindings: binding for asset {dto.AssetId} (household {HouseholdId}) skipped — already bound.");
+                    skippedBindings++;
+                    continue;
+                }
+                int displayMeshCap = dto.DisplayMeshCap > 0
+                    ? dto.DisplayMeshCap
+                    : FurnishingStorageBinding.DefaultDisplayMeshCapPerSku;
+                if (dto.DisplayMeshCap <= 0)
+                    diag.Add($"FurnishingStorageRegistry.RestoreBindings: binding for asset {dto.AssetId} (household {HouseholdId}) restores with the default display cap — saved cap {dto.DisplayMeshCap} is not positive.");
+                string error = TryBindFixture(dto.AssetId, dto.Visibility,
+                    dto.MassCapacity, dto.VolumeCapacity,
+                    measureLot,
+                    dto.AllowedReserveCategoryId, dto.AllowedItemIds, displayMeshCap,
+                    out FurnishingStorageBinding binding);
+                if (error != null)
+                {
+                    diag.Add($"FurnishingStorageRegistry.RestoreBindings: binding for asset {dto.AssetId} (household {HouseholdId}) skipped — {error}");
+                    skippedBindings++;
+                    continue;
+                }
+                if (!string.Equals(binding.ZoneId, dto.ZoneId, StringComparison.Ordinal))
+                {
+                    DropBindingForAsset(dto.AssetId);
+                    diag.Add($"FurnishingStorageRegistry.RestoreBindings: binding for asset {dto.AssetId} (household {HouseholdId}) skipped — derived zone '{binding.ZoneId}' does not match saved zone '{dto.ZoneId}'.");
+                    skippedBindings++;
+                    continue;
+                }
+                if (dto.PlacedLots != null)
+                {
+                    foreach (StoredLotReference placed in dto.PlacedLots)
+                    {
+                        if (placed == null) continue;
+                        if (!int.TryParse(placed.LotId, NumberStyles.Integer, CultureInfo.InvariantCulture, out int lotId))
+                        {
+                            diag.Add($"FurnishingStorageRegistry.RestoreBindings: placed lot '{placed.LotId}' in zone {dto.ZoneId} (household {HouseholdId}) skipped — not a lot id.");
+                            skippedLots++;
+                            continue;
+                        }
+                        bool placedElsewhere = false;
+                        foreach (FurnishingStorageBinding other in Bindings)
+                        {
+                            if (other == null || other == binding || other.Zone == null) continue;
+                            if (other.Zone.Contains(CustodyTransferLog.HouseholdInventoryAuthority, placed.LotId))
+                            {
+                                placedElsewhere = true;
+                                break;
+                            }
+                        }
+                        if (placedElsewhere)
+                        {
+                            diag.Add($"FurnishingStorageRegistry.RestoreBindings: lot {lotId} in zone {dto.ZoneId} (household {HouseholdId}) skipped — already placed in another zone; one lot has exactly one storage place.");
+                            skippedLots++;
+                            continue;
+                        }
+                        string placeError = binding.TryPlaceLotWithLoad(lotId, placed.Load);
+                        if (placeError != null)
+                        {
+                            diag.Add($"FurnishingStorageRegistry.RestoreBindings: lot {lotId} in zone {dto.ZoneId} (household {HouseholdId}) skipped — {placeError}");
+                            skippedLots++;
+                        }
+                    }
+                }
+                restored++;
+            }
+            diag.Add($"FurnishingStorageRegistry.RestoreBindings: household {HouseholdId} restored {restored}, skipped {skippedBindings} bindings, skipped {skippedLots} placed lots.");
+            return restored;
         }
 
         /// <summary>

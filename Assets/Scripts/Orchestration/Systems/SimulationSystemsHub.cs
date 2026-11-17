@@ -209,6 +209,7 @@ namespace LandLedgers.Orchestration.Systems
         // load. A household with no register holds no furniture.
         private Dictionary<int, HouseholdFurnishingRegister> householdFurnishingRegisters;
         private Dictionary<int, SleepingPlaceRegistry> householdSleepingPlaceRegistries;
+        private Dictionary<int, DiningPlaceRegistry> householdDiningPlaceRegistries;
 
         // C-3 (expanded campaign): hub-owned per-business workstation
         // registries, keyed by holder id (not just business — the shape
@@ -438,6 +439,43 @@ namespace LandLedgers.Orchestration.Systems
                 : new List<SleepingPlaceRegistry>();
 
         /// <summary>
+        /// G-4 (Agent G, expanded campaign 2026-11-16): the dining-place
+        /// registry for one household, created on first use (empty).
+        /// Derived from the household's B0 furnishing register (chairs
+        /// and tables are derived from it), parallel to
+        /// SleepingPlaceRegistryFor. The registry is NOT a Pass 9 list
+        /// of its own: reservations are intraday working state,
+        /// re-derived by the next day's planning, and the meal driver
+        /// releases past-day reservations on its next tick — so no
+        /// Continue re-mirror is needed (unlike sleep's asset holds).
+        /// </summary>
+        public DiningPlaceRegistry DiningPlaceRegistryFor(int householdId)
+        {
+            householdDiningPlaceRegistries ??= new Dictionary<int, DiningPlaceRegistry>();
+            if (!householdDiningPlaceRegistries.TryGetValue(householdId, out DiningPlaceRegistry registry) || registry == null)
+            {
+                registry = new DiningPlaceRegistry
+                {
+                    HouseholdId = householdId,
+                    Furnishings = FurnishingRegisterFor(householdId),
+                };
+                householdDiningPlaceRegistries[householdId] = registry;
+            }
+            return registry;
+        }
+
+        /// <summary>
+        /// G-4: read-only snapshot of the hub's live dining-place
+        /// registries, for the meal tick driver. A new list each call,
+        /// never the live dictionary, so callers cannot add or remove hub
+        /// holders. Empty when no registry has been created yet.
+        /// </summary>
+        public IReadOnlyList<DiningPlaceRegistry> AllDiningPlaceRegistries =>
+            householdDiningPlaceRegistries != null
+                ? new List<DiningPlaceRegistry>(householdDiningPlaceRegistries.Values)
+                : new List<DiningPlaceRegistry>();
+
+        /// <summary>
         /// W-G2: adopts a registry (e.g. one rebuilt from the Pass 9
         /// furnishing registers after Continue) as the hub's live holder
         /// for its household. Replaces by household id, never merges —
@@ -554,11 +592,11 @@ namespace LandLedgers.Orchestration.Systems
         /// binding's lot lookups refuse loudly until the daily drive or
         /// the Continue hook re-points it via RefreshInventory). Hub-owned,
         /// one per household, parallel to the furnishing registers. The
-        /// registry is NOT a Pass 9 list of its own and its bindings do
-        /// NOT survive Continue (no save seam for bind parameters — B5
-        /// follow-up, documented in the B8 record): after a load the
-        /// registry is empty until the install path binds fixtures again,
-        /// and the day-boundary poll only recomputes live bindings.
+        /// registry is NOT a Pass 9 list of its own: the bindings
+        /// persist through the Pass 9 state list
+        /// HouseholdStorageBindings (G-4 save seam) and the Continue
+        /// hook restores them after RefreshInventory; the day-boundary
+        /// poll recomputes live bindings.
         /// </summary>
         public FurnishingStorageRegistry FurnishingStorageRegistryFor(int householdId)
         {
@@ -978,6 +1016,7 @@ namespace LandLedgers.Orchestration.Systems
         private HouseholdAutonomyDriver householdAutonomyDriver;
         private DomesticLaborDriver domesticLaborDriver;
         private SleepTickDriver sleepTickDriver;
+        private MealTickDriver mealTickDriver;
         private HouseholdErrandCoordinator householdErrandCoordinator;
         private HousingSearchNeedRegistry housingSearchNeedRegistry;
         private HousingAuthority housingAuthority;
@@ -1304,6 +1343,18 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         public SleepTickDriver SleepTickDriver =>
             sleepTickDriver ??= new SleepTickDriver();
+
+        /// <summary>
+        /// G-4 (Agent G, expanded campaign 2026-11-16): the meal tick
+        /// driver (meal-window movement to the reserved seat, hold
+        /// through the meal, release at the window end; Fallback meals
+        /// eat in place). Hub-owned and transient — its per-meal phase
+        /// re-derives from the clock and the live reservations, so
+        /// nothing about it is persisted; SimulationDrivers runs it on
+        /// the short tick.
+        /// </summary>
+        public MealTickDriver MealTickDriver =>
+            mealTickDriver ??= new MealTickDriver();
 
         /// <summary>
         /// Pass V P2-1: the household errand coordinator — batched shopping

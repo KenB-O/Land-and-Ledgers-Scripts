@@ -5127,6 +5127,44 @@ namespace LandLedgers.Orchestration.Systems
                 : DomesticActivityMovementResult.Unsupported;
         }
 
+        /// <summary>
+        /// G-4: the production movement resolver for the meal driver.
+        /// A chair with an authored activity location routes through the
+        /// director's domestic-activity movement (interior route to the
+        /// chair anchor — the flight is only a person carrier; the
+        /// director reads PersonId and writes the building and activity
+        /// location back). A seat with no authored location routes to
+        /// the home building and counts as arrived once physically at
+        /// the building (the arrival check already proved the entrance
+        /// indoor point is walkable; the driver normally eats in place
+        /// for such a seat, so this leg only fires for an injected
+        /// arrival check that passed one). Returns Travelling while the
+        /// route is active, Arrived once the diner is at the seat,
+        /// Unsupported when no route exists.
+        /// </summary>
+        private DomesticActivityMovementResult ResolveMealMovement(
+            int personId, DiningSeat seat, BuildingFootprintAuthority authority)
+        {
+            if (seat == null || authority == null || populationManager?.State == null)
+                return DomesticActivityMovementResult.Unsupported;
+            PersonState person = populationManager.State.GetPerson(personId);
+            if (person == null || person.homeBuildingId < 0)
+                return DomesticActivityMovementResult.Unsupported;
+            LandLedgers.FirstLedger.PopulationPathingDirector director =
+                FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+            if (director == null) return DomesticActivityMovementResult.Unsupported;
+            if (!string.IsNullOrWhiteSpace(seat.ActivityLocationId))
+            {
+                var flight = new DomesticLaborDriver.InFlightDomesticTask { PersonId = personId };
+                return director.TryReachDomesticActivity(flight, seat.ActivityLocationId, out _);
+            }
+            if (director.IsPersonPhysicallyAtBuilding(personId, person.homeBuildingId))
+                return DomesticActivityMovementResult.Arrived;
+            return director.TryStartExplicitRoute(personId, person.homeBuildingId, PopulationScheduleState.AtHome)
+                ? DomesticActivityMovementResult.Traveling
+                : DomesticActivityMovementResult.Unsupported;
+        }
+
         private bool HouseholdOwnsAnimals(int householdId, List<int> memberIds)
         {
             if (hub?.Animals == null) return false;
@@ -5969,6 +6007,15 @@ namespace LandLedgers.Orchestration.Systems
                 sleepingPlaces.HomeBuildingInstanceId = household.homeBuildingId;
                 sleepingPlaces.IsColdSeason = IsColdSeasonMonth();
                 sleepingPlaces.HeatingFuelBurnedToday = DomesticNeedAuthorities.FuelHandlingNeeded(household, absoluteDayIndex);
+                // G-4 (Agent G, expanded campaign 2026-11-16): one
+                // dining-place registry per household, hub-owned and
+                // derived from the furnishing register (no Pass 9 list of
+                // its own — reservations are intraday working state).
+                // The planner assigns each meal a seat (or the Fallback)
+                // from this registry, and the meal tick driver moves
+                // diners to the reserved seats at the meal windows.
+                DiningPlaceRegistry diningPlaces = hub.DiningPlaceRegistryFor(household.id);
+                diningPlaces.HomeBuildingInstanceId = household.homeBuildingId;
                 dailyActivityPlanner.PlanHouseholdDay(
                     members,
                     personId =>
@@ -5993,7 +6040,8 @@ namespace LandLedgers.Orchestration.Systems
                     hub.PersonSchedules,
                     hub.WorkTimeBudgets,
                     diag,
-                    sleepingPlaces);
+                    sleepingPlaces,
+                    diningPlaces);
             }
 
             if (diag.Count > 0)
@@ -13576,6 +13624,38 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     Debug.LogWarning("[SimulationDrivers] sleep: " +
                         string.Join(" | ", sleepDiag.Take(20)));
+                }
+
+                // G-4 (Agent G, expanded campaign 2026-11-16): the meal
+                // tick driver moves diners to their reserved seats at
+                // the meal windows, holds them through the meal, and
+                // releases the reservation at the window end (Fallback
+                // meals eat in place — no movement is requested). Same
+                // forward-motion gate as domestic labor and sleep, so a
+                // repeated/paused tick can never re-start a meal. The
+                // driver is Unity-free and harness-tested; the movement
+                // resolver below is the production glue over the pathing
+                // director (source-reviewed; Unity compilation proof is
+                // owed from Codex). ResolveSleepAuthority is reused: it
+                // resolves a person's home building authority, and is
+                // not sleep-specific.
+                var mealDiag = new List<string>();
+                hub.MealTickDriver.AdvanceTick(
+                    context.Date.AbsoluteDayIndex,
+                    Mathf.FloorToInt(context.TimeOfDay01 * 1440f),
+                    hub.AllDiningPlaceRegistries,
+                    ResolveSleepAuthority,
+                    DiningArrival.TryValidateArrivalPath,
+                    DiningArrival.TryValidateFallbackArrivalPath,
+                    ResolveMealMovement,
+                    mealDiag);
+                // The driver's lines are loud by construction (only
+                // failures and stale-meal recoveries, once per meal),
+                // so they all surface; routine meals stay silent.
+                if (mealDiag.Count > 0)
+                {
+                    Debug.LogWarning("[SimulationDrivers] meal: " +
+                        string.Join(" | ", mealDiag.Take(20)));
                 }
             }
 

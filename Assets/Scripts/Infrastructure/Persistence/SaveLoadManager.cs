@@ -901,6 +901,15 @@ namespace LandLedgers.Persistence
             // pinned by Roslyn tests.
             var registerSyncDiagnostics = new List<string>();
             Series2Pass9State?.SyncRegistersFromHub(systemsHub?.AllEquipmentRegisters, systemsHub?.AllFurnishingRegisters, registerSyncDiagnostics);
+            // G-4 (Agent G, expanded campaign 2026-11-16): the same
+            // pre-Capture sync for the stove fuel stores and the storage
+            // bindings — both state lists are snapshots of live hub
+            // registries (clear-then-load, see the sync methods), and
+            // without these calls the lists stay empty in production
+            // (B2's CaptureFuelStores had no production caller; B5's
+            // bind parameters were persisted nowhere).
+            Series2Pass9State?.SyncFuelStoresFromHub(systemsHub?.AllStoveRegistries, registerSyncDiagnostics);
+            Series2Pass9State?.SyncStorageBindingsFromHub(systemsHub?.AllStorageRegistries, registerSyncDiagnostics);
             foreach (string registerSyncDiagnostic in registerSyncDiagnostics)
                 Debug.Log($"[SaveLoad] {registerSyncDiagnostic}");
 

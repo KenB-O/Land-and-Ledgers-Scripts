@@ -23,6 +23,13 @@ namespace LandLedgers.Economy.Blacksmith
     /// Skill dependence is structural (Canon §7.2): without a qualified smith
     /// (journeyman-equivalent), crafting and repair refuse — the parcel and tools
     /// alone do not produce work.
+    ///
+    /// D1 exception: horseshoe forging does NOT use the journeyman gate.
+    /// Forging one shoe is ordinary physically feasible work, so any smith
+    /// at a forge may attempt it; capability instead grades the result
+    /// (ForgeHorseshoe: slower, lower-condition shoes at low capability,
+    /// never a guaranteed perfect shoe). The gate still applies to every
+    /// whole-unit recipe and to repair work.
     /// </summary>
     public sealed class BlacksmithRuntime
     {
@@ -37,8 +44,221 @@ namespace LandLedgers.Economy.Blacksmith
         /// <summary>Calibration: journeyman-equivalent floor. Tuning, not canon.</summary>
         public const int JourneymanLevelFloor = 2;
 
+        /// <summary>D1: one horseshoe is the manufacturing and inventory unit.</summary>
+        public const string HorseshoeKind = "horseshoe";
+
+        /// <summary>
+        /// D1: one material/fuel unit is four shoe-quarters. Calibration, from
+        /// the recipes themselves and the historical record: one iron-stock
+        /// unit is a ~5 lb bar (a plow takes 8 units for ~40 lb of iron, a
+        /// hand tool 1 unit for a ~2-5 lb head, a plowshare 2 steel units
+        /// for a ~10 lb share), and a working horseshoe is ~0.5-1.5 lb of
+        /// iron with forging loss — four shoes per bar, ~1.25 lb of bar
+        /// each. One forge-coal unit fires four shoe forgings (~1 hour of
+        /// forge work). Four shoes therefore consume exactly one iron unit
+        /// and one coal unit: the same totals as the retired four-shoe
+        /// recipe, but each shoe is now individually produced, priced,
+        /// and inventoried. A single-shoe replacement costs one quarter
+        /// of each, never a four-shoe batch.
+        /// </summary>
+        public const int HorseshoeQuartersPerUnit = 4;
+
+        /// <summary>D1: minutes to forge one shoe at capability 0 (complete novice).</summary>
+        public const int HorseshoeNoviceMinutes = 30;
+
+        /// <summary>D1: minutes to forge one shoe at capability 1.0 (master). A
+        /// skilled farrier forges one basic shoe from bar stock in ~10-15
+        /// minutes; the mid-capability figure lands at 20.</summary>
+        public const int HorseshoeMasterMinutes = 10;
+
         private string businessInstanceId = string.Empty;
         private string businessName = string.Empty;
+
+        // D1: cut-bar and fired-coal remainders for horseshoe forging. The
+        // integer stock ledger stays the authority; a whole unit drawn from
+        // stock yields four quarters, three of which wait here for the next
+        // shoes. Session-scoped like materialStock — a future save pass
+        // must persist these together with materialStock.
+        private int ironShoeQuarters;
+        private int coalShoeQuarters;
+        private string ironShoeQuarterLotId = string.Empty;
+        private string coalShoeQuarterLotId = string.Empty;
+
+        /// <summary>D1: cut bar lengths on hand, waiting for the next shoe forgings (0..3).</summary>
+        public int IronShoeQuartersOnHand => ironShoeQuarters;
+
+        /// <summary>D1: fired coal quarters on hand (0..3).</summary>
+        public int CoalShoeQuartersOnHand => coalShoeQuarters;
+
+        // --- D1: capability-graded horseshoe forging ---------------------------------
+
+        /// <summary>D1: minutes to forge one horseshoe at this capability.</summary>
+        public static int HorseshoeMinutesForCapability(double capability)
+            => SkillOutcomeCurves.MinutesForCapability(HorseshoeNoviceMinutes, HorseshoeMasterMinutes, capability);
+
+        /// <summary>D1: condition of a horseshoe forged at this capability (0.60..1.00).</summary>
+        public static double HorseshoeQualityForCapability(double capability)
+            => SkillOutcomeCurves.QualityForCapability(capability);
+
+        /// <summary>
+        /// D1: forge ONE horseshoe. No journeyman gate — this is ordinary
+        /// physically feasible work. Capability instead grades the outcome:
+        /// a low-capability smith is slower and produces a flawed-but-usable
+        /// shoe (Condition01 below 1.0), never a guaranteed perfect product.
+        /// Each shoe consumes 1 quarter-iron + 1 quarter-coal from the
+        /// pools (a whole unit is drawn from stock only when a pool is
+        /// empty), so four shoes consume exactly one iron unit and one
+        /// coal unit. The returned asset is shop stock; fitting is a
+        /// separate call (FarrierService.FitShoes) and never happens here.
+        /// Returns null and consumes nothing on any refusal.
+        /// </summary>
+        public EquipmentAsset ForgeHorseshoe(EntityId smithPersonId, int dayIndex, SkillService skillService, List<string> diagnostics, out int minutesUsed)
+        {
+            minutesUsed = 0;
+            diagnostics = diagnostics ?? new List<string>();
+
+            SmithingRecipe recipe = DefaultRecipes().Find(r => r.EquipmentKind == HorseshoeKind);
+            if (recipe == null)
+            {
+                diagnostics.Add("BlacksmithRuntime: no horseshoe recipe configured.");
+                return null;
+            }
+
+            if (!forgeStationReady)
+            {
+                diagnostics.Add("BlacksmithRuntime: forge station is not ready; cannot forge a horseshoe.");
+                return null;
+            }
+
+            if (skillService == null)
+            {
+                diagnostics.Add("BlacksmithRuntime: no SkillService; cannot assess the smith's farrier skill.");
+                return null;
+            }
+
+            // Sufficiency first: refuse without consuming anything.
+            bool ironOk = ironShoeQuarters > 0 || MaterialOnHand(recipe.MaterialId) >= 1;
+            bool coalOk = coalShoeQuarters > 0 || MaterialOnHand(ImportCatalog.ForgeCoalId) >= 1;
+            if (!ironOk)
+            {
+                diagnostics.Add($"BlacksmithRuntime: no {recipe.MaterialId} for a horseshoe (no cut quarters, no whole unit in stock).");
+                return null;
+            }
+            if (!coalOk)
+            {
+                diagnostics.Add($"BlacksmithRuntime: no {ImportCatalog.ForgeCoalId} for a horseshoe (no fired quarters, no whole unit in stock).");
+                return null;
+            }
+
+            double capability = skillService.GetCapability(smithPersonId, recipe.RequiredSkillId);
+            minutesUsed = HorseshoeMinutesForCapability(capability);
+            double quality = HorseshoeQualityForCapability(capability);
+
+            var lotNotes = new List<string>();
+            if (!DrawShoeQuarter(recipe.MaterialId, ref ironShoeQuarters, ref ironShoeQuarterLotId, lotNotes, diagnostics)) return null;
+            if (!DrawShoeQuarter(ImportCatalog.ForgeCoalId, ref coalShoeQuarters, ref coalShoeQuarterLotId, lotNotes, diagnostics)) return null;
+
+            var asset = new EquipmentAsset
+            {
+                AssetId = Guid.NewGuid().ToString("N"),
+                Kind = HorseshoeKind,
+                DisplayName = "Horseshoe",
+                Condition01 = (float)quality,
+                OwnerKind = "business",
+                OwnerId = businessInstanceId,
+                MadeByBusinessId = businessInstanceId,
+                MadeByBusinessName = businessName,
+                MadeDayIndex = dayIndex,
+                MaterialLotIds = new List<string>(),
+            };
+            if (!string.IsNullOrWhiteSpace(ironShoeQuarterLotId)) asset.MaterialLotIds.Add(ironShoeQuarterLotId);
+            if (!string.IsNullOrWhiteSpace(coalShoeQuarterLotId)) asset.MaterialLotIds.Add(coalShoeQuarterLotId);
+            assets[asset.AssetId] = asset;
+
+            string lots = lotNotes.Count > 0 ? $" ({string.Join(", ", lotNotes)})" : string.Empty;
+            diagnostics.Add($"BlacksmithRuntime: forged one horseshoe {asset.AssetId} (condition {quality:0.00}, {minutesUsed} min) by {smithPersonId}, capability {capability:0.00}.{lots}");
+            return asset;
+        }
+
+        /// <summary>
+        /// D1: release one forged horseshoe from shop stock to the caller
+        /// (farrier fitting, retail sale, freight). Returns null on an
+        /// unknown id, a non-horseshoe kind, or a reserved asset — the
+        /// asset stays in stock in every refusal.
+        /// </summary>
+        public EquipmentAsset TakeHorseshoe(string assetId, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            if (string.IsNullOrWhiteSpace(assetId))
+            {
+                diagnostics.Add("BlacksmithRuntime: no horseshoe id given to release.");
+                return null;
+            }
+
+            if (!assets.TryGetValue(assetId, out EquipmentAsset asset) || asset == null)
+            {
+                diagnostics.Add($"BlacksmithRuntime: no asset '{assetId}' in shop stock.");
+                return null;
+            }
+
+            if (!string.Equals(asset.Kind, HorseshoeKind, StringComparison.Ordinal))
+            {
+                diagnostics.Add($"BlacksmithRuntime: asset '{assetId}' is a {asset.Kind}, not a horseshoe.");
+                return null;
+            }
+
+            if (asset.IsReserved)
+            {
+                diagnostics.Add($"BlacksmithRuntime: horseshoe '{assetId}' is reserved by {asset.ReservedBy}; release refused.");
+                return null;
+            }
+
+            assets.Remove(assetId);
+            diagnostics.Add($"BlacksmithRuntime: horseshoe '{assetId}' released from shop stock.");
+            return asset;
+        }
+
+        /// <summary>
+        /// D1: draw one shoe-quarter of a material. If quarters are on hand,
+        /// take one. Otherwise draw one whole unit from stock (FIFO lot
+        /// provenance), cut it into four quarters, and spend one of them.
+        /// Returns false only when no quarter and no whole unit exist.
+        /// </summary>
+        private bool DrawShoeQuarter(string materialId, ref int quarters, ref string quarterLotId, List<string> lotNotes, List<string> diagnostics)
+        {
+            if (quarters > 0)
+            {
+                quarters--;
+                return true;
+            }
+
+            if (MaterialOnHand(materialId) < 1)
+            {
+                diagnostics.Add($"BlacksmithRuntime: no {materialId} left to cut a shoe-quarter from.");
+                return false;
+            }
+
+            materialStock[materialId]--;
+            var notes = new List<string>();
+            RecordLotConsumption(materialId, 1, notes);
+            string lotId = FirstLotId(notes);
+            if (!string.IsNullOrWhiteSpace(lotId)) quarterLotId = lotId;
+            lotNotes.AddRange(notes);
+            quarters = HorseshoeQuartersPerUnit - 1;
+            return true;
+        }
+
+        private static string FirstLotId(List<string> notes)
+        {
+            if (notes == null) return string.Empty;
+            foreach (string note in notes)
+            {
+                if (string.IsNullOrWhiteSpace(note) || note.StartsWith("unallocated", StringComparison.Ordinal)) continue;
+                int colon = note.IndexOf(':');
+                if (colon > 0) return note.Substring(0, colon);
+            }
+            return string.Empty;
+        }
 
         /// <summary>
         /// Tech X §3.5: the ForgeStation workstation — forge + anvil + tools.
@@ -180,7 +400,11 @@ namespace LandLedgers.Economy.Blacksmith
             {
                 new SmithingRecipe("plow", "Moldboard plow", ImportCatalog.IronStockId, 8, 2, 240, SmithingSkillId),
                 new SmithingRecipe("harrow", "Spike-tooth harrow", ImportCatalog.IronStockId, 6, 2, 180, SmithingSkillId),
-                new SmithingRecipe("horseshoe-set", "Horseshoe set (4)", ImportCatalog.IronStockId, 2, 1, 60, FarrierSkillId),
+                // One shoe per forging, priced in quarters (see HorseshoeQuartersPerUnit).
+                // MinutesAtLevel1 is the novice (capability 0.10) baseline that
+                // ForgeHorseshoe scales by capability.
+                new SmithingRecipe(HorseshoeKind, "Horseshoe", ImportCatalog.IronStockId, 0, 0, 28, FarrierSkillId)
+                { MaterialQuartersPerItem = 1, FuelQuartersPerItem = 1 },
                 new SmithingRecipe("wagon-part", "Wagon ironwork (tire/shoe)", ImportCatalog.IronStockId, 4, 1, 120, SmithingSkillId),
                 new SmithingRecipe("hand-tool", "Hand tool", ImportCatalog.IronStockId, 1, 1, 45, SmithingSkillId),
                 new SmithingRecipe("plowshare", "Replacement plowshare", ImportCatalog.SteelStockId, 2, 1, 90, SmithingSkillId),
@@ -295,6 +519,14 @@ namespace LandLedgers.Economy.Blacksmith
             if (recipe == null)
             {
                 diagnostics.Add($"BlacksmithRuntime: no recipe for '{equipmentKind}'.");
+                return null;
+            }
+            // D1: fractional (quarter-priced) recipes are forged one item at a
+            // time through ForgeHorseshoe — this whole-unit path cannot mint
+            // them, or a caller could spend 0 whole units for a perfect shoe.
+            if (recipe.MaterialQuartersPerItem > 0 || recipe.FuelQuartersPerItem > 0)
+            {
+                diagnostics.Add($"BlacksmithRuntime: '{equipmentKind}' is priced in quarters; forge one at a time with ForgeHorseshoe.");
                 return null;
             }
             if (!forgeStationReady)

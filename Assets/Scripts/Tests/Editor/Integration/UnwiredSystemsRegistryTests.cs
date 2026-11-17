@@ -47,6 +47,10 @@ namespace LandLedgers.EditorTests.Integration
         // (no instance ever created in production) but previously hidden
         // because hub plumbing counts as a reference under this test's
         // definition; their registry rows allowlist exactly that plumbing.
+        // D1 (2026-11-17): BlacksmithRuntime is no longer an unwired
+        // candidate — FarrierService.FitShoes references it for the
+        // horseshoe kind and farrier skill id, a deliberate production
+        // caller, so its registry row was removed with it.
         private static readonly string[] CandidateTypes =
         {
             "BakeryShopRuntime", "BarberShopRuntime", "DoctorPracticeRuntime",
@@ -54,7 +58,7 @@ namespace LandLedgers.EditorTests.Integration
             "LumberYardShopRuntime", "NewspaperRuntime", "RestaurantShopRuntime",
             "SaloonRuntime", "SawmillShopRuntime", "TailorShopRuntime",
             "BankRuntime",
-            "ButcherRuntime", "BlacksmithRuntime", "TanneryRuntime",
+            "ButcherRuntime", "TanneryRuntime",
             "StagedProductionProcess", "ProductionDueEventDriver",
             "BakeryStagedProductionChain", "ForgeRepairChain",
             "RealDemandSource",

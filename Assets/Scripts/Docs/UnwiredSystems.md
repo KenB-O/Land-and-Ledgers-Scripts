@@ -67,7 +67,6 @@ found, the test fails loudly rather than passing silently.
 | HouseholdMoveService | Domains/World/Property/HouseholdMoveService.cs | Domains/World/Property | (none) |
 | ScenarioFailureNoticeBoard | Orchestration/Scenarios/Generation/ScenarioFailureNoticeBoard.cs | Orchestration/Scenarios/Generation | (none) |
 | ButcherRuntime | Domains/Economy/Businesses/Butcher/ButcherRuntime.cs | Domains/Economy/Businesses/Butcher | Orchestration/Systems/SimulationSystemsHub.cs; Domains/Economy/Businesses/GeneralStore/StoreButchery.cs; Domains/Economy/Farming/FarmLivestock.cs; Domains/Economy/Farming/Integration/CullFlow.cs |
-| BlacksmithRuntime | Domains/Economy/Businesses/Blacksmith/BlacksmithRuntime.cs | Domains/Economy/Businesses/Blacksmith | Domains/Economy/Businesses/Wheelwright/WagonRepairEconomy.cs |
 | TanneryRuntime | Domains/Economy/Businesses/Tannery/TanneryRuntime.cs | Domains/Economy/Businesses/Tannery | (none) |
 | PanelModalCoordinator | Presentation/UI/PanelModalCoordinator.cs | Presentation/UI | (none) |
 | ResourceObservationReadModel | ReadModels/Civic/ResourceObservationReadModel.cs | ReadModels/Civic | (none) |
@@ -404,9 +403,17 @@ note records their audited status so the question does not reopen:
   the three parameter-passing helpers (`StoreButchery`,
   `FarmLivestockMarket.ExecuteSale`, `CullFlow.CullAndSellCow`) are
   themselves never called in production, so no instance ever flows
-  into them. `BlacksmithRuntime`'s only non-test reference is
-  `WagonRepairEconomy.FindAvailableIronwork`, and that helper is
-  itself never called in production. `TanneryRuntime` has no
+  into them. `BlacksmithRuntime` was removed from this registry by
+  campaign lane D1 (2026-11-17, individual horseshoes): its only
+  non-test reference used to be `WagonRepairEconomy.FindAvailableIronwork`
+  (allowlisted above), but `FarrierService.FitShoes`
+  (`Domains/Economy/AnimalServices/VetServices.cs`) now references it
+  for the horseshoe kind and the farrier skill id — a deliberate
+  production reference, because fitting consumes forged horseshoes.
+  The detailed runtime class is still not instantiated by the live
+  tick (the archetype path is live); the registry's rule is about
+  production references, and this is one, so the row is gone rather
+  than allowlisted. `TanneryRuntime` has no
   production reference at all (only a comment mention, which the
   registry test strips). The allowlists above cover plumbing
   references only, NOT wiring: a future real wiring must remove

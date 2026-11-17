@@ -189,11 +189,16 @@ namespace LandLedgers.EditorTests.Integration
             "ExperienceFormationInputs", "ExperienceFormationService", "ExperienceLedger", "ExternalCounterparty",
             "ExternalCounterpartySaveDto", "ExternalCounterpartySupplyDto", "ExternalMarketAuthority", "ExternalMarketAuthoritySaveDto",
             "ExternalTradeRecord", "ExternalTradeRecordSaveDto", "FallbackDurationEstimator", "FamilyUnitPlan",
-            "FarmPlowService", "FeeLineItem", "FinancingEstimate", "FinancingEvaluator",
+            // D1 (2026-11-17): "FarrierFittingResult" is the file-internal
+            // result DTO of FarrierService.FitShoes (VetServices.cs), and
+            // "HoofFittingRecord" / "HoofNeed" below are its per-hoof
+            // records — consumed inside that file, the same precedent as
+            // AssetAppraisalResult / AssetSaleRecord above.
+            "FarmPlowService", "FarrierFittingResult", "FeeLineItem", "FinancingEstimate", "FinancingEvaluator",
             "ForeclosureBid", "ForeclosureCase", "ForgeChainContext", "ForgeRepairOrder",
             "FreightRoute", "GenericBusinessSetupTemplate", "GenericEquipmentInstallationState", "GenericInventoryLot",
             "GenericProductCatalog", "GenericRetailConfiguration", "GoodsCounterRecord", "GuarantyRecord",
-            "HeirShare", "HistoricalPersonRecord", "HoldingRecord", "HorseHousingState",
+            "HeirShare", "HistoricalPersonRecord", "HoldingRecord", "HoofFittingRecord", "HoofNeed", "HorseHousingState",
             "HorseRentalRecord", "HorseRentalRequest", "HorseRentalService", "HorseRentalServiceSaveDto",
             "HorseSale", "HouseholdErrandPlanClaimEntry", "HouseholdErrandPlanIntEntry", "HouseholdErrandPlanRegistry",
             "HouseholdLedgerPostagePayer", "HouseholdMembershipProjectionResult", "HouseholdMoveResult", "HouseholdMoveService",

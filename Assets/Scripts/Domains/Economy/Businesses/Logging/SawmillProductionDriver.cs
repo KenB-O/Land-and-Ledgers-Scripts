@@ -600,6 +600,115 @@ namespace LandLedgers.Economy.Businesses.Logging
             return found;
         }
 
+        /// <summary>
+        /// M2 (2026-11-17): stranded-lot query. A yard lot is stranded
+        /// when it holds at least one log and no Planned/Sawing job names
+        /// it. Failed and Complete jobs never block recovery: a Failed job
+        /// is terminal and its lot (or its remainder, under a fresh id)
+        /// must be re-beginnable, and a Complete job's lot is fully
+        /// consumed, so it cannot be in the yard. Lots in excludeLotIds
+        /// are skipped — the daily drive passes today's delivered lots,
+        /// which its delivered pass already attempted. Pure query: no job
+        /// is created, no stock moves. Returned oldest first
+        /// (FelledDayIndex, then lot id), matching the FIFO order
+        /// BeginProduction enforces.
+        /// </summary>
+        public List<string> FindStrandedLotIds(IReadOnlyCollection<string> excludeLotIds)
+        {
+            var found = new List<string>();
+            if (mill == null || mill.LogStock == null) return found;
+            var excluded = excludeLotIds != null
+                ? new HashSet<string>(excludeLotIds, StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
+            var openLotIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (SawmillProductionJob job in jobs.Values)
+            {
+                if (job == null) continue;
+                if (job.State != SawmillProductionJobState.Planned && job.State != SawmillProductionJobState.Sawing) continue;
+                if (!string.IsNullOrWhiteSpace(job.LotId)) openLotIds.Add(job.LotId);
+            }
+            var stranded = new List<LogLot>();
+            foreach (LogLot lot in mill.LogStock.Lots)
+            {
+                if (lot == null || lot.LogUnits < 1) continue;
+                string lotId = lot.LotId.ToString();
+                if (excluded.Contains(lotId)) continue;
+                if (openLotIds.Contains(lotId)) continue;
+                stranded.Add(lot);
+            }
+            stranded.Sort((a, b) =>
+            {
+                int byDay = a.FelledDayIndex.CompareTo(b.FelledDayIndex);
+                return byDay != 0 ? byDay : string.CompareOrdinal(a.LotId.ToString(), b.LotId.ToString());
+            });
+            foreach (LogLot lot in stranded)
+            {
+                found.Add(lot.LotId.ToString());
+            }
+            return found;
+        }
+
+        /// <summary>
+        /// M2 (2026-11-17): stranded-remainder recovery. The daily drive
+        /// re-attempts only open jobs and begins only lots delivered that
+        /// day, so a lot that missed its delivery-day begin — delivered
+        /// on a no-sawyer day, refused at begin while an older job
+        /// blocked FIFO, or left behind by a failed or abandoned job —
+        /// is never sawn. This sweep begins and runs each stranded lot
+        /// once, oldest first. One attempt per lot per call: a fresh
+        /// remainder from a failed run is picked up by the next day's
+        /// sweep, never re-begun in the same sweep, so a persistently
+        /// refusing lot cannot burn logs in a loop. A refused begin
+        /// (FIFO moved on, lot left the yard) is diagnosed and skipped,
+        /// never invented. Returns the number of stranded lots begun;
+        /// completedCount reports how many of those jobs completed.
+        /// </summary>
+        public int BeginStrandedRemainders(EntityId sawyerId, int dayIndex, IReadOnlyCollection<string> excludeLotIds, out int completedCount)
+        {
+            completedCount = 0;
+            if (mill == null)
+            {
+                diagnostics.Add("SawmillProductionDriver.BeginStrandedRemainders: no sawmill runtime — no stranded lot can be recovered.");
+                return 0;
+            }
+            if (!sawyerId.IsValid || sawyerId.Kind != EntityKind.Person)
+            {
+                diagnostics.Add("SawmillProductionDriver.BeginStrandedRemainders: no valid Person sawyer — stranded lots stay in the yard, never a phantom worker.");
+                return 0;
+            }
+            List<string> strandedLotIds = FindStrandedLotIds(excludeLotIds);
+            int begunCount = 0;
+            foreach (string lotId in strandedLotIds)
+            {
+                LogLot lot = FindLotInYard(lotId);
+                if (lot == null || lot.LogUnits < 1)
+                {
+                    diagnostics.Add($"SawmillProductionDriver.BeginStrandedRemainders: stranded lot '{lotId}' left the mill yard before its recovery run — skipped, never conjured.");
+                    continue;
+                }
+                SawmillProductionJob job = BeginProduction(lotId, sawyerId, lot.LogUnits, dayIndex, out string beginRefusal);
+                if (job == null)
+                {
+                    diagnostics.Add($"SawmillProductionDriver.BeginStrandedRemainders: stranded lot '{lotId}' could not begin — {beginRefusal}");
+                    continue;
+                }
+                begunCount++;
+                if (RunProduction(job.JobId, dayIndex, out string runRefusal) && job.State == SawmillProductionJobState.Complete)
+                {
+                    completedCount++;
+                }
+                else if (runRefusal != null)
+                {
+                    diagnostics.Add($"SawmillProductionDriver.BeginStrandedRemainders: stranded lot '{lotId}' run refused — {runRefusal}");
+                }
+            }
+            if (begunCount > 0)
+            {
+                diagnostics.Add($"SawmillProductionDriver.BeginStrandedRemainders: began {begunCount} stranded lot(s), {completedCount} complete.");
+            }
+            return begunCount;
+        }
+
         // ---- Save contract (nested DTO, F2 driver / F3 ledger pattern) ----
 
         [Serializable]

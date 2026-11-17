@@ -224,3 +224,183 @@ before/after comparison of the expanded-config build error set, confirming the
 edit introduces no new diagnostics. The repair itself is a six-line call to
 an existing public method at the single transfer choke point, with the
 refusal path surfaced in the transfer message.
+
+## UBC Lane A2 — the four follow-ups (2026-11-17)
+
+- Lane: A2, workstream A (acquisition follow-ups)
+- Base: `muse/ubc-a1-acquisition-2026-11-17` at `f52a45bd`
+- Method: same as A1 — read on disk, decide by what would happen in real
+  life, document each decision so the owner can correct it. Every decision
+  below names the interpretation it rests on.
+
+### A2-1. Seller proceeds — REPAIRED
+
+The A1 verdict 3 defect is closed. Both closes now pay the seller:
+
+- The cash price is credited to the seller's household ledger as
+  `HouseholdIncomeSource.SaleProceeds` with reference
+  `acquisition:<businessInstanceId>`: negotiated close, price minus any
+  seller-financed principal (the note is a separate obligation, not cash at
+  closing); direct purchase, the full asking price. New public method
+  `AcquisitionMarketManager.CreditSellerProceeds`, called from
+  `CompleteBusinessAcquisition` and `TryPurchaseBusiness`.
+- The pre-close cash withdrawal (business cash above the motive-based opening
+  target) is credited the same way through the reworked
+  `ApplyPostAcquisitionOpeningCash`, which now takes the seller identity and
+  reports the withdrawal. The old message ("seller cash of X was not
+  acquired") is gone; the close message now says what the seller was paid.
+- When the seller has no household to credit, the proceeds become a named
+  `FinancialObligationKind.Payable` the player owes the seller (debtor
+  `"player"`, creditor `person:<id>` or the seller's display name) — a
+  settleable debt, never a silent loss. When there is no debt authority
+  either, the method returns 0 and the note says
+  `SELLER PROCEEDS UNDELIVERED` with the amount, and the excess cash stays
+  in the business (the withdrawal does not happen).
+- Listings and terms now carry the seller: `AcquisitionListing.sellerPersonId`
+  (set in `CreateBusinessListing` from the owner's `PersonId` when the owner
+  is an NPC), and `BusinessSaleTerms` gains `sellerPersonId`,
+  `purchasePriceCents`, `sellerCashWithdrawalCents`, `transitionArrangement`,
+  plus a derived `SellerProceedsCents`. The DTO (`BusinessSaleTermsSaveDto`)
+  gains the same four fields in both the real `SaveDtos.cs` and the harness
+  shim mirror, appended, never reordered.
+- `TrySpendOwnerCash` itself was NOT changed: it is a generic debit used for
+  land, buildings and earnest, and a generic debit must stay generic. The
+  credit happens in the acquisition closes, where the seller and the price
+  are known. That is the interpretation of the task's "TrySpendOwnerCash
+  must credit the seller" the owner can correct.
+
+Interpretation the owner can correct: the motive-based opening target is
+treated as the seller's agreed pre-close withdrawal — the seller strips
+excess cash before handing over the keys and the buyer keeps an agreed
+working float. If the owner wants the buyer to keep ALL business cash by
+default (no motive-based withdrawal unless the terms say so), the target
+goes away and `ApplyPostAcquisitionOpeningCash` becomes a no-op. The
+calibration itself (`CalculatePostAcquisitionOpeningCashCents`) is untouched.
+
+Adjacent gap, not repaired here: land purchases and vacant-shell "business"
+purchases have the same price-vanishes shape (the seller is paid nothing),
+but they are property sales, not business sales, and are out of this slice's
+scope. Noted for a future lane.
+
+### A2-2. Former owner as employee — REPAIRED
+
+The A1-era `EnsureOwnerOperatorStaffing(formerOwner)` call in
+`TryTransferBusinessToPlayer` is removed. Employment requires an agreement,
+and the sale terms carry no transition arrangement yet, so the former owner
+leaves the business's employment set at closing. New
+`BusinessRuntimeState.RemoveOwnerOperator` clears only slots whose worker id
+is the owner slot id (`owner:<personId>` or `owner:<displayName>`); a
+genuine hired-worker slot and any `EmploymentRelationship` are untouched.
+Formation paths that staff an owner-operator at business creation
+(`SharedBusinessRuntimeManager` ~`:8851`, `:9000`, `:9125`) are unchanged —
+this slice touches only the sale transfer. The terms record the outcome:
+"Former owner holds no operator role after closing; no transition
+arrangement was agreed." No transition-arrangement deal field exists yet;
+when the deal flow grows one, the terms and this call are the place it lands.
+No substitute agreement was invented.
+
+### A2-3. Sale terms on the player path — REPAIRED
+
+New `SharedBusinessRuntimeManager.RecordPlayerAcquisitionTerms`, called from
+both closes AFTER the opening-cash adjustment, so `includedCash` is the
+post-adjustment cash on hand. It records the seller's name and person id,
+the cash price actually delivered, the pre-close cash withdrawal, and the
+transition outcome, through the same `BuildSaleTerms` snapshot the to-Town
+path already uses (new overload carrying the seller fields). Terms survive
+save/load through the existing `BusinessInstanceState` save path, pinned by
+harness tests. A direct `TryTransferBusinessToPlayer` call on its own still
+records no terms: the market close is the acquisition path, and only it
+knows the price the seller was paid. Transfer-failure closes (title moved,
+runtime transfer failed) still pay the seller and record terms when the
+business can still be resolved; a pure shell with no business instance has
+nothing to record on.
+
+### A2-4. To-Town unbind — REPAIRED
+
+New `GeneralStoreRuntimeManager.TryUnbindPlayerBusiness`, the mirror of
+`TryBindFormedPlayerBusiness`: it releases exactly the business currently
+held (clears `currentBusiness`, `runtimeState`, `storeBuildingId`), refreshes
+reorder/capacity/HUD state (all three verified null-safe with no current
+business), and is a no-op success for a business the runtime never held.
+`TryTransferBusinessToTown` calls it for GeneralStore/Generic businesses,
+so all three callers (player sale, bank receiver foreclosure, rival
+takeover) release the store. The NPC restock driver resumes naturally once
+no current business is held. A refused unbind (no business given) is
+surfaced in the transfer message, as the bind refusal already is.
+
+### A2 files changed
+
+- `Assets/Scripts/Domains/Economy/Acquisitions/AcquisitionMarketManager.cs` —
+  `sellerPersonId` on listings, `CreditSellerProceeds` + household/payable
+  resolution, reworked `ApplyPostAcquisitionOpeningCash`, both closes pay
+  the seller and record terms, injectable `HouseholdLedgers` /
+  `ObligationAuthority` / `ObligationIdRegistry` seams (hub fallback covers
+  production; bootstrap wiring is a follow-up).
+- `Assets/Scripts/Domains/Economy/Core/SharedBusinessRuntimeManager.cs` —
+  former-owner slot removal on player transfer, `RecordPlayerAcquisitionTerms`
+  + `BuildSaleTerms` overload, to-Town unbind call.
+- `Assets/Scripts/Domains/Economy/Core/BusinessRuntimeState.cs` —
+  `RemoveOwnerOperator`.
+- `Assets/Scripts/Domains/Economy/Core/BusinessSaleTerms.cs` —
+  seller identity, price, withdrawal, transition arrangement,
+  `SellerProceedsCents`, full constructor (6-arg constructor kept).
+- `Assets/Scripts/Infrastructure/Persistence/SaveDtos.cs` —
+  four appended fields on `BusinessSaleTermsSaveDto`.
+- `Assets/Scripts/Domains/Economy/Businesses/GeneralStore/GeneralStoreRuntimeManager.cs` —
+  `TryUnbindPlayerBusiness`.
+- `Assets/Scripts/Tests/Editor/Economy/BusinessSaleTermsTests.cs` —
+  three harness tests (full-terms round-trip, legacy defaults, business-level
+  persistence).
+- `Assets/Scripts/Tests/Editor/Economy/UBC_A1_AcquisitionContinuityTests.cs` —
+  six Unity tests (listing seller id, direct-purchase credit + terms,
+  payable fallback, fail-loud, former-owner slot removal, to-Town unbind).
+- `Assets/Scripts/Tests/Editor/Economy/AcquisitionVpFlowTests.cs` —
+  two existing staged-close tests updated: the old "was not acquired"
+  assertion is replaced by "paid to", and the test world injects a
+  `HouseholdLedgerRegistry` on the market manager (production gets it from
+  the hub). No exact seller-ledger balance is asserted there — the staged
+  close may also settle stove fuel into the same household; exact
+  price-plus-withdrawal conservation is pinned by the A2 direct-purchase
+  test instead.
+- This audit document.
+- Harness-only companion (not committed, lives in the harness dirs): the
+  `BusinessSaleTermsSaveDto` shim mirror in `Shims/PersistenceDtos.cs` was
+  updated identically in the shared harness, this lane's baseline harness,
+  and the experiment harness. The shared-harness copy must travel with this
+  commit or the harness build cannot compile `BusinessSaleTerms.cs`.
+
+### A2 verification note (honest)
+
+Same limitation as A1: the acquisition cluster is harness-excluded, so the
+baseline-config run cannot execute the new Unity tests, and the two
+`AcquisitionVpFlowTests` updates are excluded from both harness configs, so
+nothing here compiles them — they were reviewed by eye against the
+production signatures and need Codex's Unity EditMode run. What the harness
+does verify: (a) the baseline-config run (numbers below) with zero FAIL-set
+change versus this lane's baseline; (b) the three new `BusinessSaleTermsTests`
+harness tests, which run in the baseline config; (c) the expanded-config
+build error-set comparison, which compiles the cluster files including the
+new production code.
+
+Lane baseline note: this lane's baseline run came back 4937 passed / 75
+failed, not the campaign baseline's 4934 / 78. The config is identical to
+A1's (sources.txt diff is empty); the 3-test difference is exactly the
+`SawmillAuthorshipC8` trio, which now passes because the S3 lane fixed the
+shared harness shim's `Application.dataPath` to point at the Assets folder
+(Unity semantics) while this lane was running. The FAIL-set comparison below
+is against this lane's 75, not the campaign's 78.
+
+- Baseline-config run: 4940 passed / 75 failed / 5015 total (log:
+  `/home/hatch/ll-ubc-a2-run.log`). Lane baseline was 4937 / 75 / 5012;
+  the +3 passed are exactly the three new `BusinessSaleTermsTests` A2 tests
+  (all PASS in the log).
+- FAIL-set delta vs lane baseline: zero. The 75-line FAIL set is identical
+  (`/home/hatch/ll-ubc-a2-fails-post.txt` vs `ll-ubc-a2-fails-base.txt`).
+- Expanded-config build, pre-edit: 143 unique errors (562 raw `error CS`
+  occurrences), log `/home/hatch/ll-ubc-a2-build-exp-pre.log`
+- Expanded-config build, post-edit: 143 unique errors (562 raw),
+  log `/home/hatch/ll-ubc-a2-build-exp-post2.log`. The unique error sets are
+  identical — zero new diagnostics. (An intermediate post-edit build showed
+  one new `CS0246` for `EntityIdRegistry`; fixed by adding
+  `using LandLedgers.Primitives;` to `AcquisitionMarketManager.cs`, after
+  which the sets matched exactly.)

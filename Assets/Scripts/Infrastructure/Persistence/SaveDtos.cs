@@ -938,6 +938,13 @@ namespace LandLedgers.Persistence
         public string inventoryStatement = string.Empty;
         public string employeeOfferStatement = string.Empty;
         public int closingDayIndex = -1;
+        // UBC A2: seller identity and cash the seller actually received.
+        // Appended — never renumber or reorder; the harness shim mirror
+        // (Shims/PersistenceDtos.cs) must carry these fields identically.
+        public int sellerPersonId = -1;
+        public int purchasePriceCents;
+        public int sellerCashWithdrawalCents;
+        public string transitionArrangement = string.Empty;
     }
 
     [Serializable]

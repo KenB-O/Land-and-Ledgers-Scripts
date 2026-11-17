@@ -1344,6 +1344,42 @@ namespace LandLedgers.FirstLedger
         }
 
         /// <summary>
+        /// UBC A2: the reverse of TryBindFormedPlayerBusiness. Selling a store
+        /// to Town (or otherwise ending player ownership) must release it from
+        /// the player store runtime, or the runtime would keep running weekly
+        /// payroll, reorder and distribution for a store the player no longer
+        /// owns while the NPC restock driver stays locked out. Only the exact
+        /// business currently held is released; a business the runtime never
+        /// held is a no-op success. The NPC restock driver resumes naturally
+        /// once no current business is held.
+        /// </summary>
+        public bool TryUnbindPlayerBusiness(BusinessInstanceState business, out string message)
+        {
+            AutoWire();
+            if (business == null)
+            {
+                message = "No business to release from the store runtime.";
+                return false;
+            }
+
+            if (currentBusiness != business)
+            {
+                message = $"{business.RuntimeDisplayName} was not managed by the store runtime.";
+                return true;
+            }
+
+            currentBusiness = null;
+            runtimeState = null;
+            storeBuildingId = -1;
+            RefreshReorderState();
+            RefreshCurrentBusinessCapacityState();
+            PushCashToHud();
+            message = $"{business.RuntimeDisplayName} released from the store runtime.";
+            status = message;
+            return true;
+        }
+
+        /// <summary>
         /// Migration adapter for a formed classless merchant. Existing category
         /// stock remains the single inventory authority; this only projects the
         /// legacy authored assortment into generic Retail lines so sale execution

@@ -6,6 +6,7 @@ using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
+using LandLedgers.Primitives;
 using LandLedgers.World;
 using NUnit.Framework;
 using UnityEditor;
@@ -19,6 +20,10 @@ namespace LandLedgers.Editor.Economy
     /// player acquires it, the same enterprise (same business id, same stock,
     /// same agreements, same cash and liabilities) must keep operating under
     /// the store runtime, with no phantom second business.
+    /// UBC lane A2 extends this file with the four A1 follow-ups: seller
+    /// proceeds reach the seller, the former owner is not silently kept on
+    /// as an employee, sale terms are recorded on the player path, and a sale
+    /// to Town unbinds the store from the player store runtime.
     /// Unity EditMode tests: this file needs the real town assets and the
     /// acquisition cluster (SharedBusinessRuntimeManager, store runtime,
     /// portfolio, market), which the Roslyn harness does not compile.
@@ -217,6 +222,165 @@ namespace LandLedgers.Editor.Economy
                 .Select(business => business.InstanceId)), "The business set must be identical before and after the sale.");
         }
 
+        // UBC A2 item 1 (listing half): the store's listing must name the
+        // seller's person id, so the proceeds path can credit the actual
+        // seller instead of a display name no ledger can resolve.
+        [Test]
+        public void BusinessListingCarriesSellerPersonId()
+        {
+            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+
+            AcquisitionListing listing = context.AcquisitionMarket.BusinessListings
+                .FirstOrDefault(candidate => candidate != null && candidate.businessInstanceId == store.InstanceId);
+            Assert.NotNull(listing, "The store must be listed for sale.");
+            Assert.GreaterOrEqual(store.Owner.PersonId, 0, "The NPC store owner must have a person id.");
+            Assert.AreEqual(store.Owner.PersonId, listing.sellerPersonId, "The listing must name the seller's person id.");
+            Assert.AreEqual(store.Owner.DisplayName, listing.ownerDisplayName);
+        }
+
+        // UBC A2 items 1 and 3 (end to end, direct purchase): the asking price
+        // and the seller's pre-close cash withdrawal both reach the seller's
+        // household ledger, the business keeps only the opening float, and
+        // the sale terms record the price, the withdrawal and the transition
+        // outcome on the business record.
+        [Test]
+        public void DirectPurchaseCreditsSellerAndRecordsTerms()
+        {
+            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+            context.SetBusinessCash(store, 100000);
+            HouseholdLedgerRegistry ledgers = context.RegisterSellerWithHousehold(store, 100);
+            context.PlayerPortfolio.AddOwnerCash(10_000_000, "UBC A2 test working capital");
+
+            AcquisitionListing listing = context.AcquisitionMarket.BusinessListings
+                .FirstOrDefault(candidate => candidate != null && candidate.businessInstanceId == store.InstanceId);
+            Assert.NotNull(listing, "The store must be listed for sale.");
+            int askingPrice = listing.askingPriceCents;
+            Assert.Greater(askingPrice, 0, "The store must have a positive asking price.");
+            int listingIndex = context.AcquisitionMarket.BusinessListings.ToList().IndexOf(listing);
+            Assert.GreaterOrEqual(listingIndex, 0, "The store listing must be in the market's business listings.");
+            SetSelectedBusinessIndex(context.AcquisitionMarket, listingIndex);
+
+            Assert.IsTrue(InvokeTryPurchaseBusiness(context.AcquisitionMarket, out string message), message);
+            StringAssert.Contains("paid to", message, "The close message must say the seller was paid.");
+
+            int openingCash = store.RuntimeState.CurrentCashCents;
+            int withdrawal = 100000 - openingCash;
+            Assert.GreaterOrEqual(withdrawal, 0, "The business must keep no more than it held before the sale.");
+            HouseholdLedger sellerLedger = ledgers.Get(100);
+            Assert.NotNull(sellerLedger, "The seller's household must have a ledger after the sale.");
+            Assert.AreEqual(
+                askingPrice + withdrawal,
+                sellerLedger.GetBalanceCents(),
+                "Seller proceeds are the price plus the pre-close cash withdrawal; neither may vanish.");
+
+            Assert.AreEqual(BusinessOwnerKind.Player, store.Owner.OwnerKind);
+            Assert.AreEqual(store.Owner.PersonId, store.SaleTerms.SellerPersonId);
+            Assert.AreEqual(askingPrice, store.SaleTerms.PurchasePriceCents);
+            Assert.AreEqual(withdrawal, store.SaleTerms.SellerCashWithdrawalCents);
+            Assert.AreEqual(askingPrice + withdrawal, store.SaleTerms.SellerProceedsCents);
+            Assert.AreEqual(openingCash, store.SaleTerms.IncludedCashCents);
+            StringAssert.Contains("no transition arrangement was agreed", store.SaleTerms.TransitionArrangement);
+
+            BusinessInstanceSaveDto dto = store.CaptureSaveDto();
+            BusinessInstanceState restored = BusinessInstanceState.FromSaveDto(dto);
+            Assert.NotNull(restored);
+            Assert.AreEqual(askingPrice, restored.SaleTerms.PurchasePriceCents);
+            Assert.AreEqual(withdrawal, restored.SaleTerms.SellerCashWithdrawalCents);
+            Assert.AreEqual(store.Owner.PersonId, restored.SaleTerms.SellerPersonId);
+        }
+
+        // UBC A2 item 1 (fallback): when the seller has no household to
+        // credit, the proceeds become a named Payable the player owes the
+        // seller — a settleable debt, never a silent loss.
+        [Test]
+        public void SellerProceedsFallBackToNamedPayableWhenNoHousehold()
+        {
+            using TestWorld context = TestWorld.Create();
+            var authority = new FinancialObligationAuthority();
+            context.AcquisitionMarket.ObligationAuthority = authority;
+            context.AcquisitionMarket.ObligationIdRegistry = new EntityIdRegistry();
+
+            int delivered = context.AcquisitionMarket.CreditSellerProceeds(
+                -1, "No Such Seller", 50000, "test_business", out string note);
+
+            Assert.AreEqual(50000, delivered, "The fallback must deliver the full amount as a debt.");
+            StringAssert.Contains("owed to", note);
+            FinancialObligation payable = authority.Obligations.FirstOrDefault(o => o != null && o.Kind == FinancialObligationKind.Payable);
+            Assert.NotNull(payable, "A Payable must be recorded when no household can be credited.");
+            Assert.AreEqual("player", payable.Debtor);
+            Assert.AreEqual("No Such Seller", payable.Creditor);
+            Assert.AreEqual(50000, payable.OutstandingPrincipalCents);
+        }
+
+        // UBC A2 item 1 (fail-loud): when there is no household and no debt
+        // authority either, the proceeds are NOT delivered and the note says
+        // so plainly — the loss is visible, never silent.
+        [Test]
+        public void SellerProceedsFailLoudWhenNoHouseholdAndNoAuthority()
+        {
+            using TestWorld context = TestWorld.Create();
+
+            int delivered = context.AcquisitionMarket.CreditSellerProceeds(
+                999, "Seller NineNineNine", 50000, "test_business", out string note);
+
+            Assert.AreEqual(0, delivered, "Nothing is delivered when no household and no debt authority exist.");
+            StringAssert.Contains("UNDELIVERED", note);
+            StringAssert.Contains("$500.00", note, "The undelivered amount must be named.");
+        }
+
+        // UBC A2 item 2: the former owner is not silently kept on as an
+        // employee. A staffed owner-operator slot is cleared at transfer,
+        // while a genuine hired-worker slot is untouched.
+        [Test]
+        public void FormerOwnerLeavesEmploymentSetOnPlayerTransfer()
+        {
+            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+            store.EnsureOwnerOperatorStaffing(store.Owner);
+            string ownerSlotId = $"owner:{store.Owner.PersonId}";
+            Assert.IsTrue(
+                store.RuntimeState.WorkerSlots.Any(slot => slot != null && slot.IsFilled && slot.AssignedWorkerId == ownerSlotId),
+                "The fixture must staff the owner-operator slot before the transfer.");
+
+            WorkerSlotState hiredSlot = store.RuntimeState.WorkerSlots.FirstOrDefault(slot => slot != null && !slot.IsFilled);
+            Assert.NotNull(hiredSlot, "The store must have an open slot for a hired worker.");
+            hiredSlot.Assign("worker:3", "Worker 03", 500);
+
+            Assert.IsTrue(
+                context.SharedBusinessRuntime.TryTransferBusinessToPlayer(store.AssignedBuildingId, out _, out string message),
+                message);
+
+            Assert.IsFalse(
+                store.RuntimeState.WorkerSlots.Any(slot => slot != null && slot.IsFilled && slot.AssignedWorkerId == ownerSlotId),
+                "The former owner's operator slot must be cleared at closing; employment requires an agreement.");
+            Assert.IsTrue(hiredSlot.IsFilled, "A genuine hired-worker slot must be untouched by the transfer.");
+            Assert.AreEqual("worker:3", hiredSlot.AssignedWorkerId);
+        }
+
+        // UBC A2 item 4: selling a store to Town must unbind it from the
+        // player store runtime — the reverse of the A1 bind.
+        [Test]
+        public void SaleToTownUnbindsStoreFromPlayerRuntime()
+        {
+            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+
+            Assert.IsTrue(
+                context.SharedBusinessRuntime.TryTransferBusinessToPlayer(store.AssignedBuildingId, out _, out string transferMessage),
+                transferMessage);
+            Assert.AreSame(store, context.StoreRuntime.CurrentBusiness, "The store must be bound after the player acquires it.");
+
+            Assert.IsTrue(
+                context.SharedBusinessRuntime.TryTransferBusinessToTown(store.AssignedBuildingId, "Town", out BusinessInstanceState townBusiness, out string townMessage),
+                townMessage);
+            Assert.AreSame(store, townBusiness, "The sale to Town must move the same business object.");
+            Assert.AreEqual(BusinessOwnerKind.Town, store.Owner.OwnerKind);
+            Assert.IsNull(context.StoreRuntime.CurrentBusiness, "Selling to Town must unbind the store from the player store runtime.");
+            Assert.IsNull(context.StoreRuntime.RuntimeState, "The runtime must hold no store state after the unbind.");
+        }
+
         private static List<(string CategoryId, int Units)> SnapshotStock(BusinessInstanceState business)
         {
             List<(string, int)> snapshot = new();
@@ -238,6 +402,26 @@ namespace LandLedgers.Editor.Economy
             FieldInfo field = typeof(BusinessRuntimeState).GetField("accruedLiabilityCents", BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(field, "BusinessRuntimeState.accruedLiabilityCents should exist.");
             field.SetValue(business.RuntimeState, Mathf.Max(0, cents));
+        }
+
+        // UBC A2: TryPurchaseBusiness is the direct-purchase close (no staged
+        // deal machine). It is private, so the test drives it by reflection,
+        // the same pattern the file already uses for private fields.
+        private static void SetSelectedBusinessIndex(AcquisitionMarketManager market, int index)
+        {
+            FieldInfo field = typeof(AcquisitionMarketManager).GetField("selectedBusinessIndex", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(field, "AcquisitionMarketManager.selectedBusinessIndex should exist.");
+            field.SetValue(market, index);
+        }
+
+        private static bool InvokeTryPurchaseBusiness(AcquisitionMarketManager market, out string message)
+        {
+            MethodInfo method = typeof(AcquisitionMarketManager).GetMethod("TryPurchaseBusiness", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(method, "AcquisitionMarketManager.TryPurchaseBusiness should exist.");
+            object[] args = { null };
+            bool result = (bool)method.Invoke(market, args);
+            message = (string)args[0];
+            return result;
         }
 
         private sealed class TestWorld : IDisposable
@@ -349,6 +533,48 @@ namespace LandLedgers.Editor.Economy
                 FieldInfo field = typeof(SharedBusinessRuntimeManager).GetField("transferAgreements", BindingFlags.NonPublic | BindingFlags.Instance);
                 Assert.NotNull(field, "SharedBusinessRuntimeManager.transferAgreements should exist.");
                 field.SetValue(SharedBusinessRuntime, new List<BusinessTransferAgreementState>(agreements));
+            }
+
+            // UBC A2: gives the seller a household the proceeds path can
+            // credit, and injects a fresh household ledger registry on the
+            // market manager (production gets it from the hub). The fixture's
+            // SeedLaborPool clears the population, so the seller's person
+            // record is added here when it is missing; when the seller's
+            // person id collides with a labor-pool placeholder, that record
+            // is the one given the household — what the test pins is that the
+            // proceeds reach the household the seller resolves to.
+            public HouseholdLedgerRegistry RegisterSellerWithHousehold(BusinessInstanceState business, int householdId)
+            {
+                Assert.NotNull(business);
+                Assert.NotNull(business.Owner);
+                Assert.GreaterOrEqual(business.Owner.PersonId, 0, "The seller must have a person id.");
+                PersonState seller = PopulationManager.State.GetPerson(business.Owner.PersonId);
+                if (seller == null)
+                {
+                    seller = new PersonState
+                    {
+                        id = business.Owner.PersonId,
+                        firstName = "Seller",
+                        lastName = business.Owner.Surname ?? string.Empty,
+                        age = 35,
+                        ageBand = AgeBand.Adult18Plus,
+                        laborAccessLevel = LaborAccessLevel.FullLaborMarket,
+                        householdId = householdId,
+                        professionId = string.Empty,
+                        professionName = "Business owner",
+                        homeBuildingId = -1,
+                        workplaceBuildingId = business.AssignedBuildingId
+                    };
+                    PopulationManager.State.people.Add(seller);
+                }
+                else
+                {
+                    seller.householdId = householdId;
+                }
+
+                var ledgers = new HouseholdLedgerRegistry();
+                AcquisitionMarket.HouseholdLedgers = ledgers;
+                return ledgers;
             }
 
             public void SeedLaborPool(int count)

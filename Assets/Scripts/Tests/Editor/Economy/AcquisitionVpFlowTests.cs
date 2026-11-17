@@ -198,13 +198,14 @@ namespace LandLedgers.Editor.Economy
         // wrong. "Operating cash remains with the business as working capital."
         // exists nowhere in production code, and CompleteBusinessAcquisition
         // does the opposite — ApplyPostAcquisitionOpeningCash RESETS operating
-        // cash to a motive-based opening float, "seller cash ... was not
-        // acquired." The staged close is the live design (the one-call
-        // purchase died at 1aaf7269); this test now pins what the close
-        // actually does. The owner-cash assertion was already right: total
-        // drop is earnest + final due = finalPrice when seller financing is
-        // zero, and AgreeTentativeTerms never sets seller financing on a
-        // fresh deal.
+        // cash to a motive-based opening float. The staged close is the live
+        // design (the one-call purchase died at 1aaf7269); this test now pins
+        // what the close actually does. UBC A2: the reset is the seller's
+        // pre-close withdrawal, and the withdrawn cash is paid to the
+        // seller's household ledger — it is not erased. The owner-cash
+        // assertion was already right: total drop is earnest + final due =
+        // finalPrice when seller financing is zero, and
+        // AgreeTentativeTerms never sets seller financing on a fresh deal.
         [Test]
         public void BusinessCloseResetsOperatingCashToMotiveBasedOpeningFloat()
         {
@@ -228,11 +229,19 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(ownerCashBefore - (finalPrice - sellerFinanced), context.PlayerPortfolio.OwnerCashCents);
             int payroll = business.RuntimeState.FilledWeeklyPayrollCents;
             int reserve = SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business);
-            Assert.AreEqual(ExpectedPostAcquisitionOpeningCashCents(100000, payroll, reserve, motive), business.RuntimeState.CurrentCashCents);
+            int expectedOpeningCash = ExpectedPostAcquisitionOpeningCashCents(100000, payroll, reserve, motive);
+            Assert.AreEqual(expectedOpeningCash, business.RuntimeState.CurrentCashCents);
             Assert.NotNull(business.Owner);
             Assert.AreEqual(BusinessOwnerKind.Player, business.Owner.OwnerKind);
             StringAssert.Contains("Opening operating cash set to", closeMessage);
-            StringAssert.Contains("was not acquired", closeMessage);
+            // UBC A2: the seller is paid, not erased. The cash price plus
+            // the pre-close cash withdrawal land on the seller's household
+            // ledger — the business keeps only the motive-based opening float.
+            // (The exact price-plus-withdrawal conservation is pinned by
+            // the A2 direct-purchase test, whose close has no contents
+            // transfer; this staged close may also settle stove fuel into
+            // the same household, so no exact balance is asserted here.)
+            StringAssert.Contains("paid to", closeMessage);
         }
 
         // Checkpoint-54 follow-up: this test pinned the pre-1aaf7269 one-call
@@ -244,8 +253,9 @@ namespace LandLedgers.Editor.Economy
         // drives the obsolete entry one stage per call, as the UI would, to a
         // staged close, and pins what the close actually does: owner cash
         // drops by the tentative price less seller financing, and operating
-        // cash is reset to the motive-based opening float — the seller's till
-        // cash is not acquired. Real-life rule: an 1870 purchase runs
+        // cash is reset to the motive-based opening float — the seller's
+        // pre-close cash withdrawal is paid to the seller (UBC A2), not
+        // erased. Real-life rule: an 1870 purchase runs
         // inquiry, proof, earnest, diligence, agreement, close, never a
         // single click.
         [Test]
@@ -287,12 +297,20 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(ownerCashBefore - (finalPrice - sellerFinanced), context.PlayerPortfolio.OwnerCashCents);
             int payroll = business.RuntimeState.FilledWeeklyPayrollCents;
             int reserve = SharedBusinessRuntimeManager.CalculateSharedSurvivalCashReserveCents(business);
-            Assert.AreEqual(ExpectedPostAcquisitionOpeningCashCents(100000, payroll, reserve, motive), business.RuntimeState.CurrentCashCents);
+            int expectedOpeningCash = ExpectedPostAcquisitionOpeningCashCents(100000, payroll, reserve, motive);
+            Assert.AreEqual(expectedOpeningCash, business.RuntimeState.CurrentCashCents);
             Assert.NotNull(business.Owner);
             Assert.AreEqual(BusinessOwnerKind.Player, business.Owner.OwnerKind);
             Assert.IsTrue(context.TownWorld.Buildings[listing.buildingId].playerOwned);
             StringAssert.Contains("Opening operating cash set to", closeMessage);
-            StringAssert.Contains("was not acquired", closeMessage);
+            // UBC A2: the seller is paid, not erased. The cash price plus
+            // the pre-close cash withdrawal land on the seller's household
+            // ledger — the business keeps only the motive-based opening float.
+            // (The exact price-plus-withdrawal conservation is pinned by
+            // the A2 direct-purchase test, whose close has no contents
+            // transfer; this staged close may also settle stove fuel into
+            // the same household, so no exact balance is asserted here.)
+            StringAssert.Contains("paid to", closeMessage);
         }
 
         [Test]
@@ -983,6 +1001,11 @@ namespace LandLedgers.Editor.Economy
                 context.SharedBusinessRuntime.Configure(context.TownWorld, null, context.PopulationManager, null, context.StoreRuntime, context.PlayerPortfolio);
                 context.SharedBusinessRuntime.InitializeIfNeeded(context.StoreRuntime.CurrentBusiness);
                 context.AcquisitionMarket.Configure(context.TownWorld, context.StoreRuntime, context.SharedBusinessRuntime, context.PopulationManager, null, null, context.PlayerPortfolio);
+                // UBC A2: the market's household-cash authority. Production
+                // gets it from the hub; the test world injects a fresh
+                // registry so seller proceeds land on a real ledger instead
+                // of falling through to the payable fallback.
+                context.AcquisitionMarket.HouseholdLedgers = new HouseholdLedgerRegistry();
                 context.DebtManager.Configure(null, context.StoreRuntime, context.AcquisitionMarket, context.SharedBusinessRuntime, context.PlayerPortfolio);
                 context.AcquisitionMarket.RebuildMarket();
                 return context;

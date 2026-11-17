@@ -3928,6 +3928,40 @@ namespace LandLedgers.Economy
             return true;
         }
 
+        /// <summary>
+        /// UBC A2: removes a former owner's operator slot after a business is
+        /// sold to the player. The former owner is NOT silently kept on as an
+        /// employee — employment requires an agreement — so when the sale has
+        /// no transition arrangement the owner-operator slot goes with the
+        /// sale. Only slots whose worker id is the owner slot id
+        /// ("owner:{personId}" or "owner:{displayName}") are touched; a
+        /// genuine hired-worker slot, and any EmploymentRelationship, are
+        /// left alone. Returns the number of slots cleared.
+        /// </summary>
+        public int RemoveOwnerOperator(BusinessOwnerIdentity formerOwner)
+        {
+            if (formerOwner == null || formerOwner.OwnerKind == BusinessOwnerKind.Player)
+            {
+                return 0;
+            }
+
+            string ownerSlotId = formerOwner.PersonId >= 0
+                ? $"owner:{formerOwner.PersonId}"
+                : $"owner:{formerOwner.DisplayName}";
+            int removed = 0;
+            foreach (WorkerSlotState slot in WorkerSlots)
+            {
+                if (slot != null && slot.IsFilled &&
+                    string.Equals(slot.AssignedWorkerId, ownerSlotId, StringComparison.Ordinal))
+                {
+                    slot.Unassign();
+                    removed++;
+                }
+            }
+
+            return removed;
+        }
+
         public int ReceivePendingReorderUnits(string categoryId, int units)
         {
             CategoryStockState stock = GetCategoryStock(categoryId);

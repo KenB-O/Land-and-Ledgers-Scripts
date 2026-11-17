@@ -114,6 +114,16 @@ namespace LandLedgers.EditorTests.Integration
             // AssetAppraisalResult / AssetSaleRecord above. The signal
             // never orders; the driver reads it and decides.
             "BlacksmithIronReorderPolicy", "BlacksmithIronReorderSignal",
+            // D5 (2026-11-17): "BlacksmithCoalReorderPolicy" is the
+            // smith's forge-coal reorder policy and
+            // "BlacksmithCoalReorderSignal" is its data-only signal —
+            // both consumed inside the smith coal feature by
+            // BlacksmithCoalImportDriver (the wired driver, registered
+            // in the hub and driven by SimulationDrivers), the same
+            // precedent as AssetAppraisalResult / AssetSaleRecord
+            // above. The signal never orders; the driver reads it and
+            // decides.
+            "BlacksmithCoalReorderPolicy", "BlacksmithCoalReorderSignal",
             "BorrowerLenderMemory", "BuildingFootprintLinker", "BuildingFootprintView",
             // Pass IX review fix R-13: "BusinessCashPostagePayer" removed from this
             // baseline — since R-03 it is constructed by RecruitmentService

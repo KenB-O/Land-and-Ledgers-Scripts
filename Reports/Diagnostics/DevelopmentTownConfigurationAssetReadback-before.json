@@ -1,0 +1,1 @@
+people=12 households=6 businesses=7 validate=False error=Each development resident must reference exactly one configured household.

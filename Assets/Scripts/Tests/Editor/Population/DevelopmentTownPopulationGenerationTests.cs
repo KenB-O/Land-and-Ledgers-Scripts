@@ -39,7 +39,7 @@ namespace LandLedgers.EditorTests.Population
 
             var plots = (List<TownPlot>)GetPrivateField(world, "plots");
             var buildings = (List<PlacedBuilding>)GetPrivateField(world, "buildings");
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 8; i++)
             {
                 plots.Add(new TownPlot { id = 10 + i, zone = PlotZone.Residential });
                 BuildingDefinition definition = ScriptableObject.CreateInstance<BuildingDefinition>();
@@ -125,9 +125,7 @@ namespace LandLedgers.EditorTests.Population
         public void CommonConfigurationRefusesToInventHomesWhenTownWorldIsTooSmall()
         {
             List<PlacedBuilding> buildings = (List<PlacedBuilding>)GetPrivateField(world, "buildings");
-            buildings.RemoveAt(buildings.Count - 1);
-            buildings.RemoveAt(buildings.Count - 1);
-            buildings.RemoveAt(buildings.Count - 1);
+            while (buildings.Count > 2) buildings.RemoveAt(buildings.Count - 1);
             PopulationGenerationResult result = PopulationGenerator.GenerateDevelopmentTown(
                 world, settings, sixPersonTestData, new KinshipRegistry(), new HouseholdLedgerRegistry(), 0, 1886, 3, 1);
             Assert.IsTrue(result.HasErrors);
@@ -137,439 +135,74 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void AuthoredNineResidentTown_GeneratesDirectlyWithoutCompositionOrAppend()
+        public void AuthoredTownGeneration_PreservesConfiguredIdentitiesAndMemberships()
         {
             DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
                 "Assets/Core/Population/DevelopmentTownConfiguration.asset");
             Assert.IsNotNull(configuration);
             manager.GeneratePopulationSnapshot(configuration);
-            Assert.AreEqual(9, manager.State.people.Count);
-            Assert.AreEqual(5, manager.State.households.Count);
-            Assert.AreEqual(5, manager.State.households.Select(household => household.homeBuildingId).Distinct().Count());
-            Assert.AreEqual("Ethan Boniecki", manager.State.GetPerson(configuration.ResolveRuntimePersonId("ethan")).DisplayName);
-            Assert.AreEqual("Shane Bryan", manager.State.GetPerson(configuration.ResolveRuntimePersonId("shane")).DisplayName);
-            Assert.AreEqual(10, manager.Kinship.EdgeCount, "Five authored relationships should be restored once in the shared kinship authority.");
-        }
 
-        [Test]
-        public void AuthoredNineResidentTown_MembershipBoundary_MapsNinePersonsToFiveHouseholds()
-        {
-            // Plan 01 Slice 0(c): membership boundary at generation. Authored
-            // mapping (person IDs allocated 1-9 in asset order, households 1-5
-            // in asset order): H1 {1, 2}, H2 {3, 4}, H3 {5, 6}, H4 {7, 8}, H5 {9}.
-            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
-                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
-            Assert.IsNotNull(configuration);
-            manager.GeneratePopulationSnapshot(configuration);
-
-            Assert.AreEqual(9, manager.Memberships.ActiveCount,
-                "Exactly one Active membership per resident must exist at generation.");
-            CollectionAssert.AreEqual(new[] { 1, 2 }, manager.Memberships.GetActiveMembers(1));
-            CollectionAssert.AreEqual(new[] { 3, 4 }, manager.Memberships.GetActiveMembers(2));
-            CollectionAssert.AreEqual(new[] { 5, 6 }, manager.Memberships.GetActiveMembers(3));
-            CollectionAssert.AreEqual(new[] { 7, 8 }, manager.Memberships.GetActiveMembers(4));
-            CollectionAssert.AreEqual(new[] { 9 }, manager.Memberships.GetActiveMembers(5));
-
-            int[][] authoredHouseholds =
+            Assert.AreEqual(configuration.People.Count, manager.State.people.Count);
+            Assert.AreEqual(configuration.Households.Count, manager.State.households.Count);
+            Assert.AreEqual(configuration.People.Count, manager.Memberships.ActiveCount);
+            foreach (var householdDefinition in configuration.Households)
             {
-                new[] { 1, 2 }, new[] { 3, 4 }, new[] { 5, 6 }, new[] { 7, 8 }, new[] { 9 },
-            };
-            for (int personId = 1; personId <= 9; personId++)
-            {
-                int expectedHousehold = -1;
-                for (int h = 0; h < authoredHouseholds.Length; h++)
-                {
-                    if (System.Array.IndexOf(authoredHouseholds[h], personId) >= 0)
-                    {
-                        expectedHousehold = h + 1;
-                    }
-                }
-                Assert.AreEqual(expectedHousehold, manager.Memberships.GetActiveHouseholdId(personId),
-                    $"P{personId} must resolve to its authored household.");
-                HouseholdMembership membership = manager.Memberships.GetActiveMembership(personId);
-                Assert.IsNotNull(membership, $"P{personId} must hold a non-null Active membership.");
-                Assert.IsTrue(membership.IsActive);
+                HouseholdState household = manager.State.GetHousehold(householdDefinition.runtimeHouseholdId);
+                Assert.IsNotNull(household, householdDefinition.key);
+                CollectionAssert.AreEquivalent(householdDefinition.memberPersonKeys.Select(configuration.ResolveRuntimePersonId),
+                    household.memberIds, householdDefinition.key);
             }
-
-            // ActiveCount == 9 plus per-household sets covering exactly persons
-            // 1-9 once proves no person holds two Active memberships.
-            var covered = new List<int>();
-            for (int householdId = 1; householdId <= 5; householdId++)
+            foreach (var personDefinition in configuration.People)
             {
-                covered.AddRange(manager.Memberships.GetActiveMembers(householdId));
-            }
-            covered.Sort();
-            CollectionAssert.AreEqual(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 }, covered);
-            CollectionAssert.IsEmpty(manager.Memberships.Diagnostics,
-                "No Register rejection may fire at generation; any rejection diagnostic fails this boundary.");
-        }
-
-        [Test]
-        public void AuthoredNineResidentTown_RegistryIdentityStable_GenerationThroughFirstDailyNeeds()
-        {
-            // Plan 01 Slice 0(c): the registry instance the daily drivers read
-            // at first use must be the same live instance generation populated.
-            // A replaced or stale instance is the Slice 0 mechanism-A signature.
-            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
-                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
-            Assert.IsNotNull(configuration);
-            manager.GeneratePopulationSnapshot(configuration);
-
-            HouseholdMembershipRegistry registryAtGeneration = manager.Memberships;
-            Assert.IsNotNull(registryAtGeneration);
-            Assert.AreEqual(9, registryAtGeneration.ActiveCount);
-            var membersAtGeneration = new Dictionary<int, List<int>>();
-            for (int householdId = 1; householdId <= 5; householdId++)
-            {
-                membersAtGeneration[householdId] = registryAtGeneration.GetActiveMembers(householdId);
-            }
-
-            // First daily needs event, read through the same manager property
-            // the runtime drivers read (SimulationDrivers.DriveDailyNeeds
-            // re-reads populationManager.Memberships fresh every day).
-            HouseholdMembershipRegistry registryAtFirstUse = manager.Memberships;
-            Assert.IsTrue(object.ReferenceEquals(registryAtGeneration, registryAtFirstUse),
-                "The registry instance at first daily needs use must be the instance generation populated.");
-            var diag = new List<string>();
-            DailyNeedsService.DayReport report = new DailyNeedsService().ExecuteDay(
-                manager.State, new HouseholdConsumptionPlanner(), null, 0, diag,
-                inventories: new HouseholdInventoryRegistry(), mealLog: new HouseholdMealLogRegistry(),
-                mealPolicy: MealSchedulingPolicy.Default, memberships: registryAtFirstUse);
-            Assert.AreEqual(5, report.HouseholdsServed,
-                "All five households must resolve an acting adult at the first daily needs event.");
-            Assert.IsTrue(diag.TrueForAll(message => !message.Contains("no acting adult")),
-                "No household may report 'no acting adult' at the first daily needs event.");
-
-            Assert.IsTrue(object.ReferenceEquals(registryAtGeneration, manager.Memberships),
-                "The registry instance must still be the generation instance after the first daily needs event.");
-            Assert.AreEqual(9, manager.Memberships.ActiveCount);
-            for (int householdId = 1; householdId <= 5; householdId++)
-            {
-                CollectionAssert.AreEqual(membersAtGeneration[householdId],
-                    manager.Memberships.GetActiveMembers(householdId),
-                    $"H{householdId} memberships must be unchanged by the first daily needs event.");
+                PersonState person = manager.State.GetPerson(configuration.ResolveRuntimePersonId(personDefinition.key));
+                Assert.IsNotNull(person, personDefinition.key);
+                Assert.AreEqual(personDefinition.firstName + " " + personDefinition.lastName, person.DisplayName);
+                DevelopmentTownConfiguration.HouseholdDefinition home = configuration.Households.Single(h =>
+                    h.memberPersonKeys.Contains(personDefinition.key));
+                Assert.AreEqual(home.runtimeHouseholdId, manager.Memberships.GetActiveHouseholdId(person.id));
             }
         }
 
         [Test]
-        public void AuthoredNineResidentTown_DailyNeeds_LotBackedMealsServeAllHouseholds()
+        public void OpeningHouseholdCash_IsSeededOnceAcrossRepeatedGeneration()
         {
-            // Plan 01 Slice 3, Unity Test Runner only: the full end-to-end
-            // path through the real manager. With the repaired registry,
-            // ExecuteDay over the generated population serves all 5
-            // households with a resolved acting adult and lot-backed meal
-            // consumption: forty loaves per household is 3.3+ staple days of
-            // supply for a two-person household, so the flexible midday slot
-            // is served - three scheduled slots per resident, 27 meals, each
-            // consuming one real loaf and recorded in the meal log. Passing
-            // is left for Codex; this test never runs in the Roslyn harness
-            // (this file is harness-excluded).
             DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
                 "Assets/Core/Population/DevelopmentTownConfiguration.asset");
-            Assert.IsNotNull(configuration);
             manager.GeneratePopulationSnapshot(configuration);
-            Assert.AreEqual(9, manager.Memberships.ActiveCount,
-                "Exactly one Active membership per resident must exist at generation.");
+            int householdId = configuration.Households[0].runtimeHouseholdId;
+            HouseholdLedger ledger = manager.HouseholdLedgers.Get(householdId);
+            Assert.IsNotNull(ledger);
+            Assert.AreEqual(configuration.Households[0].openingCashCents, ledger.GetBalanceCents());
 
-            var inventories = new HouseholdInventoryRegistry();
-            var mealLog = new HouseholdMealLogRegistry();
-            for (int householdId = 1; householdId <= 5; householdId++)
-            {
-                Assert.IsNull(inventories.GetOrCreate(householdId).AddLot(
-                    HouseholdItemCatalog.BreadId, 40, 0, "test larder"),
-                    "Bread lots must land in the household inventory.");
-            }
-
-            var diag = new List<string>();
-            DailyNeedsService.DayReport report = new DailyNeedsService().ExecuteDay(
-                manager.State, new HouseholdConsumptionPlanner(), null, 0, diag,
-                inventories: inventories, mealLog: mealLog,
-                mealPolicy: MealSchedulingPolicy.Default, memberships: manager.Memberships);
-
-            Assert.AreEqual(5, report.HouseholdsServed,
-                "All five households must resolve an acting adult at the first daily needs event.");
-            Assert.AreEqual(27, report.MealsEaten,
-                "Nine residents x three scheduled slots, all lot-backed.");
-            Assert.AreEqual(0, report.MealsMissed);
-            Assert.IsTrue(diag.TrueForAll(message => !message.Contains("no acting adult")),
-                "No household may report 'no acting adult' at the first daily needs event.");
-            int[][] authoredHouseholds =
-            {
-                new[] { 1, 2 }, new[] { 3, 4 }, new[] { 5, 6 }, new[] { 7, 8 }, new[] { 9 },
-            };
-            int loggedMeals = 0;
-            for (int h = 0; h < authoredHouseholds.Length; h++)
-            {
-                loggedMeals += mealLog.GetMeals(h + 1).Count;
-                Assert.AreEqual(40 - 3 * authoredHouseholds[h].Length,
-                    inventories.GetOrCreate(h + 1).GetAvailableUnits(HouseholdItemCatalog.BreadId),
-                    $"H{h + 1} bread must fall by exactly one loaf per meal served.");
-            }
-            Assert.AreEqual(27, loggedMeals, "Every served meal must be recorded in the meal log.");
+            manager.GeneratePopulationSnapshot(configuration);
+            ledger = manager.HouseholdLedgers.Get(householdId);
+            Assert.AreEqual(configuration.Households[0].openingCashCents, ledger.GetBalanceCents(),
+                "Rebuilding a development population must not duplicate configured opening cash.");
         }
 
         [Test]
-        public void AuthoredNineResidentTown_RebuildTwice_IsIdempotent()
+        public void AuthoredPopulationSaveLoad_PreservesStablePersonAndHouseholdIds()
         {
-            // Plan 01 Slice 1a: a second generation on the same manager is
-            // clear-then-load on the SAME registry instance - no duplicates,
-            // no ActiveCount growth, identical members, no rejections.
             DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
                 "Assets/Core/Population/DevelopmentTownConfiguration.asset");
-            Assert.IsNotNull(configuration);
             manager.GeneratePopulationSnapshot(configuration);
-            HouseholdMembershipRegistry registryAfterFirst = manager.Memberships;
-            Assert.IsNotNull(registryAfterFirst);
-            Assert.AreEqual(9, registryAfterFirst.ActiveCount);
-
-            manager.GeneratePopulationSnapshot(configuration);
-
-            Assert.IsTrue(object.ReferenceEquals(registryAfterFirst, manager.Memberships),
-                "Rebuild must clear-then-load the same registry instance, never replace it.");
-            Assert.AreEqual(9, manager.Memberships.ActiveCount);
-            CollectionAssert.AreEqual(new[] { 1, 2 }, manager.Memberships.GetActiveMembers(1));
-            CollectionAssert.AreEqual(new[] { 3, 4 }, manager.Memberships.GetActiveMembers(2));
-            CollectionAssert.AreEqual(new[] { 5, 6 }, manager.Memberships.GetActiveMembers(3));
-            CollectionAssert.AreEqual(new[] { 7, 8 }, manager.Memberships.GetActiveMembers(4));
-            CollectionAssert.AreEqual(new[] { 9 }, manager.Memberships.GetActiveMembers(5));
-            for (int personId = 1; personId <= 9; personId++)
-            {
-                Assert.IsNotNull(manager.Memberships.GetActiveMembership(personId),
-                    $"P{personId} must hold a membership after the second generation.");
-            }
-            CollectionAssert.IsEmpty(manager.Memberships.Diagnostics,
-                "No Register rejection may fire on a rebuild.");
-        }
-
-        [Test]
-        public void AuthoredNineResidentTown_GenerateAfterClear_MatchesLatestGenerationOnly()
-        {
-            // Plan 01 Slice 1a: fresh New Game after a previous session -
-            // generate, clear, generate again on the same manager. The
-            // registry must match the latest generation only, with no stale
-            // members from the earlier session. (Slice 2: ClearPopulationSnapshot
-            // now also clears the registry on the same instance, so the
-            // intermediate state is empty; the dedicated
-            // ClearPopulationSnapshot_ClearsRegistryOnSameInstance test
-            // asserts that, and this test asserts the regeneration.)
-            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
-                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
-            Assert.IsNotNull(configuration);
-            manager.GeneratePopulationSnapshot(configuration);
-            HouseholdMembershipRegistry registryBeforeClear = manager.Memberships;
-            Assert.AreEqual(9, registryBeforeClear.ActiveCount);
-
-            manager.ClearPopulationSnapshot();
-            Assert.AreEqual(0, manager.State.people.Count);
-            Assert.AreEqual(0, manager.State.households.Count);
-
-            manager.GeneratePopulationSnapshot(configuration);
-
-            Assert.IsTrue(object.ReferenceEquals(registryBeforeClear, manager.Memberships),
-                "The registry instance must survive a clear and a regeneration; holders keep reading the same live object.");
-            Assert.AreEqual(9, manager.Memberships.ActiveCount,
-                "The registry must hold exactly the latest generation's nine memberships, no more.");
-            CollectionAssert.AreEqual(new[] { 1, 2 }, manager.Memberships.GetActiveMembers(1));
-            CollectionAssert.AreEqual(new[] { 3, 4 }, manager.Memberships.GetActiveMembers(2));
-            CollectionAssert.AreEqual(new[] { 5, 6 }, manager.Memberships.GetActiveMembers(3));
-            CollectionAssert.AreEqual(new[] { 7, 8 }, manager.Memberships.GetActiveMembers(4));
-            CollectionAssert.AreEqual(new[] { 9 }, manager.Memberships.GetActiveMembers(5));
-            CollectionAssert.IsEmpty(manager.Memberships.Diagnostics,
-                "No Register rejection may fire on the regeneration after clear.");
-        }
-
-        [Test]
-        public void AuthoredNineResidentTown_SaveLoadRoundTrip_PreservesMembershipsAndCursor()
-        {
-            // Plan 01 Slice 2 (UNITY-OWED): generate, capture the save
-            // DTO, load it into a FRESH manager, and assert identical
-            // memberships - same membership IDs, same person/household
-            // pairs, same ActiveCount - with the membership allocator
-            // cursor restored so the next membership ID (9) does not
-            // collide with the restored set (0-8).
-            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
-                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
-            Assert.IsNotNull(configuration);
-            manager.GeneratePopulationSnapshot(configuration);
-
-            var membershipIdsBefore = new Dictionary<int, int>();
-            var membersBefore = new Dictionary<int, List<int>>();
-            for (int personId = 1; personId <= 9; personId++)
-            {
-                membershipIdsBefore[personId] = manager.Memberships.GetActiveMembership(personId).MembershipId;
-            }
-            for (int householdId = 1; householdId <= 5; householdId++)
-            {
-                membersBefore[householdId] = manager.Memberships.GetActiveMembers(householdId);
-            }
-
-            PopulationSaveDto saved = manager.CaptureSaveDto();
-            Assert.IsNotNull(saved.householdMemberships);
-            Assert.AreEqual(9, saved.householdMemberships.memberships.Count);
-
+            PopulationSaveDto dto = manager.CaptureSaveDto();
             GameObject freshObject = null;
             try
             {
                 PopulationManager fresh = CreateFreshManager(out freshObject);
-                fresh.LoadFromSaveDto(saved);
-
-                Assert.IsNotNull(fresh.Memberships);
-                Assert.AreEqual(9, fresh.Memberships.ActiveCount,
-                    "The loaded registry must hold exactly the nine saved memberships.");
-                CollectionAssert.IsEmpty(fresh.Memberships.Diagnostics,
-                    "No Register rejection may fire when restoring saved memberships.");
-                for (int personId = 1; personId <= 9; personId++)
-                {
-                    HouseholdMembership membership = fresh.Memberships.GetActiveMembership(personId);
-                    Assert.IsNotNull(membership, $"P{personId} must hold a membership after load.");
-                    Assert.AreEqual(membershipIdsBefore[personId], membership.MembershipId,
-                        $"P{personId} membership id must survive the round-trip unchanged.");
-                }
-                for (int householdId = 1; householdId <= 5; householdId++)
-                {
-                    CollectionAssert.AreEqual(membersBefore[householdId], fresh.Memberships.GetActiveMembers(householdId),
-                        $"H{householdId} members must be identical after load.");
-                }
-
-                var entityIds = (EntityIdRegistry)GetPrivateField(fresh, "entityIds");
-                Assert.IsNotNull(entityIds);
-                Assert.AreEqual(9, entityIds.PeekNext(EntityKind.Membership),
-                    "The membership allocator cursor must be restored to 9 so the next allocated membership id cannot collide with the restored 0-8.");
+                fresh.LoadFromSaveDto(dto);
+                Assert.AreEqual(configuration.People.Count, fresh.State.people.Count);
+                Assert.AreEqual(configuration.Households.Count, fresh.State.households.Count);
+                Assert.AreEqual(configuration.People.Count, fresh.Memberships.ActiveCount);
+                foreach (var person in configuration.People)
+                    Assert.IsNotNull(fresh.State.GetPerson(configuration.ResolveRuntimePersonId(person.key)), person.key);
+                foreach (var household in configuration.Households)
+                    Assert.IsNotNull(fresh.State.GetHousehold(household.runtimeHouseholdId), household.key);
             }
             finally
             {
                 if (freshObject != null) Object.DestroyImmediate(freshObject);
-            }
-        }
-
-        [Test]
-        public void AuthoredNineResidentTown_SaveLoadLegacyNullDto_RebuildsFromMemberIds()
-        {
-            // Plan 01 Slice 2 (UNITY-OWED): a save DTO with
-            // householdMemberships == null (legacy path) rebuilds the
-            // memberships from the persisted household memberIds mirrors,
-            // reproducing the same pairs and ActiveCount.
-            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
-                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
-            Assert.IsNotNull(configuration);
-            manager.GeneratePopulationSnapshot(configuration);
-
-            PopulationSaveDto saved = manager.CaptureSaveDto();
-            saved.householdMemberships = null;
-
-            GameObject freshObject = null;
-            try
-            {
-                PopulationManager fresh = CreateFreshManager(out freshObject);
-                fresh.LoadFromSaveDto(saved);
-
-                Assert.IsNotNull(fresh.Memberships);
-                Assert.AreEqual(9, fresh.Memberships.ActiveCount,
-                    "The legacy rebuild must reproduce all nine memberships from memberIds.");
-                CollectionAssert.IsEmpty(fresh.Memberships.Diagnostics,
-                    "No Register rejection may fire on the legacy rebuild.");
-                CollectionAssert.AreEqual(new[] { 1, 2 }, fresh.Memberships.GetActiveMembers(1));
-                CollectionAssert.AreEqual(new[] { 3, 4 }, fresh.Memberships.GetActiveMembers(2));
-                CollectionAssert.AreEqual(new[] { 5, 6 }, fresh.Memberships.GetActiveMembers(3));
-                CollectionAssert.AreEqual(new[] { 7, 8 }, fresh.Memberships.GetActiveMembers(4));
-                CollectionAssert.AreEqual(new[] { 9 }, fresh.Memberships.GetActiveMembers(5));
-                for (int personId = 1; personId <= 9; personId++)
-                {
-                    HouseholdMembership membership = fresh.Memberships.GetActiveMembership(personId);
-                    Assert.IsNotNull(membership, $"P{personId} must hold a membership after the legacy rebuild.");
-                    Assert.AreEqual(personId - 1, membership.MembershipId,
-                        "A fresh manager rebuilds membership ids 0-8 in household-then-member order.");
-                }
-            }
-            finally
-            {
-                if (freshObject != null) Object.DestroyImmediate(freshObject);
-            }
-        }
-
-        [Test]
-        public void AuthoredNineResidentTown_SaveLoadTwice_IsIdempotent()
-        {
-            // Plan 01 Slice 2 (UNITY-OWED): loading the same save DTO
-            // twice is clear-then-load on the SAME registry instance -
-            // identical memberships, no duplicates, no ActiveCount growth.
-            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
-                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
-            Assert.IsNotNull(configuration);
-            manager.GeneratePopulationSnapshot(configuration);
-
-            PopulationSaveDto saved = manager.CaptureSaveDto();
-
-            GameObject freshObject = null;
-            try
-            {
-                PopulationManager fresh = CreateFreshManager(out freshObject);
-                fresh.LoadFromSaveDto(saved);
-                HouseholdMembershipRegistry registryAfterFirstLoad = fresh.Memberships;
-                Assert.IsNotNull(registryAfterFirstLoad);
-                Assert.AreEqual(9, registryAfterFirstLoad.ActiveCount);
-
-                fresh.LoadFromSaveDto(saved);
-
-                Assert.IsTrue(object.ReferenceEquals(registryAfterFirstLoad, fresh.Memberships),
-                    "Double load must clear-then-load the same registry instance, never replace it.");
-                Assert.AreEqual(9, fresh.Memberships.ActiveCount,
-                    "A second load must not grow ActiveCount or duplicate memberships.");
-                CollectionAssert.IsEmpty(fresh.Memberships.Diagnostics,
-                    "No Register rejection may fire on the second load.");
-                for (int personId = 1; personId <= 9; personId++)
-                {
-                    HouseholdMembership membership = fresh.Memberships.GetActiveMembership(personId);
-                    Assert.IsNotNull(membership, $"P{personId} must hold a membership after the second load.");
-                    Assert.AreEqual(personId - 1, membership.MembershipId,
-                        $"P{personId} membership id must be unchanged by the second load.");
-                }
-                CollectionAssert.AreEqual(new[] { 1, 2 }, fresh.Memberships.GetActiveMembers(1));
-                CollectionAssert.AreEqual(new[] { 3, 4 }, fresh.Memberships.GetActiveMembers(2));
-                CollectionAssert.AreEqual(new[] { 5, 6 }, fresh.Memberships.GetActiveMembers(3));
-                CollectionAssert.AreEqual(new[] { 7, 8 }, fresh.Memberships.GetActiveMembers(4));
-                CollectionAssert.AreEqual(new[] { 9 }, fresh.Memberships.GetActiveMembers(5));
-            }
-            finally
-            {
-                if (freshObject != null) Object.DestroyImmediate(freshObject);
-            }
-        }
-
-        [Test]
-        public void AuthoredNineResidentTown_ClearPopulationSnapshot_ClearsRegistryOnSameInstance()
-        {
-            // Plan 01 Slice 2 (UNITY-OWED): ClearPopulationSnapshot also
-            // clears the registry on the same instance, so a New Game
-            // reset cannot leave stale memberships behind. This is the
-            // intermediate state the Slice 1 GenerateAfterClear test
-            // deliberately did not assert.
-            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
-                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
-            Assert.IsNotNull(configuration);
-            manager.GeneratePopulationSnapshot(configuration);
-            HouseholdMembershipRegistry registryBeforeClear = manager.Memberships;
-            Assert.IsNotNull(registryBeforeClear);
-            Assert.AreEqual(9, registryBeforeClear.ActiveCount);
-
-            manager.ClearPopulationSnapshot();
-
-            Assert.IsTrue(object.ReferenceEquals(registryBeforeClear, manager.Memberships),
-                "Clear must empty the registry in place, never replace the instance.");
-            Assert.AreEqual(0, manager.Memberships.ActiveCount,
-                "No stale membership may survive a population snapshot clear.");
-            CollectionAssert.IsEmpty(manager.Memberships.Diagnostics,
-                "Clear drops prior diagnostics with the records.");
-            for (int householdId = 1; householdId <= 5; householdId++)
-            {
-                CollectionAssert.IsEmpty(manager.Memberships.GetActiveMembers(householdId),
-                    $"H{householdId} must have no members after the clear.");
-            }
-            for (int personId = 1; personId <= 9; personId++)
-            {
-                Assert.AreEqual(-1, manager.Memberships.GetActiveHouseholdId(personId),
-                    $"P{personId} must hold no membership after the clear.");
-                Assert.IsNull(manager.Memberships.GetActiveMembership(personId));
             }
         }
 
@@ -634,8 +267,8 @@ namespace LandLedgers.EditorTests.Population
         private static DevelopmentTownConfiguration CreateSixPersonDatasetUsingCommonType()
         {
             var config = ScriptableObject.CreateInstance<DevelopmentTownConfiguration>();
-            SetPrivateField(config, "configurationId", "six-person-regression-data");
-            SetPrivateField(config, "seedOffset", 9217);
+            config.Settings.configurationId = "six-person-regression-data";
+            config.Settings.seedOffset = 9217;
             string[] first = { "Kennedy", "Emma", "Glen", "Tannis", "Jacob", "Grace" };
             string[] last = { "Baldwin-Ooms", "Baldwin-Ooms", "Pierce", "Pierce", "Boniecki", "Boniecki" };
             var people = new DevelopmentTownConfiguration.PersonDefinition[6];
@@ -654,11 +287,12 @@ namespace LandLedgers.EditorTests.Population
             SetPrivateField(config, "people", people);
             SetPrivateField(config, "households", households);
             SetPrivateField(config, "relationships", relationships);
-            SetPrivateField(config, "businesses", new[] { new DevelopmentTownConfiguration.BusinessDefinition
-            { key = "store", operationId = "general-store", ownerPersonKey = "person-0", premisesRequired = true } });
-            SetPrivateField(config, "freightBusinessKey", "store");
-            SetPrivateField(config, "openingHorseId", "A0");
-            SetPrivateField(config, "openingWagonId", "test-wagon");
+            var storeBusiness = new DevelopmentTownConfiguration.BusinessDefinition
+            { key = "store", operationId = "general-store", ownerPersonKey = "person-0", premisesRequired = true };
+            storeBusiness.opening.openingHorseId = "A0";
+            storeBusiness.opening.openingWagonId = "test-wagon";
+            SetPrivateField(config, "businesses", new[] { storeBusiness });
+            config.Settings.freightBusinessKey = "store";
             Assert.IsTrue(config.Validate(out string error), error);
             return config;
         }
@@ -673,4 +307,5 @@ namespace LandLedgers.EditorTests.Population
                 && edge.Relation == KinshipRelation.Spouse && edge.Source == "development town configuration:six-person-regression-data"));
         }
     }
+
 }

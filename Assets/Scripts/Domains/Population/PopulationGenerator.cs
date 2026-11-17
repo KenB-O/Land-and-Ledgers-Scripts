@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using LandLedgers.Economy.Creation;
 using LandLedgers.World;
@@ -177,8 +178,10 @@ namespace LandLedgers.Population
 
             int seed = (townWorld.Settings != null ? townWorld.Settings.seed : 0) + settings.seedOffset + configuration.SeedOffset;
             System.Random random = new(seed);
-            state.RestorePersonIdAllocator(1);
-            state.RestoreHouseholdIdAllocator(1);
+            int nextPersonId = configuration.People.Where(person => person != null).Select(person => person.runtimePersonId).DefaultIfEmpty(0).Max() + 1;
+            int nextHouseholdId = configuration.Households.Where(household => household != null).Select(household => household.runtimeHouseholdId).DefaultIfEmpty(0).Max() + 1;
+            state.RestorePersonIdAllocator(Math.Max(1, nextPersonId));
+            state.RestoreHouseholdIdAllocator(Math.Max(1, nextHouseholdId));
             var personIds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
             foreach (DevelopmentTownConfiguration.HouseholdDefinition definition in configuration.Households)
@@ -186,7 +189,7 @@ namespace LandLedgers.Population
                 if (definition.homeBuildingOrdinal < 0 || definition.homeBuildingOrdinal >= homes.Count)
                     return DevelopmentTownFailure(state, $"Household '{definition.key}' references unavailable home ordinal {definition.homeBuildingOrdinal}.");
                 BuildingRuntimeInfo home = homes[definition.homeBuildingOrdinal];
-                int householdId = state.AllocateNextHouseholdId();
+                int householdId = definition.runtimeHouseholdId > 0 ? definition.runtimeHouseholdId : state.AllocateNextHouseholdId();
                 var household = new HouseholdState
                 {
                     id = householdId,
@@ -205,7 +208,7 @@ namespace LandLedgers.Population
                 {
                     if (!configuration.TryGetPerson(personKey, out DevelopmentTownConfiguration.PersonDefinition authoredPerson))
                         return DevelopmentTownFailure(state, $"Household '{definition.key}' references unknown resident '{personKey}'.");
-                    int personId = state.AllocateNextPersonId();
+                    int personId = authoredPerson.runtimePersonId > 0 ? authoredPerson.runtimePersonId : state.AllocateNextPersonId();
                     PersonState person = CreateSettlementPerson(personId, householdId, authoredPerson.lastName,
                         home.buildingId, household.memberIds.Count, settings, random,
                         NewcomerArrivalProfile.SettledResident, SettlementArrangement.StableHousehold,
@@ -252,6 +255,13 @@ namespace LandLedgers.Population
                 NewcomerSettlementEvaluator.RefreshHouseholdPressures(household);
             }
             RecalculateHouseholdIncome(state);
+            // Development-town opening cash was already recorded directly in
+            // each household's authoritative ledger above. Do not leave the
+            // legacy wallet's minimum calibration balance populated here:
+            // PopulationManager's compatibility sweep would migrate it as a
+            // second, unintended opening grant.
+            foreach (HouseholdState household in state.households)
+                household.spendingMoneyCents = 0;
             NewcomerSettlementPlanner.RefreshSettlementMetrics(state,
                 NewcomerSettlementPlanner.BuildHomeOptions(townWorld, settings));
             Validate(state, homes, workplaces, kinship, startYear, startMonth, startDay);

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
@@ -15,6 +16,8 @@ namespace LandLedgers.Population
         public sealed class PersonDefinition
         {
             public string key = string.Empty;
+            [Min(1), Tooltip("Stable runtime identity. Once authored, this is not derived from household list order.")]
+            public int runtimePersonId;
             public string firstName = string.Empty;
             public string lastName = string.Empty;
             [Min(18)] public int age = 30;
@@ -29,6 +32,8 @@ namespace LandLedgers.Population
         public sealed class HouseholdDefinition
         {
             public string key = string.Empty;
+            [Min(1), Tooltip("Stable runtime identity. Once authored, this is not derived from household list order.")]
+            public int runtimeHouseholdId;
             public string displayName = string.Empty;
             public string surname = string.Empty;
             public string[] memberPersonKeys = Array.Empty<string>();
@@ -51,6 +56,7 @@ namespace LandLedgers.Population
         public sealed class BusinessDefinition
         {
             public string key = string.Empty;
+            public string displayName = string.Empty;
             [Tooltip("Existing runtime operation ID, such as general-store, bakery, fuel-dealer, or livery-freight. More than one business may use an operation.")]
             public string operationId = string.Empty;
             public string ownerPersonKey = string.Empty;
@@ -60,6 +66,44 @@ namespace LandLedgers.Population
             [Min(0)] public int openingCashCents;
             [Tooltip("Optional freight quote calibration for this business. Values are development data, not canonical prices.")]
             public FreightServiceRateCard freightRateCard;
+            [Header("Business opening resources and agreements")]
+            public BusinessOpeningConfiguration opening = new();
+        }
+
+        [Serializable]
+        public sealed class GeneralSettings
+        {
+            public string configurationId = "millbrook-development-town";
+            [Min(0)] public int seedOffset = 9217;
+            public bool generatePopulationFromSettings;
+            public PopulationGenerationSettings generatedPopulationSettings;
+            [Tooltip("Opening balances for generated households whose memberships are created from the population-generation asset.")]
+            public HouseholdCashTarget[] generatedHouseholdOpeningCash = Array.Empty<HouseholdCashTarget>();
+            public string freightBusinessKey = "freight-company";
+            public bool enableMortality;
+            public bool enableFertility;
+        }
+
+        /// <summary>Finite New Game resources and agreements owned by one configured business.</summary>
+        [Serializable]
+        public sealed class BusinessOpeningConfiguration
+        {
+            [Header("Inventory and equipment")]
+            public OpeningInventoryItem[] inventory = Array.Empty<OpeningInventoryItem>();
+            public BusinessOpeningEquipment equipment = new();
+            [Header("Employees and production supplies")]
+            public BusinessEmployeeDefinition[] employees = Array.Empty<BusinessEmployeeDefinition>();
+            public BusinessSpareBladeDefinition[] spareBlades = Array.Empty<BusinessSpareBladeDefinition>();
+            [Min(0)] public int loggingCampProvisionCoverDays;
+            [Min(0)] public int bakeryFuelUnits;
+            [Min(0)] public int bakeryFlourPounds;
+            [Min(0)] public int bakeryNotionsUnits;
+            [Min(0)] public int carpentryLumberUnits;
+            [Min(0)] public int fuelDealerIntakeUnitsPerBakeryUnit;
+            [Header("Transport and commercial agreements")]
+            public string openingHorseId = string.Empty;
+            public string openingWagonId = string.Empty;
+            public BakeryWholesaleAccountDefinition[] wholesaleAgreements = Array.Empty<BakeryWholesaleAccountDefinition>();
         }
 
         [Serializable]
@@ -121,7 +165,7 @@ namespace LandLedgers.Population
         [Serializable]
         public sealed class BusinessOpeningEquipment
         {
-            public string businessKey = string.Empty;
+            [NonSerialized] public string businessKey;
             public OvenEquipment[] ovens = Array.Empty<OvenEquipment>();
             public string[] kitIds = Array.Empty<string>();
             /// <summary>
@@ -162,7 +206,7 @@ namespace LandLedgers.Population
         [Serializable]
         public sealed class BusinessEmployeeDefinition
         {
-            public string businessKey = string.Empty;
+            [NonSerialized] public string businessKey;
             public string personKey = string.Empty;
             public string role = string.Empty;
             [Min(0)] public int weeklyWageCents;
@@ -180,7 +224,7 @@ namespace LandLedgers.Population
         [Serializable]
         public sealed class BusinessSpareBladeDefinition
         {
-            public string businessKey = string.Empty;
+            [NonSerialized] public string businessKey;
             public string bladeId = string.Empty;
         }
 
@@ -229,7 +273,7 @@ namespace LandLedgers.Population
         [Serializable]
         public sealed class BakeryWholesaleAccountDefinition
         {
-            public string sellerBusinessKey = string.Empty;
+            [NonSerialized] public string sellerBusinessKey;
             public string buyerBusinessKey = string.Empty;
             public string productId = string.Empty;
             [Min(0)] public int unitsPerDelivery;
@@ -239,102 +283,75 @@ namespace LandLedgers.Population
             public int firstDeliveryDayIndex;
         }
 
-        [SerializeField] private string configurationId = "millbrook-development-town";
-        [SerializeField, Min(0), Tooltip("Deterministic development fixture calibration; not canonical world-generation policy.")]
-        private int seedOffset = 9217;
-        [SerializeField, Tooltip("Uses the standard deterministic population generator with the authored population settings below instead of the personally authored Small-town roster.")]
-        private bool generatePopulationFromSettings;
-        [SerializeField] private PopulationGenerationSettings generatedPopulationSettings;
+        [Header("General settings")]
+        [SerializeField] private GeneralSettings general = new();
+        [Header("Residents")]
         [SerializeField] private PersonDefinition[] people = Array.Empty<PersonDefinition>();
+        [Header("Households")]
         [SerializeField] private HouseholdDefinition[] households = Array.Empty<HouseholdDefinition>();
+        [Header("Relationships")]
         [SerializeField] private RelationshipDefinition[] relationships = Array.Empty<RelationshipDefinition>();
+        [Header("Businesses")]
         [SerializeField] private BusinessDefinition[] businesses = Array.Empty<BusinessDefinition>();
-        [SerializeField] private BusinessCashTarget[] businessCashTargets = Array.Empty<BusinessCashTarget>();
-        [SerializeField] private HouseholdCashTarget[] householdCashTargets = Array.Empty<HouseholdCashTarget>();
-        [SerializeField] private BusinessOpeningInventory[] openingInventory = Array.Empty<BusinessOpeningInventory>();
-        [SerializeField] private BusinessOpeningEquipment[] openingEquipment = Array.Empty<BusinessOpeningEquipment>();
-        [SerializeField, Tooltip("C-1 (expanded campaign, Phase 1 forestry): scenario-authored opening employments, applied once at New Game. Zero by default: no entry means no opening hire. The wage is provisional scenario calibration.")]
-        private BusinessEmployeeDefinition[] openingEmployees = Array.Empty<BusinessEmployeeDefinition>();
-        [SerializeField, Tooltip("C-5 (expanded campaign, Phase 1 forestry): scenario-authored opening spare saw blades, received once at New Game. Zero by default: no entry means no spare stocked. One spare is the natural number for a one-saw-line mill.")]
-        private BusinessSpareBladeDefinition[] openingSpareBlades = Array.Empty<BusinessSpareBladeDefinition>();
+        [Header("World resources")]
         [SerializeField] private TimberStandEntry[] timberStands = Array.Empty<TimberStandEntry>();
-        [SerializeField, Min(0), Tooltip("A2 plan 27 (P10): cover days of opening provisions for the logging camp crew, endowed once at New Game from the bootstrap endowment. Zero by default means no endowment. The cover-days value is Kennedy's; no number is invented here.")]
-        private int openingLoggingCampProvisionCoverDays;
-        [SerializeField] private BakeryWholesaleAccountDefinition[] wholesaleAccounts = Array.Empty<BakeryWholesaleAccountDefinition>();
-        [SerializeField] private string freightBusinessKey = "freight-company";
-        [SerializeField, Min(0), Tooltip("Finite development-town opening fuel endowment for the configured Bakery. This is scenario stock, applied once and never replenished automatically.")]
-        private int openingBakeryFuelUnits;
-        [SerializeField, Min(0), Tooltip("Finite development-town opening flour in pounds, received into the Bakery production bin on New Game only.")]
-        private int openingBakeryFlourPounds;
-        [SerializeField, Min(0), Tooltip("Finite development-town opening baker's notions in units, received into the Bakery production bin on New Game only.")]
-        private int openingBakeryNotionsUnits;
-        /// <summary>
-        /// F1 part 2 (expanded campaign 2026-11-16, O-F3): finite
-        /// development-town opening lumber in units for the configured
-        /// carpentry workshop, received into the workshop's generic
-        /// inventory on New Game only (one of each lumber-only furniture
-        /// recipe: table 2 + chair batch 4 + cabinet-small 3 +
-        /// cabinet-large 4 + shelf 1 + crate 1 = 15; the bed and bedroll
-        /// are excluded — they need hay, which has no priced supply, F7
-        /// finding F3). An explicit, auditable opening endowment per the
-        /// business-establishment principle; never replenished
-        /// automatically — further lumber comes through the yard retail
-        /// procurement path. Zero by default: no workshop lumber.
-        /// </summary>
-        [SerializeField, Min(0), Tooltip("Finite development-town opening lumber in units for the configured carpentry workshop, received into the workshop's generic inventory on New Game only. One of each lumber-only furniture recipe (15 units); the bed and bedroll are excluded — they need hay, which has no priced supply.")]
-        private int openingCarpentryLumberUnits;
-        /// <summary>
-        /// Plan 10 E4 (Obj 8; D-2): the fuel-dealer conversion factor —
-        /// intake units per bakery fuel unit (IntakeUnitsPerBakeryUnit for
-        /// Series2DealerBakeryFuelSource). Zero/unset by default: unset
-        /// means "no dealer conversion — fuel cannot be supplied from the
-        /// dealer". D-2 DECIDED by owner Decision 1 (Nov 15, 2026): the
-        /// factor is 4 intake units per bakery fuel unit, carried in every
-        /// scenario asset as provisional calibration. A factor of 1 would
-        /// be an invented conversion — never default to 1, and a factor
-        /// of 0 is treated as unset everywhere it is read.
-        /// </summary>
-        [SerializeField, Min(0)] private int fuelDealerIntakeUnitsPerBakeryUnit;
-        [SerializeField] private string openingHorseId = "A0";
-        [SerializeField] private string openingWagonId = "opening-freight-wagon";
-        [SerializeField, Tooltip("Overnight 2026-11-04: development-town mortality switch. FALSE by default, so the current development town runs with population turnover removed as a testing variable. A prevented death is logged once per person as a suppressed death (see MortalityDriver) and leaves the person, their employment, and their ownership intact. This is a development-town setting only: scenarios that do not use this configuration keep normal mortality.")]
-        private bool enableMortality;
-        [SerializeField, Tooltip("Overnight 2026-11-04: development-town fertility switch. FALSE by default, so the current development town starts no new pregnancies and delivers no births while disabled. Pregnancies already underway are deferred, not deleted, and deliver once fertility is re-enabled. This is a development-town setting only: scenarios that do not use this configuration keep normal fertility.")]
-        private bool enableFertility;
+        [Header("Development-only rules")]
+        [SerializeField, Min(0)] private int schemaVersion;
 
-        public string ConfigurationId => configurationId ?? string.Empty;
-        public int SeedOffset => seedOffset;
-        public bool GeneratePopulationFromSettings => generatePopulationFromSettings;
-        public PopulationGenerationSettings GeneratedPopulationSettings => generatedPopulationSettings;
+        public GeneralSettings Settings => general ??= new GeneralSettings();
+        public int SchemaVersion => schemaVersion;
+        public string ConfigurationId => Settings.configurationId ?? string.Empty;
+        public int SeedOffset => Settings.seedOffset;
+        public bool GeneratePopulationFromSettings => Settings.generatePopulationFromSettings;
+        public PopulationGenerationSettings GeneratedPopulationSettings => Settings.generatedPopulationSettings;
         public IReadOnlyList<PersonDefinition> People => people ?? Array.Empty<PersonDefinition>();
         public IReadOnlyList<HouseholdDefinition> Households => households ?? Array.Empty<HouseholdDefinition>();
         public IReadOnlyList<RelationshipDefinition> Relationships => relationships ?? Array.Empty<RelationshipDefinition>();
         public IReadOnlyList<BusinessDefinition> Businesses => businesses ?? Array.Empty<BusinessDefinition>();
-        public IReadOnlyList<BusinessCashTarget> BusinessCashTargets => businessCashTargets ?? Array.Empty<BusinessCashTarget>();
-        public IReadOnlyList<HouseholdCashTarget> HouseholdCashTargets => householdCashTargets ?? Array.Empty<HouseholdCashTarget>();
-        public IReadOnlyList<BusinessOpeningInventory> OpeningInventory => openingInventory ?? Array.Empty<BusinessOpeningInventory>();
-        public IReadOnlyList<BusinessOpeningEquipment> OpeningEquipment => openingEquipment ?? Array.Empty<BusinessOpeningEquipment>();
-        /// <summary>C-1: the scenario-authored opening employments; empty by default (no opening hires).</summary>
-        public IReadOnlyList<BusinessEmployeeDefinition> OpeningEmployees => openingEmployees ?? Array.Empty<BusinessEmployeeDefinition>();
-        /// <summary>C-5: the scenario-authored opening spare saw blades; empty by default (no spare stocked).</summary>
-        public IReadOnlyList<BusinessSpareBladeDefinition> OpeningSpareBlades => openingSpareBlades ?? Array.Empty<BusinessSpareBladeDefinition>();
-        /// <summary>A2 plan 27 (P10): the scenario-authored timber stands; empty by default (no stands, no felling).</summary>
         public IReadOnlyList<TimberStandEntry> TimberStands => timberStands ?? Array.Empty<TimberStandEntry>();
-        /// <summary>A2 plan 27 (P10): cover days of opening logging-camp provisions; 0 = no endowment.</summary>
-        public int OpeningLoggingCampProvisionCoverDays => openingLoggingCampProvisionCoverDays;
-        public IReadOnlyList<BakeryWholesaleAccountDefinition> WholesaleAccounts => wholesaleAccounts ?? Array.Empty<BakeryWholesaleAccountDefinition>();
-        public string FreightBusinessKey => freightBusinessKey ?? string.Empty;
-        public int OpeningBakeryFuelUnits => openingBakeryFuelUnits;
-        public int OpeningBakeryFlourPounds => openingBakeryFlourPounds;
-        public int OpeningBakeryNotionsUnits => openingBakeryNotionsUnits;
-        /// <summary>F1 part 2 (O-F3): finite opening lumber units for the configured carpentry workshop; 0 = no endowment.</summary>
-        public int OpeningCarpentryLumberUnits => openingCarpentryLumberUnits;
-        /// <summary>Plan 10 E4: the D-2 fuel-dealer conversion factor (decided by owner Decision 1: 4 intake units per bakery fuel unit); 0 = unset (no dealer conversion).</summary>
-        public int FuelDealerIntakeUnitsPerBakeryUnit => fuelDealerIntakeUnitsPerBakeryUnit;
-        public string OpeningHorseId => openingHorseId ?? string.Empty;
-        public string OpeningWagonId => openingWagonId ?? string.Empty;
-        public bool EnableMortality => enableMortality;
-        public bool EnableFertility => enableFertility;
+        public string FreightBusinessKey => Settings.freightBusinessKey ?? string.Empty;
+        public bool EnableMortality => Settings.enableMortality;
+        public bool EnableFertility => Settings.enableFertility;
+
+        [Obsolete("Use each BusinessDefinition.opening record. This computed view is only for staged consumer migration.")]
+        public IReadOnlyList<BusinessOpeningInventory> OpeningInventory => Businesses
+            .Where(b => b?.opening?.inventory != null && b.opening.inventory.Length > 0)
+            .Select(b => new BusinessOpeningInventory { businessKey = b.key, items = b.opening.inventory }).ToArray();
+
+        [Obsolete("Use BusinessDefinition.openingCashCents.")]
+        public IReadOnlyList<BusinessCashTarget> BusinessCashTargets => Businesses
+            .Select(b => new BusinessCashTarget { businessKey = b.key, targetCashCents = b.openingCashCents }).ToArray();
+        [Obsolete("Use HouseholdDefinition.openingCashCents.")]
+        public IReadOnlyList<HouseholdCashTarget> HouseholdCashTargets => Households.Count > 0
+            ? Households.Where(h => h?.memberPersonKeys != null && h.memberPersonKeys.Length > 0)
+                .Select(h => new HouseholdCashTarget { anchorPersonKey = h.memberPersonKeys[0], targetCashCents = h.openingCashCents }).ToArray()
+            : Settings.generatedHouseholdOpeningCash ?? Array.Empty<HouseholdCashTarget>();
+
+        public BusinessDefinition FindBusinessByOperation(string operationId) => Businesses.FirstOrDefault(b =>
+            b != null && string.Equals(b.operationId, operationId, StringComparison.OrdinalIgnoreCase));
+
+        public BusinessDefinition FindBusiness(string businessKey) => TryGetBusiness(businessKey, out BusinessDefinition business) ? business : null;
+
+        [Obsolete("Read opening data from the owning BusinessDefinition.")]
+        public IReadOnlyList<BusinessOpeningEquipment> OpeningEquipment => Businesses
+            .Where(b => b?.opening?.equipment != null)
+            .Select(b => { b.opening.equipment.businessKey = b.key; return b.opening.equipment; }).ToArray();
+        [Obsolete("Read employees from each owning BusinessDefinition.")]
+        public IReadOnlyList<BusinessEmployeeDefinition> OpeningEmployees => Businesses.SelectMany(b =>
+            (b?.opening?.employees ?? Array.Empty<BusinessEmployeeDefinition>()).Select(e => { e.businessKey = b.key; return e; })).ToArray();
+        [Obsolete("Read spare blades from each owning BusinessDefinition.")]
+        public IReadOnlyList<BusinessSpareBladeDefinition> OpeningSpareBlades => Businesses.SelectMany(b =>
+            (b?.opening?.spareBlades ?? Array.Empty<BusinessSpareBladeDefinition>()).Select(x => { x.businessKey = b.key; return x; })).ToArray();
+        public IReadOnlyList<BakeryWholesaleAccountDefinition> WholesaleAccounts => Businesses.SelectMany(b =>
+            (b?.opening?.wholesaleAgreements ?? Array.Empty<BakeryWholesaleAccountDefinition>()).Select(x => { x.sellerBusinessKey = b.key; return x; })).ToArray();
+        public int OpeningLoggingCampProvisionCoverDays => FindBusinessByOperation("sawmill")?.opening?.loggingCampProvisionCoverDays ?? 0;
+        public int OpeningBakeryFuelUnits => FindBusinessByOperation("bakery")?.opening?.bakeryFuelUnits ?? 0;
+        public int OpeningBakeryFlourPounds => FindBusinessByOperation("bakery")?.opening?.bakeryFlourPounds ?? 0;
+        public int OpeningBakeryNotionsUnits => FindBusinessByOperation("bakery")?.opening?.bakeryNotionsUnits ?? 0;
+        public int OpeningCarpentryLumberUnits => FindBusinessByOperation("carpentry-workshop")?.opening?.carpentryLumberUnits ?? 0;
+        public int FuelDealerIntakeUnitsPerBakeryUnit => FindBusinessByOperation("fuel-dealer")?.opening?.fuelDealerIntakeUnitsPerBakeryUnit ?? 0;
+        public string OpeningHorseId => FindBusiness(FreightBusinessKey)?.opening?.openingHorseId ?? string.Empty;
+        public string OpeningWagonId => FindBusiness(FreightBusinessKey)?.opening?.openingWagonId ?? string.Empty;
 
         public bool TryGetPerson(string personKey, out PersonDefinition result)
         {
@@ -349,18 +366,19 @@ namespace LandLedgers.Population
         public int ResolveRuntimePersonId(string personKey)
         {
             if (string.IsNullOrWhiteSpace(personKey)) return -1;
-            if (generatePopulationFromSettings
+            if (GeneratePopulationFromSettings
                 && personKey.StartsWith("generated-person-", StringComparison.OrdinalIgnoreCase)
                 && int.TryParse(personKey.Substring("generated-person-".Length), out int generatedPersonId)
                 && generatedPersonId >= 0)
                 return generatedPersonId;
+            if (TryGetPerson(personKey, out PersonDefinition person) && person.runtimePersonId > 0)
+                return person.runtimePersonId;
+            // Transitional compatibility for generated fixtures without an
+            // explicit stable id. Authored town assets migrate to explicit ids.
             int id = 1;
             foreach (HouseholdDefinition household in Households)
                 foreach (string memberKey in household.memberPersonKeys ?? Array.Empty<string>())
-                {
-                    if (string.Equals(memberKey, personKey, StringComparison.OrdinalIgnoreCase)) return id;
-                    id++;
-                }
+                { if (string.Equals(memberKey, personKey, StringComparison.OrdinalIgnoreCase)) return id; id++; }
             return -1;
         }
 
@@ -401,9 +419,9 @@ namespace LandLedgers.Population
         {
             error = string.Empty;
             if (string.IsNullOrWhiteSpace(ConfigurationId)) { error = "Development town configuration needs a stable ID."; return false; }
-            if (generatePopulationFromSettings)
+            if (GeneratePopulationFromSettings)
             {
-                if (generatedPopulationSettings == null)
+                if (GeneratedPopulationSettings == null)
                 { error = "Generated development presets require PopulationGenerationSettings."; return false; }
                 if (People.Count != 0 || Households.Count != 0)
                 { error = "Generated development presets must not duplicate an authored person or household roster."; return false; }
@@ -413,7 +431,7 @@ namespace LandLedgers.Population
                 {
                     int ownerId = business != null ? ResolveRuntimePersonId(business.ownerPersonKey) : -1;
                     if (business == null || string.IsNullOrWhiteSpace(business.key) || string.IsNullOrWhiteSpace(business.operationId)
-                        || ownerId <= 0 || ownerId > generatedPopulationSettings.maximumStartingResidents
+                        || ownerId <= 0 || ownerId > GeneratedPopulationSettings.maximumStartingResidents
                         || business.openingCashCents < 0 || !generatedBusinessKeys.Add(business.key)
                         || !generatedPersonOwners.Add(ownerId))
                     { error = "Generated opening businesses need unique keys and distinct owners within the generated starting population."; return false; }
@@ -430,7 +448,7 @@ namespace LandLedgers.Population
                 foreach (HouseholdCashTarget target in HouseholdCashTargets)
                 {
                     int anchorId = target != null ? ResolveRuntimePersonId(target.anchorPersonKey) : -1;
-                    if (target == null || anchorId < 0 || anchorId >= generatedPopulationSettings.maximumStartingResidents
+                    if (target == null || anchorId < 0 || anchorId >= GeneratedPopulationSettings.maximumStartingResidents
                         || target.targetCashCents < 0 || !generatedCashHouseholdKeys.Add(target.anchorPersonKey))
                     { error = "Generated household cash targets must reference distinct starting residents and non-negative balances."; return false; }
                 }
@@ -441,17 +459,24 @@ namespace LandLedgers.Population
             }
             if (People.Count == 0 || Households.Count == 0 || Businesses.Count == 0) { error = "Development town must define people, households, and businesses directly."; return false; }
             var personKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var runtimePersonIds = new HashSet<int>();
+            bool hasStablePersonIds = People.Any(person => person != null && person.runtimePersonId > 0);
             foreach (PersonDefinition person in People)
                 if (person == null || string.IsNullOrWhiteSpace(person.key) || string.IsNullOrWhiteSpace(person.firstName)
                     || string.IsNullOrWhiteSpace(person.lastName) || person.age < 18 || person.homeBuildingOrdinal < 0
-                    || !personKeys.Add(person.key)) { error = "Development people need unique keys, names, adult ages, and valid home ordinals."; return false; }
+                    || !personKeys.Add(person.key)
+                    || (hasStablePersonIds && (person.runtimePersonId <= 0 || !runtimePersonIds.Add(person.runtimePersonId))))
+                { error = "Development residents need unique readable identity keys, names, adult ages, valid home ordinals, and unique stable runtime IDs when IDs are authored."; return false; }
             var assigned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var householdKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var homeOrdinals = new HashSet<int>();
+            var runtimeHouseholdIds = new HashSet<int>();
+            bool hasStableHouseholdIds = Households.Any(household => household != null && household.runtimeHouseholdId > 0);
             foreach (HouseholdDefinition household in Households)
             {
                 if (household == null || string.IsNullOrWhiteSpace(household.key) || string.IsNullOrWhiteSpace(household.surname)
                     || household.homeBuildingOrdinal < 0 || household.openingCashCents < 0 || !householdKeys.Add(household.key)
+                    || (hasStableHouseholdIds && (household.runtimeHouseholdId <= 0 || !runtimeHouseholdIds.Add(household.runtimeHouseholdId)))
                     || !homeOrdinals.Add(household.homeBuildingOrdinal) || household.memberPersonKeys == null || household.memberPersonKeys.Length == 0)
                 { error = "Development households need unique keys, distinct home ordinals, non-negative opening cash, and members."; return false; }
                 foreach (string memberKey in household.memberPersonKeys)

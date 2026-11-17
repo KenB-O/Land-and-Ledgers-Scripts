@@ -29,12 +29,12 @@ namespace LandLedgers.EditorTests.Population
         {
             DevelopmentTownConfiguration configuration = CreateConfiguration(
                 Business("freight-company", "livery-freight", "kennedy"),
-                Business("sawmill", "sawmill", "enzo"),
+                Business("sawmill", "sawmill", "enzo-kwindt"),
                 Business("carpentry-workshop", "carpentry-workshop", "don-millward"));
             try
             {
                 Assert.IsFalse(configuration.Validate(out string error));
-                StringAssert.Contains("business 'sawmill' ownerPersonKey 'enzo'", error);
+                StringAssert.Contains("business 'sawmill' ownerPersonKey 'enzo-kwindt'", error);
                 StringAssert.Contains("business 'carpentry-workshop' ownerPersonKey 'don-millward'", error);
                 StringAssert.Contains("does not match a configured person key", error);
             }
@@ -47,7 +47,12 @@ namespace LandLedgers.EditorTests.Population
         private static DevelopmentTownConfiguration CreateConfiguration(params DevelopmentTownConfiguration.BusinessDefinition[] businesses)
         {
             DevelopmentTownConfiguration configuration = ScriptableObject.CreateInstance<DevelopmentTownConfiguration>();
-            Set(configuration, "configurationId", "business-validation-regression");
+            typeof(DevelopmentTownConfiguration).GetField("general", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(configuration, new DevelopmentTownConfiguration.GeneralSettings
+                {
+                    configurationId = "business-validation-regression",
+                    freightBusinessKey = "freight-company"
+                });
             Set(configuration, "people", new[]
             {
                 new DevelopmentTownConfiguration.PersonDefinition
@@ -66,12 +71,20 @@ namespace LandLedgers.EditorTests.Population
             });
             Set(configuration, "relationships", Array.Empty<DevelopmentTownConfiguration.RelationshipDefinition>());
             Set(configuration, "businesses", businesses);
-            Set(configuration, "freightBusinessKey", "freight-company");
             return configuration;
         }
 
-        private static DevelopmentTownConfiguration.BusinessDefinition Business(string key, string operation, string owner) =>
-            new() { key = key, operationId = operation, ownerPersonKey = owner, openingCashCents = 0 };
+        private static DevelopmentTownConfiguration.BusinessDefinition Business(string key, string operation, string owner)
+        {
+            var business = new DevelopmentTownConfiguration.BusinessDefinition
+            { key = key, operationId = operation, ownerPersonKey = owner, openingCashCents = 0 };
+            if (operation == "livery-freight")
+            {
+                business.opening.openingHorseId = "test-horse";
+                business.opening.openingWagonId = "test-wagon";
+            }
+            return business;
+        }
 
         private static void Set(object target, string fieldName, object value)
         {

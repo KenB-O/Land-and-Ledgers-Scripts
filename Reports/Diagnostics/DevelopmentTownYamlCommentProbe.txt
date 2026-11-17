@@ -1,0 +1,2 @@
+Assets/__YamlProbeWithComments.asset people=10 households=6 businesses=7 openingEmployees=1 valid=False validation=Invalid development business configuration: business 'sawmill' ownerPersonKey 'enzo' does not match a configured person key; business 'carpentry-workshop' ownerPersonKey 'don-millward' does not match a configured person key.
+Assets/__YamlProbeWithoutComments.asset people=15 households=8 businesses=7 openingEmployees=3 valid=True validation=

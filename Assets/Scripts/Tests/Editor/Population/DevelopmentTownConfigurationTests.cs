@@ -12,210 +12,111 @@ namespace LandLedgers.EditorTests.Population
         private const string AssetPath = "Assets/Core/Population/DevelopmentTownConfiguration.asset";
 
         [Test]
-        public void AuthoredConfiguration_DirectlyDefinesTheCompleteDevelopmentTown()
+        public void OwnerAuthoredConfiguration_ReadsBackCompleteStableRosterAndOwnership()
         {
             DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(AssetPath);
             Assert.IsNotNull(configuration);
             Assert.IsTrue(configuration.Validate(out string error), error);
-            Assert.AreEqual(15, configuration.People.Count);
+            Assert.AreEqual(2, configuration.SchemaVersion);
+            Assert.AreEqual(14, configuration.People.Count);
             Assert.AreEqual(8, configuration.Households.Count);
-            Assert.AreEqual(7, configuration.Relationships.Count);
             Assert.AreEqual(7, configuration.Businesses.Count);
-            Assert.IsTrue(configuration.TryGetPerson("ethan", out DevelopmentTownConfiguration.PersonDefinition ethan));
-            Assert.AreEqual("Ethan", ethan.firstName);
-            Assert.AreEqual(7, configuration.ResolveRuntimePersonId("ethan"));
-            Assert.AreEqual(9, configuration.ResolveRuntimePersonId("shane"));
-            // C-1 (expanded campaign, Phase 1 forestry): the mill hand.
-            Assert.IsTrue(configuration.TryGetPerson("silas", out DevelopmentTownConfiguration.PersonDefinition silas));
-            Assert.AreEqual("Silas", silas.firstName);
-            Assert.AreEqual("Ward", silas.lastName);
-            Assert.AreEqual(24, silas.age);
-            Assert.AreEqual("Sawmill hand", silas.occupation);
-            Assert.AreEqual(5, silas.homeBuildingOrdinal);
-            Assert.AreEqual(10, configuration.ResolveRuntimePersonId("silas"));
-            DevelopmentTownConfiguration.HouseholdDefinition silasHousehold =
-                configuration.Households.Single(item => item.key == "silas");
-            Assert.AreEqual(1, silasHousehold.memberPersonKeys.Length);
-            Assert.AreEqual("silas", silasHousehold.memberPersonKeys[0]);
-            Assert.AreEqual(5, silasHousehold.homeBuildingOrdinal);
-            // C-8 (expanded campaign, Phase 1 forestry): Enzo Kwint runs
-            // the sawmill with his wife Emma; Josh Saunders labours for
-            // Enzo and boards with the Kwints (D-10/D-11 owns his permanent
-            // residence). Owner-directed names (Kennedy 2026-11-16); ages
-            // are provisional calibrations. Emma Kwint is a distinct person
-            // from Emma Baldwin-Ooms (base:1).
-            Assert.IsTrue(configuration.TryGetPerson("enzo", out DevelopmentTownConfiguration.PersonDefinition enzo));
-            Assert.AreEqual("Enzo", enzo.firstName);
-            Assert.AreEqual("Kwint", enzo.lastName);
-            Assert.AreEqual(40, enzo.age);
-            Assert.AreEqual("Sawmill owner/operator", enzo.occupation);
-            Assert.AreEqual(6, enzo.homeBuildingOrdinal);
-            Assert.AreEqual(11, configuration.ResolveRuntimePersonId("enzo"));
-            Assert.IsTrue(configuration.TryGetPerson("emma-kwint", out DevelopmentTownConfiguration.PersonDefinition emmaKwint));
-            Assert.AreEqual("Emma", emmaKwint.firstName);
-            Assert.AreEqual("Kwint", emmaKwint.lastName);
-            Assert.AreEqual(34, emmaKwint.age);
-            Assert.AreEqual("Unspecified", emmaKwint.occupation);
-            Assert.AreEqual(6, emmaKwint.homeBuildingOrdinal);
-            Assert.AreEqual(12, configuration.ResolveRuntimePersonId("emma-kwint"));
-            Assert.IsTrue(configuration.TryGetPerson("josh", out DevelopmentTownConfiguration.PersonDefinition josh));
-            Assert.AreEqual("Josh", josh.firstName);
-            Assert.AreEqual("Saunders", josh.lastName);
-            Assert.AreEqual(26, josh.age);
-            Assert.AreEqual("Sawmill labourer", josh.occupation);
-            Assert.AreEqual(6, josh.homeBuildingOrdinal);
-            Assert.AreEqual(13, configuration.ResolveRuntimePersonId("josh"));
-            DevelopmentTownConfiguration.HouseholdDefinition kwintHousehold =
-                configuration.Households.Single(item => item.key == "enzo-emma");
-            Assert.AreEqual(3, kwintHousehold.memberPersonKeys.Length);
-            Assert.AreEqual("enzo", kwintHousehold.memberPersonKeys[0]);
-            Assert.AreEqual("emma-kwint", kwintHousehold.memberPersonKeys[1]);
-            Assert.AreEqual("josh", kwintHousehold.memberPersonKeys[2]);
-            Assert.AreEqual(6, kwintHousehold.homeBuildingOrdinal);
-            // F1 part 2 (O-F3): Don Millward is the carpentry workshop
-            // owner/worker and Grace Millward his wife, in the same
-            // household. Renumbered at integration merge to home ordinal
-            // 7 and person ids 14/15: the F branch used ordinal 5 and ids
-            // 10/11, which the integration tree already gives to Silas
-            // Ward, and 6 is the Kwints' from C-8 (the F branch's "bump
-            // to 6" note was wrong).
-            Assert.IsTrue(configuration.TryGetPerson("don-millward", out DevelopmentTownConfiguration.PersonDefinition don));
-            Assert.AreEqual("Don", don.firstName);
-            Assert.AreEqual("Millward", don.lastName);
-            Assert.AreEqual(7, don.homeBuildingOrdinal);
-            Assert.IsTrue(configuration.TryGetPerson("grace-millward", out DevelopmentTownConfiguration.PersonDefinition grace));
-            Assert.AreEqual("Grace", grace.firstName);
-            Assert.AreEqual("Millward", grace.lastName);
-            Assert.AreEqual(7, grace.homeBuildingOrdinal);
-            Assert.AreEqual(14, configuration.ResolveRuntimePersonId("don-millward"));
-            Assert.AreEqual(15, configuration.ResolveRuntimePersonId("grace-millward"));
-            DevelopmentTownConfiguration.HouseholdDefinition millwardHousehold =
-                configuration.Households.Single(item => item.key == "millward");
-            Assert.AreEqual(2, millwardHousehold.memberPersonKeys.Length);
-            Assert.AreEqual("don-millward", millwardHousehold.memberPersonKeys[0]);
-            Assert.AreEqual("grace-millward", millwardHousehold.memberPersonKeys[1]);
-            Assert.AreEqual(7, millwardHousehold.homeBuildingOrdinal);
-            Assert.AreEqual("A0", configuration.OpeningHorseId);
-            Assert.AreEqual("opening-freight-wagon", configuration.OpeningWagonId);
-            Assert.AreEqual("freight-company", configuration.FreightBusinessKey);
-            // DEF-004: the dev scenario carries a sawmill, a lumber yard, and two legally accessible timber stands.
+            Assert.AreEqual(configuration.People.Count, configuration.People.Select(p => p.key).Distinct().Count());
+            Assert.AreEqual(configuration.People.Count, configuration.People.Select(p => p.runtimePersonId).Distinct().Count());
+            Assert.AreEqual(configuration.Households.Count, configuration.Households.Select(h => h.runtimeHouseholdId).Distinct().Count());
+
+            Assert.IsTrue(configuration.TryGetPerson("richard-sithole", out var richard));
+            Assert.AreEqual("Richard Sithole", richard.firstName + " " + richard.lastName);
+            Assert.AreEqual(10, configuration.ResolveRuntimePersonId("richard-sithole"));
+            Assert.IsTrue(configuration.TryGetPerson("enzo-kwindt", out var enzo));
+            Assert.AreEqual("Enzo Kwindt", enzo.firstName + " " + enzo.lastName);
+            Assert.IsTrue(configuration.TryGetPerson("josh-saunders", out var josh));
+            Assert.AreEqual("Josh Saunders", josh.firstName + " " + josh.lastName);
+            Assert.IsTrue(configuration.TryGetPerson("shane-bryan", out var shane));
+            Assert.AreEqual("Unemployed", shane.occupation, "He is not one of the two authored sawmill workers.");
+
+            DevelopmentTownConfiguration.HouseholdDefinition millward = configuration.Households.Single(h => h.key == "millward");
+            Assert.AreEqual("Millward Household", millward.displayName);
+            Assert.AreEqual("Millward", millward.surname);
+            CollectionAssert.AreEqual(new[] { "don-millward", "grace-millward" }, millward.memberPersonKeys);
+            Assert.AreEqual(7, millward.homeBuildingOrdinal);
+            Assert.IsTrue(configuration.TryGetPerson("grace-millward", out var grace));
+            Assert.IsTrue(grace.isFemale);
+
+            DevelopmentTownConfiguration.HouseholdDefinition kwindt = configuration.Households.Single(h => h.key == "kwindt");
+            CollectionAssert.AreEqual(new[] { "enzo-kwindt", "josh-saunders" }, kwindt.memberPersonKeys);
+            Assert.AreEqual(6, kwindt.homeBuildingOrdinal);
+            Assert.AreEqual("enzo-kwindt", configuration.FindBusiness("sawmill").ownerPersonKey);
+            Assert.AreEqual("don-millward", configuration.FindBusiness("carpentry-workshop").ownerPersonKey);
+        }
+
+        [Test]
+        public void OpeningCashAndResourcesHaveSingleOwnerOrganizedSource()
+        {
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(AssetPath);
+            Assert.IsNotNull(configuration);
+            Assert.AreEqual(320000, configuration.Households.Sum(h => h.openingCashCents));
+            Assert.IsTrue(configuration.Households.All(h => h.openingCashCents == 40000));
+            CollectionAssert.AreEqual(new[] { 50000, 35000, 20000, 20000, 15000, 12000, 10000 },
+                configuration.Businesses.Select(b => b.openingCashCents).ToArray());
+
+            var store = configuration.FindBusiness("general-store");
+            Assert.AreEqual(15, store.opening.inventory.Length);
+            Assert.IsTrue(store.opening.inventory.Any(i => i.itemId == "bread" && i.minimumUnits == 24 && i.maximumUnits == 48));
+            Assert.AreEqual(1, configuration.FindBusiness("bakery").opening.equipment.ovens.Length);
+            Assert.AreEqual(40, configuration.FindBusiness("bakery").opening.bakeryFuelUnits);
+            Assert.AreEqual(120, configuration.FindBusiness("bakery").opening.bakeryFlourPounds);
+            Assert.AreEqual(30, configuration.FindBusiness("bakery").opening.bakeryNotionsUnits);
+            Assert.AreEqual(15, configuration.FindBusiness("carpentry-workshop").opening.carpentryLumberUnits);
+            Assert.AreEqual("A0", configuration.FindBusiness("freight-company").opening.openingHorseId);
+            Assert.AreEqual("opening-freight-wagon", configuration.FindBusiness("freight-company").opening.openingWagonId);
+
+            var serialized = new SerializedObject(configuration);
+            Assert.IsNull(serialized.FindProperty("businessCashTargets"));
+            Assert.IsNull(serialized.FindProperty("householdCashTargets"));
+            Assert.IsNull(serialized.FindProperty("openingInventory"));
+            Assert.IsNull(serialized.FindProperty("openingEquipment"));
+            Assert.IsNull(serialized.FindProperty("openingEmployees"));
+        }
+
+        [Test]
+        public void SawmillHasConfiguredOwnerAndOnlyRichardAndJoshAsOpeningWorkers()
+        {
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(AssetPath);
+            var sawmill = configuration.FindBusiness("sawmill");
+            Assert.AreEqual("enzo-kwindt", sawmill.ownerPersonKey);
+            Assert.AreEqual(6, sawmill.opening.equipment.assetEntries.Length);
+            Assert.AreEqual(7, sawmill.opening.loggingCampProvisionCoverDays);
+            Assert.AreEqual(1, sawmill.opening.spareBlades.Length);
+            Assert.AreEqual(2, sawmill.opening.employees.Length);
+            Assert.IsTrue(sawmill.opening.employees.Any(e => e.personKey == "richard-sithole" && e.weeklyWageCents == 750));
+            Assert.IsTrue(sawmill.opening.employees.Any(e => e.personKey == "josh-saunders" && e.weeklyWageCents == 750));
+            Assert.IsFalse(sawmill.opening.employees.Any(e => e.personKey == "shane-bryan"));
             Assert.AreEqual(2, configuration.TimberStands.Count);
-            Assert.IsTrue(configuration.TimberStands.All(stand =>
-                !string.IsNullOrWhiteSpace(stand.standId)
-                && stand.standingTimberUnits > 0
-                && stand.kilogramsPerLog > 0
-                && stand.milesToMill > 0));
-            Assert.AreEqual("stand-pine-north", configuration.TimberStands[0].standId);
-            Assert.AreEqual("stand-pine-east", configuration.TimberStands[1].standId);
         }
 
         [Test]
-        public void Configuration_PreservesOwnersCashAndGenericOpeningInventory()
+        public void SchemaMigration_IsIdempotentAndGeneratedConfigurationsPreserveOpeningAllocations()
         {
             DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(AssetPath);
-            Assert.IsNotNull(configuration);
-            Assert.AreEqual("base:0", configuration.Businesses.Single(item => item.key == "general-store").ownerPersonKey);
-            Assert.AreEqual("base:2", configuration.Businesses.Single(item => item.key == "bakery").ownerPersonKey);
-            Assert.AreEqual("base:4", configuration.Businesses.Single(item => item.key == "fuel-dealer").ownerPersonKey);
-            Assert.AreEqual("ethan", configuration.Businesses.Single(item => item.key == "freight-company").ownerPersonKey);
-            // C-8: Enzo Kwint runs the sawmill (Kennedy 2026-11-16); Shane
-            // stays on as a sawmill hand under him, never a second owner.
-            Assert.AreEqual("enzo", configuration.Businesses.Single(item => item.key == "sawmill").ownerPersonKey);
-            Assert.AreEqual("base:5", configuration.Businesses.Single(item => item.key == "lumber-yard").ownerPersonKey);
-            Assert.AreEqual("don-millward", configuration.Businesses.Single(item => item.key == "carpentry-workshop").ownerPersonKey);
-            Assert.AreEqual("carpentry-workshop", configuration.Businesses.Single(item => item.key == "carpentry-workshop").operationId);
-            Assert.AreEqual(7, configuration.BusinessCashTargets.Count);
-            Assert.AreEqual(15000, configuration.BusinessCashTargets.Single(item => item.businessKey == "sawmill").targetCashCents);
-            Assert.AreEqual(12000, configuration.BusinessCashTargets.Single(item => item.businessKey == "lumber-yard").targetCashCents);
-            Assert.AreEqual(10000, configuration.BusinessCashTargets.Single(item => item.businessKey == "carpentry-workshop").targetCashCents);
-            Assert.AreEqual(8, configuration.HouseholdCashTargets.Count);
-            Assert.AreEqual(40000, configuration.HouseholdCashTargets.Single(item => item.anchorPersonKey == "silas").targetCashCents);
-            Assert.AreEqual(40000, configuration.HouseholdCashTargets.Single(item => item.anchorPersonKey == "enzo").targetCashCents);
-            Assert.AreEqual(40000, configuration.HouseholdCashTargets.Single(item => item.anchorPersonKey == "don-millward").targetCashCents);
-            Assert.IsTrue(configuration.OpeningInventory.Any(item => item.businessKey == "general-store"));
-            Assert.IsTrue(configuration.OpeningInventory.All(item => configuration.TryGetBusiness(item.businessKey, out _)));
-            Assert.AreEqual(0, configuration.Households.Sum(item => item.openingCashCents),
-                "Development household liquidity has one scenario allocation authority, not a base seed plus top-up.");
-            Assert.AreEqual(50000, configuration.BusinessCashTargets.Single(item => item.businessKey == "general-store").targetCashCents);
-            Assert.AreEqual(35000, configuration.BusinessCashTargets.Single(item => item.businessKey == "bakery").targetCashCents);
-            // DEF-013 (Decision 9): a business's opening cash is one
-            // scenario-authored figure, not a creation floor plus a top-up
-            // that disagrees with it. (Households are deliberately
-            // different: their openingCashCents is pinned to 0 above, with
-            // the target top-up as the single authority.)
-            foreach (DevelopmentTownConfiguration.BusinessDefinition business in configuration.Businesses)
+            string before = EditorJsonUtility.ToJson(configuration, true);
+            LandLedgers.EditorTools.Population.DevelopmentTownConfigurationMigration.MigrateAuthoritativeAsset();
+            Assert.AreEqual(before, EditorJsonUtility.ToJson(configuration, true));
+
+            foreach (string path in new[]
+                     {
+                         "Assets/Core/Population/MediumDevelopmentTownConfiguration.asset",
+                         "Assets/Core/Population/LargeDevelopmentTownConfiguration.asset"
+                     })
             {
-                DevelopmentTownConfiguration.BusinessCashTarget target =
-                    configuration.BusinessCashTargets.Single(item => item.businessKey == business.key);
-                Assert.AreEqual(target.targetCashCents, business.openingCashCents,
-                    $"Business '{business.key}' opens with {business.openingCashCents}c but its cash target is {target.targetCashCents}c.");
+                var generated = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(path);
+                Assert.IsNotNull(generated);
+                Assert.IsTrue(generated.Validate(out string error), error);
+                Assert.IsTrue(generated.GeneratePopulationFromSettings);
+                Assert.Greater(generated.HouseholdCashTargets.Count, 0);
+                Assert.IsTrue(generated.HouseholdCashTargets.All(t => t.targetCashCents == 25000));
+                Assert.IsFalse(string.IsNullOrWhiteSpace(generated.OpeningWagonId));
             }
-            Assert.AreEqual(120, configuration.OpeningBakeryFlourPounds);
-            Assert.AreEqual(30, configuration.OpeningBakeryNotionsUnits);
-            Assert.AreEqual(15, configuration.OpeningCarpentryLumberUnits);
-        }
-
-        [Test]
-        public void Configuration_MillOpeningCrewToolsAndProvisions_AreAuthored()
-        {
-            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(AssetPath);
-            Assert.IsNotNull(configuration);
-            // C-1 (expanded campaign, Phase 1 forestry): two felling axes
-            // for the two-person crew, seven cover days of camp provisions,
-            // and the mill hand's opening employment. C-2b: the log wagon
-            // (1200 kg two-horse logging wagon, OD-C4) the mill teamster
-            // hauls with, beside the axes. C-3: the saw-line components
-            // (saw-line, log-carriage, drive-system) the bootstrapper wires
-            // into the mill's saw-line workstation. C-5: the one spare saw
-            // blade the filer fits when the fitted blade retires.
-            DevelopmentTownConfiguration.BusinessOpeningEquipment millEquipment =
-                configuration.OpeningEquipment.Single(item => item.businessKey == "sawmill");
-            Assert.AreEqual(6, millEquipment.assetEntries.Length);
-            Assert.AreEqual("felling-axe-1", millEquipment.assetEntries[0].assetId);
-            Assert.AreEqual("felling-axe", millEquipment.assetEntries[0].kind);
-            Assert.AreEqual("felling-axe-2", millEquipment.assetEntries[1].assetId);
-            Assert.AreEqual("felling-axe", millEquipment.assetEntries[1].kind);
-            Assert.AreEqual("log-wagon-1", millEquipment.assetEntries[2].assetId);
-            Assert.AreEqual("log-wagon", millEquipment.assetEntries[2].kind);
-            Assert.AreEqual("saw-line-1", millEquipment.assetEntries[3].assetId);
-            Assert.AreEqual("saw-line", millEquipment.assetEntries[3].kind);
-            Assert.AreEqual("log-carriage-1", millEquipment.assetEntries[4].assetId);
-            Assert.AreEqual("log-carriage", millEquipment.assetEntries[4].kind);
-            Assert.AreEqual("drive-system-1", millEquipment.assetEntries[5].assetId);
-            Assert.AreEqual("drive-system", millEquipment.assetEntries[5].kind);
-            Assert.AreEqual(7, configuration.OpeningLoggingCampProvisionCoverDays);
-            Assert.AreEqual(3, configuration.OpeningEmployees.Count);
-            DevelopmentTownConfiguration.BusinessEmployeeDefinition millHand = configuration.OpeningEmployees[0];
-            Assert.AreEqual("sawmill", millHand.businessKey);
-            Assert.AreEqual("silas", millHand.personKey);
-            Assert.AreEqual("logger", millHand.role);
-            Assert.AreEqual(750, millHand.weeklyWageCents);
-            // C-8: Shane stays on as a logger under the new owner Enzo, and
-            // Josh labours for Enzo — both at the miller precedent wage.
-            // The owner is never his own opening employee.
-            DevelopmentTownConfiguration.BusinessEmployeeDefinition shaneHand = configuration.OpeningEmployees[1];
-            Assert.AreEqual("sawmill", shaneHand.businessKey);
-            Assert.AreEqual("shane", shaneHand.personKey);
-            Assert.AreEqual("logger", shaneHand.role);
-            Assert.AreEqual(750, shaneHand.weeklyWageCents);
-            DevelopmentTownConfiguration.BusinessEmployeeDefinition joshHand = configuration.OpeningEmployees[2];
-            Assert.AreEqual("sawmill", joshHand.businessKey);
-            Assert.AreEqual("josh", joshHand.personKey);
-            Assert.AreEqual("labourer", joshHand.role);
-            Assert.AreEqual(750, joshHand.weeklyWageCents);
-            Assert.AreEqual(1, configuration.OpeningSpareBlades.Count);
-            DevelopmentTownConfiguration.BusinessSpareBladeDefinition spareBlade = configuration.OpeningSpareBlades[0];
-            Assert.AreEqual("sawmill", spareBlade.businessKey);
-            Assert.AreEqual("sawmill-spare-blade-1", spareBlade.bladeId);
-        }
-
-        [Test]
-        public void Configuration_AllowsMoreBusinessRecordsWithoutASecondFixtureType()
-        {
-            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(AssetPath);
-            Assert.IsNotNull(configuration);
-            Assert.AreEqual("general-store", configuration.Businesses[0].operationId);
-            Assert.IsTrue(configuration.Businesses.All(business => !string.IsNullOrWhiteSpace(business.operationId)));
         }
 
         [Test]

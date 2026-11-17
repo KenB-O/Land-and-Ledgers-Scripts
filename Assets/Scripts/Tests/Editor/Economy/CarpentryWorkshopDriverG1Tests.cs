@@ -16,6 +16,7 @@ using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
 using UnityEngine;
+using EntityId = LandLedgers.Primitives.EntityId;
 
 namespace LandLedgers.Editor.Economy
 {

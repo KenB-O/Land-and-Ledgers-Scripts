@@ -9,6 +9,7 @@ using LandLedgers.Population;
 using LandLedgers.Primitives;
 using NUnit.Framework;
 using UnityEngine;
+using EntityId = LandLedgers.Primitives.EntityId;
 
 namespace LandLedgers.Editor.Economy
 {

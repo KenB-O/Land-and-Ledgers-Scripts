@@ -15,6 +15,7 @@ using LandLedgers.World;
 using NUnit.Framework;
 using UnityEngine;
 using Object = UnityEngine.Object;
+using EntityId = LandLedgers.Primitives.EntityId;
 
 namespace LandLedgers.Editor.Population
 {

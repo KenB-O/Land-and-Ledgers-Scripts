@@ -42,7 +42,12 @@ namespace LandLedgers.World
         {
             EnsureStableId();
             displayName = name;
-            definitionId = name.ToLowerInvariant().Replace(' ', '.');
+            // A freshly added placement is a genuinely untyped free slot.
+            // Deriving a kind from the GameObject name made names like
+            // "Empty Slot" look like an incompatible furniture definition,
+            // preventing any legitimate item from using the slot.
+            if (string.IsNullOrWhiteSpace(definitionId))
+                definitionId = "furniture.unspecified";
         }
 
         private void OnEnable()

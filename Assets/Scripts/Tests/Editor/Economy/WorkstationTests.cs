@@ -141,13 +141,15 @@ namespace LandLedgers.EditorTests.Economy
             // No station: legacy behavior — milling proceeds.
             Assert.IsNotNull(miller.MillGrain(ids, GrainLot(), EntityId.Invalid, 220, diagnostics));
 
-            // Station established without millstones: milling refuses.
+            // Station established without millstones refuses, while a real
+            // water source satisfies this station's separate power gate.
             var parts = new Dictionary<string, EquipmentAsset>
             {
                 ["hopper-1"] = Asset("hopper-1", "hopper-feed"),
                 ["sifter-1"] = Asset("sifter-1", "sifter-bolter"),
             };
             var station = StationFor("grain-mill-station", "mill", parts, out var finder);
+            station.MotivePowerSources.Add(new MotivePowerSource(MotivePowerKind.Water, "test mill race"));
             miller.EstablishMillStation(station, finder);
             Assert.IsNull(miller.MillGrain(ids, GrainLot(), EntityId.Invalid, 220, new List<string>()),
                 "Missing millstones must refuse milling (Tech X §3.5, §3.9).");
@@ -155,6 +157,7 @@ namespace LandLedgers.EditorTests.Economy
             // Complete the station: milling proceeds.
             parts["stones-1"] = Asset("stones-1", "millstones");
             station = StationFor("grain-mill-station", "mill", parts, out finder);
+            station.MotivePowerSources.Add(new MotivePowerSource(MotivePowerKind.Water, "test mill race"));
             miller.EstablishMillStation(station, finder);
             Assert.IsNotNull(miller.MillGrain(ids, GrainLot(), EntityId.Invalid, 220, new List<string>()));
         }

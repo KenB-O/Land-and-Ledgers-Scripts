@@ -526,7 +526,7 @@ namespace LandLedgers.Economy
                 failedFromStage = InferFailedFromStage(dto),
                 // D-6: a save from before contents terms existed carries a
                 // null selection — the deal loads as a no-contents deal.
-                contents = dto.contents
+                Contents = dto.contents
             };
         }
 

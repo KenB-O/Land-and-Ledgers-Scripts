@@ -5,6 +5,7 @@ using System.Text;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using LandLedgers.Pathing;
@@ -875,7 +876,7 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void UnroutedSawmillYardAttemptDoesNotMintDestinationStockOrSettlement()
+        public void RouteBackedSawmillYardShipmentKeepsCommittedCargoOutOfDestinationUntilDelivery()
         {
             using TestWorld context = TestWorld.Create(requireBuildableOwnedPlot: false);
             context.ConfigureLogistics();
@@ -887,15 +888,36 @@ namespace LandLedgers.Editor.Economy
             context.SetBusinessCash(yard, 50000); // Caller-supplied test opening balance; not a design constant.
             context.SharedBusinessRuntime.ResolveWeeklySharedOperations();
 
+            bool sawPlannedShipment = false;
             foreach (LogisticsShipmentState shipment in context.LogisticsRuntime.Shipments)
             {
-                Assert.IsFalse(shipment != null
+                bool matchesTransfer = shipment != null
                     && shipment.shipmentKind == LogisticsShipmentKind.LocalTradeTransfer
                     && string.Equals(shipment.sourceBusinessInstanceId, sawmill.InstanceId, StringComparison.Ordinal)
                     && string.Equals(shipment.destinationBusinessInstanceId, yard.InstanceId, StringComparison.Ordinal)
-                    && string.Equals(shipment.destinationCategoryId, "lumber", StringComparison.Ordinal),
-                    "This test fixture produced no routed sawmill-to-yard delivery, so no matching local cargo may exist.");
+                    && string.Equals(shipment.destinationCategoryId, "lumber", StringComparison.Ordinal);
+                if (!matchesTransfer) continue;
+
+                // Recurring orders commit the source quantity into shipment custody
+                // when the route-backed manifest is created. It is not yet a yard
+                // receipt or a settled transfer.
+                Assert.AreEqual(LogisticsShipmentStatus.Planned, shipment.state,
+                    "A route-backed shipment remains planned before travel and receiving.");
+                Assert.NotNull(shipment.routePlan);
+                Assert.IsNotEmpty(shipment.routePlan.VisiblePath);
+                Assert.IsTrue(shipment.sourceCommittedAtSchedule,
+                    "The recurring-order authority transfers actual source quantity into shipment custody.");
+                Assert.IsTrue(shipment.loadApplied,
+                    "Committed recurring-order cargo must remain represented as loaded shipment cargo.");
+                Assert.Greater(shipment.remainingQuantityUnits, 0,
+                    "Undelivered cargo remains owned in shipment custody.");
+                Assert.IsFalse(shipment.deliveryApplied,
+                    "A planned shipment must not be credited to the yard.");
+                sawPlannedShipment = true;
             }
+
+            Assert.IsTrue(sawPlannedShipment,
+                "A legitimate road route should create a cargo-bearing planned shipment, not instant delivery.");
 
             Assert.LessOrEqual(context.GetSawmillStock(), 200,
                 "Other legitimate weekly construction demand may consume sawmill stock; it must not be duplicated.");

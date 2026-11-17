@@ -5,6 +5,7 @@ using LandLedgers.Tasks;
 using LandLedgers.Time;
 using LandLedgers.World.Journeys;
 using UnityEngine;
+using EntityId = LandLedgers.Primitives.EntityId;
 
 namespace LandLedgers.Orchestration.Player
 {

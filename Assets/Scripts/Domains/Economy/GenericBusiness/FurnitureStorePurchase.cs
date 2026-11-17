@@ -49,6 +49,7 @@ using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.World;
 using UnityEngine;
+using EntityId = LandLedgers.Primitives.EntityId;
 
 namespace LandLedgers.Economy.GenericBusiness
 {

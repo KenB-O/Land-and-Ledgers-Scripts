@@ -563,6 +563,7 @@ namespace LandLedgers.EditorTests.Economy
             var commissioner = new NpcConstructionCommissioner();
             var prices = new FakePricePort();
             prices.Prices["lumber"] = 40;
+            prices.Prices["door hardware"] = 45;
             prices.Prices["glass"] = 25;
             var diag = new List<string>();
             NpcConstructionEvaluation unglazed = commissioner.EvaluateCommission(
@@ -585,6 +586,7 @@ namespace LandLedgers.EditorTests.Economy
             var commissioner = new NpcConstructionCommissioner();
             var prices = new FakePricePort();
             prices.Prices["lumber"] = 40;
+            prices.Prices["door hardware"] = 45;
             var diag = new List<string>();
             NpcConstructionEvaluation glazed = commissioner.EvaluateCommission(
                 catalog, "settler-cabin", 1, prices, 100000, 28,
@@ -603,6 +605,7 @@ namespace LandLedgers.EditorTests.Economy
             var commissioner = new NpcConstructionCommissioner();
             var prices = new FakePricePort();
             prices.Prices["lumber"] = 40;
+            prices.Prices["door hardware"] = 45;
             var diag = new List<string>();
             NpcConstructionEvaluation evaluation = commissioner.EvaluateCommission(
                 catalog, "settler-cabin", 1, prices, 100000, 28,
@@ -619,6 +622,7 @@ namespace LandLedgers.EditorTests.Economy
             var executor = new ConstructionProjectExecutor();
             var prices = new FakePricePort();
             prices.Prices["lumber"] = 40;
+            prices.Prices["door hardware"] = 45;
             prices.Prices["glass"] = 25;
             var diag = new List<string>();
             NpcConstructionEvaluation evaluation = commissioner.EvaluateCommission(

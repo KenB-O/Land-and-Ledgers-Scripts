@@ -194,6 +194,21 @@ namespace LandLedgers.Economy
             int dayIndex,
             List<string> diagnostics,
             out ConstructionMaterialSale sale);
+
+        /// <summary>
+        /// G1: voids a recorded sale in full — every unit returns to the
+        /// supplier's saleable stock and the record is kept, marked
+        /// voided, for audit. The voided value (out) is what the caller
+        /// refunds or un-bills. Returns null on success; a refusal
+        /// otherwise — on refusal nothing is returned and the sale
+        /// stands, so the caller must report it loudly rather than
+        /// assume the goods are back.
+        /// </summary>
+        string TryVoidSale(
+            ConstructionMaterialSale sale,
+            int dayIndex,
+            List<string> diagnostics,
+            out int voidedCents);
     }
 
     /// <summary>
@@ -1002,44 +1017,146 @@ namespace LandLedgers.Economy
 
             string saleProblem = salePort.TrySellToProject(supplierIdOnly, project.ProjectId,
                 package.PackageId, package.Materials, pricePort, dayIndex, diag, out sale);
-            if (saleProblem != null) return "ConstructionProcurementService: " + saleProblem;
+            if (saleProblem != null)
+            {
+                string failure = "ConstructionProcurementService: " + saleProblem;
+                // G1: the port refused but a sale stands (the total-mismatch
+                // refusal records the sale first) — unwind it before
+                // returning, or paid-for stock with no custody is stranded.
+                if (sale == null) return failure;
+                return UnwindFailedProcurement(salePort, sale, stockpile, cash, buyerOwnerName,
+                    supplierIdOnly, obligations, null, false, dayIndex, diag, failure);
+            }
             if (sale == null)
                 return "ConstructionProcurementService: sale port reported success but returned no sale — refusing.";
             if (sale.TotalCents != Math.Max(0, pricedTotalCents))
-                return $"ConstructionProcurementService: sale '{sale.SaleId}' totals {sale.TotalCents}c against the priced {pricedTotalCents}c — the supplier's price moved or the port mis-priced; refusing the silent change.";
+            {
+                string failure = $"ConstructionProcurementService: sale '{sale.SaleId}' totals {sale.TotalCents}c against the priced {pricedTotalCents}c — the supplier's price moved or the port mis-priced; refusing the silent change.";
+                // G1: the sale stands but was never paid — void it so its
+                // units return to the supplier instead of vanishing.
+                return UnwindFailedProcurement(salePort, sale, stockpile, cash, buyerOwnerName,
+                    supplierIdOnly, obligations, null, false, dayIndex, diag, failure);
+            }
 
             // Pay the supplier in real cash. On payment failure the debt is a
             // REAL payable — never vanished, never faked as paid.
+            bool paidInCash = false;
+            FinancialObligation bookedPayable = null;
             string payProblem = ConstructionCashMover.MoveCash(cash, buyerOwnerName,
                 "business:" + supplierIdOnly, sale.TotalCents, dayIndex,
                 $"procured materials for project '{project.ProjectId}' package '{package.PackageId}' (sale '{sale.SaleId}')", diag);
-            if (payProblem != null)
+            if (payProblem == null)
             {
-                if (obligations != null && ids != null)
-                {
-                    FinancialObligation payable = obligations.Create(ids, FinancialObligationKind.Payable,
-                        buyerOwnerName, "business:" + supplierIdOnly, sale.TotalCents, dayIndex,
-                        $"materials procured but cash payment failed: {payProblem}",
-                        $"sale '{sale.SaleId}'");
-                    diag.Add($"ConstructionProcurementService: {sale.TotalCents}c to 'business:{supplierIdOnly}' booked as REAL payable " +
-                        $"'{(payable != null ? payable.ObligationId : "FAILED")}' — the debt stands.");
-                }
-                else
-                {
-                    diag.Add($"ConstructionProcurementService: INCONSISTENCY — {sale.TotalCents}c of materials procured but payment failed and no obligation authority to book the debt: {payProblem}");
-                    return "ConstructionProcurementService: payment failed and no obligation authority to book the debt — failing loudly.";
-                }
+                paidInCash = true;
+            }
+            else if (obligations != null && ids != null)
+            {
+                bookedPayable = obligations.Create(ids, FinancialObligationKind.Payable,
+                    buyerOwnerName, "business:" + supplierIdOnly, sale.TotalCents, dayIndex,
+                    $"materials procured but cash payment failed: {payProblem}",
+                    $"sale '{sale.SaleId}'");
+                diag.Add($"ConstructionProcurementService: {sale.TotalCents}c to 'business:{supplierIdOnly}' booked as REAL payable " +
+                    $"'{(bookedPayable != null ? bookedPayable.ObligationId : "FAILED")}' — the debt stands.");
+            }
+            else
+            {
+                diag.Add($"ConstructionProcurementService: INCONSISTENCY — {sale.TotalCents}c of materials procured but payment failed and no obligation authority to book the debt: {payProblem}");
+                string failure = "ConstructionProcurementService: payment failed and no obligation authority to book the debt — failing loudly.";
+                // G1: no payable could be booked, so the sale cannot stand
+                // as an unpaid purchase — void it instead of stranding it.
+                return UnwindFailedProcurement(salePort, sale, stockpile, cash, buyerOwnerName,
+                    supplierIdOnly, obligations, null, false, dayIndex, diag, failure);
             }
 
             string freightProblem = freightCoordinator.FreightSaleToSite(sale, freightPlan, stockpile, dayIndex, diag);
-            if (freightProblem != null) return freightProblem;
+            if (freightProblem != null)
+            {
+                // G1: the sale was paid for but the freight leg failed — the
+                // goods are in no custody and the package cannot stage.
+                // Void the sale (units back to the supplier, cash refunded
+                // or payable cancelled) instead of stranding them.
+                return UnwindFailedProcurement(salePort, sale, stockpile, cash, buyerOwnerName,
+                    supplierIdOnly, obligations, bookedPayable, paidInCash, dayIndex, diag, freightProblem);
+            }
 
             string stageProblem = executor.StagePackageMaterialsFromStockpile(project, package, stockpile, dayIndex, diag);
-            if (stageProblem != null) return stageProblem;
+            if (stageProblem != null)
+            {
+                // G1: freight delivered but staging failed — the stockpile
+                // is transient, so its units would vanish with it. Void
+                // the sale and drain the stockpile instead.
+                return UnwindFailedProcurement(salePort, sale, stockpile, cash, buyerOwnerName,
+                    supplierIdOnly, obligations, bookedPayable, paidInCash, dayIndex, diag, stageProblem);
+            }
 
             diag.Add($"ConstructionProcurementService: package '{package.PackageId}' procured, freighted and staged — " +
                 $"sale '{sale.SaleId}' ({sale.TotalCents}c), {sale.TotalUnits} unit(s) conserved to site.");
             return null;
+        }
+
+        /// <summary>
+        /// G1: unwinds a recorded sale after a post-sale leg fails, so a
+        /// failed procurement leaves the world exactly as it found it.
+        /// The site stockpile is drained first (freighted units return
+        /// through the void — the stockpile is transient, so units left
+        /// in it would vanish with it); the sale is then voided in full
+        /// (every unit back in the supplier's stock); a cash payment is
+        /// refunded in full, and a booked payable is cancelled in full
+        /// (the buyer received nothing). The original failure is always
+        /// returned, with the unwind outcome appended — a failed unwind
+        /// is reported loudly (goods or cash in dispute), never silently
+        /// kept, and the package stays Ready for a clean retry.
+        /// </summary>
+        private string UnwindFailedProcurement(
+            IConstructionMaterialSalePort salePort,
+            ConstructionMaterialSale sale,
+            ConstructionSiteStockpile stockpile,
+            CreditCashBridge cash,
+            string buyerOwnerName,
+            string supplierBusinessId,
+            FinancialObligationAuthority obligations,
+            FinancialObligation bookedPayable,
+            bool paidInCash,
+            int dayIndex,
+            List<string> diag,
+            string failure)
+        {
+            diag = diag ?? diagnostics;
+            if (stockpile != null)
+            {
+                var drained = stockpile.DrainAll(
+                    sale != null ? $"project '{sale.ProjectId}'" : "unknown project", dayIndex);
+                if (drained != null && drained.Count > 0)
+                {
+                    int drainedUnits = 0;
+                    foreach (var line in drained) if (line != null) drainedUnits += Math.Max(0, line.Units);
+                    diag.Add($"ConstructionProcurementService: unwind drained {drainedUnits} unit(s) from the site stockpile — they return to the supplier through the void, never stranded in a transient stockpile.");
+                }
+            }
+            if (salePort == null || sale == null)
+                return failure + " (nothing to unwind — no sale was recorded).";
+            int voidedCents;
+            string voidProblem = salePort.TryVoidSale(sale, dayIndex, diag, out voidedCents);
+            if (voidProblem != null)
+                return failure + $" UNWIND FAILED: the sale could not be voided ({voidProblem}) — the sale stands and its goods and cash are in dispute; reconcile before retry.";
+            if (voidedCents > 0 && paidInCash)
+            {
+                string refundProblem = ConstructionCashMover.MoveCash(cash, "business:" + supplierBusinessId,
+                    buyerOwnerName, voidedCents, dayIndex,
+                    $"refund — sale '{sale.SaleId}' voided after a failed procurement for project '{sale.ProjectId}' package '{sale.PackageId}'", diag);
+                if (refundProblem != null)
+                    return failure + $" UNWIND PARTIAL: sale '{sale.SaleId}' voided and its units returned to stock, but the {voidedCents}c refund failed ({refundProblem}) — cash in dispute.";
+                diag.Add($"ConstructionProcurementService: unwind refunded {voidedCents}c to '{buyerOwnerName}' for voided sale '{sale.SaleId}'.");
+            }
+            else if (voidedCents > 0 && bookedPayable != null && obligations != null)
+            {
+                string cancelProblem = obligations.CancelObligation(bookedPayable.ObligationId,
+                    $"sale '{sale.SaleId}' voided after a failed procurement — the buyer received nothing.");
+                if (cancelProblem != null)
+                    return failure + $" UNWIND PARTIAL: sale '{sale.SaleId}' voided and its units returned to stock, but the booked payable could not be cancelled ({cancelProblem}) — debt in dispute.";
+                diag.Add($"ConstructionProcurementService: unwind cancelled payable '{bookedPayable.ObligationId}' ({voidedCents}c) for voided sale '{sale.SaleId}'.");
+            }
+            return failure + $" (unwound: sale '{sale.SaleId}' voided, {voidedCents}c returned to the buyer; the package stays Ready for a clean retry).";
         }
     }
 }

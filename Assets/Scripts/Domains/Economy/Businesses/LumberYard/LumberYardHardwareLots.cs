@@ -78,6 +78,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
     /// <summary>
     /// W4B: one withdrawal of hardware units into a sale — the audit line of
     /// what left the yard, preserving each source lot's provenance.
+    ///
+    /// G1: the line also carries the source lot's full snapshot, so a
+    /// voided sale can restore a lot that was fully drained — and
+    /// therefore removed from stock — with its provenance intact.
     /// </summary>
     [Serializable]
     public sealed class LumberYardHardwareDispenseLine
@@ -87,7 +91,40 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         public LumberYardHardwareKind HardwareKind = LumberYardHardwareKind.Nails;
         public string ProvenanceChain = string.Empty;
 
+        // G1: source-lot snapshot for an exact void restock.
+        public int AcquiredDayIndex;
+        public string SourceBlacksmithBusinessId = string.Empty;
+        public int ForgedDayIndex = -1;
+        public string IronImportOrderId = string.Empty;
+        public string ImportOrderId = string.Empty;
+        public string OriginName = string.Empty;
+        public bool IsBootstrapEndowment;
+        public string SupplierNote = string.Empty;
+        public int UnitCostCents;
+
         public LumberYardHardwareDispenseLine() { }
+
+        /// <summary>G1: builds the dispense line for a withdrawal from a real lot, snapshot included.</summary>
+        public static LumberYardHardwareDispenseLine For(LumberYardHardwareLot lot, int take)
+        {
+            if (lot == null) return new LumberYardHardwareDispenseLine { UnitsTaken = take };
+            return new LumberYardHardwareDispenseLine
+            {
+                LotId = lot.LotId,
+                UnitsTaken = take,
+                HardwareKind = lot.HardwareKind,
+                ProvenanceChain = lot.ProvenanceChain(),
+                AcquiredDayIndex = lot.AcquiredDayIndex,
+                SourceBlacksmithBusinessId = lot.SourceBlacksmithBusinessId,
+                ForgedDayIndex = lot.ForgedDayIndex,
+                IronImportOrderId = lot.IronImportOrderId,
+                ImportOrderId = lot.ImportOrderId,
+                OriginName = lot.OriginName,
+                IsBootstrapEndowment = lot.IsBootstrapEndowment,
+                SupplierNote = lot.SupplierNote,
+                UnitCostCents = lot.UnitCostCents,
+            };
+        }
     }
 
     /// <summary>
@@ -294,13 +331,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                     int take = Math.Min(remaining, available);
                     lot.HardwareUnits -= take;
                     remaining -= take;
-                    lines.Add(new LumberYardHardwareDispenseLine
-                    {
-                        LotId = lot.LotId,
-                        UnitsTaken = take,
-                        HardwareKind = lot.HardwareKind,
-                        ProvenanceChain = lot.ProvenanceChain(),
-                    });
+                    lines.Add(LumberYardHardwareDispenseLine.For(lot, take));
                 }
             }
 
@@ -312,6 +343,63 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                     + "Empty shelves stay empty; nothing invented.");
             }
             return lines;
+        }
+
+        /// <summary>G1: finds a lot by its yard custody id, or null.</summary>
+        public LumberYardHardwareLot FindLot(EntityId lotId)
+        {
+            foreach (var lot in lots)
+            {
+                if (lot != null && lot.LotId.Equals(lotId)) return lot;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// G1: returns voided-sale units to saleable stock from a dispense
+        /// line's snapshot. A lot that still exists is topped up; a lot
+        /// the sale fully drained — and that withdrawal removed — is
+        /// recreated under its SAME yard lot id with its provenance
+        /// intact. Returns the refusal, or null.
+        /// </summary>
+        public string ReturnVoidedUnits(LumberYardHardwareDispenseLine line, int units, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (line == null) return "LumberYardHardwareStock.ReturnVoidedUnits: no dispense line — nothing to return.";
+            if (units <= 0) return "LumberYardHardwareStock.ReturnVoidedUnits: returned units must be positive.";
+            if (units > line.UnitsTaken)
+                return $"LumberYardHardwareStock.ReturnVoidedUnits: lot {line.LotId} dispensed only {line.UnitsTaken} units — {units} requested.";
+            if (line.LotId == EntityId.Invalid)
+                return "LumberYardHardwareStock.ReturnVoidedUnits: the dispense line names no yard lot — refusing.";
+            LumberYardHardwareLot lot = FindLot(line.LotId);
+            if (lot == null)
+            {
+                lot = new LumberYardHardwareLot
+                {
+                    LotId = line.LotId,
+                    HardwareUnits = units,
+                    HardwareKind = line.HardwareKind,
+                    AcquiredDayIndex = line.AcquiredDayIndex,
+                    SourceBlacksmithBusinessId = line.SourceBlacksmithBusinessId,
+                    ForgedDayIndex = line.ForgedDayIndex,
+                    IronImportOrderId = line.IronImportOrderId,
+                    ImportOrderId = line.ImportOrderId,
+                    OriginName = line.OriginName,
+                    IsBootstrapEndowment = line.IsBootstrapEndowment,
+                    SupplierNote = line.SupplierNote,
+                    UnitCostCents = line.UnitCostCents,
+                };
+                lots.Add(lot);
+                diag.Add($"LumberYardHardwareStock ({yardBusinessId}): voided sale restored lot {line.LotId} "
+                    + $"({units} {line.HardwareKind}) — the drained lot was recreated with its provenance intact.");
+            }
+            else
+            {
+                lot.HardwareUnits += units;
+                diag.Add($"LumberYardHardwareStock ({yardBusinessId}): voided sale returned {units} {line.HardwareKind} to lot {line.LotId} "
+                    + $"(now {lot.HardwareUnits} units).");
+            }
+            return null;
         }
 
         /// <summary>W4B save contract: lives inside the owning stock class.</summary>

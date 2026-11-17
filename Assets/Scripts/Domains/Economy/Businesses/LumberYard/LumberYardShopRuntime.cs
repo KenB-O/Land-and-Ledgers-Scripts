@@ -291,6 +291,88 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         }
 
         /// <summary>
+        /// G1: voids a recorded yard sale in full — every dispensed unit
+        /// returns to saleable stock (drained lots recreated with their
+        /// provenance intact), the record is marked voided and kept for
+        /// audit, and the voided value is returned for the caller to
+        /// refund or un-bill. A voided sale never sells, invoices, or
+        /// delivers again: voiding twice refuses, and invoicing or
+        /// scheduling delivery against a voided sale refuses. A sale with
+        /// an open (undelivered) delivery obligation refuses — resolve
+        /// the delivery first. All-or-nothing: every line is validated
+        /// before any unit moves, so a refused void changes nothing. The
+        /// yard itself moves no money here; the caller refunds the buyer
+        /// from the returned value. Returns the refusal, or null.
+        /// </summary>
+        public string VoidSale(string saleId, int dayIndex, List<string> diag, out int voidedCents)
+        {
+            diag = diag ?? diagnostics;
+            voidedCents = 0;
+            if (string.IsNullOrWhiteSpace(saleId))
+                return "LumberYardShopRuntime: voiding a sale requires its sale id.";
+            LumberYardSaleRecord record = null;
+            foreach (var candidate in salesHistory)
+            {
+                if (candidate != null && string.Equals(candidate.SaleId.ToString(), saleId.Trim(), StringComparison.Ordinal))
+                { record = candidate; break; }
+            }
+            if (record == null)
+                return $"LumberYardShopRuntime: no recorded sale '{saleId}' — nothing to void.";
+            if (record.Voided)
+                return $"LumberYardShopRuntime: sale '{saleId}' is already voided (day {record.VoidedDayIndex}) — never voided twice.";
+            foreach (var order in deliveryRegister.Orders)
+            {
+                if (order != null && order.SaleId.Equals(record.SaleId) && order.DeliveredDayIndex < 0)
+                    return $"LumberYardShopRuntime: sale '{saleId}' has an open delivery obligation '{order.OrderId}' — resolve the delivery before voiding.";
+            }
+            // Validate every line before any unit moves.
+            foreach (var line in record.Lines)
+            {
+                if (line == null) continue;
+                foreach (var dispense in line.LumberLines)
+                {
+                    if (dispense == null)
+                        return $"LumberYardShopRuntime: sale '{saleId}' has a corrupt lumber line — void refused, nothing restocked.";
+                    if (dispense.LotId == EntityId.Invalid || dispense.UnitsTaken <= 0)
+                        return $"LumberYardShopRuntime: sale '{saleId}' lumber line for lot {dispense.LotId} is not restockable — void refused, nothing restocked.";
+                }
+                foreach (var dispense in line.HardwareLines)
+                {
+                    if (dispense == null)
+                        return $"LumberYardShopRuntime: sale '{saleId}' has a corrupt hardware line — void refused, nothing restocked.";
+                    if (dispense.LotId == EntityId.Invalid || dispense.UnitsTaken <= 0)
+                        return $"LumberYardShopRuntime: sale '{saleId}' hardware line for lot {dispense.LotId} is not restockable — void refused, nothing restocked.";
+                }
+            }
+            foreach (var line in record.Lines)
+            {
+                if (line == null) continue;
+                foreach (var dispense in line.LumberLines)
+                {
+                    if (dispense == null) continue;
+                    string restockProblem = lumberStock.ReturnVoidedUnits(dispense, dispense.UnitsTaken, diag);
+                    if (restockProblem != null)
+                        return $"LumberYardShopRuntime: void of sale '{saleId}' failed restocking lumber — {restockProblem}";
+                }
+                foreach (var dispense in line.HardwareLines)
+                {
+                    if (dispense == null) continue;
+                    string restockProblem = hardwareStock.ReturnVoidedUnits(dispense, dispense.UnitsTaken, diag);
+                    if (restockProblem != null)
+                        return $"LumberYardShopRuntime: void of sale '{saleId}' failed restocking hardware — {restockProblem}";
+                }
+            }
+            voidedCents = record.TotalCents;
+            record.Voided = true;
+            record.VoidedDayIndex = dayIndex;
+            diag.Add($"LumberYardShopRuntime ({businessInstanceId}): sale '{saleId}' VOIDED — "
+                + $"{record.UnitsSoldFor(ConstructionResourceKind.Lumber)} lumber, "
+                + $"{record.UnitsSoldFor(ConstructionResourceKind.Nails)} nails/hardware returned to stock, "
+                + $"{voidedCents}c to refund or un-bill. The record stays for audit.");
+            return null;
+        }
+
+        /// <summary>
         /// W4B: town retail — lumber to the wheelwright, households, and other
         /// local buyers (the recurring-order paths lumber_yard_lumber_to_*).
         /// Same real-lot rails and loud refusal as construction sales.
@@ -408,6 +490,8 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             diag = diag ?? diagnostics;
             if (sale == null || !salesHistory.Contains(sale))
                 return "LumberYardShopRuntime: deliveries fulfill recorded yard sales — unknown sale refused.";
+            if (sale.Voided)
+                return $"LumberYardShopRuntime: sale '{sale.SaleId}' is voided — its goods were returned to stock, nothing to deliver.";
             return deliveryRegister.ScheduleDelivery(sale, destinationLabel, miles, yardDelivers,
                 carrierLabel, buyerProvidesUnloading, policy, idRegistry, dayIndex, diag);
         }
@@ -496,6 +580,11 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             if (sale == null || !salesHistory.Contains(sale))
             {
                 diag.Add("LumberYardShopRuntime: invoices bill recorded yard sales — unknown sale refused.");
+                return null;
+            }
+            if (sale.Voided)
+            {
+                diag.Add($"LumberYardShopRuntime: sale '{sale.SaleId}' is voided — its value was returned, never invoiced.");
                 return null;
             }
             var invoice = new LumberYardContractorInvoice
@@ -644,6 +733,8 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 BuyerLabel = sale.BuyerLabel,
                 IsConstructionSale = sale.IsConstructionSale,
                 DayIndex = sale.DayIndex,
+                Voided = sale.Voided,
+                VoidedDayIndex = sale.VoidedDayIndex,
             };
             foreach (var line in sale.Lines)
             {
@@ -664,6 +755,22 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                         YardGradeId = l.YardGradeId,
                         Species = l.Species,
                         ProvenanceChain = l.ProvenanceChain,
+                        SourceKind = l.SourceKind,
+                        AcquiredDayIndex = l.AcquiredDayIndex,
+                        SourceSawmillLotId = l.SourceSawmillLotId,
+                        SourceMillBusinessId = l.SourceMillBusinessId,
+                        SourceLogLotId = l.SourceLogLotId,
+                        StandId = l.StandId,
+                        SawedBy = l.SawedBy,
+                        SawedDayIndex = l.SawedDayIndex,
+                        ConversionProfileId = l.ConversionProfileId,
+                        SellerNote = l.SellerNote,
+                        ImportOrderId = l.ImportOrderId,
+                        OriginName = l.OriginName,
+                        IsBootstrapEndowment = l.IsBootstrapEndowment,
+                        UnitCostCents = l.UnitCostCents,
+                        LandedFreightCents = l.LandedFreightCents,
+                        LandedHandlingCents = l.LandedHandlingCents,
                     });
                 }
                 foreach (var h in line.HardwareLines)
@@ -675,6 +782,15 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                         UnitsTaken = h.UnitsTaken,
                         HardwareKind = h.HardwareKind,
                         ProvenanceChain = h.ProvenanceChain,
+                        AcquiredDayIndex = h.AcquiredDayIndex,
+                        SourceBlacksmithBusinessId = h.SourceBlacksmithBusinessId,
+                        ForgedDayIndex = h.ForgedDayIndex,
+                        IronImportOrderId = h.IronImportOrderId,
+                        ImportOrderId = h.ImportOrderId,
+                        OriginName = h.OriginName,
+                        IsBootstrapEndowment = h.IsBootstrapEndowment,
+                        SupplierNote = h.SupplierNote,
+                        UnitCostCents = h.UnitCostCents,
                     });
                 }
                 clone.Lines.Add(lineClone);

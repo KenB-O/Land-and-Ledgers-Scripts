@@ -134,6 +134,12 @@ namespace LandLedgers.Economy.Businesses.LumberYard
     /// <summary>
     /// W4B: one withdrawal of lumber units into a sale — the audit line of
     /// what left the yard, preserving each source lot's provenance.
+    ///
+    /// G1: the line also carries the source lot's full snapshot (grade,
+    /// species, acquisition, sawmill provenance, costs, endowment flag),
+    /// so a voided sale can restore a lot that was fully drained — and
+    /// therefore removed from stock — with its provenance intact, instead
+    /// of inventing a fresh lot or losing the trace.
     /// </summary>
     [Serializable]
     public sealed class LumberYardLumberDispenseLine
@@ -144,7 +150,55 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         public string Species = string.Empty;
         public string ProvenanceChain = string.Empty;
 
+        // G1: source-lot snapshot for an exact void restock.
+        public LumberYardLumberSourceKind SourceKind = LumberYardLumberSourceKind.MillDirect;
+        public int AcquiredDayIndex;
+        public string SourceSawmillLotId = string.Empty;
+        public string SourceMillBusinessId = string.Empty;
+        public string SourceLogLotId = string.Empty;
+        public string StandId = string.Empty;
+        public EntityId SawedBy = EntityId.Invalid;
+        public int SawedDayIndex;
+        public string ConversionProfileId = string.Empty;
+        public string SellerNote = string.Empty;
+        public string ImportOrderId = string.Empty;
+        public string OriginName = string.Empty;
+        public bool IsBootstrapEndowment;
+        public int UnitCostCents;
+        public int LandedFreightCents;
+        public int LandedHandlingCents;
+
         public LumberYardLumberDispenseLine() { }
+
+        /// <summary>G1: builds the dispense line for a withdrawal from a real lot, snapshot included.</summary>
+        public static LumberYardLumberDispenseLine For(LumberYardLumberLot lot, int take)
+        {
+            if (lot == null) return new LumberYardLumberDispenseLine { UnitsTaken = take };
+            return new LumberYardLumberDispenseLine
+            {
+                LotId = lot.LotId,
+                UnitsTaken = take,
+                YardGradeId = lot.YardGradeId,
+                Species = lot.Species,
+                ProvenanceChain = lot.ProvenanceChain(),
+                SourceKind = lot.SourceKind,
+                AcquiredDayIndex = lot.AcquiredDayIndex,
+                SourceSawmillLotId = lot.SourceSawmillLotId,
+                SourceMillBusinessId = lot.SourceMillBusinessId,
+                SourceLogLotId = lot.SourceLogLotId,
+                StandId = lot.StandId,
+                SawedBy = lot.SawedBy,
+                SawedDayIndex = lot.SawedDayIndex,
+                ConversionProfileId = lot.ConversionProfileId,
+                SellerNote = lot.SellerNote,
+                ImportOrderId = lot.ImportOrderId,
+                OriginName = lot.OriginName,
+                IsBootstrapEndowment = lot.IsBootstrapEndowment,
+                UnitCostCents = lot.UnitCostCents,
+                LandedFreightCents = lot.LandedFreightCents,
+                LandedHandlingCents = lot.LandedHandlingCents,
+            };
+        }
     }
 
     /// <summary>
@@ -449,14 +503,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 int take = Math.Min(remaining, available);
                 lot.LumberUnits -= take;
                 remaining -= take;
-                lines.Add(new LumberYardLumberDispenseLine
-                {
-                    LotId = lot.LotId,
-                    UnitsTaken = take,
-                    YardGradeId = lot.YardGradeId,
-                    Species = lot.Species,
-                    ProvenanceChain = lot.ProvenanceChain(),
-                });
+                lines.Add(LumberYardLumberDispenseLine.For(lot, take));
             }
 
             lots.RemoveAll(l => l.LumberUnits <= 0);
@@ -481,6 +528,63 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             foreach (var lot in lots)
             {
                 if (lot != null && lot.LotId.Equals(lotId)) return lot;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// G1: returns voided-sale units to saleable stock from a dispense
+        /// line's snapshot. A lot that still exists is topped up (as
+        /// ordinary stock — a voided sale's earmark was spent by the sale);
+        /// a lot the sale fully drained — and that withdrawal removed —
+        /// is recreated under its SAME yard lot id with its provenance
+        /// intact, so the trace survives and no fresh lot is invented.
+        /// Returns the refusal, or null.
+        /// </summary>
+        public string ReturnVoidedUnits(LumberYardLumberDispenseLine line, int units, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (line == null) return "LumberYardLumberStock.ReturnVoidedUnits: no dispense line — nothing to return.";
+            if (units <= 0) return "LumberYardLumberStock.ReturnVoidedUnits: returned units must be positive.";
+            if (units > line.UnitsTaken)
+                return $"LumberYardLumberStock.ReturnVoidedUnits: lot {line.LotId} dispensed only {line.UnitsTaken} units — {units} requested.";
+            if (line.LotId == EntityId.Invalid)
+                return "LumberYardLumberStock.ReturnVoidedUnits: the dispense line names no yard lot — refusing.";
+            LumberYardLumberLot lot = FindLot(line.LotId);
+            if (lot == null)
+            {
+                lot = new LumberYardLumberLot
+                {
+                    LotId = line.LotId,
+                    LumberUnits = units,
+                    YardGradeId = line.YardGradeId,
+                    Species = line.Species,
+                    AcquiredDayIndex = line.AcquiredDayIndex,
+                    SourceKind = line.SourceKind,
+                    SourceSawmillLotId = line.SourceSawmillLotId,
+                    SourceMillBusinessId = line.SourceMillBusinessId,
+                    SourceLogLotId = line.SourceLogLotId,
+                    StandId = line.StandId,
+                    SawedBy = line.SawedBy,
+                    SawedDayIndex = line.SawedDayIndex,
+                    ConversionProfileId = line.ConversionProfileId,
+                    SellerNote = line.SellerNote,
+                    ImportOrderId = line.ImportOrderId,
+                    OriginName = line.OriginName,
+                    IsBootstrapEndowment = line.IsBootstrapEndowment,
+                    UnitCostCents = line.UnitCostCents,
+                    LandedFreightCents = line.LandedFreightCents,
+                    LandedHandlingCents = line.LandedHandlingCents,
+                };
+                lots.Add(lot);
+                diag.Add($"LumberYardLumberStock ({yardBusinessId}): voided sale restored lot {line.LotId} "
+                    + $"({units} lumber, {line.Species}, {line.YardGradeId}) — the drained lot was recreated with its provenance intact.");
+            }
+            else
+            {
+                lot.LumberUnits += units;
+                diag.Add($"LumberYardLumberStock ({yardBusinessId}): voided sale returned {units} lumber to lot {line.LotId} "
+                    + $"(now {lot.LumberUnits} units).");
             }
             return null;
         }
@@ -605,14 +709,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 lot.EarmarkedUnits = Math.Max(0, lot.EarmarkedUnits) - take;
                 if (lot.EarmarkedUnits <= 0) lot.EarmarkedForProjectId = string.Empty;
                 remaining -= take;
-                lines.Add(new LumberYardLumberDispenseLine
-                {
-                    LotId = lot.LotId,
-                    UnitsTaken = take,
-                    YardGradeId = lot.YardGradeId,
-                    Species = lot.Species,
-                    ProvenanceChain = lot.ProvenanceChain(),
-                });
+                lines.Add(LumberYardLumberDispenseLine.For(lot, take));
             }
 
             lots.RemoveAll(l => l.LumberUnits <= 0);
@@ -664,14 +761,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 int take = Math.Min(remaining, available);
                 lot.LumberUnits -= take;
                 remaining -= take;
-                lines.Add(new LumberYardLumberDispenseLine
-                {
-                    LotId = lot.LotId,
-                    UnitsTaken = take,
-                    YardGradeId = lot.YardGradeId,
-                    Species = lot.Species,
-                    ProvenanceChain = lot.ProvenanceChain(),
-                });
+                lines.Add(LumberYardLumberDispenseLine.For(lot, take));
             }
 
             lots.RemoveAll(l => l.LumberUnits <= 0);

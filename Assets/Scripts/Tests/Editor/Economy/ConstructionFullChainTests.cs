@@ -140,6 +140,26 @@ namespace LandLedgers.EditorTests.Economy
                 sale = s;
                 return null;
             }
+
+            // G1: voids a recorded sale in full — every unit returns to
+            // stock, the record stays for audit.
+            public readonly HashSet<string> VoidedSaleIds = new HashSet<string>();
+            public string TryVoidSale(ConstructionMaterialSale sale, int dayIndex, List<string> diagnostics, out int voidedCents)
+            {
+                voidedCents = 0;
+                if (sale == null || string.IsNullOrWhiteSpace(sale.SaleId)) return "no sale to void.";
+                if (!Sales.Contains(sale)) return $"FakeSalePort: unknown sale '{sale.SaleId}' — nothing to void.";
+                if (VoidedSaleIds.Contains(sale.SaleId)) return $"FakeSalePort: sale '{sale.SaleId}' is already voided.";
+                foreach (ConstructionMaterialSaleLine line in sale.Lines)
+                {
+                    if (line == null) continue;
+                    if (!Stock.ContainsKey(line.DisplayName)) Stock[line.DisplayName] = 0;
+                    Stock[line.DisplayName] += Math.Max(0, line.Units);
+                    voidedCents += line.LineTotalCents;
+                }
+                VoidedSaleIds.Add(sale.SaleId);
+                return null;
+            }
         }
 
         private sealed class FakeGoodsSupplier : IGoodsSupplier
@@ -678,8 +698,8 @@ namespace LandLedgers.EditorTests.Economy
         public void FreightChain_OverCapacity_BlockedPreLoad_NothingFreighted()
         {
             var c = new Chain();
-            c.RegisterHousehold(7, 100000);
-            c.RegisterPurse("business:lumber-yard", 0);
+            HouseholdLedger ledger = c.RegisterHousehold(7, 100000);
+            PurseCashStore yard = c.RegisterPurse("business:lumber-yard", 0);
             NpcConstructionRecord record;
             ConstructionProject project = c.CommissionCabin(out record);
             WorkPackage framing = project.WorkPackages[1]; // 600 units of lumber
@@ -692,11 +712,21 @@ namespace LandLedgers.EditorTests.Economy
             string problem = RunMaterialLeg(c, project, framing, stockpile, plan, 11);
             Assert.IsNotNull(problem);
             StringAssert.Contains("blocked pre-load", problem);
-            // The sale stands (real purchase, buyer's goods at the yard) but
-            // NOTHING reached the site and the package cannot stage.
+            // G1: the sale no longer stands stranded — the failed leg
+            // unwinds it: the sale record stays for audit (voided), its
+            // units return to the supplier, the buyer is refunded in
+            // full, and NOTHING reached the site, so the package cannot
+            // stage but stays Ready for a clean retry.
             Assert.AreEqual(1, c.SalePort.Sales.Count);
+            Assert.IsTrue(c.SalePort.VoidedSaleIds.Contains(c.SalePort.Sales[0].SaleId));
             Assert.AreEqual(0, stockpile.AvailableUnits("lumber"));
             Assert.AreEqual(WorkPackageStatus.Ready, framing.Status);
+            Assert.AreEqual(10000, c.SalePort.Stock["lumber"],
+                "the voided sale returned every unit to the supplier.");
+            Assert.AreEqual(100000, ledger.GetBalanceCents(),
+                "the buyer was refunded in full.");
+            Assert.AreEqual(0, yard.ReadBalanceCents(),
+                "the supplier keeps nothing for goods never delivered.");
         }
 
         #endregion

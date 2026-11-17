@@ -448,6 +448,26 @@ namespace LandLedgers.EditorTests.Economy
                 sale = s;
                 return null;
             }
+
+            // G1: voids a recorded sale in full — every unit returns to
+            // stock, the record stays for audit.
+            public readonly HashSet<string> VoidedSaleIds = new HashSet<string>();
+            public string TryVoidSale(ConstructionMaterialSale sale, int dayIndex, List<string> diagnostics, out int voidedCents)
+            {
+                voidedCents = 0;
+                if (sale == null || string.IsNullOrWhiteSpace(sale.SaleId)) return "no sale to void.";
+                if (!Sales.Contains(sale)) return $"FakeSalePort: unknown sale '{sale.SaleId}' — nothing to void.";
+                if (VoidedSaleIds.Contains(sale.SaleId)) return $"FakeSalePort: sale '{sale.SaleId}' is already voided.";
+                foreach (ConstructionMaterialSaleLine line in sale.Lines)
+                {
+                    if (line == null) continue;
+                    if (!Stock.ContainsKey(line.DisplayName)) Stock[line.DisplayName] = 0;
+                    Stock[line.DisplayName] += Math.Max(0, line.Units);
+                    voidedCents += line.LineTotalCents;
+                }
+                VoidedSaleIds.Add(sale.SaleId);
+                return null;
+            }
         }
 
         private sealed class FakeGoodsSupplier : IGoodsSupplier

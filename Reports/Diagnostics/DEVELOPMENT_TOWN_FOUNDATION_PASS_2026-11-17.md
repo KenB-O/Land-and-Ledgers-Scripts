@@ -14,6 +14,8 @@ Unity Editor serialization APIs were used for migration and save. The authoritat
 
 The pre-migration owner asset backup is at `Reports/Diagnostics/Backups/DevelopmentTownConfiguration.20261117-pre-schema.asset.backup` (SHA256 `F368381E0CC3B56BB86935241FB54DAEF8F346612A4E7707A932BEA88BC0E98D`). Its matching meta backup SHA256 is `16D900F4EDDAAAD42DED9604A18C64CDF200C23FA467EE3137A77DFB03A46E89`.
 
+The byte-exact backup and its meta backup are retained in the local project but excluded from Git publication. The backup file's original Unity YAML whitespace trips `git diff --check`; preserving its exact bytes is preferable to normalizing the recovery copy.
+
 The invalid pre-migration business record was the sawmill: it named owner key `enzo`, but the local resident list had no Enzo record. Its opening employee also referenced `silas`, which did not match the authored Richard Sithole resident key. Validation therefore rejected the configuration. The migration adds the owner and Josh as residents, maps the prior worker reference to Richard, and uses the owner's direction to configure Richard and Josh as the two workers.
 
 ## Data organization and reconciliation
@@ -68,3 +70,7 @@ The existing business architecture remains intentionally unchanged: `BusinessTyp
 - The migration snapshots, serialization probes and protected backup listed above.
 
 Owner-local scene, prefab, terrain, font and asset-pack modifications were preserved and excluded from this pass's change set.
+
+## Publication
+
+The scoped checkpoint is published on `codex/development-town-foundation-2026-11-17` at `3ff1d0909f4d6d683f8620ad0d4a14deac4ead0e`. The GitHub remote branch SHA was queried after push and matched this commit. The local pre-migration backup remains available only in the authoritative project workspace.

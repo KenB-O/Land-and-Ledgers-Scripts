@@ -5,6 +5,7 @@ using LandLedgers.Civic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.BoardingHouse;
 using LandLedgers.Economy.Businesses.Logging;
+using LandLedgers.Economy.Businesses.LumberYard;
 using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Economy.Butcher;
 using LandLedgers.Economy.Creation;
@@ -97,6 +98,8 @@ namespace LandLedgers.Persistence
         public LogLotCustodyLedger.LogLotCustodyLedgerSaveDto logLotCustodyLedger = new();
         /// <summary>F7 yard-transfer wiring: the sawmill-to-yard transfer driver — one shared instance.</summary>
         public SawmillToYardTransferDriver.SawmillToYardTransferDriverSaveDto sawmillToYardTransferDriver = new();
+        /// <summary>F1 (workstream F, glass leg): the lumber yard window-glass import driver — one shared instance.</summary>
+        public LumberYardGlassImportDriver.LumberYardGlassImportDriverSaveDto lumberYardGlassImportDriver = new();
         public NpcFormationAssetRegisterSaveDto npcFormationAssets = new();
         public List<NpcBusinessLifeRecordSaveDto> npcBusinessLifecycle = new();
         public NpcBusinessInvestigationSaveDto npcBusinessInvestigation = new();

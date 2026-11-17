@@ -34,6 +34,14 @@ namespace LandLedgers.Economy
         public NpcConstructionReason Reason = NpcConstructionReason.Unspecified;
         /// <summary>Free-text evidence for the reason (the gap, the shared building, ...).</summary>
         public string ReasonNotes = string.Empty;
+        /// <summary>
+        /// F1: glazed windows — the build's windows get real glass panes
+        /// (WindowGlassRequirements), bought from the lumber yard's
+        /// imported glass stock and consumed by window assembly. False
+        /// (the default) builds unglazed: no glass requirement, no glass
+        /// price, no glass consumption. Glass is never universal.
+        /// </summary>
+        public bool GlazedWindows;
     }
 
     /// <summary>
@@ -365,7 +373,7 @@ namespace LandLedgers.Economy
             int members = request.MemberPersonIds != null ? request.MemberPersonIds.Count : 0;
             NpcConstructionEvaluation evaluation = commissioner.EvaluateCommission(catalog, request.DesignId,
                 Math.Max(1, members), pricePort, buyerStore.ReadBalanceCents(), MaxUnitsPerTrip,
-                request.Reason, request.ReasonNotes, dayIndex, diag);
+                request.Reason, request.ReasonNotes, dayIndex, diag, request.GlazedWindows);
             if (evaluation == null || !evaluation.IsViable)
             {
                 // D-4: a cash-only refusal on affordability is the one case
@@ -419,7 +427,7 @@ namespace LandLedgers.Economy
             }
             NpcConstructionRecord record;
             ConstructionProject project = commissioner.CommissionProject(executor, catalog,
-                request.HouseholdId, request.DesignId, request.ParcelId, pricePort, dayIndex, diag, out record);
+                request.HouseholdId, request.DesignId, request.ParcelId, pricePort, dayIndex, diag, out record, request.GlazedWindows);
             if (project == null || record == null)
             {
                 diag.Add($"NpcConstructionDriver.Commission: commissioning '{request.DesignId}' for H{request.HouseholdId} failed — see diagnostics.");
@@ -505,7 +513,7 @@ namespace LandLedgers.Economy
             int members = request.MemberPersonIds != null ? request.MemberPersonIds.Count : 0;
             return commissioner.EvaluateCommissionWithLoan(catalog, request.DesignId,
                 Math.Max(1, members), pricePort, buyerStore.ReadBalanceCents(),
-                terms, MaxUnitsPerTrip, request.Reason, request.ReasonNotes, dayIndex, diag);
+                terms, MaxUnitsPerTrip, request.Reason, request.ReasonNotes, dayIndex, diag, request.GlazedWindows);
         }
 
         /// <summary>

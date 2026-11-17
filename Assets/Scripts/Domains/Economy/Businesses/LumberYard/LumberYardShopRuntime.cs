@@ -62,6 +62,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         private readonly EntityIdRegistry idRegistry;
         private readonly LumberYardLumberStock lumberStock;
         private readonly LumberYardHardwareStock hardwareStock;
+        private readonly LumberYardGlassStock glassStock;
         private readonly LumberYardProjectStockpile stockpile;
         private readonly LumberYardDeliveryRegister deliveryRegister;
         private readonly LumberYardContractorLedger contractorLedger;
@@ -74,6 +75,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         public EntityIdRegistry IdRegistry => idRegistry;
         public LumberYardLumberStock LumberStock => lumberStock;
         public LumberYardHardwareStock HardwareStock => hardwareStock;
+        public LumberYardGlassStock GlassStock => glassStock;
         public LumberYardProjectStockpile Stockpile => stockpile;
         public LumberYardDeliveryRegister DeliveryRegister => deliveryRegister;
         public LumberYardContractorLedger ContractorLedger => contractorLedger;
@@ -87,6 +89,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             this.idRegistry = idRegistry;
             this.lumberStock = new LumberYardLumberStock(this.businessInstanceId);
             this.hardwareStock = new LumberYardHardwareStock(this.businessInstanceId);
+            this.glassStock = new LumberYardGlassStock(this.businessInstanceId);
             this.stockpile = new LumberYardProjectStockpile(this.businessInstanceId);
             this.deliveryRegister = new LumberYardDeliveryRegister(this.businessInstanceId);
             this.contractorLedger = new LumberYardContractorLedger(this.businessInstanceId);
@@ -165,6 +168,24 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 acquiredDayIndex, unitCostCents, diag);
         }
 
+        /// <summary>
+        /// F1: window-glass panes arriving on a named import order
+        /// (LumberYardSupply.GlassImportMaterialId). The ONLY glass
+        /// intake — no blacksmith path (glass is not forged) and no
+        /// bootstrap endowment (glass never appears without a paid
+        /// import order behind it).
+        /// </summary>
+        public string ReceiveGlassImportArrival(
+            int panes, string importOrderId, string originName,
+            int acquiredDayIndex, int unitCostCents, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            EntityId yardLotId = AllocateYardLotId(diag);
+            if (yardLotId == EntityId.Invalid) return "LumberYardShopRuntime: no lot id available.";
+            return glassStock.ReceiveImportArrival(yardLotId, panes, importOrderId, originName,
+                acquiredDayIndex, unitCostCents, diag);
+        }
+
         /// <summary>W4B: marks the one-time opening endowment as applied. Only
         /// LumberYardOpeningStock calls this, after its lots land.</summary>
         public void MarkOpeningStockApplied()
@@ -196,13 +217,34 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             List<string> diag)
         {
             return ExecuteConstructionSale(projectId, lumberUnits, lumberUnitPriceCents,
-                nailsUnits, nailsUnitPriceCents, dayIndex, diag);
+                nailsUnits, nailsUnitPriceCents, 0, 0, dayIndex, diag);
+        }
+
+        /// <summary>
+        /// F1: the three-bucket construction sale (lumber; nails and
+        /// hardware; window glass). Same atomic guarantees as the
+        /// two-bucket sale: every bucket is checked first, and a
+        /// shortfall in ANY bucket refuses the whole sale loudly with
+        /// nothing consumed. A glazed package's glass is sold here, from
+        /// real glass lots, never from thin air.
+        /// </summary>
+        public LumberYardSaleRecord TrySellToConstructionProject(
+            string projectId,
+            int lumberUnits, int lumberUnitPriceCents,
+            int nailsUnits, int nailsUnitPriceCents,
+            int glassPanes, int glassUnitPriceCents,
+            int dayIndex,
+            List<string> diag)
+        {
+            return ExecuteConstructionSale(projectId, lumberUnits, lumberUnitPriceCents,
+                nailsUnits, nailsUnitPriceCents, glassPanes, glassUnitPriceCents, dayIndex, diag);
         }
 
         private LumberYardSaleRecord ExecuteConstructionSale(
             string projectId,
             int lumberUnits, int lumberUnitPriceCents,
             int nailsUnits, int nailsUnitPriceCents,
+            int glassPanes, int glassUnitPriceCents,
             int dayIndex,
             List<string> diag)
         {
@@ -219,7 +261,8 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             }
             lumberUnits = Math.Max(0, lumberUnits);
             nailsUnits = Math.Max(0, nailsUnits);
-            if (lumberUnits == 0 && nailsUnits == 0)
+            glassPanes = Math.Max(0, glassPanes);
+            if (lumberUnits == 0 && nailsUnits == 0 && glassPanes == 0)
             {
                 diag.Add("LumberYardShopRuntime: nothing requested — no sale recorded.");
                 return null;
@@ -231,11 +274,13 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             int projectReserved = lumberStock.EarmarkedUnitsForProject(projectId, null, null);
             int lumberAvailable = lumberStock.AvailableUnitsForSale(null, null) + projectReserved;
             int nailsAvailable = hardwareStock.TotalHardwareUnits;
-            if (lumberAvailable < lumberUnits || nailsAvailable < nailsUnits)
+            int glassAvailable = glassStock.TotalGlassPanes;
+            if (lumberAvailable < lumberUnits || nailsAvailable < nailsUnits || glassAvailable < glassPanes)
             {
                 diag.Add($"LumberYardShopRuntime ({businessInstanceId}): SALE REFUSED to project '{projectId}' — "
                     + $"shortfall (need {lumberUnits} lumber / have {lumberAvailable}; "
-                    + $"need {nailsUnits} nails-hardware / have {nailsAvailable}). "
+                    + $"need {nailsUnits} nails-hardware / have {nailsAvailable}; "
+                    + $"need {glassPanes} glass panes / have {glassAvailable}). "
                     + "Empty shelves stay empty; nothing invented, nothing consumed.");
                 return null;
             }
@@ -282,10 +327,25 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 });
             }
 
+            if (glassPanes > 0)
+            {
+                var lines = glassStock.TryWithdrawUnits(glassPanes, diag);
+                int taken = 0;
+                foreach (var line in lines) taken += line.UnitsTaken;
+                record.Lines.Add(new LumberYardMaterialSaleLine
+                {
+                    ResourceKind = ConstructionResourceKind.Glass,
+                    UnitsSold = taken,
+                    UnitPriceCents = Math.Max(0, glassUnitPriceCents),
+                    GlassLines = lines,
+                });
+            }
+
             salesHistory.Add(record);
             diag.Add($"LumberYardShopRuntime ({businessInstanceId}): sold to project '{projectId}' — "
                 + $"{record.UnitsSoldFor(ConstructionResourceKind.Lumber)} lumber, "
                 + $"{record.UnitsSoldFor(ConstructionResourceKind.Nails)} nails/hardware, "
+                + $"{record.UnitsSoldFor(ConstructionResourceKind.Glass)} glass panes, "
                 + $"total {record.TotalCents}¢ (sale {record.SaleId}). Provenance on every lot.");
             return record;
         }
@@ -343,6 +403,13 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                     if (dispense.LotId == EntityId.Invalid || dispense.UnitsTaken <= 0)
                         return $"LumberYardShopRuntime: sale '{saleId}' hardware line for lot {dispense.LotId} is not restockable — void refused, nothing restocked.";
                 }
+                foreach (var dispense in line.GlassLines)
+                {
+                    if (dispense == null)
+                        return $"LumberYardShopRuntime: sale '{saleId}' has a corrupt glass line — void refused, nothing restocked.";
+                    if (dispense.LotId == EntityId.Invalid || dispense.UnitsTaken <= 0)
+                        return $"LumberYardShopRuntime: sale '{saleId}' glass line for lot {dispense.LotId} is not restockable — void refused, nothing restocked.";
+                }
             }
             foreach (var line in record.Lines)
             {
@@ -361,13 +428,21 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                     if (restockProblem != null)
                         return $"LumberYardShopRuntime: void of sale '{saleId}' failed restocking hardware — {restockProblem}";
                 }
+                foreach (var dispense in line.GlassLines)
+                {
+                    if (dispense == null) continue;
+                    string restockProblem = glassStock.ReturnVoidedUnits(dispense, dispense.UnitsTaken, diag);
+                    if (restockProblem != null)
+                        return $"LumberYardShopRuntime: void of sale '{saleId}' failed restocking glass — {restockProblem}";
+                }
             }
             voidedCents = record.TotalCents;
             record.Voided = true;
             record.VoidedDayIndex = dayIndex;
             diag.Add($"LumberYardShopRuntime ({businessInstanceId}): sale '{saleId}' VOIDED — "
                 + $"{record.UnitsSoldFor(ConstructionResourceKind.Lumber)} lumber, "
-                + $"{record.UnitsSoldFor(ConstructionResourceKind.Nails)} nails/hardware returned to stock, "
+                + $"{record.UnitsSoldFor(ConstructionResourceKind.Nails)} nails/hardware, "
+                + $"{record.UnitsSoldFor(ConstructionResourceKind.Glass)} glass panes returned to stock, "
                 + $"{voidedCents}c to refund or un-bill. The record stays for audit.");
             return null;
         }
@@ -556,7 +631,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             }
 
             var record = ExecuteConstructionSale(projectId, lumberUnits, lumberUnitPriceCents,
-                nailsUnits, nailsUnitPriceCents, dayIndex, diag);
+                nailsUnits, nailsUnitPriceCents, 0, 0, dayIndex, diag);
             if (record == null) return null;
 
             return IssueContractorInvoiceForSale(contractorBusinessId, record, null, dayIndex, diag);
@@ -599,7 +674,9 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 if (line == null) continue;
                 string what = line.ResourceKind == ConstructionResourceKind.Lumber
                     ? $"lumber — {line.UnitsSold} units @ {line.UnitPriceCents}c"
-                    : $"nails/hardware — {line.UnitsSold} units @ {line.UnitPriceCents}c";
+                    : line.ResourceKind == ConstructionResourceKind.Glass
+                        ? $"window glass — {line.UnitsSold} panes @ {line.UnitPriceCents}c"
+                        : $"nails/hardware — {line.UnitsSold} units @ {line.UnitPriceCents}c";
                 invoice.Lines.Add(new LumberYardContractorInvoiceLine(what, line.LineTotalCents));
             }
             if (deliveryOrder != null && deliveryOrder.ChargeCents > 0)
@@ -673,6 +750,8 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 new LumberYardLumberStock.LumberYardLumberStockSaveDto();
             public LumberYardHardwareStock.LumberYardHardwareStockSaveDto HardwareStock =
                 new LumberYardHardwareStock.LumberYardHardwareStockSaveDto();
+            public LumberYardGlassStock.LumberYardGlassStockSaveDto GlassStock =
+                new LumberYardGlassStock.LumberYardGlassStockSaveDto();
             public List<LumberYardSaleRecord> SalesHistory = new List<LumberYardSaleRecord>();
             public LumberYardProjectStockpile.LumberYardProjectStockpileSaveDto Stockpile =
                 new LumberYardProjectStockpile.LumberYardProjectStockpileSaveDto();
@@ -692,6 +771,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 OpeningStockApplied = openingStockApplied,
                 LumberStock = lumberStock.CaptureSaveDto(),
                 HardwareStock = hardwareStock.CaptureSaveDto(),
+                GlassStock = glassStock.CaptureSaveDto(),
                 Stockpile = stockpile.CaptureSaveDto(),
                 DeliveryRegister = deliveryRegister.CaptureSaveDto(),
                 ContractorLedger = contractorLedger.CaptureSaveDto(),
@@ -709,6 +789,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         {
             lumberStock.LoadFromSaveDto(dto != null ? dto.LumberStock : null);
             hardwareStock.LoadFromSaveDto(dto != null ? dto.HardwareStock : null);
+            glassStock.LoadFromSaveDto(dto != null ? dto.GlassStock : null);
             stockpile.LoadFromSaveDto(dto != null ? dto.Stockpile : null);
             deliveryRegister.LoadFromSaveDto(dto != null ? dto.DeliveryRegister : null);
             contractorLedger.LoadFromSaveDto(dto != null ? dto.ContractorLedger : null);
@@ -791,6 +872,20 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                         IsBootstrapEndowment = h.IsBootstrapEndowment,
                         SupplierNote = h.SupplierNote,
                         UnitCostCents = h.UnitCostCents,
+                    });
+                }
+                foreach (var g in line.GlassLines)
+                {
+                    if (g == null) continue;
+                    lineClone.GlassLines.Add(new LumberYardGlassDispenseLine
+                    {
+                        LotId = g.LotId,
+                        UnitsTaken = g.UnitsTaken,
+                        ProvenanceChain = g.ProvenanceChain,
+                        AcquiredDayIndex = g.AcquiredDayIndex,
+                        ImportOrderId = g.ImportOrderId,
+                        OriginName = g.OriginName,
+                        UnitCostCents = g.UnitCostCents,
                     });
                 }
                 clone.Lines.Add(lineClone);

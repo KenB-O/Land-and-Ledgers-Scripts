@@ -340,6 +340,14 @@ namespace LandLedgers.Economy
         /// Returns a non-viable evaluation (never null) with the refusal
         /// reason on any failure — the NPC never builds a design it cannot
         /// price, fund, or physically receive.
+        ///
+        /// F1: glazedWindows prices the design's window glass on top of
+        /// its phase materials (WindowGlassRequirements) and counts the
+        /// panes in the openings phase's shipment. An unpriced glass
+        /// requirement — no stocked glass lot in the yard — refuses the
+        /// glazed commission outright: glass is never invented, and a
+        /// glazed build is never approved without the money for its
+        /// panes. Unglazed (false) evaluates exactly as before.
         /// </summary>
         public NpcConstructionEvaluation EvaluateCommission(
             BuildingDesignCatalog catalog,
@@ -351,7 +359,8 @@ namespace LandLedgers.Economy
             NpcConstructionReason reason,
             string reasonNotes,
             int dayIndex,
-            List<string> diag)
+            List<string> diag,
+            bool glazedWindows = false)
         {
             diag = diag ?? diagnostics;
             var evaluation = new NpcConstructionEvaluation
@@ -391,26 +400,40 @@ namespace LandLedgers.Economy
                 return evaluation;
             }
             int estimate = 0;
+            var evaluatedRequirements = new List<ConstructionMaterialRequirement>();
             foreach (BuildingDesignPhase phase in design.Phases ?? new List<BuildingDesignPhase>())
             {
                 if (phase == null) continue;
                 foreach (ConstructionMaterialRequirement requirement in phase.Materials ?? new List<ConstructionMaterialRequirement>())
+                    evaluatedRequirements.Add(requirement);
+            }
+            if (glazedWindows)
+            {
+                ConstructionMaterialRequirement glass = WindowGlassRequirements.GlassRequirementFor(designId);
+                if (glass == null)
                 {
-                    if (requirement == null || !requirement.IsCoherent)
-                    {
-                        evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' has an incoherent material requirement — cost unknowable, refused.";
-                        diag.Add(evaluation.RefusalReason);
-                        return evaluation;
-                    }
-                    int unitPrice = pricePort.UnitPriceCents(requirement);
-                    if (unitPrice < 0)
-                    {
-                        evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' material '{requirement.MaterialDisplayName}' has no price — cost unknowable, refused.";
-                        diag.Add(evaluation.RefusalReason);
-                        return evaluation;
-                    }
-                    estimate += unitPrice * Math.Max(0, requirement.RequiredUnits);
+                    evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' has no recorded window count — a glazed build cannot be priced, refused rather than guessed.";
+                    diag.Add(evaluation.RefusalReason);
+                    return evaluation;
                 }
+                evaluatedRequirements.Add(glass);
+            }
+            foreach (ConstructionMaterialRequirement requirement in evaluatedRequirements)
+            {
+                if (requirement == null || !requirement.IsCoherent)
+                {
+                    evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' has an incoherent material requirement — cost unknowable, refused.";
+                    diag.Add(evaluation.RefusalReason);
+                    return evaluation;
+                }
+                int unitPrice = pricePort.UnitPriceCents(requirement);
+                if (unitPrice < 0)
+                {
+                    evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' material '{requirement.MaterialDisplayName}' has no price — cost unknowable, refused.";
+                    diag.Add(evaluation.RefusalReason);
+                    return evaluation;
+                }
+                estimate += unitPrice * Math.Max(0, requirement.RequiredUnits);
             }
             evaluation.EstimateCents = estimate;
             evaluation.MarginCents = fundsAvailableCents - estimate;
@@ -447,6 +470,8 @@ namespace LandLedgers.Economy
                         int units = 0;
                         foreach (ConstructionMaterialRequirement requirement in phase.Materials ?? new List<ConstructionMaterialRequirement>())
                             if (requirement != null) units += Math.Max(0, requirement.RequiredUnits);
+                        if (glazedWindows && string.Equals(phase.PhaseName, WindowGlassRequirements.OpeningsPhaseName, StringComparison.Ordinal))
+                            units += Math.Max(0, WindowGlassRequirements.PanesForDesign(designId));
                         if (units <= 0) continue;
                         evaluation.ShipmentFeasible = false;
                         evaluation.RefusalReason = $"NpcCommissioner.EvaluateCommission: design '{designId}' phase '{phase.PhaseName}' needs {units} units, but the wagon cannot carry this cargo at all ({maxUnitsPerTrip.Value}-unit single-trip bound) — no trip can move it, so the design cannot be commissioned as drawn.";
@@ -464,6 +489,8 @@ namespace LandLedgers.Economy
                         int units = 0;
                         foreach (ConstructionMaterialRequirement requirement in phase.Materials ?? new List<ConstructionMaterialRequirement>())
                             if (requirement != null) units += Math.Max(0, requirement.RequiredUnits);
+                        if (glazedWindows && string.Equals(phase.PhaseName, WindowGlassRequirements.OpeningsPhaseName, StringComparison.Ordinal))
+                            units += Math.Max(0, WindowGlassRequirements.PanesForDesign(designId));
                         int trips = units <= 0 ? 0 : (int)((units + (long)maxUnitsPerTrip.Value - 1) / maxUnitsPerTrip.Value);
                         tripNotes.Add($"'{phase.PhaseName}' {units} units in {trips} trip{(trips == 1 ? string.Empty : "s")}");
                     }
@@ -475,13 +502,13 @@ namespace LandLedgers.Economy
                 evaluation.ShipmentNotes = "no trip bound supplied — shipment feasibility not evaluated at commission; the shipment service still refuses over-capacity loads pre-load.";
             }
             evaluation.Benefit = BenefitFor(reason, reasonNotes);
-            evaluation.Lines.Add($"day {dayIndex}: evaluated '{designId}' for {reason} — {evaluation.Benefit}.");
+            evaluation.Lines.Add($"day {dayIndex}: evaluated '{designId}' for {reason} — {evaluation.Benefit}{(glazedWindows ? " (glazed windows)" : string.Empty)}.");
             evaluation.Lines.Add($"day {dayIndex}: estimate ~{estimate}c materials against {fundsAvailableCents}c available (margin {evaluation.MarginCents}c); sleeps {capacity} for {evaluation.RequiredPlaces} needed.");
             evaluation.Lines.Add(evaluation.Alternatives.Count > 0
                 ? $"day {dayIndex}: alternatives considered — {string.Join("; ", evaluation.Alternatives)}."
                 : $"day {dayIndex}: no other priced adequate design in the catalog.");
             evaluation.Lines.Add($"day {dayIndex}: shipment — {evaluation.ShipmentNotes}");
-            evaluation.Summary = $"day {dayIndex}: '{designId}' ~{estimate}c vs {fundsAvailableCents}c (margin {evaluation.MarginCents}c), sleeps {capacity}/{evaluation.RequiredPlaces}, {reason}, {evaluation.ShipmentNotes}";
+            evaluation.Summary = $"day {dayIndex}: '{designId}'{(glazedWindows ? " (glazed windows)" : string.Empty)} ~{estimate}c vs {fundsAvailableCents}c (margin {evaluation.MarginCents}c), sleeps {capacity}/{evaluation.RequiredPlaces}, {reason}, {evaluation.ShipmentNotes}";
             evaluation.IsViable = true;
             diag.Add($"NpcCommissioner.EvaluateCommission: '{designId}' selected (~{estimate}c, margin {evaluation.MarginCents}c, sleeps {capacity}).");
             return evaluation;
@@ -518,6 +545,28 @@ namespace LandLedgers.Economy
             List<string> diag,
             out NpcConstructionRecord record)
         {
+            return CommissionProject(executor, catalog, householdId, designId, parcelId,
+                pricePort, dayIndex, diag, out record, false);
+        }
+
+        /// <summary>
+        /// F1: commissions the project with the glazed-windows option —
+        /// a glazed build carries the window-glass requirement on its
+        /// openings package (and the record's per-package estimates price
+        /// it), an unglazed build commissions exactly as before.
+        /// </summary>
+        public ConstructionProject CommissionProject(
+            ConstructionProjectExecutor executor,
+            BuildingDesignCatalog catalog,
+            int householdId,
+            string designId,
+            string parcelId,
+            IConstructionMaterialPricePort pricePort,
+            int dayIndex,
+            List<string> diag,
+            out NpcConstructionRecord record,
+            bool glazedWindows)
+        {
             diag = diag ?? diagnostics;
             record = null;
             if (executor == null || catalog == null)
@@ -533,7 +582,7 @@ namespace LandLedgers.Economy
             }
             ConstructionProject project = executor.CreateProject(catalog, householdId, designId, parcelId, dayIndex, diag);
             if (project == null) return null;
-            string packageProblem = executor.CreateWorkPackages(project, design, dayIndex, diag);
+            string packageProblem = executor.CreateWorkPackages(project, design, glazedWindows, dayIndex, diag);
             if (packageProblem != null)
             {
                 diag.Add("NpcCommissioner.CommissionProject: " + packageProblem);
@@ -562,7 +611,7 @@ namespace LandLedgers.Economy
                 record.TotalEstimatedCostCents += Math.Max(0, estimate);
             }
             record.Decisions.Add($"day {dayIndex}: commissioned design '{designId}' on parcel '{parcelId}' " +
-                $"(~{record.TotalEstimatedCostCents}c materials estimated, {project.WorkPackages.Count} package(s)).");
+                $"(~{record.TotalEstimatedCostCents}c materials estimated, {project.WorkPackages.Count} package(s){(glazedWindows ? ", glazed windows" : string.Empty)}).");
             records[record.RecordId] = record;
             diag.Add($"NpcCommissioner: H{householdId} commissioned project '{project.ProjectId}' ('{designId}') — record '{record.RecordId}'.");
             return project;
@@ -720,7 +769,8 @@ namespace LandLedgers.Economy
             NpcConstructionReason reason,
             string reasonNotes,
             int dayIndex,
-            List<string> diag)
+            List<string> diag,
+            bool glazedWindows = false)
         {
             diag = diag ?? diagnostics;
             if (loanTerms == null)
@@ -755,7 +805,7 @@ namespace LandLedgers.Economy
             int funds = cashAvailableCents + Math.Max(0, loanTerms.PrincipalCents);
             NpcConstructionEvaluation evaluation = EvaluateCommission(catalog, designId,
                 requiredSleepingPlaces, pricePort, funds, maxUnitsPerTrip,
-                reason, reasonNotes, dayIndex, diag);
+                reason, reasonNotes, dayIndex, diag, glazedWindows);
             evaluation.LoanTerms = loanTerms;
             if (!evaluation.IsViable) return evaluation;
             if (loanTerms.EvaluatedPriceCents != evaluation.EstimateCents)

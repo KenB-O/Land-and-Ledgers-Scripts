@@ -42,8 +42,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
 
             int lumberUnits = 0;
             int hardwareUnits = 0;
+            int glassUnits = 0;
             int lumberPrice = -1;
             int hardwarePrice = -1;
+            int glassPrice = -1;
             // C-9: the sale line must carry the requirement's own display
             // name, not a hard-coded label. The site stockpile matches
             // delivered lines to the package requirements by exact display
@@ -53,6 +55,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             // name per kind, same shape as the price-consistency rule.
             string lumberDisplayName = null;
             string hardwareDisplayName = null;
+            string glassDisplayName = null;
             foreach (ConstructionMaterialRequirement requirement in requirements)
             {
                 if (requirement == null || !requirement.IsCoherent)
@@ -87,6 +90,16 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                         hardwarePrice = price;
                         hardwareUnits = checked(hardwareUnits + requirement.RequiredUnits);
                         break;
+                    case ConstructionMaterialKind.Glass:
+                        if (glassPrice >= 0 && glassPrice != price)
+                            return "Lumber Yard sales require one consistent glass unit price per package.";
+                        if (glassDisplayName != null
+                            && !string.Equals(glassDisplayName, requirement.MaterialDisplayName, StringComparison.Ordinal))
+                            return "Lumber Yard sales require one consistent glass display name per package.";
+                        glassDisplayName = requirement.MaterialDisplayName;
+                        glassPrice = price;
+                        glassUnits = checked(glassUnits + requirement.RequiredUnits);
+                        break;
                     default:
                         return $"Lumber Yard does not stock construction material kind '{requirement.MaterialKind}'.";
                 }
@@ -94,7 +107,8 @@ namespace LandLedgers.Economy.Businesses.LumberYard
 
             LumberYardSaleRecord yardSale = yard.TrySellToConstructionProject(
                 projectId, lumberUnits, Math.Max(0, lumberPrice),
-                hardwareUnits, Math.Max(0, hardwarePrice), dayIndex, diagnostics);
+                hardwareUnits, Math.Max(0, hardwarePrice),
+                glassUnits, Math.Max(0, glassPrice), dayIndex, diagnostics);
             if (yardSale == null)
                 return "Lumber Yard refused the sale; finite inventory was left unchanged.";
 
@@ -112,10 +126,17 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 if (line == null || line.UnitsSold <= 0) continue;
                 ConstructionMaterialKind materialKind = line.ResourceKind == ConstructionResourceKind.Lumber
                     ? ConstructionMaterialKind.Lumber
-                    : ConstructionMaterialKind.Hardware;
+                    : line.ResourceKind == ConstructionResourceKind.Glass
+                        ? ConstructionMaterialKind.Glass
+                        : ConstructionMaterialKind.Hardware;
+                string displayName = materialKind == ConstructionMaterialKind.Lumber
+                    ? lumberDisplayName
+                    : materialKind == ConstructionMaterialKind.Glass
+                        ? glassDisplayName
+                        : hardwareDisplayName;
                 sale.Lines.Add(new ConstructionMaterialSaleLine
                 {
-                    DisplayName = materialKind == ConstructionMaterialKind.Lumber ? lumberDisplayName : hardwareDisplayName,
+                    DisplayName = displayName,
                     Units = line.UnitsSold,
                     UnitLabel = "units",
                     UnitPriceCents = line.UnitPriceCents,

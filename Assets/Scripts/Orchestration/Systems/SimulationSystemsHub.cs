@@ -260,6 +260,12 @@ namespace LandLedgers.Orchestration.Systems
         // wired by FirstLedgerSliceBootstrapper.ConfigureSawmillYardTransferWiring.
         private SawmillToYardTransferDriver sawmillToYardTransferDriver;
 
+        // F1 (workstream F, glass leg): one shared lumber yard
+        // window-glass import driver. Single instance, not a list — one
+        // shared authority, wired by
+        // FirstLedgerSliceBootstrapper.ConfigureLumberYardGlassImportWiring.
+        private LumberYardGlassImportDriver lumberYardGlassImportDriver;
+
         /// <summary>Slice S2: the equipment register for one business, created on first use (empty).</summary>
         public BusinessEquipmentRegister EquipmentRegisterFor(string businessInstanceId)
         {
@@ -691,6 +697,20 @@ namespace LandLedgers.Orchestration.Systems
 
         /// <summary>F7 yard-transfer wiring: the live sawmill-to-yard transfer driver, or null when unwired.</summary>
         public SawmillToYardTransferDriver SawmillToYardTransferDriver => sawmillToYardTransferDriver;
+
+        /// <summary>
+        /// F1 (workstream F, glass leg): adopts the lumber yard
+        /// window-glass import driver as the hub's live holder. Single
+        /// instance; re-registering the same driver is idempotent.
+        /// </summary>
+        public void RegisterLumberYardGlassImportDriver(LumberYardGlassImportDriver driver)
+        {
+            if (driver == null) return;
+            lumberYardGlassImportDriver = driver;
+        }
+
+        /// <summary>F1: the live lumber yard window-glass import driver, or null when unwired.</summary>
+        public LumberYardGlassImportDriver LumberYardGlassImportDriver => lumberYardGlassImportDriver;
 
         // Pass IV Worker 2: the unified reservation authority (persisted),
         // the hub-owned draft-power service (reserves through the authority),
@@ -1831,6 +1851,10 @@ namespace LandLedgers.Orchestration.Systems
                 // transfer driver. Null at capture means unwired — the
                 // section stays an empty DTO, never null.
                 sawmillToYardTransferDriver = sawmillToYardTransferDriver != null ? sawmillToYardTransferDriver.ToSaveDto() : new SawmillToYardTransferDriver.SawmillToYardTransferDriverSaveDto(),
+                // F1 (workstream F, glass leg): one section for the shared
+                // glass import driver. Null at capture means unwired — the
+                // section stays an empty DTO, never null.
+                lumberYardGlassImportDriver = lumberYardGlassImportDriver != null ? lumberYardGlassImportDriver.ToSaveDto() : new LumberYardGlassImportDriver.LumberYardGlassImportDriverSaveDto(),
                 // Pass IV (Worker 1): deterministic due-event schedule.
                 dueEvents = DueEvents.CaptureSaveDto(),
                 // Pass IV Worker 2: unified reservations, draft holds, capacity registrations.
@@ -2047,6 +2071,30 @@ namespace LandLedgers.Orchestration.Systems
             else diagnostics.Add("SimulationSystemsHub: log-lot custody ledger section skipped — no ledger constructed yet; the bootstrapper owns construction.");
             if (sawmillToYardTransferDriver != null) sawmillToYardTransferDriver.LoadFromSaveDto(dto.sawmillToYardTransferDriver);
             else diagnostics.Add("SimulationSystemsHub: sawmill-to-yard transfer driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
+            return diagnostics;
+        }
+
+        /// <summary>
+        /// F1 (workstream F, glass leg): deferred glass-driver restore.
+        /// Called ONLY from FirstLedgerSliceBootstrapper
+        /// .ApplySawmillRestoreAfterPass9 after the Pass 9 yard restore
+        /// — never from LoadFromSaveDto — because the bootstrapper
+        /// constructs the driver in the restore window, and loading here
+        /// would run before it exists. The import driver's order book
+        /// has no yard-stock dependency, but it restores on the same
+        /// deferred path so all yard drivers share one restore point
+        /// and one construction owner (the bootstrapper).
+        /// </summary>
+        public List<string> LoadGlassDriverSectionFromSaveDto(SystemsSaveDto dto)
+        {
+            var diagnostics = new List<string>();
+            if (dto == null)
+            {
+                return diagnostics;
+            }
+
+            if (lumberYardGlassImportDriver != null) lumberYardGlassImportDriver.LoadFromSaveDto(dto.lumberYardGlassImportDriver);
+            else diagnostics.Add("SimulationSystemsHub: lumber yard glass import driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
             return diagnostics;
         }
 

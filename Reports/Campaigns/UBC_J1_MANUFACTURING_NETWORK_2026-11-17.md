@@ -96,9 +96,12 @@ No new industry was created merely because a definition file exists.
 
 ### What is missing
 
-- **Zero production callers** for all of it: `ScanFleetForRepair`,
-  `TrySendToRepair`, `TryCompleteRepairJob`, `FlagHaulingBlockedOrders`,
-  `EscalateOverdueOrders`, `ComputeTripWear01` — tests only.
+- **No production entry point** for any of it: `ScanFleetForRepair`,
+  `TryCompleteRepairJob`, `FlagHaulingBlockedOrders`,
+  `EscalateOverdueOrders`, `ComputeTripWear01` have zero production
+  callers (tests only); `TrySendToRepair`'s sole production caller is
+  `ScanFleetForRepair` itself (WagonRepairEconomy.cs:300), which is
+  itself never driven — so the whole repair loop is undriven.
 - **Condition gates nothing.** `SelectAvailableWagon`
   (`FreightResourcePool.cs:391`) filters on status, capacity, reservation
   and holds — never on condition. A wagon at 0.05 still hauls. Wear is

@@ -1634,7 +1634,16 @@ namespace LandLedgers.Orchestration.Systems
                 return byDay != 0 ? byDay : string.CompareOrdinal(a.JobId, b.JobId);
             });
 
-            if (openJobs.Count == 0 && deliveredLotIds.Count == 0)
+            // M2: stranded lots — yard lots with no open job naming them
+            // (delivered on a no-sawyer day, refused at begin while an
+            // older job blocked FIFO, or left behind by a failed or
+            // abandoned job). The delivered pass only begins today's lots
+            // and the C7 pass only re-attempts open jobs, so without this
+            // query the early return below would fire in exactly the
+            // stranded state and the lots would sit unsawn forever.
+            List<string> strandedLotIds = driver.FindStrandedLotIds(deliveredLotIds);
+
+            if (openJobs.Count == 0 && deliveredLotIds.Count == 0 && strandedLotIds.Count == 0)
             {
                 LogSawmillProductionWarningOnce("nothing-to-saw",
                     "Sawmill production: no lots delivered today and no open jobs to re-attempt.");
@@ -1661,10 +1670,12 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             // 6-7. Saw each delivered lot, whole-lot first use. The sawyer
-            // is picked only when there is something to saw (C2).
+            // is picked only when there is something to saw (C2). The
+            // picked sawyer is reused by the M2 stranded sweep below.
+            EntityId sawyerId = EntityId.Invalid;
             if (deliveredLotIds.Count > 0)
             {
-                EntityId sawyerId = PickSawmillSawyer(millBusiness);
+                sawyerId = PickSawmillSawyer(millBusiness);
                 if (!sawyerId.IsValid || sawyerId.Kind != EntityKind.Person)
                 {
                     LogSawmillProductionWarningOnce("no-sawyer",
@@ -1692,6 +1703,33 @@ namespace LandLedgers.Orchestration.Systems
                             completedCount++;
                         }
                     }
+                }
+            }
+
+            // M2: stranded-remainder sweep — recover lots the delivered
+            // pass never began (no-sawyer day, FIFO-blocked delivery, or
+            // a remainder left by a failed or abandoned job). The sweep
+            // begins and runs each stranded lot once, oldest first;
+            // today's delivered lots are excluded because the delivered
+            // pass already attempted them. A sawyer is picked here when
+            // the delivered pass ran with none (or did not run at all).
+            int strandedBegunCount = 0;
+            if (strandedLotIds.Count > 0)
+            {
+                if (!sawyerId.IsValid || sawyerId.Kind != EntityKind.Person)
+                {
+                    sawyerId = PickSawmillSawyer(millBusiness);
+                }
+                if (!sawyerId.IsValid || sawyerId.Kind != EntityKind.Person)
+                {
+                    LogSawmillProductionWarningOnce("no-sawyer-stranded",
+                        "Sawmill production: stranded lot(s) in the mill yard but the mill has no owner person and no active employees — no sawyer, never a phantom worker.");
+                }
+                else
+                {
+                    strandedBegunCount = driver.BeginStrandedRemainders(sawyerId, absoluteDayIndex, deliveredLotIds, out int strandedCompleted);
+                    begunCount += strandedBegunCount;
+                    completedCount += strandedCompleted;
                 }
             }
 
@@ -1726,7 +1764,7 @@ namespace LandLedgers.Orchestration.Systems
                 if (SawmillLubrication.ShouldRestock(mill))
                     RestockMillLubrication(mill, millSupport, millBusiness, absoluteDayIndex, diag);
             }
-            Debug.Log($"[SawmillProduction] Day {absoluteDayIndex}: delivered {deliveredLotIds.Count} lot(s), re-attempted {reattemptedCount} open job(s), began {begunCount} new job(s), {completedCount} job(s) complete. {string.Join(" | ", diag)}", this);
+            Debug.Log($"[SawmillProduction] Day {absoluteDayIndex}: delivered {deliveredLotIds.Count} lot(s), re-attempted {reattemptedCount} open job(s), began {begunCount} new job(s) ({strandedBegunCount} stranded), {completedCount} job(s) complete. {string.Join(" | ", diag)}", this);
         }
 
         /// <summary>

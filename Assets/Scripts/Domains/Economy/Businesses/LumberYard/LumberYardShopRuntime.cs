@@ -141,16 +141,19 @@ namespace LandLedgers.Economy.Businesses.LumberYard
 
         // ---- Hardware intake ----
 
-        /// <summary>W4B: nails/simple hardware forged by a named blacksmith — the primary honest supply path.</summary>
+        /// <summary>W4B: nails/simple hardware forged by a named blacksmith — the primary honest supply path.
+        /// The optional supplier note carries the delivery's piece breakdown (D3: the delivery driver
+        /// records which pieces make up the lot).</summary>
         public string ReceiveHardwareFromBlacksmith(
             LumberYardHardwareKind kind, int units, string blacksmithBusinessId, int forgedDayIndex,
-            string ironImportOrderId, int acquiredDayIndex, int unitCostCents, List<string> diag)
+            string ironImportOrderId, int acquiredDayIndex, int unitCostCents, List<string> diag,
+            string supplierNote = "")
         {
             diag = diag ?? diagnostics;
             EntityId yardLotId = AllocateYardLotId(diag);
             if (yardLotId == EntityId.Invalid) return "LumberYardShopRuntime: no lot id available.";
             return hardwareStock.ReceiveFromBlacksmith(yardLotId, kind, units, blacksmithBusinessId, forgedDayIndex,
-                ironImportOrderId, acquiredDayIndex, unitCostCents, diag);
+                ironImportOrderId, acquiredDayIndex, unitCostCents, diag, supplierNote);
         }
 
         /// <summary>W4B: hardware arriving on a named import order (LumberYardSupply.HardwareImportMaterialId).</summary>

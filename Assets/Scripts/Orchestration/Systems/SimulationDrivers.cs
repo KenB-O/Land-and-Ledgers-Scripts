@@ -2490,6 +2490,83 @@ namespace LandLedgers.Orchestration.Systems
             Debug.Log($"[HardwareImport] Day {absoluteDayIndex}: {summary}", this);
         }
 
+        private void DriveBlacksmithCoalImports(int absoluteDayIndex)
+        {
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogHardwareImportWarningOnce("no-business-runtime",
+                    "Smith coal import skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogHardwareImportWarningOnce("no-pass9",
+                    "Smith coal import skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            BusinessInstanceState smithBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Blacksmith)
+                {
+                    if (smithBusiness == null) smithBusiness = business;
+                    else LogHardwareImportWarningOnce("second-smith",
+                        $"Second Blacksmith business '{business.InstanceId}' is unwired: the coal import orders for the first smith only.");
+                }
+            }
+
+            // No Pass 9 smith holder exists yet, so the smith resolves
+            // through the hub when a formed Blacksmith business exists.
+            // No formed smith means no delivery at all — the drive
+            // never invents one.
+            BlacksmithRuntime smithy = null;
+            if (smithBusiness == null || string.IsNullOrWhiteSpace(smithBusiness.InstanceId))
+            {
+                LogHardwareImportWarningOnce("no-smith",
+                    "Smith coal import skipped: no formed Blacksmith business is present in the shared runtime.");
+                return;
+            }
+            smithy = hub.BlacksmithRuntimeFor(smithBusiness.InstanceId);
+            if (smithy == null)
+            {
+                LogHardwareImportWarningOnce("hub-no-smith",
+                    "Smith coal import skipped: hub returned no blacksmith runtime.");
+                return;
+            }
+
+            BlacksmithCoalImportDriver driver = hub.BlacksmithCoalImportDriver;
+            if (driver == null)
+            {
+                LogHardwareImportWarningOnce("no-driver",
+                    "Smith coal import skipped: no smith coal import driver is registered in the hub.");
+                return;
+            }
+
+            if (smithBusiness?.RuntimeState != null)
+            {
+                driver.SmithCash = new Series2BusinessRuntimeCashPort(smithBusiness.RuntimeState);
+            }
+            else
+            {
+                driver.SmithCash = null;
+                LogHardwareImportWarningOnce("no-smith-cash",
+                    "Smith coal import: no formed Blacksmith business runtime state — cash orders are unavailable and the driver orders on honest credit only.");
+            }
+            driver.LiabilityLedger = hub.Liabilities;
+            driver.IdRegistry = hub.Ids;
+
+            string summary = driver.Drive(absoluteDayIndex);
+            Debug.Log($"[HardwareImport] Day {absoluteDayIndex}: {summary}", this);
+        }
+
         /// <summary>
         /// F7 yard-transfer wiring: runs one open transfer job once and
         /// handles its refusal. An intake refusal leaves the job Planned
@@ -3559,6 +3636,17 @@ namespace LandLedgers.Orchestration.Systems
         {
             if (driver == null || hub == null) return;
             hub.RegisterBlacksmithIronImportDriver(driver);
+        }
+
+        /// <summary>
+        /// D5 (D4 follow-up): registers the smith's forge-coal import
+        /// driver with the hub. Forwarder only — no BindBusiness-style
+        /// side effects (note 100 Q6 boundary).
+        /// </summary>
+        public void RegisterBlacksmithCoalImportDriver(BlacksmithCoalImportDriver driver)
+        {
+            if (driver == null || hub == null) return;
+            hub.RegisterBlacksmithCoalImportDriver(driver);
         }
 
         // CAMPAIGN-B (DEF-042): resolve the general-store business a shopping
@@ -5329,6 +5417,10 @@ namespace LandLedgers.Orchestration.Systems
             // D4 (F-D2-3): the smith's iron import — receive due
             // imports, then order when the covered-stock signal fires.
             DriveBlacksmithIronImports(absoluteDayIndex);
+            // D5 (D4 follow-up): the smith's forge-coal import —
+            // receive due imports, then order when the covered-stock
+            // signal fires.
+            DriveBlacksmithCoalImports(absoluteDayIndex);
             // C-6: a retail sale's lumber travels by the real freight
             // chain the day after the buyer-side flow queues it — the
             // day's sawn lumber is already in the yard (above).

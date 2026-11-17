@@ -276,9 +276,12 @@ namespace LandLedgers.Orchestration.Systems
         // FirstLedgerSliceBootstrapper.ConfigureBlacksmithYardHardwareWiring,
         // ConfigureLumberYardHardwareImportWiring, and
         // ConfigureBlacksmithIronImportWiring.
+        // D5 (D4 follow-up): one shared forge-coal import driver, wired
+        // by FirstLedgerSliceBootstrapper.ConfigureBlacksmithCoalImportWiring.
         private BlacksmithToYardHardwareTransferDriver blacksmithToYardHardwareTransferDriver;
         private LumberYardHardwareImportDriver lumberYardHardwareImportDriver;
         private BlacksmithIronImportDriver blacksmithIronImportDriver;
+        private BlacksmithCoalImportDriver blacksmithCoalImportDriver;
 
         /// <summary>Slice S2: the equipment register for one business, created on first use (empty).</summary>
         public BusinessEquipmentRegister EquipmentRegisterFor(string businessInstanceId)
@@ -786,6 +789,20 @@ namespace LandLedgers.Orchestration.Systems
 
         /// <summary>D4 (F-D2-3): the live smith's iron import driver, or null when unwired.</summary>
         public BlacksmithIronImportDriver BlacksmithIronImportDriver => blacksmithIronImportDriver;
+
+        /// <summary>
+        /// D5 (D4 follow-up): adopts the smith's forge-coal import
+        /// driver as the hub's live holder. Single instance;
+        /// re-registering the same driver is idempotent.
+        /// </summary>
+        public void RegisterBlacksmithCoalImportDriver(BlacksmithCoalImportDriver driver)
+        {
+            if (driver == null) return;
+            blacksmithCoalImportDriver = driver;
+        }
+
+        /// <summary>D5 (D4 follow-up): the live smith's forge-coal import driver, or null when unwired.</summary>
+        public BlacksmithCoalImportDriver BlacksmithCoalImportDriver => blacksmithCoalImportDriver;
 
         // Pass IV Worker 2: the unified reservation authority (persisted),
         // the hub-owned draft-power service (reserves through the authority),
@@ -1942,6 +1959,9 @@ namespace LandLedgers.Orchestration.Systems
                 // D4 (F-D2-3): one section for the smith's iron import
                 // driver. Same null rule as the D3 sections.
                 blacksmithIronImportDriver = blacksmithIronImportDriver != null ? blacksmithIronImportDriver.ToSaveDto() : new BlacksmithIronImportDriver.BlacksmithIronImportDriverSaveDto(),
+                // D5 (D4 follow-up): one section for the smith's
+                // forge-coal import driver. Same null rule.
+                blacksmithCoalImportDriver = blacksmithCoalImportDriver != null ? blacksmithCoalImportDriver.ToSaveDto() : new BlacksmithCoalImportDriver.BlacksmithCoalImportDriverSaveDto(),
                 // Pass IV (Worker 1): deterministic due-event schedule.
                 dueEvents = DueEvents.CaptureSaveDto(),
                 // Pass IV Worker 2: unified reservations, draft holds, capacity registrations.
@@ -2171,7 +2191,7 @@ namespace LandLedgers.Orchestration.Systems
         /// loads re-attach against yard lots that do not exist until
         /// the Pass 9 restore runs. The import drivers' order books have
         /// no yard-stock dependency, but they restore on the same
-        /// deferred path so all three hardware drivers share one restore
+        /// deferred path so all four hardware drivers share one restore
         /// point and one construction owner (the bootstrapper).
         /// </summary>
         public List<string> LoadHardwareDriverSectionsFromSaveDto(SystemsSaveDto dto)
@@ -2188,6 +2208,8 @@ namespace LandLedgers.Orchestration.Systems
             else diagnostics.Add("SimulationSystemsHub: lumber yard nails import driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
             if (blacksmithIronImportDriver != null) blacksmithIronImportDriver.LoadFromSaveDto(dto.blacksmithIronImportDriver);
             else diagnostics.Add("SimulationSystemsHub: smith iron import driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
+            if (blacksmithCoalImportDriver != null) blacksmithCoalImportDriver.LoadFromSaveDto(dto.blacksmithCoalImportDriver);
+            else diagnostics.Add("SimulationSystemsHub: smith forge-coal import driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
             return diagnostics;
         }
 

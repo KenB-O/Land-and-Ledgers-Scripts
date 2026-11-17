@@ -56,7 +56,7 @@ namespace LandLedgers.Economy.Equipment
             report = string.Empty;
             error = string.Empty;
             diag = diag ?? new List<string>();
-            if (configuration == null || !configuration.TryGetBusiness(businessKey, out _)
+            if (configuration == null || !configuration.TryGetBusiness(businessKey, out DevelopmentTownConfiguration.BusinessDefinition slot)
                 || business == null || business.RuntimeState == null
                 || string.IsNullOrWhiteSpace(business.InstanceId)
                 || register == null || workstations == null)
@@ -71,13 +71,10 @@ namespace LandLedgers.Economy.Equipment
                 return false;
             }
 
-            DevelopmentTownConfiguration.BusinessOpeningEquipment equipment = null;
-            foreach (DevelopmentTownConfiguration.BusinessOpeningEquipment candidate in configuration.OpeningEquipment)
-                if (candidate != null && string.Equals(candidate.businessKey, businessKey, StringComparison.OrdinalIgnoreCase))
-                {
-                    equipment = candidate;
-                    break;
-                }
+            // K1: direct owner-record iteration. The deleted OpeningEquipment
+            // view returned this business's opening.equipment record; the
+            // null check below keeps the same no-equipment report.
+            DevelopmentTownConfiguration.BusinessOpeningEquipment equipment = slot.opening?.equipment;
             if (equipment == null)
             {
                 report = $"No opening equipment is configured for business '{businessKey}'; no carpentry asset, kit, workstation, or lumber was installed.";

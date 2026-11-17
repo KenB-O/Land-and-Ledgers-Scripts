@@ -313,32 +313,18 @@ namespace LandLedgers.Population
         public bool EnableMortality => Settings.enableMortality;
         public bool EnableFertility => Settings.enableFertility;
 
-        [Obsolete("Use each BusinessDefinition.opening record. This computed view is only for staged consumer migration.")]
-        public IReadOnlyList<BusinessOpeningInventory> OpeningInventory => Businesses
-            .Where(b => b?.opening?.inventory != null && b.opening.inventory.Length > 0)
-            .Select(b => new BusinessOpeningInventory { businessKey = b.key, items = b.opening.inventory }).ToArray();
-
-        [Obsolete("Use BusinessDefinition.openingCashCents.")]
-        public IReadOnlyList<BusinessCashTarget> BusinessCashTargets => Businesses
-            .Select(b => new BusinessCashTarget { businessKey = b.key, targetCashCents = b.openingCashCents }).ToArray();
-        [Obsolete("Use HouseholdDefinition.openingCashCents.")]
-        public IReadOnlyList<HouseholdCashTarget> HouseholdCashTargets => Households.Count > 0
-            ? Households.Where(h => h?.memberPersonKeys != null && h.memberPersonKeys.Length > 0)
-                .Select(h => new HouseholdCashTarget { anchorPersonKey = h.memberPersonKeys[0], targetCashCents = h.openingCashCents }).ToArray()
-            : Settings.generatedHouseholdOpeningCash ?? Array.Empty<HouseholdCashTarget>();
+        // K1 (2026-11-17): the five derived compatibility views
+        // (OpeningInventory, BusinessCashTargets, HouseholdCashTargets,
+        // OpeningEquipment, OpeningEmployees) are deleted. All consumers
+        // now iterate the owning BusinessDefinition and HouseholdDefinition
+        // records directly; schema-2 opening allocations are the single
+        // authority. The nested DTO types stay.
 
         public BusinessDefinition FindBusinessByOperation(string operationId) => Businesses.FirstOrDefault(b =>
             b != null && string.Equals(b.operationId, operationId, StringComparison.OrdinalIgnoreCase));
 
         public BusinessDefinition FindBusiness(string businessKey) => TryGetBusiness(businessKey, out BusinessDefinition business) ? business : null;
 
-        [Obsolete("Read opening data from the owning BusinessDefinition.")]
-        public IReadOnlyList<BusinessOpeningEquipment> OpeningEquipment => Businesses
-            .Where(b => b?.opening?.equipment != null)
-            .Select(b => { b.opening.equipment.businessKey = b.key; return b.opening.equipment; }).ToArray();
-        [Obsolete("Read employees from each owning BusinessDefinition.")]
-        public IReadOnlyList<BusinessEmployeeDefinition> OpeningEmployees => Businesses.SelectMany(b =>
-            (b?.opening?.employees ?? Array.Empty<BusinessEmployeeDefinition>()).Select(e => { e.businessKey = b.key; return e; })).ToArray();
         [Obsolete("Read spare blades from each owning BusinessDefinition.")]
         public IReadOnlyList<BusinessSpareBladeDefinition> OpeningSpareBlades => Businesses.SelectMany(b =>
             (b?.opening?.spareBlades ?? Array.Empty<BusinessSpareBladeDefinition>()).Select(x => { x.businessKey = b.key; return x; })).ToArray();
@@ -396,21 +382,21 @@ namespace LandLedgers.Population
         {
             quantity = 0;
             if (string.IsNullOrWhiteSpace(itemId) || string.IsNullOrWhiteSpace(businessKey)) return false;
-            foreach (BusinessOpeningInventory entry in OpeningInventory)
+            // K1: direct owner-record iteration. The deleted OpeningInventory
+            // view projected the same inventory arrays; the hash below is
+            // untouched, so seeded quantities are identical.
+            if (!TryGetBusiness(businessKey, out BusinessDefinition business)) return false;
+            foreach (OpeningInventoryItem item in business.opening?.inventory ?? Array.Empty<OpeningInventoryItem>())
             {
-                if (entry == null || !string.Equals(entry.businessKey, businessKey, StringComparison.OrdinalIgnoreCase)) continue;
-                foreach (OpeningInventoryItem item in entry.items ?? Array.Empty<OpeningInventoryItem>())
-                {
-                    if (item == null || !string.Equals(item.itemId, itemId, StringComparison.OrdinalIgnoreCase)) continue;
-                    int min = Mathf.Max(0, item.minimumUnits);
-                    int max = Mathf.Max(min, item.maximumUnits);
-                    uint hash = 2166136261u ^ unchecked((uint)scenarioSeed);
-                    string key = ConfigurationId + ":" + businessKey.Trim().ToLowerInvariant() + ":" + itemId.Trim().ToLowerInvariant();
-                    for (int i = 0; i < key.Length; i++) { hash ^= key[i]; hash *= 16777619u; }
-                    hash ^= hash >> 16; hash *= 0x7feb352du; hash ^= hash >> 15;
-                    quantity = min + (int)(hash % (uint)(max - min + 1));
-                    return true;
-                }
+                if (item == null || !string.Equals(item.itemId, itemId, StringComparison.OrdinalIgnoreCase)) continue;
+                int min = Mathf.Max(0, item.minimumUnits);
+                int max = Mathf.Max(min, item.maximumUnits);
+                uint hash = 2166136261u ^ unchecked((uint)scenarioSeed);
+                string key = ConfigurationId + ":" + businessKey.Trim().ToLowerInvariant() + ":" + itemId.Trim().ToLowerInvariant();
+                for (int i = 0; i < key.Length; i++) { hash ^= key[i]; hash *= 16777619u; }
+                hash ^= hash >> 16; hash *= 0x7feb352du; hash ^= hash >> 15;
+                quantity = min + (int)(hash % (uint)(max - min + 1));
+                return true;
             }
             return false;
         }
@@ -440,12 +426,17 @@ namespace LandLedgers.Population
                     { error = $"Development business '{business.key}' has a freight rate card with a negative fee."; return false; }
                 }
                 var generatedCashBusinessKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (BusinessCashTarget target in BusinessCashTargets)
-                    if (target == null || !TryGetBusiness(target.businessKey, out _)
-                        || target.targetCashCents < 0 || !generatedCashBusinessKeys.Add(target.businessKey))
+                // K1: direct owner-record iteration. BusinessCashTargets
+                // projected one entry per business from openingCashCents;
+                // the checks below are the same checks on the owning record.
+                foreach (BusinessDefinition business in Businesses)
+                    if (business == null || business.openingCashCents < 0 || !generatedCashBusinessKeys.Add(business.key))
                     { error = "Generated business cash targets must reference unique configured businesses and non-negative balances."; return false; }
                 var generatedCashHouseholdKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (HouseholdCashTarget target in HouseholdCashTargets)
+                // K1: the generated branch of the deleted HouseholdCashTargets
+                // view returned the stored generated array unchanged; iterate
+                // that owner record directly.
+                foreach (HouseholdCashTarget target in Settings.generatedHouseholdOpeningCash ?? Array.Empty<HouseholdCashTarget>())
                 {
                     int anchorId = target != null ? ResolveRuntimePersonId(target.anchorPersonKey) : -1;
                     if (target == null || anchorId < 0 || anchorId >= GeneratedPopulationSettings.maximumStartingResidents
@@ -524,38 +515,58 @@ namespace LandLedgers.Population
             if (!TryGetBusiness(FreightBusinessKey, out _) || string.IsNullOrWhiteSpace(OpeningHorseId) || string.IsNullOrWhiteSpace(OpeningWagonId))
             { error = "Development transport startup must identify its configured freight business, horse, and wagon."; return false; }
             var cashBusinessKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (BusinessCashTarget target in BusinessCashTargets)
-                if (target == null || !TryGetBusiness(target.businessKey, out _) || target.targetCashCents < 0 || !cashBusinessKeys.Add(target.businessKey))
+            // K1: direct owner-record iteration. The deleted
+            // BusinessCashTargets view projected one entry per business from
+            // openingCashCents; the checks below are the same checks on the
+            // owning record.
+            foreach (BusinessDefinition business in Businesses)
+                if (business == null || business.openingCashCents < 0 || !cashBusinessKeys.Add(business.key))
                 { error = "Business cash targets must reference unique configured businesses and non-negative balances."; return false; }
             var cashHouseholdKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (HouseholdCashTarget target in HouseholdCashTargets)
-                if (target == null || !TryGetPerson(target.anchorPersonKey, out _) || target.targetCashCents < 0 || !cashHouseholdKeys.Add(target.anchorPersonKey))
-                { error = "Household cash targets must reference unique configured residents and non-negative balances."; return false; }
-            var inventoryBusinessKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (BusinessOpeningInventory entry in OpeningInventory)
+            // K1: direct owner-record iteration. The deleted
+            // HouseholdCashTargets view anchored each household on its first
+            // member with target openingCashCents; households with no
+            // members were already refused above, so the skip below is
+            // unreachable and only mirrors the old view filter.
+            foreach (HouseholdDefinition household in Households)
             {
-                if (entry == null || !TryGetBusiness(entry.businessKey, out _) || !inventoryBusinessKeys.Add(entry.businessKey))
+                if (household == null || household.memberPersonKeys == null || household.memberPersonKeys.Length == 0) continue;
+                string anchorPersonKey = household.memberPersonKeys[0];
+                if (!TryGetPerson(anchorPersonKey, out _) || household.openingCashCents < 0 || !cashHouseholdKeys.Add(anchorPersonKey))
+                { error = "Household cash targets must reference unique configured residents and non-negative balances."; return false; }
+            }
+            var inventoryBusinessKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // K1: direct owner-record iteration over each business's opening
+            // inventory. The deleted OpeningInventory view projected the
+            // same arrays for businesses with non-empty inventory.
+            foreach (BusinessDefinition business in Businesses)
+            {
+                if (business == null || business.opening?.inventory == null || business.opening.inventory.Length == 0) continue;
+                if (!inventoryBusinessKeys.Add(business.key))
                 { error = "Opening inventory entries must reference unique configured businesses."; return false; }
                 var items = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (OpeningInventoryItem item in entry.items ?? Array.Empty<OpeningInventoryItem>())
+                foreach (OpeningInventoryItem item in business.opening.inventory)
                     if (item == null || string.IsNullOrWhiteSpace(item.itemId) || item.minimumUnits < 0 || item.maximumUnits < item.minimumUnits || !items.Add(item.itemId))
-                    { error = $"Opening inventory for '{entry.businessKey}' contains an invalid or duplicate item range."; return false; }
+                    { error = $"Opening inventory for '{business.key}' contains an invalid or duplicate item range."; return false; }
             }
             // Slice S2: opening equipment is optional and zero by default.
             // When present, every entry must name a configured business, every
             // kit id must resolve in the ToolKitCatalog, and every oven entry
             // must list exactly the BakeOven definition's component count.
-            foreach (BusinessOpeningEquipment entry in OpeningEquipment)
+            // K1: direct owner-record iteration. The deleted OpeningEquipment
+            // view returned each business's opening.equipment record; the
+            // business key in messages is the owning business key.
+            foreach (BusinessDefinition business in Businesses)
             {
-                if (entry == null || !TryGetBusiness(entry.businessKey, out _))
-                { error = "Opening equipment entries must reference configured businesses."; return false; }
+                if (business == null || business.opening?.equipment == null) continue;
+                BusinessOpeningEquipment entry = business.opening.equipment;
                 foreach (string kitId in entry.kitIds ?? Array.Empty<string>())
                     if (string.IsNullOrWhiteSpace(kitId) || ToolKitCatalog.Get(kitId.Trim()) == null)
-                    { error = $"Opening equipment for '{entry.businessKey}' names an unknown tool kit '{kitId}'."; return false; }
+                    { error = $"Opening equipment for '{business.key}' names an unknown tool kit '{kitId}'."; return false; }
                 foreach (OvenEquipment oven in entry.ovens ?? Array.Empty<OvenEquipment>())
                     if (oven == null || oven.componentAssetIds == null
                         || oven.componentAssetIds.Length != WorkstationCatalog.BakeOven.Components.Count)
-                    { error = $"Opening equipment for '{entry.businessKey}' lists an oven whose component count must equal the BakeOven definition ({WorkstationCatalog.BakeOven.Components.Count})."; return false; }
+                    { error = $"Opening equipment for '{business.key}' lists an oven whose component count must equal the BakeOven definition ({WorkstationCatalog.BakeOven.Components.Count})."; return false; }
                 // A2 plan 27 (P10): asset entries need a non-blank id and
                 // kind, no duplicates, and never the slice fixture id.
                 var assetIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -563,9 +574,9 @@ namespace LandLedgers.Population
                 {
                     if (asset == null || string.IsNullOrWhiteSpace(asset.assetId) || string.IsNullOrWhiteSpace(asset.kind)
                         || !assetIds.Add(asset.assetId.Trim()))
-                    { error = $"Opening equipment for '{entry.businessKey}' contains an invalid or duplicate asset entry."; return false; }
+                    { error = $"Opening equipment for '{business.key}' contains an invalid or duplicate asset entry."; return false; }
                     if (string.Equals(asset.assetId.Trim(), "slice-felling-axe", StringComparison.Ordinal))
-                    { error = $"Opening equipment for '{entry.businessKey}' must not reuse the slice fixture id 'slice-felling-axe'."; return false; }
+                    { error = $"Opening equipment for '{business.key}' must not reuse the slice fixture id 'slice-felling-axe'."; return false; }
                 }
             }
             // C-1: opening employments are optional and zero by default.
@@ -576,14 +587,22 @@ namespace LandLedgers.Population
             // is never their own opening employee (the owner is rostered
             // separately wherever a crew is built).
             var openingEmployeePersons = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (BusinessEmployeeDefinition employee in OpeningEmployees)
+            // K1: direct owner-record iteration. The deleted OpeningEmployees
+            // view flattened each business's opening.employees; the owning
+            // business is the employer, so the TryGetBusiness check the old
+            // loop ran on the stamped businessKey is vacuous here.
+            foreach (BusinessDefinition business in Businesses)
             {
-                if (employee == null || !TryGetBusiness(employee.businessKey, out BusinessDefinition business)
-                    || !TryGetPerson(employee.personKey, out _)
-                    || string.IsNullOrWhiteSpace(employee.role) || employee.weeklyWageCents <= 0
-                    || string.Equals(employee.personKey, business.ownerPersonKey, StringComparison.OrdinalIgnoreCase)
-                    || !openingEmployeePersons.Add(employee.personKey))
-                { error = "Opening employees must reference a configured business and person, a non-blank role, a positive weekly wage, and a person who is not that business's owner and holds no other opening job."; return false; }
+                if (business == null) continue;
+                foreach (BusinessEmployeeDefinition employee in business.opening?.employees ?? Array.Empty<BusinessEmployeeDefinition>())
+                {
+                    if (employee == null
+                        || !TryGetPerson(employee.personKey, out _)
+                        || string.IsNullOrWhiteSpace(employee.role) || employee.weeklyWageCents <= 0
+                        || string.Equals(employee.personKey, business.ownerPersonKey, StringComparison.OrdinalIgnoreCase)
+                        || !openingEmployeePersons.Add(employee.personKey))
+                    { error = "Opening employees must reference a configured business and person, a non-blank role, a positive weekly wage, and a person who is not that business's owner and holds no other opening job."; return false; }
+                }
             }
             // C-5: opening spare blades are optional and zero by default.
             // When present, every entry must name a configured business and

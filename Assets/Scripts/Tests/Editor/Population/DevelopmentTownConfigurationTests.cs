@@ -113,8 +113,13 @@ namespace LandLedgers.EditorTests.Population
                 Assert.IsNotNull(generated);
                 Assert.IsTrue(generated.Validate(out string error), error);
                 Assert.IsTrue(generated.GeneratePopulationFromSettings);
-                Assert.Greater(generated.HouseholdCashTargets.Count, 0);
-                Assert.IsTrue(generated.HouseholdCashTargets.All(t => t.targetCashCents == 25000));
+                // K1: the deleted HouseholdCashTargets view returned the
+                // stored generated array when no households were authored;
+                // read that owner record directly.
+                DevelopmentTownConfiguration.HouseholdCashTarget[] generatedCash =
+                    generated.Settings.generatedHouseholdOpeningCash ?? new DevelopmentTownConfiguration.HouseholdCashTarget[0];
+                Assert.Greater(generatedCash.Length, 0);
+                Assert.IsTrue(generatedCash.All(t => t.targetCashCents == 25000));
                 Assert.IsFalse(string.IsNullOrWhiteSpace(generated.OpeningWagonId));
             }
         }

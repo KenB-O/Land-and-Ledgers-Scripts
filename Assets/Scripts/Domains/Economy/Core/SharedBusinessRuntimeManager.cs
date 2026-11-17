@@ -2775,7 +2775,28 @@ namespace LandLedgers.Economy
                 playerPortfolio?.RegisterCurrentBusinessCashCheckpoint(business, weekKey, true);
             }
 
-            message = $"{business.RuntimeDisplayName} is now player-owned.";
+            // UBC A1: a player-owned General Store must be managed by the store
+            // runtime from the moment of acquisition. Without this the acquired
+            // store receives no weekly payroll, no weekly reorder, no owner
+            // distribution and no daily-sales resolution (the shared weekly pass
+            // deliberately excludes GeneralStore), while the NPC restock driver
+            // keeps spending its cash. Bind here so both acquisition closes (and
+            // any future caller of this choke point) keep the store operational.
+            // A refusal is surfaced in the message, never silent: the runtime
+            // manages exactly one store, so a second store stays unbound until
+            // a multi-store runtime exists.
+            string storeBindingNote = string.Empty;
+            if (business.BusinessType == BusinessType.GeneralStore
+                || business.BusinessType == BusinessType.Generic)
+            {
+                GeneralStoreRuntimeManager storeRuntime = generalStoreRuntime ?? FindAnyObjectByType<GeneralStoreRuntimeManager>();
+                if (storeRuntime != null && !storeRuntime.TryBindFormedPlayerBusiness(business, out string bindMessage))
+                {
+                    storeBindingNote = $" Note: the store runtime could not take over this business ({bindMessage}); weekly payroll and reorder will not run until it is bound.";
+                }
+            }
+
+            message = $"{business.RuntimeDisplayName} is now player-owned.{storeBindingNote}";
             status = message;
             return true;
         }

@@ -266,6 +266,23 @@ namespace LandLedgers.Economy
                 return null;
             }
 
+            // D6 merge: a requirement naming one real kind by its own
+            // display name ("nails", "door-hinge", "iron-latch",
+            // "door-handle") IS that kind, in full — a nails-only
+            // requirement is legitimate stock, not a bucket mix to derive.
+            // The bucket name ("door hardware") is not a kind name, so it
+            // still falls through to the pair rule below and refuses on a
+            // non-multiple rather than guessing.
+            if (IsKnownKindDisplayName(requirement.MaterialDisplayName))
+            {
+                lines.Add(new ConstructionHardwareKindLine
+                {
+                    DisplayName = requirement.MaterialDisplayName.Trim(),
+                    Units = requirement.RequiredUnits,
+                });
+                return null;
+            }
+
             if (requirement.RequiredUnits % UnitsPerDoorWindowPair != 0)
                 return $"ConstructionHardwareKindBreakdown: hardware requirement '{requirement.RequirementId}' names {requirement.RequiredUnits} units with no per-kind breakdown, and {requirement.RequiredUnits} is not a whole number of door+window pairs ({UnitsPerDoorWindowPair} units each) — the kind mix is unknown; refusing rather than guessing. A design with unequal doors and windows must carry explicit kind lines.";
             int pairs = requirement.RequiredUnits / UnitsPerDoorWindowPair;

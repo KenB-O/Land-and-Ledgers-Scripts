@@ -47,8 +47,13 @@ namespace LandLedgers.Editor.Economy
             DevelopmentTownConfiguration.BusinessOpeningEquipment[] openingEquipment)
         {
             var config = ScriptableObject.CreateInstance<DevelopmentTownConfiguration>();
-            SetPrivateField(config, "configurationId", "test-town");
-            SetPrivateField(config, "seedOffset", 0);
+            // Schema 2 (foundation pass): configurationId, seedOffset and
+            // freightBusinessKey live on the nested GeneralSettings; the
+            // horse, wagon and equipment live on the owning business's
+            // opening record. The flat top-level fields no longer exist.
+            config.Settings.configurationId = "test-town";
+            config.Settings.seedOffset = 0;
+            config.Settings.freightBusinessKey = BakeryKey;
             SetPrivateField(config, "people", new[]
             {
                 new DevelopmentTownConfiguration.PersonDefinition
@@ -63,18 +68,30 @@ namespace LandLedgers.Editor.Economy
                 },
             });
             SetPrivateField(config, "relationships", Array.Empty<DevelopmentTownConfiguration.RelationshipDefinition>());
+            // Schema 2: no matched entry means the business's opening
+            // carries a null equipment record, so the derived view omits
+            // it and the endowment reports "No opening equipment is
+            // configured". An empty (non-null) record would instead be a
+            // present-but-empty entry.
+            DevelopmentTownConfiguration.BusinessOpeningEquipment bakeryEquipment = null;
+            if (openingEquipment != null)
+                foreach (DevelopmentTownConfiguration.BusinessOpeningEquipment entry in openingEquipment)
+                    if (entry != null && string.Equals(entry.businessKey, BakeryKey, StringComparison.OrdinalIgnoreCase))
+                    { bakeryEquipment = entry; break; }
             SetPrivateField(config, "businesses", new[]
             {
                 new DevelopmentTownConfiguration.BusinessDefinition
                 {
                     key = BakeryKey, operationId = "bakery", ownerPersonKey = "person-0",
                     businessId = BakeryInstanceId, premisesRequired = false,
+                    opening = new DevelopmentTownConfiguration.BusinessOpeningConfiguration
+                    {
+                        openingHorseId = "A0",
+                        openingWagonId = "test-wagon",
+                        equipment = bakeryEquipment,
+                    },
                 },
             });
-            SetPrivateField(config, "freightBusinessKey", BakeryKey);
-            SetPrivateField(config, "openingHorseId", "A0");
-            SetPrivateField(config, "openingWagonId", "test-wagon");
-            SetPrivateField(config, "openingEquipment", openingEquipment ?? Array.Empty<DevelopmentTownConfiguration.BusinessOpeningEquipment>());
             return config;
         }
 

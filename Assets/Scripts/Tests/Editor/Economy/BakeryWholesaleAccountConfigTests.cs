@@ -37,8 +37,14 @@ namespace LandLedgers.Editor.Economy
             DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition[] wholesaleAccounts)
         {
             var config = ScriptableObject.CreateInstance<DevelopmentTownConfiguration>();
-            SetPrivateField(config, "configurationId", "test-town");
-            SetPrivateField(config, "seedOffset", 0);
+            // Schema 2 (foundation pass): configurationId, seedOffset and
+            // freightBusinessKey live on the nested GeneralSettings; the
+            // horse, wagon and wholesale agreements live on the owning
+            // business's opening record. The flat top-level fields no
+            // longer exist.
+            config.Settings.configurationId = "test-town";
+            config.Settings.seedOffset = 0;
+            config.Settings.freightBusinessKey = BakeryKey;
             SetPrivateField(config, "people", new[]
             {
                 new DevelopmentTownConfiguration.PersonDefinition
@@ -59,6 +65,12 @@ namespace LandLedgers.Editor.Economy
                 {
                     key = BakeryKey, operationId = "bakery", ownerPersonKey = "person-0",
                     businessId = BakeryInstanceId, premisesRequired = false,
+                    opening = new DevelopmentTownConfiguration.BusinessOpeningConfiguration
+                    {
+                        openingHorseId = "A0",
+                        openingWagonId = "test-wagon",
+                        wholesaleAgreements = wholesaleAccounts ?? Array.Empty<DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition>(),
+                    },
                 },
                 new DevelopmentTownConfiguration.BusinessDefinition
                 {
@@ -66,11 +78,6 @@ namespace LandLedgers.Editor.Economy
                     businessId = StoreInstanceId, premisesRequired = false,
                 },
             });
-            SetPrivateField(config, "freightBusinessKey", BakeryKey);
-            SetPrivateField(config, "openingHorseId", "A0");
-            SetPrivateField(config, "openingWagonId", "test-wagon");
-            SetPrivateField(config, "wholesaleAccounts",
-                wholesaleAccounts ?? Array.Empty<DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition>());
             return config;
         }
 

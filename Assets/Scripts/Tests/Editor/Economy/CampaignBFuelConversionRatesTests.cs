@@ -353,11 +353,15 @@ namespace LandLedgers.Editor.Economy
         public void Wiring_AssetsCarryTheDecidedBakeryFactor()
         {
             Assert.IsTrue(ReadRepoFile(DevConfigPath).Contains("fuelDealerIntakeUnitsPerBakeryUnit: 4"),
-                "the dev scenario asset must carry the decided factor 4: " + DevConfigPath);
-            Assert.IsTrue(ReadRepoFile(MediumConfigPath).Contains("fuelDealerIntakeUnitsPerBakeryUnit: 4"),
-                "the medium scenario asset must carry the decided factor 4: " + MediumConfigPath);
-            Assert.IsTrue(ReadRepoFile(LargeConfigPath).Contains("fuelDealerIntakeUnitsPerBakeryUnit: 4"),
-                "the large scenario asset must carry the decided factor 4: " + LargeConfigPath);
+                "the dev scenario asset must carry the decided factor 4 in its fuel-dealer opening: " + DevConfigPath);
+            // Schema 2 nests the factor in the fuel-dealer business's
+            // opening record, and the medium and large scenarios have no
+            // fuel-dealer business at all, so the factor has no home
+            // there and is correctly absent rather than defaulted.
+            Assert.IsFalse(ReadRepoFile(MediumConfigPath).Contains("operationId: fuel-dealer"),
+                "the medium scenario has no fuel-dealer business, so no per-business factor is authored: " + MediumConfigPath);
+            Assert.IsFalse(ReadRepoFile(LargeConfigPath).Contains("operationId: fuel-dealer"),
+                "the large scenario has no fuel-dealer business, so no per-business factor is authored: " + LargeConfigPath);
         }
 
         // --- Repo-root discovery (B-13 pattern) ----------------------------

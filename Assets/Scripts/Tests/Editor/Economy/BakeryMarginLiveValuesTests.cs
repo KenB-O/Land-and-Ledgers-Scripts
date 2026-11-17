@@ -140,16 +140,24 @@ namespace LandLedgers.Editor.Economy
             // opening inventory for the general store (flour minimum 4,
             // maximum 8) under the authored configuration id.
             var config = ScriptableObject.CreateInstance<DevelopmentTownConfiguration>();
-            SetPrivateField(config, "configurationId", "millbrook-development-town");
-            SetPrivateField(config, "openingInventory", new[]
+            // Schema 2 (foundation pass): the configuration id lives on
+            // the nested GeneralSettings and opening inventory lives on
+            // the owning business's opening record. The flat top-level
+            // fields no longer exist.
+            config.Settings.configurationId = "millbrook-development-town";
+            SetPrivateField(config, "businesses", new[]
             {
-                new DevelopmentTownConfiguration.BusinessOpeningInventory
+                new DevelopmentTownConfiguration.BusinessDefinition
                 {
-                    businessKey = "general-store",
-                    items = new[]
+                    key = "general-store",
+                    operationId = "general-store",
+                    opening = new DevelopmentTownConfiguration.BusinessOpeningConfiguration
                     {
-                        new DevelopmentTownConfiguration.OpeningInventoryItem
-                        { itemId = "flour", minimumUnits = 4, maximumUnits = 8 },
+                        inventory = new[]
+                        {
+                            new DevelopmentTownConfiguration.OpeningInventoryItem
+                            { itemId = "flour", minimumUnits = 4, maximumUnits = 8 },
+                        },
                     },
                 },
             });

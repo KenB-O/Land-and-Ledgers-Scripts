@@ -135,8 +135,13 @@ namespace LandLedgers.Editor.Economy
             DevelopmentTownConfiguration.BusinessOpeningEquipment[] openingEquipment)
         {
             var config = ScriptableObject.CreateInstance<DevelopmentTownConfiguration>();
-            SetPrivateField(config, "configurationId", "test-town");
-            SetPrivateField(config, "seedOffset", 0);
+            // Schema 2 (foundation pass): configurationId, seedOffset and
+            // freightBusinessKey live on the nested GeneralSettings; the
+            // horse, wagon and equipment live on the mill's opening
+            // record. The flat top-level fields no longer exist.
+            config.Settings.configurationId = "test-town";
+            config.Settings.seedOffset = 0;
+            config.Settings.freightBusinessKey = MillKey;
             SetPrivateField(config, "people", new[]
             {
                 new DevelopmentTownConfiguration.PersonDefinition
@@ -151,18 +156,26 @@ namespace LandLedgers.Editor.Economy
                 },
             });
             SetPrivateField(config, "relationships", Array.Empty<DevelopmentTownConfiguration.RelationshipDefinition>());
+            DevelopmentTownConfiguration.BusinessOpeningEquipment millEquipment =
+                new DevelopmentTownConfiguration.BusinessOpeningEquipment();
+            if (openingEquipment != null)
+                foreach (DevelopmentTownConfiguration.BusinessOpeningEquipment entry in openingEquipment)
+                    if (entry != null && string.Equals(entry.businessKey, MillKey, StringComparison.OrdinalIgnoreCase))
+                    { millEquipment = entry; break; }
             SetPrivateField(config, "businesses", new[]
             {
                 new DevelopmentTownConfiguration.BusinessDefinition
                 {
                     key = MillKey, operationId = "sawmill", ownerPersonKey = "person-0",
                     businessId = MillInstanceId, premisesRequired = false,
+                    opening = new DevelopmentTownConfiguration.BusinessOpeningConfiguration
+                    {
+                        openingHorseId = "A0",
+                        openingWagonId = "test-wagon",
+                        equipment = millEquipment,
+                    },
                 },
             });
-            SetPrivateField(config, "freightBusinessKey", MillKey);
-            SetPrivateField(config, "openingHorseId", "A0");
-            SetPrivateField(config, "openingWagonId", "test-wagon");
-            SetPrivateField(config, "openingEquipment", openingEquipment ?? Array.Empty<DevelopmentTownConfiguration.BusinessOpeningEquipment>());
             return config;
         }
 

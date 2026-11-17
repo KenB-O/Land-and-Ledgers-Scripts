@@ -232,5 +232,94 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(5, account.NextDeliveryDayIndex, "the configured first delivery day wins");
             Assert.IsTrue(!report.Contains("fallback"), "no fallback is mentioned when the config authors terms; report: " + report);
         }
+
+        [Test]
+        public void WholesaleAccounts_OtherSellerEntry_BlocksFallback()
+        {
+            // K2: the fallback books only when the config lists no
+            // wholesale accounts at all, for ANY seller. A config whose
+            // only entry belongs to another seller gives this seller no
+            // fallback and no booking: the entry is not this seller's, and
+            // the config has still spoken about wholesale accounts. This
+            // pins the preserved hasAnyEntry rule after the
+            // WholesaleAccounts view was replaced by direct iteration.
+            var diag = new List<string>();
+            DevelopmentTownConfiguration config = BuildConfigWithOtherSellerEntry();
+            Assert.IsTrue(config.Validate(out string configError), configError);
+            var bakery = new BakeryShopRuntime(BakeryInstanceId);
+            var state = new BusinessRuntimeState();
+
+            Assert.IsTrue(Apply(config, bakery, state, StoreBusiness(), 2, diag, out string report, out string error), error);
+
+            Assert.AreEqual(0, bakery.WholesaleAccounts.Count, "another seller's entry books nothing for this seller");
+            Assert.IsTrue(!report.Contains("fallback"), "no fallback when the config lists an account for any seller; report: " + report);
+            StringAssert.Contains("No wholesale accounts are configured for seller", report, "report: " + report);
+        }
+
+        private const string OtherBakeryKey = "bakery-2";
+        private const string OtherBakeryInstanceId = "test-bakery-2";
+
+        private static DevelopmentTownConfiguration BuildConfigWithOtherSellerEntry()
+        {
+            var config = ScriptableObject.CreateInstance<DevelopmentTownConfiguration>();
+            config.Settings.configurationId = "test-town";
+            config.Settings.seedOffset = 0;
+            config.Settings.freightBusinessKey = BakeryKey;
+            SetPrivateField(config, "people", new[]
+            {
+                new DevelopmentTownConfiguration.PersonDefinition
+                { key = "person-0", firstName = "Test", lastName = "Baker", age = 30, homeBuildingOrdinal = 0 },
+            });
+            SetPrivateField(config, "households", new[]
+            {
+                new DevelopmentTownConfiguration.HouseholdDefinition
+                {
+                    key = "household-0", surname = "Baker", displayName = "Baker Household",
+                    memberPersonKeys = new[] { "person-0" }, homeBuildingOrdinal = 0, openingCashCents = 0,
+                },
+            });
+            SetPrivateField(config, "relationships", Array.Empty<DevelopmentTownConfiguration.RelationshipDefinition>());
+            SetPrivateField(config, "businesses", new[]
+            {
+                new DevelopmentTownConfiguration.BusinessDefinition
+                {
+                    key = BakeryKey, operationId = "bakery", ownerPersonKey = "person-0",
+                    businessId = BakeryInstanceId, premisesRequired = false,
+                    opening = new DevelopmentTownConfiguration.BusinessOpeningConfiguration
+                    {
+                        openingHorseId = "A0",
+                        openingWagonId = "test-wagon",
+                    },
+                },
+                new DevelopmentTownConfiguration.BusinessDefinition
+                {
+                    key = OtherBakeryKey, operationId = "bakery", ownerPersonKey = "person-0",
+                    businessId = OtherBakeryInstanceId, premisesRequired = false,
+                    opening = new DevelopmentTownConfiguration.BusinessOpeningConfiguration
+                    {
+                        wholesaleAgreements = new[]
+                        {
+                            new DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition
+                            {
+                                sellerBusinessKey = OtherBakeryKey,
+                                buyerBusinessKey = StoreKey,
+                                productId = BakeryBreadCatalog.BreadLoafId,
+                                unitsPerDelivery = 24,
+                                deliveryCadenceDays = 1,
+                                pricePerUnitCents = 2,
+                                freshness = BakeryWholesaleFreshness.FreshOrDayOld,
+                                firstDeliveryDayIndex = 0,
+                            },
+                        },
+                    },
+                },
+                new DevelopmentTownConfiguration.BusinessDefinition
+                {
+                    key = StoreKey, operationId = "general-store", ownerPersonKey = "person-0",
+                    businessId = StoreInstanceId, premisesRequired = false,
+                },
+            });
+            return config;
+        }
     }
 }

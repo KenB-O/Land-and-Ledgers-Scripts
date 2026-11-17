@@ -102,6 +102,8 @@ namespace LandLedgers.Persistence
         /// <summary>D3 (F-D2-1, F-D2-2): the smith-to-yard hardware transfer driver and the lumber yard nails import driver — one shared instance each.</summary>
         public BlacksmithToYardHardwareTransferDriver.BlacksmithToYardHardwareTransferDriverSaveDto blacksmithToYardHardwareTransferDriver = new();
         public LumberYardHardwareImportDriver.LumberYardHardwareImportDriverSaveDto lumberYardHardwareImportDriver = new();
+        /// <summary>D4 (F-D2-3): the smith's iron import driver — one shared instance.</summary>
+        public BlacksmithIronImportDriver.BlacksmithIronImportDriverSaveDto blacksmithIronImportDriver = new();
         public NpcFormationAssetRegisterSaveDto npcFormationAssets = new();
         public List<NpcBusinessLifeRecordSaveDto> npcBusinessLifecycle = new();
         public NpcBusinessInvestigationSaveDto npcBusinessInvestigation = new();

@@ -51,6 +51,13 @@ namespace LandLedgers.EditorTests.Integration
         // candidate — FarrierService.FitShoes references it for the
         // horseshoe kind and farrier skill id, a deliberate production
         // caller, so its registry row was removed with it.
+        // S4 (2026-11-17): VetService and FarrierService added — the
+        // vet and farrier entry services in VetServices.cs, fully
+        // implemented with no production caller outside their owning
+        // directory (D1 added the file to the harness subset, which
+        // exposed them to the Pass 9 assembly scan). Registered
+        // unwired in Docs/UnwiredSystems.md; listed here so the
+        // registry test enforces the registration both ways.
         private static readonly string[] CandidateTypes =
         {
             "BakeryShopRuntime", "BarberShopRuntime", "DoctorPracticeRuntime",
@@ -62,6 +69,7 @@ namespace LandLedgers.EditorTests.Integration
             "StagedProductionProcess", "ProductionDueEventDriver",
             "BakeryStagedProductionChain", "ForgeRepairChain",
             "RealDemandSource",
+            "VetService", "FarrierService",
         };
 
         private static string ResolveRepoRoot()

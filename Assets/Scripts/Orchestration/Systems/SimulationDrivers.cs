@@ -12,6 +12,7 @@ using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Transport;
 using LandLedgers.Economy.Financing;
+using LandLedgers.Economy.GenericBusiness;
 using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Storage;
 using LandLedgers.Economy.Businesses.BoardingHouse;
@@ -4561,6 +4562,10 @@ namespace LandLedgers.Orchestration.Systems
             // workshop has lumber, nails and cloth before its start leg,
             // the C-7 camp-supply order (feed before the crew works).
             DriveCarpentryWorkshop(absoluteDayIndex);
+            // G-3 (W-G4 Workstream 3): the F4 purchase/install binding —
+            // workshop first (G-1 sells, the custody leg installs the sold
+            // pieces), then store purchases fill the remaining wants.
+            DriveHouseholdFurniturePurchases(absoluteDayIndex);
             // Generic production processes are persisted on their Business and
             // advance through the same TaskAuthority on the daily simulation
             // boundary. This is execution of an already-started physical process;
@@ -6287,7 +6292,31 @@ namespace LandLedgers.Orchestration.Systems
                     "[SimulationDrivers] carpentry furniture sales skipped: no population state to find buying households in.");
                 return;
             }
+            var candidates = BuildFurnitureSaleCandidates(absoluteDayIndex);
+            var workshopCash = new Series2BusinessRuntimeCashPort(workshop.RuntimeState);
+            if (!CarpentryFurnitureSale.TrySellFinishedPieces(workshop, register, workshopCash, candidates, absoluteDayIndex, diag, out string saleError))
+            {
+                LogRefusalDayKeyed("carpentry:sale", absoluteDayIndex,
+                    "[SimulationDrivers] carpentry furniture sale disputed: " + saleError);
+            }
+        }
+
+        /// <summary>
+        /// G-3: the shared furniture-sale candidate assembly (G-1's
+        /// extraction, unchanged behaviour): each household with a ledger
+        /// and members, its ranked B6 wants priced at the F2 retail
+        /// baseline, plus its home building id for the store-purchase
+        /// route. Shared by the workshop sale leg (G-1) and the store
+        /// purchase leg (G-3) so the two legs read the same wants. Empty
+        /// (never null) when there is no population state to read.
+        /// </summary>
+        private List<CarpentryFurnitureSaleCandidate> BuildFurnitureSaleCandidates(int absoluteDayIndex)
+        {
             var candidates = new List<CarpentryFurnitureSaleCandidate>();
+            if (populationManager == null || populationManager.State == null || populationManager.State.households == null)
+            {
+                return candidates;
+            }
             foreach (HouseholdState household in populationManager.State.households)
             {
                 if (household == null) continue;
@@ -6316,14 +6345,10 @@ namespace LandLedgers.Orchestration.Systems
                     Ledger = ledger,
                     Furnishings = furnishings,
                     Wants = HouseholdFurnishingEvaluator.EvaluateWants(inputs),
+                    HomeBuildingId = household.homeBuildingId,
                 });
             }
-            var workshopCash = new Series2BusinessRuntimeCashPort(workshop.RuntimeState);
-            if (!CarpentryFurnitureSale.TrySellFinishedPieces(workshop, register, workshopCash, candidates, absoluteDayIndex, diag, out string saleError))
-            {
-                LogRefusalDayKeyed("carpentry:sale", absoluteDayIndex,
-                    "[SimulationDrivers] carpentry furniture sale disputed: " + saleError);
-            }
+            return candidates;
         }
 
         /// <summary>
@@ -6336,6 +6361,285 @@ namespace LandLedgers.Orchestration.Systems
         /// cabinet want then fires on its stored lots, which is the
         /// evaluator's honest reading of the state at that moment.
         /// </summary>
+        /// <summary>
+        /// G-3 (W-G4 Workstream 3): the F4 purchase/install binding, driven
+        /// once per day after the carpentry workshop (workshop first, so a
+        /// G-1 sale made today is installed by the custody leg before any
+        /// store purchase is considered for the same want). For each
+        /// household with a ranked B6 want: install its workshop-made
+        /// custody pieces, then — for its best affordable New-channel want
+        /// with no custody piece of that kind, a free placement in its home
+        /// (pre-flighted, never buy what cannot be installed), store stock,
+        /// and a balance covering the live price plus the quoted freight —
+        /// buy one unit from the General Store through the F4 service and
+        /// install it. One purchase per household per day. A household that
+        /// cannot afford new stays on its Secondhand-channel want (the
+        /// store sells new only); a want with no qualifying household
+        /// simply stays a want for tomorrow. Every refusal is day-keyed,
+        /// never silent. The F4 service's install handler is bound here
+        /// (the register + the scene seams); the secondhand handler path
+        /// exists and is tested but has no production entry point yet (no
+        /// driven household-to-household sale — the B6 resale is a want,
+        /// not a sale), so the driver builds new-kind orders only.
+        /// </summary>
+        private void DriveHouseholdFurniturePurchases(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null)
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-hub", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: simulation hub or business runtime is missing.");
+                return;
+            }
+            if (populationManager == null || populationManager.State == null || populationManager.State.households == null)
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-population", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: no population state to find buying households in.");
+                return;
+            }
+            BusinessInstanceState storeBusiness = null;
+            BusinessInstanceState carrierBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            foreach (BusinessInstanceState business in businesses)
+            {
+                if (business == null) continue;
+                if (storeBusiness == null && business.BusinessType == BusinessType.GeneralStore) storeBusiness = business;
+            }
+            if (storeBusiness == null || storeBusiness.RuntimeState == null)
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-store", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: no General Store business with runtime state is present.");
+                return;
+            }
+            if (storeBusiness.AssignedBuildingId < 0)
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-store-building", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: the General Store has no assigned building — no delivery origin.");
+                return;
+            }
+            LandLedgers.FirstLedger.GeneralStoreRuntimeManager storeManager =
+                FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+            if (storeManager == null)
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-store-manager", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: no GeneralStoreRuntimeManager — no live selling price.");
+                return;
+            }
+            if (!FreightBusinessResolver.TryResolveFreightBusiness(businesses, out carrierBusiness))
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-carrier", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: no freight business to carry furniture.");
+                return;
+            }
+            DevelopmentTownConfiguration.BusinessDefinition carrierDefinition = null;
+            if (developmentTownConfiguration == null
+                || !developmentTownConfiguration.TryGetBusiness(developmentTownConfiguration.FreightBusinessKey, out carrierDefinition)
+                || carrierDefinition?.freightRateCard == null)
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-rate-card", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: the freight business has no configured rate card.");
+                return;
+            }
+            EquipmentAsset wagon = hub.TransportAssets != null ? hub.TransportAssets.Get("opening-freight-wagon") : null;
+            if (wagon == null)
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-wagon", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: wagon 'opening-freight-wagon' does not exist — no phantom transport.");
+                return;
+            }
+            if (!string.Equals(wagon.OwnerKind, "business", System.StringComparison.Ordinal)
+                || !string.Equals(wagon.OwnerId, carrierBusiness.InstanceId, System.StringComparison.Ordinal))
+            {
+                LogRefusalDayKeyed("furniture-purchase:wagon-owner", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: wagon 'opening-freight-wagon' is not owned by freight business '" + carrierBusiness.InstanceId + "'.");
+                return;
+            }
+            if (FreightProduction == null || FreightProduction.Service == null)
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-freight-service", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: no freight shipment service is bound.");
+                return;
+            }
+            FreightProduction.Service.RegisterWagon(wagon);
+            int driverPersonId = carrierBusiness.Owner != null ? carrierBusiness.Owner.PersonId : -1;
+            if (driverPersonId < 0)
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-driver", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: freight business '" + carrierBusiness.InstanceId + "' has no owner person — no driver.");
+                return;
+            }
+            int loaderPersonId = storeBusiness.Owner != null ? storeBusiness.Owner.PersonId : -1;
+            if (loaderPersonId < 0)
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-loader", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: General Store '" + storeBusiness.InstanceId + "' has no owner person — no loader.");
+                return;
+            }
+            if (loaderPersonId == driverPersonId)
+            {
+                LogRefusalDayKeyed("furniture-purchase:crew-collision", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: the loader and driver must be distinct people.");
+                return;
+            }
+            var draftAnimals = new List<EntityId>();
+            if (hub.Animals != null && hub.Animals.ActiveAnimals != null)
+            {
+                foreach (AnimalState candidate in hub.Animals.ActiveAnimals)
+                {
+                    if (candidate != null && candidate.IsActive && candidate.Species == AnimalSpecies.Horse
+                        && candidate.OwnerKind == AnimalOwnerKind.Business
+                        && string.Equals(candidate.OwnerId, carrierBusiness.InstanceId, System.StringComparison.Ordinal))
+                        draftAnimals.Add(candidate.AnimalId);
+                }
+            }
+            if (draftAnimals.Count == 0)
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-animals", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture purchases skipped: freight business '" + carrierBusiness.InstanceId + "' has no active horse — no draft animals.");
+                return;
+            }
+            var scenePlacements = new List<BuildingEquipmentPlacement>(
+                UnityEngine.Object.FindObjectsByType<BuildingEquipmentPlacement>(FindObjectsSortMode.None));
+            Func<string, bool> placementIsBound = placementId =>
+            {
+                if (string.IsNullOrWhiteSpace(placementId)) return false;
+                foreach (HouseholdFurnishingRegister register in hub.AllFurnishingRegisters)
+                {
+                    if (register?.Bindings == null) continue;
+                    foreach (FurnishingPlacementBinding binding in register.Bindings)
+                    {
+                        if (binding != null && string.Equals(binding.BindingId, placementId, System.StringComparison.Ordinal)) return true;
+                    }
+                }
+                return false;
+            };
+            var hooksTemplate = new LandLedgers.Economy.Logistics.FreightShipmentHooks
+            {
+                Tasks = hub.Tasks,
+                Budgets = hub.WorkTimeBudgets,
+                DayIndex = absoluteDayIndex,
+                Diagnostics = new List<string>(),
+                Reservations = hub.Reservations,
+                NowGameSeconds = AbsoluteNowGameSeconds(),
+                Schedules = hub.PersonSchedules,
+                MinuteOfDay = timeManager != null
+                    ? Mathf.FloorToInt(timeManager.TimeOfDay01 * 1440f) : 480,
+            };
+            var purchaseDriver = new FurnitureStorePurchaseDriver(
+                storeBusiness.RuntimeState,
+                storeManager.GetItemSellingPriceCents,
+                new Series2BusinessRuntimeCashPort(carrierBusiness.RuntimeState),
+                FreightProduction.Service,
+                wagon.AssetId,
+                EntityId.For(EntityKind.Person, loaderPersonId),
+                EntityId.For(EntityKind.Person, driverPersonId),
+                draftAnimals,
+                () => scenePlacements,
+                placementIsBound,
+                hooksTemplate,
+                absoluteDayIndex);
+            var diag = new List<string>();
+            string storeLocationId = TownJourneyNetworkBuilder.LocationIdForBuilding(storeBusiness.AssignedBuildingId);
+            foreach (CarpentryFurnitureSaleCandidate candidate in BuildFurnitureSaleCandidates(absoluteDayIndex))
+            {
+                if (candidate == null || candidate.Ledger == null || candidate.Furnishings == null) continue;
+                if (candidate.HomeBuildingId < 0)
+                {
+                    LogRefusalDayKeyed("furniture-purchase:no-home:" + candidate.HouseholdId, absoluteDayIndex,
+                        "[SimulationDrivers] household " + candidate.HouseholdId + " furniture purchase skipped: no home building — no delivery or install location.");
+                    continue;
+                }
+                if (townWorld == null || !townWorld.TryGetBuildingById(candidate.HomeBuildingId, out PlacedBuilding home)
+                    || home == null || home.runtimeFootprintAuthority == null)
+                {
+                    LogRefusalDayKeyed("furniture-purchase:no-home-authority:" + candidate.HouseholdId, absoluteDayIndex,
+                        "[SimulationDrivers] household " + candidate.HouseholdId + " furniture purchase skipped: home building " + candidate.HomeBuildingId + " has no footprint authority.");
+                    continue;
+                }
+                BuildingFootprintAuthority building = home.runtimeFootprintAuthority;
+                int installed = purchaseDriver.TryInstallCustodyPieces(candidate.Furnishings,
+                    candidate.HomeBuildingId, building, diag);
+                if (installed > 0)
+                {
+                    Debug.Log($"[SimulationDrivers] furniture purchase day {absoluteDayIndex}: household {candidate.HouseholdId} installed {installed} workshop-made custody piece(s) in building {candidate.HomeBuildingId}.", this);
+                }
+                if (hub.Journeys == null)
+                {
+                    LogRefusalDayKeyed("furniture-purchase:no-journeys:" + candidate.HouseholdId, absoluteDayIndex,
+                        "[SimulationDrivers] household " + candidate.HouseholdId + " furniture purchase skipped: no journey network — no delivery route.");
+                    continue;
+                }
+                JourneyRoute route = hub.Journeys.FindRoute(storeLocationId,
+                    TownJourneyNetworkBuilder.LocationIdForBuilding(candidate.HomeBuildingId), TravelMode.Wagon);
+                if (route == null || !route.Found)
+                {
+                    LogRefusalDayKeyed("furniture-purchase:no-route:" + candidate.HouseholdId, absoluteDayIndex,
+                        "[SimulationDrivers] household " + candidate.HouseholdId + " furniture purchase skipped: no wagon route from the store to building " + candidate.HomeBuildingId + " — " + (route?.Diagnostic ?? "no route returned") + ".");
+                    continue;
+                }
+                FurnishingWant best = null;
+                int bestFareCents = 0;
+                int bestPriceCents = 0;
+                if (candidate.Wants != null)
+                {
+                    foreach (FurnishingWant want in candidate.Wants)
+                    {
+                        if (want == null || !want.Affordable || want.Channel != FurnishingWantChannel.New) continue;
+                        if (string.IsNullOrWhiteSpace(want.ItemKind)) continue;
+                        if (HasUninstalledCustodyPiece(candidate.Furnishings, want.ItemKind)) continue;
+                        if (!FurnitureInstallBinding.TryFindFreePlacement(want.ItemKind, building,
+                                scenePlacements, placementIsBound, out BuildingEquipmentPlacement _, out string _)) continue;
+                        int priceCents = storeManager.GetItemSellingPriceCents(want.ItemKind);
+                        if (priceCents <= 0) continue;
+                        if (!FurnitureStorePurchase.TryQuoteDeliveryCharge(1, want.ItemKind, route.TotalMiles,
+                                carrierDefinition.freightRateCard, wagon, route.ConditionMultiplier,
+                                out FreightServiceQuote quote, out string _)) continue;
+                        if (candidate.Ledger.GetBalanceCents() < priceCents + quote.TotalPriceCents) continue;
+                        if (best == null
+                            || want.Priority < best.Priority
+                            || (want.Priority == best.Priority && want.PersonsAffected > best.PersonsAffected))
+                        {
+                            best = want;
+                            bestFareCents = quote.TotalPriceCents;
+                            bestPriceCents = priceCents;
+                        }
+                    }
+                }
+                if (best == null) continue;
+                FurniturePurchaseOrder order = purchaseDriver.TryPurchaseForHousehold(candidate.Ledger,
+                    candidate.Furnishings, candidate.HouseholdId, candidate.HomeBuildingId, building,
+                    best.ItemKind, bestFareCents, diag);
+                if (order == null)
+                {
+                    LogRefusalDayKeyed("furniture-purchase:refused:" + candidate.HouseholdId, absoluteDayIndex,
+                        "[SimulationDrivers] household " + candidate.HouseholdId + " furniture purchase refused for '" + best.ItemKind + "' (live price " + bestPriceCents + "c + freight " + bestFareCents + "c) — see the diagnostics; the want stays for tomorrow.");
+                    continue;
+                }
+                Debug.Log($"[SimulationDrivers] furniture purchase day {absoluteDayIndex}: household {candidate.HouseholdId} bought 1x '{best.ItemKind}' from the General Store for {order.GoodsTotalCents()}c + {bestFareCents}c freight, installed in building {candidate.HomeBuildingId} — purchase '{order.PurchaseId}' operational.", this);
+            }
+            foreach (string line in diag) Debug.Log(line, this);
+        }
+
+        /// <summary>
+        /// G-3: true when the household already owns an uninstalled, usable,
+        /// unreserved piece of the kind in custody — buying another would
+        /// double-buy what it already holds (the evaluator still wants the
+        /// kind while the custody piece sits uninstalled, so the guard is
+        /// the double-buy check, not the want).
+        /// </summary>
+        private static bool HasUninstalledCustodyPiece(HouseholdFurnishingRegister register, string kind)
+        {
+            if (register == null || register.Assets == null || string.IsNullOrWhiteSpace(kind)) return false;
+            foreach (EquipmentAsset asset in register.Assets)
+            {
+                if (asset == null) continue;
+                if (!string.Equals(asset.Kind, kind, System.StringComparison.OrdinalIgnoreCase)) continue;
+                if (register.LiveBindingFor(asset.AssetId) != null) continue;
+                if (!asset.IsUsable || asset.IsReserved) continue;
+                return true;
+            }
+            return false;
+        }
+
         private bool HasLiveStorageZone(int householdId)
         {
             FurnishingStorageRegistry storage = hub.FurnishingStorageRegistryFor(householdId);

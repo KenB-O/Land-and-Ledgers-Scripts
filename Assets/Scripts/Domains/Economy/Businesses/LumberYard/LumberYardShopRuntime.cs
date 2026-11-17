@@ -502,6 +502,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 + $"{record.UnitsSoldFor(ConstructionResourceKind.Glass)} glass panes returned to stock, "
                 + $"{voidedCents}c to refund or un-bill. The record stays for audit.");
             return null;
+        }
         /// D6: the kind-level construction sale behind the per-kind entry.
         /// ATOMIC per kind: every kind line is checked first — on any
         /// kind shortfall the sale is refused LOUDLY and nothing is

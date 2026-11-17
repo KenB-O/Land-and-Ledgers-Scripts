@@ -149,7 +149,7 @@ namespace LandLedgers.PlayMode
                 ?.GetValue(bootstrapper) ?? false);
             if (!fixtureEnabled)
             {
-                Assert.Ignore("Opt-in integration test; enable the six-person Main Scene profile to run it.");
+                Assert.Ignore("Opt-in integration test; enable the authored development-town profile on the Main Scene bootstrapper.");
             }
 
             Type populationManagerType = RuntimeType("LandLedgers.Population.PopulationManager");
@@ -158,6 +158,8 @@ namespace LandLedgers.PlayMode
             Component businessRuntime = FindComponent(businessRuntimeType);
             Assert.NotNull(populationManager);
             Assert.NotNull(businessRuntime);
+            Assert.IsTrue((bool)(bootstrapper.GetType().GetProperty("IsInitialized")?.GetValue(bootstrapper) ?? false),
+                "A rejected development configuration must not be treated as an initialized game slice.");
 
             object population = populationManagerType.GetProperty("State")?.GetValue(populationManager);
             var people = population?.GetType().GetField("people")?.GetValue(population) as System.Collections.IList;
@@ -167,12 +169,12 @@ namespace LandLedgers.PlayMode
             object[] onMapPeople = people.Cast<object>()
                 .Where(person => !(bool)person.GetType().GetField("isOffMap")?.GetValue(person))
                 .ToArray();
-            Assert.AreEqual(9, onMapPeople.Length, "The development population contains nine on-map authoritative Persons.");
-            Assert.AreEqual(5, households.Count, "The development population contains five Households.");
+            Assert.AreEqual(15, onMapPeople.Length, "The expanded development population contains fifteen on-map authoritative Persons.");
+            Assert.AreEqual(8, households.Count, "The expanded development population contains eight Households.");
             object[] orderedPeople = onMapPeople
                 .OrderBy(person => (int)person.GetType().GetField("id")?.GetValue(person)).ToArray();
             CollectionAssert.AreEqual(
-                new[] { "Kennedy Baldwin-Ooms", "Emma Baldwin-Ooms", "Glen Pierce", "Tannis Pierce", "Jacob Boniecki", "Grace Boniecki", "Ethan Boniecki", "Tia Boniecki", "Shane Bryan" },
+                new[] { "Kennedy Baldwin-Ooms", "Emma Baldwin-Ooms", "Glen Pierce", "Tannis Pierce", "Jacob Boniecki", "Grace Boniecki", "Ethan Boniecki", "Tia Boniecki", "Shane Bryan", "Silas Ward", "Enzo Kwint", "Emma Kwint", "Josh Saunders", "Don Millward", "Grace Millward" },
                 orderedPeople.Select(person => person.GetType().GetProperty("DisplayName")?.GetValue(person) as string).ToArray());
 
             Component pathingDirector = FindComponent(RuntimeType("LandLedgers.FirstLedger.PopulationPathingDirector"));
@@ -181,11 +183,11 @@ namespace LandLedgers.PlayMode
             MonoBehaviour[] actorBindings = pathingDirector.GetComponentsInChildren<MonoBehaviour>(true)
                 .Where(component => component != null && visualBindingType.IsInstanceOfType(component))
                 .ToArray();
-            Assert.AreEqual(9, actorBindings.Length,
+            Assert.AreEqual(15, actorBindings.Length,
                 "Each local Person must have one stable visual actor; a population count alone is not visible street life.");
-            CollectionAssert.AreEquivalent(Enumerable.Range(1, 9), actorBindings
+            CollectionAssert.AreEquivalent(Enumerable.Range(1, 15), actorBindings
                 .Select(binding => (int)visualBindingType.GetProperty("PersonId")?.GetValue(binding))
-                .ToArray(), "Every actor must resolve to exactly one of the nine authoritative Person IDs.");
+                .ToArray(), "Every actor must resolve to exactly one of the fifteen authoritative Person IDs.");
             MethodInfo resolvePerson = visualBindingType.GetMethod("TryResolve");
             Assert.NotNull(resolvePerson, "The visual identity binding must resolve through PopulationState.");
             foreach (MonoBehaviour binding in actorBindings)
@@ -206,8 +208,8 @@ namespace LandLedgers.PlayMode
 
             var businesses = businessRuntimeType.GetProperty("Businesses")?.GetValue(businessRuntime) as System.Collections.ICollection;
             Assert.NotNull(businesses);
-            Assert.AreEqual(4, businesses.Count,
-                "The development roster must create all four configured businesses.");
+            Assert.AreEqual(7, businesses.Count,
+                "The expanded development roster must register all seven configured businesses, including the workshop, sawmill and lumberyard.");
             var ownerByType = new Dictionary<string, int>();
             var businessBuildingIds = new HashSet<int>();
             var ownerWorkplaceByPerson = new Dictionary<int, int>();
@@ -229,11 +231,15 @@ namespace LandLedgers.PlayMode
                     ownerWorkplaceByPerson[(int)owner.GetType().GetProperty("PersonId")?.GetValue(owner)] = assignedBuildingId;
                 }
             }
-            CollectionAssert.AreEquivalent(new[] { "GeneralStore", "Bakery", "FuelDealer", "LiveryFreight" }, ownerByType.Keys);
+            CollectionAssert.AreEquivalent(new[] { "GeneralStore", "Bakery", "FuelDealer", "LiveryFreight", "Sawmill", "LumberYard", "Generic" }, ownerByType.Keys);
             Assert.AreEqual(1, ownerByType["GeneralStore"], "Kennedy P001 owns the General Store.");
             Assert.AreEqual(3, ownerByType["Bakery"], "Glen P003 owns the Bakery.");
             Assert.AreEqual(5, ownerByType["FuelDealer"], "Jacob P005 owns the Fuel Dealer.");
             Assert.AreEqual(7, ownerByType["LiveryFreight"], "Ethan P007 owns Freight Company B3.");
+            Assert.AreEqual(11, ownerByType["Sawmill"], "Enzo P011 owns the sawmill.");
+            Assert.AreEqual(6, ownerByType["LumberYard"], "Grace P006 owns the lumberyard.");
+            Assert.AreEqual(14, ownerByType["Generic"], "Don P014 owns the carpentry workshop.");
+            var openingEmployees = new HashSet<int> { 9, 10, 13 };
             foreach (object person in orderedPeople)
             {
                 int personId = (int)person.GetType().GetField("id")?.GetValue(person);
@@ -255,6 +261,13 @@ namespace LandLedgers.PlayMode
                     StringAssert.StartsWith("Owner-operator, ", professionName);
                     Assert.AreEqual(0, weeklyWage,
                         "Ownership-based labor is not an employee wage obligation.");
+                }
+                else if (openingEmployees.Contains(personId))
+                {
+                    Assert.AreEqual(ownerWorkplaceByPerson[11], workplace,
+                        $"Opening sawmill employee P{personId:000} must report to the real sawmill workplace.");
+                    Assert.Greater(weeklyWage, 0,
+                        $"Opening sawmill employee P{personId:000} must retain the authored wage obligation.");
                 }
                 else
                 {
@@ -282,12 +295,12 @@ namespace LandLedgers.PlayMode
                 string primaryUse = definition?.GetType().GetProperty("PrimaryUse")?.GetValue(definition)?.ToString();
                 if (canWork && !string.Equals(primaryUse, "Civic", StringComparison.OrdinalIgnoreCase)) commercialBuildings++;
             }
-            Assert.AreEqual(5, residentialHomes,
-                "The direct configuration must bind five distinct real homes before population generation.");
-            Assert.AreEqual(4, commercialBuildings,
-                "The development town retains its four authored commercial premises.");
-            Assert.AreEqual(9, worldBuildingIds.Count,
-                "The authored Small development profile uses five separate homes and four commercial buildings; its runtime separate-use profile disables the Town Hall.");
+            Assert.AreEqual(8, residentialHomes,
+                "The direct configuration must bind eight distinct real homes before population generation.");
+            Assert.AreEqual(6, commercialBuildings,
+                "Only the six businesses that require premises need physical commercial buildings; the freight operator is location-independent.");
+            Assert.AreEqual(14, worldBuildingIds.Count,
+                "The authored expanded profile uses eight homes and six premises-required business buildings.");
             Assert.IsTrue(businessBuildingIds.IsSubsetOf(worldBuildingIds),
                 "Every Business premises reference must resolve to one of the seven real town buildings.");
             Debug.Log($"[DevelopmentTown runtime] P001–P009; Households=5; Businesses=4 (General Store=P001, Bakery=P003, Fuel Dealer=P005, Freight Company=P007); houses={residentialHomes}; commercial buildings={commercialBuildings}; total buildings={worldBuildingIds.Count}: {string.Join(", ", buildingLabels)}.");

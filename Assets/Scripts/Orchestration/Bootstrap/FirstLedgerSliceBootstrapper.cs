@@ -174,6 +174,12 @@ namespace LandLedgers.FirstLedger
         [SerializeField]
         private string lastStartupTimingSummary = string.Empty;
 
+        // Set when an opted-in New Game configuration is rejected. Other
+        // scene authorities can query this before attempting their own
+        // fallback world generation, so a visual shell cannot masquerade as
+        // a successfully initialized development economy.
+        private bool startupFailed;
+
         [SerializeField]
         private int lastRestoreDayIndex = -1;
 
@@ -204,6 +210,8 @@ namespace LandLedgers.FirstLedger
         public WorldStartupIntent StartupIntent => startupIntent;
         public bool IsInitialized => initialized;
         public bool IsStartupReadyForManagementUi => initialized || initializing;
+        public bool HasStartupFailed => startupFailed;
+        public string BootstrapStatus => bootstrapStatus ?? string.Empty;
 
         private void Awake()
         {
@@ -225,13 +233,16 @@ namespace LandLedgers.FirstLedger
 
             AutoWire();
             AppendStartupTiming(timing, stepTimer, "autowire");
-            if (initialized || initializing)
+            if (initialized || initializing || startupFailed)
             {
-                CompleteStartupTiming(totalTimer, timing, initialized ? "already initialized" : "initialization already in progress");
+                CompleteStartupTiming(totalTimer, timing, initialized
+                    ? "already initialized"
+                    : startupFailed ? "previous startup failure is terminal for this PlayMode session" : "initialization already in progress");
                 return;
             }
 
             initializing = true;
+            startupFailed = false;
 
             // Pass XII Worker A (LL-PLAY-001): a New Game starts with a cash
             // stake, never an automatic player business. Clear the store
@@ -261,6 +272,7 @@ namespace LandLedgers.FirstLedger
             if (!TryConfigureTerrainStartup(out string terrainStartupError))
             {
                 bootstrapStatus = terrainStartupError;
+                startupFailed = true;
                 Debug.LogError(bootstrapStatus, this);
                 CompleteStartupTiming(totalTimer, timing, "terrain startup failed");
                 initializing = false;
@@ -354,6 +366,7 @@ namespace LandLedgers.FirstLedger
             if (useDevelopmentTownProfile && !townConfiguration.Validate(out string configError))
             {
                 bootstrapStatus = "Development town startup stopped: " + configError;
+                startupFailed = true;
                 Debug.LogError("[WorldStartup] " + bootstrapStatus, this);
                 CompleteStartupTiming(totalTimer, timing, "development configuration invalid");
                 initializing = false;
@@ -366,11 +379,12 @@ namespace LandLedgers.FirstLedger
                     : townConfiguration.Households.Count;
                 int requiredBusinessBuildings = townConfiguration.GeneratePopulationFromSettings
                     ? -1
-                    : townConfiguration.Businesses.Count;
+                    : CountPremisesRequiredBusinesses(townConfiguration);
                 if (!townWorld.TryApplyDevelopmentResidentialHomeCount(
                     requiredHomes, out string developmentWorldReason, requiredBusinessBuildings))
                 {
                     bootstrapStatus = $"Development fixture startup stopped before world generation: {developmentWorldReason}";
+                    startupFailed = true;
                     Debug.LogError($"[WorldStartup] {bootstrapStatus}", this);
                     CompleteStartupTiming(totalTimer, timing, "development world configuration failed");
                     initializing = false;
@@ -390,6 +404,7 @@ namespace LandLedgers.FirstLedger
             if (generateTownOnPlay && townWorld.Grid == null)
             {
                 bootstrapStatus = "New Game startup stopped because town generation did not produce a valid world.";
+                startupFailed = true;
                 Debug.LogError($"[WorldStartup] {bootstrapStatus}", this);
                 CompleteStartupTiming(totalTimer, timing, "town generation failed");
                 initializing = false;
@@ -402,7 +417,7 @@ namespace LandLedgers.FirstLedger
                 int requiredResidentialHomes = townConfiguration.GeneratePopulationFromSettings
                     ? townConfiguration.GeneratedPopulationSettings.maximumStartingHouseholds
                     : townConfiguration.Households.Count;
-                int requiredCommercialBuildings = townConfiguration.Businesses.Count;
+                int requiredCommercialBuildings = CountPremisesRequiredBusinesses(townConfiguration);
                 int realResidentialHomes = 0;
                 int realCommercialBuildings = 0;
                 int realTotalBuildings = townWorld.Buildings.Count;
@@ -446,7 +461,8 @@ namespace LandLedgers.FirstLedger
                 {
                     bootstrapStatus = townConfiguration.GeneratePopulationFromSettings
                         ? $"Development startup stopped: physical residential household capacity={realResidentialHomes}/{requiredResidentialHomes}. No Businesses or Persons were initialized."
-                        : $"Development startup stopped: standalone homes={realResidentialHomes}/{requiredResidentialHomes}, storefronts={realCommercialBuildings}/{requiredCommercialBuildings}, total buildings={realTotalBuildings}/{requiredTotalBuildings}. No Businesses or Persons were initialized.";
+                        : $"Development startup stopped: standalone homes={realResidentialHomes}/{requiredResidentialHomes}, premises-required storefronts={realCommercialBuildings}/{requiredCommercialBuildings}, total buildings={realTotalBuildings}/{requiredTotalBuildings}. No Businesses or Persons were initialized.";
+                    startupFailed = true;
                     Debug.LogError($"[WorldStartup] {bootstrapStatus}", this);
                     CompleteStartupTiming(totalTimer, timing, "development homes unavailable");
                     initializing = false;
@@ -1955,6 +1971,16 @@ namespace LandLedgers.FirstLedger
                 if (business != null && business.BusinessType == type && business.Owner?.OwnerKind == BusinessOwnerKind.Npc)
                     return business;
             return null;
+        }
+
+        private static int CountPremisesRequiredBusinesses(DevelopmentTownConfiguration configuration)
+        {
+            if (configuration == null) return 0;
+            int count = 0;
+            foreach (DevelopmentTownConfiguration.BusinessDefinition business in configuration.Businesses)
+                if (business != null && business.premisesRequired)
+                    count++;
+            return count;
         }
 
         private static List<OpeningRosterEntry> BuildDevelopmentOpeningRoster(DevelopmentTownConfiguration configuration)

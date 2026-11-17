@@ -380,6 +380,7 @@ namespace LandLedgers.World
         private float maximumRoadConnectionHeightDifference = 1.5f;
         private bool verboseStartupLogging;
         private bool startupConfigured;
+        private bool blockedStartupGenerationLogged;
         private Vector3 openingTownAnchor;
         private int generationPassCount;
 
@@ -1301,15 +1302,22 @@ namespace LandLedgers.World
         [ContextMenu("Generate Town Shell")]
         public void GenerateTownShell()
         {
-            if (Application.isPlaying && FindAnyObjectByType<FirstLedgerSliceBootstrapper>() != null)
+            FirstLedgerSliceBootstrapper bootstrapper = Application.isPlaying
+                ? FindAnyObjectByType<FirstLedgerSliceBootstrapper>()
+                : null;
+            if (bootstrapper != null)
             {
-                if (!startupConfigured)
+                if (ShouldBlockRuntimeGeneration(true, startupConfigured, bootstrapper.HasStartupFailed))
                 {
-                    if (verboseStartupLogging)
+                    if (!blockedStartupGenerationLogged)
                     {
-                        Debug.Log("[TownWorld] Fresh generation request ignored until FirstLedgerSliceBootstrapper configures the terrain mode.", this);
+                        if (bootstrapper.HasStartupFailed)
+                            Debug.LogError("[TownWorld] Town shell generation refused because FirstLedgerSliceBootstrapper rejected startup: " +
+                                bootstrapper.BootstrapStatus, this);
+                        else if (verboseStartupLogging)
+                            Debug.Log("[TownWorld] Fresh generation request ignored until FirstLedgerSliceBootstrapper configures the terrain mode.", this);
+                        blockedStartupGenerationLogged = true;
                     }
-
                     return;
                 }
 
@@ -1404,6 +1412,9 @@ namespace LandLedgers.World
                 Debug.Log($"[TownWorld] GenerateTownShell timing total {totalTimer.ElapsedMilliseconds} ms ({timing}).", this);
             }
         }
+
+        public static bool ShouldBlockRuntimeGeneration(bool hasBootstrapper, bool startupConfigured, bool startupFailed) =>
+            hasBootstrapper && (!startupConfigured || startupFailed);
 
         public bool TryConstructBuildingShell(int plotId, BuildingDefinition definition, bool playerOwned, out PlacedBuilding building, out string message)
         {

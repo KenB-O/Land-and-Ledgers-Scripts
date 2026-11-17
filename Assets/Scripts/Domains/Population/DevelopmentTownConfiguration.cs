@@ -463,14 +463,38 @@ namespace LandLedgers.Population
                     || string.Equals(relation.firstPersonKey, relation.secondPersonKey, StringComparison.OrdinalIgnoreCase))
                 { error = "Development relationships must reference two distinct configured residents."; return false; }
             var businessKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (BusinessDefinition business in Businesses)
+            var businessIssues = new List<string>();
+            for (int i = 0; i < Businesses.Count; i++)
             {
-                if (business == null || string.IsNullOrWhiteSpace(business.key) || string.IsNullOrWhiteSpace(business.operationId)
-                    || !personKeys.Contains(business.ownerPersonKey) || business.openingCashCents < 0 || !businessKeys.Add(business.key))
-                { error = "Development businesses need unique keys, an operation ID, a configured owner, and non-negative opening cash."; return false; }
+                BusinessDefinition business = Businesses[i];
+                if (business == null)
+                {
+                    businessIssues.Add($"businesses[{i}] is null");
+                    continue;
+                }
+
+                string label = string.IsNullOrWhiteSpace(business.key) ? $"businesses[{i}]" : $"business '{business.key}'";
+                if (string.IsNullOrWhiteSpace(business.key))
+                    businessIssues.Add($"{label} has an empty key");
+                else if (!businessKeys.Add(business.key))
+                    businessIssues.Add($"{label} duplicates a configured business key");
+
+                if (string.IsNullOrWhiteSpace(business.operationId))
+                    businessIssues.Add($"{label} has an empty operationId");
+                if (string.IsNullOrWhiteSpace(business.ownerPersonKey))
+                    businessIssues.Add($"{label} has an empty ownerPersonKey");
+                else if (!personKeys.Contains(business.ownerPersonKey))
+                    businessIssues.Add($"{label} ownerPersonKey '{business.ownerPersonKey}' does not match a configured person key");
+                if (business.openingCashCents < 0)
+                    businessIssues.Add($"{label} has negative openingCashCents ({business.openingCashCents})");
                 if (business.freightRateCard != null
                     && (business.freightRateCard.baseServiceFeeCents < 0 || business.freightRateCard.ratePerMileCents < 0))
-                { error = $"Development business '{business.key}' has a freight rate card with a negative fee."; return false; }
+                    businessIssues.Add($"{label} has a freightRateCard with a negative fee");
+            }
+            if (businessIssues.Count > 0)
+            {
+                error = "Invalid development business configuration: " + string.Join("; ", businessIssues) + ".";
+                return false;
             }
             if (!TryGetBusiness(FreightBusinessKey, out _) || string.IsNullOrWhiteSpace(OpeningHorseId) || string.IsNullOrWhiteSpace(OpeningWagonId))
             { error = "Development transport startup must identify its configured freight business, horse, and wagon."; return false; }

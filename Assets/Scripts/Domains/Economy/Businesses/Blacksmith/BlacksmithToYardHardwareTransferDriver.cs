@@ -16,9 +16,14 @@ namespace LandLedgers.Economy.Blacksmith
     /// door handles) from the smith's shop stock into the yard's hardware
     /// lots through the existing yard intake
     /// (LumberYardShopRuntime.ReceiveHardwareFromBlacksmith), with the
-    /// piece breakdown recorded in the lot's SupplierNote, the material lot
+    /// piece breakdown recorded in each lot's SupplierNote, the material lot
     /// ids the pieces were forged from named beside it, and the yard paying the smith the wholesale
     /// unit cost per delivered piece.
+    ///
+    /// D6 (F-D2-3): one yard lot per KIND, not one mixed SimpleHardware lot
+    /// for the whole delivery — each lot holds a single piece kind, so a
+    /// later kind-level sale can prove the yard holds the hinges and
+    /// latches a package needs instead of trusting a bucket total.
     ///
     /// The driver never sets lot state directly. It calls only
     /// smithy.TakeHardware / ReturnHardwareToStock plus the yard intake
@@ -81,6 +86,11 @@ namespace LandLedgers.Economy.Blacksmith
         public int SettledDayIndex = -1;
         public int AcquiredDayIndex = -1;
         public EntityId YardLotId = EntityId.Invalid;
+        /// <summary>
+        /// D6: every yard lot this delivery created, one per piece kind, in
+        /// kind display-name order. YardLotId is the first of these.
+        /// </summary>
+        public List<EntityId> YardLotIds = new List<EntityId>();
         public BlacksmithToYardHardwareTransferJobState State = BlacksmithToYardHardwareTransferJobState.Planned;
         public int CreatedDayIndex = -1;
         public int TransferredDayIndex = -1;
@@ -158,8 +168,8 @@ namespace LandLedgers.Economy.Blacksmith
         /// Never calls the intake, never moves a piece, never allocates a
         /// yard lot id. A refused begin leaves both stocks untouched.
         /// All pieces in one job share one forged day — one yard lot
-        /// carries one forged day — so a mixed-day batch must be split
-        /// by the caller.
+        /// carries one kind forged on one day — so a mixed-day batch must
+        /// be split by the caller.
         /// </summary>
         public BlacksmithToYardHardwareTransferJob BeginDelivery(List<string> pieceAssetIds, int unitCostCents, int dayIndex, out string refusal)
         {
@@ -407,10 +417,56 @@ namespace LandLedgers.Economy.Blacksmith
             // order ids — so the yard lot's IronImportOrderId stays empty
             // ("when known") and the material lots travel in the SupplierNote.
             // No order id is ever invented from a lot id.
-            string intakeRefusal = yard.ReceiveHardwareFromBlacksmith(
-                LumberYardHardwareKind.SimpleHardware, units, job.SmithBusinessId, job.ForgedDayIndex,
-                string.Empty, dayIndex, job.UnitCostCents, diagnostics, job.SupplierNote);
-            if (intakeRefusal != null)
+            //
+            // D6: one yard lot per KIND, not one mixed SimpleHardware lot
+            // for the whole delivery — each lot holds a single piece kind,
+            // so a later kind-level sale can prove the yard holds the
+            // hinges and latches a package needs. Kinds are taken in
+            // display-name order for determinism; every lot carries the
+            // job's full breakdown in its SupplierNote.
+            var takenByKind = new Dictionary<string, List<EquipmentAsset>>(StringComparer.Ordinal);
+            foreach (EquipmentAsset asset in taken)
+            {
+                string pieceKind = asset.Kind ?? string.Empty;
+                List<EquipmentAsset> kindPieces;
+                if (!takenByKind.TryGetValue(pieceKind, out kindPieces))
+                {
+                    kindPieces = new List<EquipmentAsset>();
+                    takenByKind[pieceKind] = kindPieces;
+                }
+                kindPieces.Add(asset);
+            }
+            var kindNames = new List<string>(takenByKind.Keys);
+            kindNames.Sort(StringComparer.Ordinal);
+            var landedLots = new List<LumberYardHardwareLot>();
+            string intakeRefusal = null;
+            foreach (string pieceKind in kindNames)
+            {
+                LumberYardHardwareKind yardKind;
+                if (!LumberYardHardwareKindNames.TryKindForDisplayName(pieceKind, out yardKind))
+                {
+                    intakeRefusal = $"piece kind '{pieceKind}' is not a stocked yard hardware kind — a delivery only moves real piece kinds.";
+                    break;
+                }
+                int kindUnits = takenByKind[pieceKind].Count;
+                string kindRefusal = yard.ReceiveHardwareFromBlacksmith(
+                    yardKind, kindUnits, job.SmithBusinessId, job.ForgedDayIndex,
+                    string.Empty, dayIndex, job.UnitCostCents, diagnostics, job.SupplierNote);
+                if (kindRefusal != null)
+                {
+                    intakeRefusal = kindRefusal;
+                    break;
+                }
+                LumberYardHardwareLot kindLot = FindYardLotByDelivery(job.SmithBusinessId, job.ForgedDayIndex,
+                    yardKind, kindUnits, job.SupplierNote);
+                if (kindLot == null)
+                {
+                    intakeRefusal = $"no yard lot matches the delivered {kindUnits} {pieceKind} (smith, forged day, supplier note) — the intake reported success but the lot cannot be found.";
+                    break;
+                }
+                landedLots.Add(kindLot);
+            }
+            if (intakeRefusal != null && landedLots.Count == 0)
             {
                 // The debit is refunded and the pieces go back, so nothing
                 // moved at all: no custody, no cash, job stays Planned. A
@@ -432,6 +488,44 @@ namespace LandLedgers.Economy.Blacksmith
                 diagnostics.Add(refusal);
                 return false;
             }
+            if (intakeRefusal != null)
+            {
+                // A later kind's intake failed after earlier kinds landed:
+                // those kinds are yard stock now and cannot go back, so
+                // only the pieces whose kind never landed are returned.
+                // The job FAILS (a retry would double-deliver the landed
+                // kinds), the debit STANDS and the smith is NOT credited —
+                // the books no longer agree, and the failure names the
+                // landed lots for reconciliation.
+                var landedKinds = new HashSet<string>(StringComparer.Ordinal);
+                var landedIds = new List<EntityId>();
+                var landedIdText = new List<string>();
+                foreach (LumberYardHardwareLot lot in landedLots)
+                {
+                    if (lot == null) continue;
+                    landedKinds.Add(LumberYardHardwareKindNames.DisplayNameFor(lot.HardwareKind));
+                    landedIds.Add(lot.LotId);
+                    landedIdText.Add(lot.LotId.ToString());
+                }
+                var unlanded = new List<EquipmentAsset>();
+                foreach (EquipmentAsset asset in taken)
+                {
+                    if (asset == null) continue;
+                    if (!landedKinds.Contains(asset.Kind ?? string.Empty)) unlanded.Add(asset);
+                }
+                RestoreTakenPieces(unlanded);
+                job.HardwareUnits = units;
+                job.YardLotId = landedLots[0].LotId;
+                job.YardLotIds = landedIds;
+                job.AcquiredDayIndex = dayIndex;
+                job.TransferredDayIndex = dayIndex;
+                job.State = BlacksmithToYardHardwareTransferJobState.Failed;
+                job.SettledPriceCents = -1;
+                job.SettledDayIndex = -1;
+                refusal = $"BlacksmithToYardHardwareTransferDriver.RunDelivery: job '{jobId}' — PARTIAL delivery ({intakeRefusal}). {landedLots.Count} kind lot(s) landed (yard lots {string.Join(", ", landedIdText.ToArray())}) and the yard debit of {priceCents}c STANDS; the smith was NOT credited and the unlanded pieces were returned to smith stock. Reconcile the books before a fresh begin.";
+                diagnostics.Add(refusal);
+                return false;
+            }
 
             // Verification step: the intake's own contract plus the
             // stock-level test make a mismatch unreachable in the current
@@ -439,7 +533,7 @@ namespace LandLedgers.Economy.Blacksmith
             // prove. The pieces are already moved; the driver never
             // re-invents them and never re-runs the intake for this job —
             // the production caller must reconcile the stocks.
-            string mismatch = VerifyDelivery(job, yardTotalBefore, units, out LumberYardHardwareLot yardLot);
+            string mismatch = VerifyDelivery(job, yardTotalBefore, units, landedLots);
             if (mismatch != null)
             {
                 // The smith is NOT credited and the yard debit is NOT
@@ -447,6 +541,14 @@ namespace LandLedgers.Economy.Blacksmith
                 // un-winding either side would hide the break. The job
                 // fails loudly for reconciliation. The pieces cannot go
                 // back — they are already yard stock.
+                job.HardwareUnits = units;
+                job.YardLotId = landedLots[0].LotId;
+                var landedIds = new List<EntityId>();
+                foreach (LumberYardHardwareLot lot in landedLots)
+                    if (lot != null) landedIds.Add(lot.LotId);
+                job.YardLotIds = landedIds;
+                job.AcquiredDayIndex = dayIndex;
+                job.TransferredDayIndex = dayIndex;
                 job.State = BlacksmithToYardHardwareTransferJobState.Failed;
                 job.SettledPriceCents = -1;
                 job.SettledDayIndex = -1;
@@ -455,6 +557,9 @@ namespace LandLedgers.Economy.Blacksmith
                 return false;
             }
 
+            var yardLotIds = new List<EntityId>();
+            foreach (LumberYardHardwareLot lot in landedLots)
+                if (lot != null) yardLotIds.Add(lot.LotId);
             string creditRefusal = SmithCash.Credit(priceCents, $"smith-to-yard wholesale settlement for job '{jobId}'");
             if (!string.IsNullOrEmpty(creditRefusal))
             {
@@ -464,7 +569,8 @@ namespace LandLedgers.Economy.Blacksmith
                 // SettledPriceCents stays -1 so the unsettled credit is
                 // visible in the job record.
                 job.HardwareUnits = units;
-                job.YardLotId = yardLot.LotId;
+                job.YardLotId = landedLots[0].LotId;
+                job.YardLotIds = yardLotIds;
                 job.AcquiredDayIndex = dayIndex;
                 job.TransferredDayIndex = dayIndex;
                 job.State = BlacksmithToYardHardwareTransferJobState.Transferred;
@@ -476,14 +582,15 @@ namespace LandLedgers.Economy.Blacksmith
             }
 
             job.HardwareUnits = units;
-            job.YardLotId = yardLot.LotId;
+            job.YardLotId = landedLots[0].LotId;
+            job.YardLotIds = yardLotIds;
             job.AcquiredDayIndex = dayIndex;
             job.TransferredDayIndex = dayIndex;
             job.State = BlacksmithToYardHardwareTransferJobState.Transferred;
             job.SettledPriceCents = priceCents;
             job.SettledDayIndex = dayIndex;
             diagnostics.Add($"BlacksmithToYardHardwareTransferDriver.RunDelivery: job '{jobId}' settled {units} pieces ({job.PieceBreakdown}) for {priceCents}c "
-                + $"(smith '{job.SmithBusinessId}' to yard lot {yardLot.LotId}, forged day {job.ForgedDayIndex}, cost {job.UnitCostCents}c).");
+                + $"(smith '{job.SmithBusinessId}' to yard lots {string.Join(", ", yardLotIds.ConvertAll(id => id.ToString()).ToArray())}, forged day {job.ForgedDayIndex}, cost {job.UnitCostCents}c).");
             return true;
         }
 
@@ -740,9 +847,12 @@ namespace LandLedgers.Economy.Blacksmith
                     }
                 }
                 if (!piecesOk) continue;
-                if (FindYardLotByDelivery(link.SmithBusinessId, link.ForgedDayIndex, link.PieceAssetIds.Count, link.SupplierNote) != null)
+                List<LumberYardHardwareLot> alreadyDelivered = FindYardLotsByDelivery(link.SmithBusinessId, link.ForgedDayIndex, link.SupplierNote);
+                int deliveredUnits = 0;
+                foreach (LumberYardHardwareLot lot in alreadyDelivered) deliveredUnits += Math.Max(0, lot.HardwareUnits);
+                if (alreadyDelivered.Count > 0 && deliveredUnits == link.PieceAssetIds.Count)
                 {
-                    diagnostics.Add($"BlacksmithToYardHardwareTransferDriver.LoadFromSaveDto: dropped link for job '{link.JobId}' — the yard already holds a lot for this delivery; the delivery already happened by another path.");
+                    diagnostics.Add($"BlacksmithToYardHardwareTransferDriver.LoadFromSaveDto: dropped link for job '{link.JobId}' — the yard already holds {alreadyDelivered.Count} lot(s) for this delivery ({deliveredUnits} units); the delivery already happened by another path.");
                     continue;
                 }
                 jobs[link.JobId] = new BlacksmithToYardHardwareTransferJob
@@ -823,15 +933,16 @@ namespace LandLedgers.Economy.Blacksmith
 
         /// <summary>
         /// The yard lot id is never handed back by the intake — it is
-        /// allocated internally — so the driver finds the new yard lot by
-        /// scanning for the lot whose smith, forged day, unit count, and
-        /// supplier note match the job. The note carries the job's piece
-        /// breakdown and material lots, so the scan is unambiguous for one
-        /// delivery; a second identical delivery the same day would match
-        /// the same lot, which is why the job record (not this scan) is
-        /// the exactly-once authority.
+        /// allocated internally — so the driver finds a new yard lot by
+        /// scanning for the lot whose smith, forged day, kind, unit count,
+        /// and supplier note match the delivery. The note carries the job's
+        /// piece breakdown and material lots, so the scan is unambiguous
+        /// for one delivery of one kind; a second identical delivery the
+        /// same day would match the same lot, which is why the job record
+        /// (not this scan) is the exactly-once authority.
         /// </summary>
-        private LumberYardHardwareLot FindYardLotByDelivery(string smithBusinessId, int forgedDayIndex, int units, string supplierNote)
+        private LumberYardHardwareLot FindYardLotByDelivery(string smithBusinessId, int forgedDayIndex,
+            LumberYardHardwareKind kind, int units, string supplierNote)
         {
             if (yard == null || yard.HardwareStock == null) return null;
             LumberYardHardwareLot found = null;
@@ -841,6 +952,7 @@ namespace LandLedgers.Economy.Blacksmith
                 if (lot == null) continue;
                 if (!string.Equals(lot.SourceBlacksmithBusinessId, smithBusinessId, StringComparison.Ordinal)) continue;
                 if (lot.ForgedDayIndex != forgedDayIndex) continue;
+                if (lot.HardwareKind != kind) continue;
                 if (lot.HardwareUnits != units) continue;
                 if (!string.Equals(lot.SupplierNote, supplierNote, StringComparison.Ordinal)) continue;
                 matches++;
@@ -849,9 +961,29 @@ namespace LandLedgers.Economy.Blacksmith
             return matches == 1 ? found : null;
         }
 
-        private string VerifyDelivery(BlacksmithToYardHardwareTransferJob job, int yardTotalBefore, int units, out LumberYardHardwareLot yardLot)
+        /// <summary>
+        /// D6: every yard lot matching one delivery (smith, forged day,
+        /// supplier note), across kinds — the load-time already-delivered
+        /// check. The single-lot finder above stays the exactly-once check
+        /// for one kind.
+        /// </summary>
+        private List<LumberYardHardwareLot> FindYardLotsByDelivery(string smithBusinessId, int forgedDayIndex, string supplierNote)
         {
-            yardLot = null;
+            var found = new List<LumberYardHardwareLot>();
+            if (yard == null || yard.HardwareStock == null) return found;
+            foreach (LumberYardHardwareLot lot in yard.HardwareStock.Lots)
+            {
+                if (lot == null) continue;
+                if (!string.Equals(lot.SourceBlacksmithBusinessId, smithBusinessId, StringComparison.Ordinal)) continue;
+                if (lot.ForgedDayIndex != forgedDayIndex) continue;
+                if (!string.Equals(lot.SupplierNote, supplierNote, StringComparison.Ordinal)) continue;
+                found.Add(lot);
+            }
+            return found;
+        }
+
+        private string VerifyDelivery(BlacksmithToYardHardwareTransferJob job, int yardTotalBefore, int units, List<LumberYardHardwareLot> landedLots)
+        {
             if (yard.HardwareStock == null)
             {
                 return "the yard has no hardware stock to verify against";
@@ -860,10 +992,26 @@ namespace LandLedgers.Economy.Blacksmith
             {
                 return $"yard hardware total is {yard.HardwareStock.TotalHardwareUnits}, expected {yardTotalBefore + units}";
             }
-            yardLot = FindYardLotByDelivery(job.SmithBusinessId, job.ForgedDayIndex, units, job.SupplierNote);
-            if (yardLot == null)
+            if (landedLots == null || landedLots.Count == 0)
             {
-                return "no single yard lot matches this delivery (smith, forged day, units, supplier note)";
+                return "no yard lot matches this delivery (smith, forged day, supplier note)";
+            }
+            int landedUnits = 0;
+            foreach (LumberYardHardwareLot lot in landedLots)
+            {
+                if (lot == null)
+                    return "a landed lot is null — the delivery cannot be verified";
+                if (!string.Equals(lot.SourceBlacksmithBusinessId, job.SmithBusinessId, StringComparison.Ordinal))
+                    return "a landed lot names a different smith — the delivery cannot be verified";
+                if (lot.ForgedDayIndex != job.ForgedDayIndex)
+                    return "a landed lot names a different forged day — the delivery cannot be verified";
+                if (!string.Equals(lot.SupplierNote, job.SupplierNote, StringComparison.Ordinal))
+                    return "a landed lot carries a different supplier note — the delivery cannot be verified";
+                landedUnits += Math.Max(0, lot.HardwareUnits);
+            }
+            if (landedUnits != units)
+            {
+                return $"landed lots hold {landedUnits} units, expected {units}";
             }
             return null;
         }

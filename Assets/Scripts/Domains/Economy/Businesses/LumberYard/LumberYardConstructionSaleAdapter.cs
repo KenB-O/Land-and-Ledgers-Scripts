@@ -9,6 +9,16 @@ namespace LandLedgers.Economy.Businesses.LumberYard
     /// Lumber Yard lot and sale authorities. The adapter records material
     /// custody only; the construction procurement service posts the cash
     /// transfer through its existing ledger path.
+    ///
+    /// D6 (F-D2-3): hardware is sold per kind, never as a bucket. Each
+    /// hardware requirement is resolved to its kind lines
+    /// (ConstructionHardwareKindBreakdown), the yard fulfills each kind
+    /// from real lots of that kind, and the sale carries one line per
+    /// kind sold — so the site stockpile stages kinds and the package
+    /// stages against them. Every kind line is priced at the
+    /// requirement's bucket price (the price port prices the whole
+    /// hardware requirement from the first stocked lot), so the sale
+    /// total is unchanged by the split.
     /// </summary>
     public sealed class LumberYardConstructionSaleAdapter : IConstructionMaterialSalePort
     {
@@ -41,7 +51,6 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 return "Construction material sale requires priced material requirements.";
 
             int lumberUnits = 0;
-            int hardwareUnits = 0;
             int glassUnits = 0;
             int lumberPrice = -1;
             int hardwarePrice = -1;
@@ -56,6 +65,9 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             string lumberDisplayName = null;
             string hardwareDisplayName = null;
             string glassDisplayName = null;
+            // D6: hardware aggregated per kind across the package's
+            // requirements (display name -> units), never as a bucket total.
+            var hardwareKinds = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (ConstructionMaterialRequirement requirement in requirements)
             {
                 if (requirement == null || !requirement.IsCoherent)
@@ -88,7 +100,19 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                             return "Lumber Yard sales require one consistent hardware display name per package.";
                         hardwareDisplayName = requirement.MaterialDisplayName;
                         hardwarePrice = price;
-                        hardwareUnits = checked(hardwareUnits + requirement.RequiredUnits);
+                        // D6: resolve the requirement to its kind lines
+                        // now — the yard fulfills kinds, never a bucket
+                        // total, and a mix that cannot be resolved
+                        // refuses the sale before anything is sold.
+                        List<ConstructionHardwareKindLine> kindLines;
+                        string breakdownRefusal = ConstructionHardwareKindBreakdown.TryBreakdown(requirement, out kindLines);
+                        if (breakdownRefusal != null)
+                            return $"Lumber Yard cannot sell '{requirement.MaterialDisplayName}' for package '{packageId}': {breakdownRefusal}";
+                        foreach (ConstructionHardwareKindLine kindLine in kindLines)
+                        {
+                            hardwareKinds.TryGetValue(kindLine.DisplayName, out int have);
+                            hardwareKinds[kindLine.DisplayName] = checked(have + kindLine.Units);
+                        }
                         break;
                     case ConstructionMaterialKind.Glass:
                         if (glassPrice >= 0 && glassPrice != price)
@@ -105,9 +129,21 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 }
             }
 
+            var yardKindLines = new List<LumberYardHardwareKindLine>();
+            foreach (var pair in hardwareKinds)
+            {
+                LumberYardHardwareKind kind;
+                if (!LumberYardHardwareKindNames.TryKindForDisplayName(pair.Key, out kind))
+                    return $"Lumber Yard cannot sell kind '{pair.Key}' — it is not a stocked hardware kind.";
+                yardKindLines.Add(new LumberYardHardwareKindLine { Kind = kind, Units = pair.Value });
+            }
+            yardKindLines.Sort((a, b) => string.Compare(
+                LumberYardHardwareKindNames.DisplayNameFor(a.Kind),
+                LumberYardHardwareKindNames.DisplayNameFor(b.Kind), StringComparison.Ordinal));
+
             LumberYardSaleRecord yardSale = yard.TrySellToConstructionProject(
                 projectId, lumberUnits, Math.Max(0, lumberPrice),
-                hardwareUnits, Math.Max(0, hardwarePrice),
+                yardKindLines, Math.Max(0, hardwarePrice),
                 glassUnits, Math.Max(0, glassPrice), dayIndex, diagnostics);
             if (yardSale == null)
                 return "Lumber Yard refused the sale; finite inventory was left unchanged.";
@@ -124,25 +160,71 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             foreach (LumberYardMaterialSaleLine line in yardSale.Lines)
             {
                 if (line == null || line.UnitsSold <= 0) continue;
-                ConstructionMaterialKind materialKind = line.ResourceKind == ConstructionResourceKind.Lumber
-                    ? ConstructionMaterialKind.Lumber
-                    : line.ResourceKind == ConstructionResourceKind.Glass
-                        ? ConstructionMaterialKind.Glass
-                        : ConstructionMaterialKind.Hardware;
-                string displayName = materialKind == ConstructionMaterialKind.Lumber
-                    ? lumberDisplayName
-                    : materialKind == ConstructionMaterialKind.Glass
-                        ? glassDisplayName
-                        : hardwareDisplayName;
-                sale.Lines.Add(new ConstructionMaterialSaleLine
+                if (line.ResourceKind == ConstructionResourceKind.Lumber)
                 {
-                    DisplayName = displayName,
-                    Units = line.UnitsSold,
-                    UnitLabel = "units",
-                    UnitPriceCents = line.UnitPriceCents,
-                    SupplierBusinessId = supplierBusinessId,
-                    Provenance = string.Join("; ", line.ProvenanceLines()),
-                });
+                    sale.Lines.Add(new ConstructionMaterialSaleLine
+                    {
+                        DisplayName = lumberDisplayName,
+                        Units = line.UnitsSold,
+                        UnitLabel = "units",
+                        UnitPriceCents = line.UnitPriceCents,
+                        SupplierBusinessId = supplierBusinessId,
+                        Provenance = string.Join("; ", line.ProvenanceLines()),
+                    });
+                    continue;
+                }
+                if (line.ResourceKind == ConstructionResourceKind.Glass)
+                {
+                    sale.Lines.Add(new ConstructionMaterialSaleLine
+                    {
+                        DisplayName = glassDisplayName,
+                        Units = line.UnitsSold,
+                        UnitLabel = "units",
+                        UnitPriceCents = line.UnitPriceCents,
+                        SupplierBusinessId = supplierBusinessId,
+                        Provenance = string.Join("; ", line.ProvenanceLines()),
+                    });
+                    continue;
+                }
+                // D6: one construction sale line per kind sold — the yard's
+                // dispense lines already carry the kind, so group them and
+                // record each kind with its own units and provenance, all
+                // priced at the requirement's bucket price.
+                var byKind = new Dictionary<LumberYardHardwareKind, List<LumberYardHardwareDispenseLine>>();
+                foreach (LumberYardHardwareDispenseLine dispense in line.HardwareLines)
+                {
+                    if (dispense == null || dispense.UnitsTaken <= 0) continue;
+                    List<LumberYardHardwareDispenseLine> kindDispense;
+                    if (!byKind.TryGetValue(dispense.HardwareKind, out kindDispense))
+                    {
+                        kindDispense = new List<LumberYardHardwareDispenseLine>();
+                        byKind[dispense.HardwareKind] = kindDispense;
+                    }
+                    kindDispense.Add(dispense);
+                }
+                var kinds = new List<LumberYardHardwareKind>(byKind.Keys);
+                kinds.Sort((a, b) => string.Compare(
+                    LumberYardHardwareKindNames.DisplayNameFor(a),
+                    LumberYardHardwareKindNames.DisplayNameFor(b), StringComparison.Ordinal));
+                foreach (LumberYardHardwareKind kind in kinds)
+                {
+                    int kindUnits = 0;
+                    var provenance = new List<string>();
+                    foreach (LumberYardHardwareDispenseLine dispense in byKind[kind])
+                    {
+                        kindUnits += dispense.UnitsTaken;
+                        provenance.Add($"{dispense.UnitsTaken} {dispense.HardwareKind} from yard lot {dispense.LotId}: {dispense.ProvenanceChain}");
+                    }
+                    sale.Lines.Add(new ConstructionMaterialSaleLine
+                    {
+                        DisplayName = LumberYardHardwareKindNames.DisplayNameFor(kind),
+                        Units = kindUnits,
+                        UnitLabel = "units",
+                        UnitPriceCents = line.UnitPriceCents,
+                        SupplierBusinessId = supplierBusinessId,
+                        Provenance = string.Join("; ", provenance.ToArray()),
+                    });
+                }
             }
 
             if (sale.TotalCents != yardSale.TotalCents)

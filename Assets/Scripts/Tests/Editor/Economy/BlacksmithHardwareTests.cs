@@ -443,9 +443,11 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(42, lot.ForgedDayIndex);
             Assert.AreEqual("IMP-ORD-1", lot.IronImportOrderId);
             Assert.AreEqual(45, lot.UnitCostCents);
-            // The delivery records which pieces the lot holds; the lot
-            // itself is bucket-level (SimpleHardware), so the breakdown
-            // rides the supplier note until kind-level lots exist.
+            // The delivery records which pieces the lot holds; this direct
+            // intake still accepts a mixed SimpleHardware lot (legacy and
+            // bootstrap stock), with the breakdown riding the supplier
+            // note. Kind-level lots now exist for driver deliveries (D6):
+            // the transfer driver lands one lot per piece kind.
             lot.SupplierNote = "4 door-hinge + 2 iron-latch + 2 door-handle, forged by smith-1 day 42";
             Assert.IsTrue(lot.ProvenanceChain().Contains("smith-1"));
 

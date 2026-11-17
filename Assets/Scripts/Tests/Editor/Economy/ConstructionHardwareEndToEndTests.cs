@@ -138,9 +138,18 @@ namespace LandLedgers.EditorTests.Economy
                 foreach (EquipmentAsset piece in pieces)
                     Assert.IsNotNull(smithy.TakeHardware(piece.AssetId, Diag), string.Join("; ", Diag));
 
-                int total = hinges + latches + handles;
+                // D6: one yard lot per kind — the roof sale fulfills kinds,
+                // never a mixed bucket, so the yard must hold the kinds the
+                // cabin needs (3 hinges + 2 latches + 1 handle for 1 door +
+                // 1 window), not an unitemized pile.
                 Assert.IsNull(Yard.ReceiveHardwareFromBlacksmith(
-                    LumberYardHardwareKind.SimpleHardware, total, "smith-1", dayIndex, "IMP-ORD-1", dayIndex, 45, Diag),
+                    LumberYardHardwareKind.DoorHinge, hinges, "smith-1", dayIndex, "IMP-ORD-1", dayIndex, 45, Diag),
+                    string.Join("; ", Diag));
+                Assert.IsNull(Yard.ReceiveHardwareFromBlacksmith(
+                    LumberYardHardwareKind.IronLatch, latches, "smith-1", dayIndex, "IMP-ORD-1", dayIndex, 45, Diag),
+                    string.Join("; ", Diag));
+                Assert.IsNull(Yard.ReceiveHardwareFromBlacksmith(
+                    LumberYardHardwareKind.DoorHandle, handles, "smith-1", dayIndex, "IMP-ORD-1", dayIndex, 45, Diag),
                     string.Join("; ", Diag));
             }
 
@@ -243,9 +252,9 @@ namespace LandLedgers.EditorTests.Economy
             var c = new Chain();
             // The cabin needs 9 door-hardware units: 1 door (4 pieces + 2
             // nails) + 1 window (2 pieces + 1 nail). The smith forges the 6
-            // pieces; the 3 nails units arrive on the import order the yard
-            // already registers (LumberYardSupply, 30c).
-            c.StockHardwareFromSmith(hinges: 2, latches: 2, handles: 2, dayIndex: 10);
+            // pieces — 3 hinges, 2 latches, 1 handle, the 1-door + 1-window
+            // mix — and the yard holds them as one lot per kind.
+            c.StockHardwareFromSmith(hinges: 3, latches: 2, handles: 1, dayIndex: 10);
             // The nails arrive a day later, so the smith delivery stays first
             // in the yard's FIFO lot order and prices the hardware at 45c.
             Assert.IsNull(c.Yard.ReceiveHardwareImportArrival(

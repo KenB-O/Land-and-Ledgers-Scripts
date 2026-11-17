@@ -134,8 +134,8 @@ namespace LandLedgers.EditorTests.Economy
 
         // ---- F-D2-1: smith-to-yard hardware delivery ----
 
-        // The full handover: pieces leave the smith, one yard lot holds
-        // them with the breakdown in its note, the yard pays 7 x 45c and
+        // The full handover: pieces leave the smith, one yard lot per kind
+        // holds them with the breakdown in its note, the yard pays 7 x 45c and
         // the smith is credited the same.
         [Test]
         public void Delivery_EndToEnd_SettlesCashAndCustody()
@@ -171,18 +171,36 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(7 * 45, job.SettledPriceCents);
             Assert.AreEqual(0, smithy.Assets.Count, "every delivered piece leaves the smith's stock");
             Assert.AreEqual(7, yard.HardwareStock.TotalHardwareUnits);
-            Assert.AreEqual(1, yard.HardwareStock.Lots.Count);
-            LumberYardHardwareLot lot = yard.HardwareStock.Lots[0];
-            Assert.AreEqual(LumberYardHardwareKind.SimpleHardware, lot.HardwareKind);
-            Assert.AreEqual("smith-1", lot.SourceBlacksmithBusinessId);
-            Assert.AreEqual(42, lot.ForgedDayIndex);
-            Assert.AreEqual(45, lot.UnitCostCents);
-            Assert.AreEqual(string.Empty, lot.IronImportOrderId,
-                "the iron import order id is not recoverable from a forged piece — it stays empty ('when known'), never invented");
-            Assert.AreEqual(job.SupplierNote, lot.SupplierNote, "the driver records the breakdown in the lot's note");
-            foreach (string lotId in materialLotIds)
-                Assert.IsTrue(lot.SupplierNote.Contains(lotId), $"note names material lot {lotId}");
-            Assert.AreEqual(lot.LotId, job.YardLotId);
+            // D6: one yard lot per kind, not one mixed SimpleHardware lot —
+            // a kind-level sale must be able to prove the yard holds the
+            // hinges and latches a package needs.
+            Assert.AreEqual(3, yard.HardwareStock.Lots.Count, "one yard lot per piece kind");
+            var byKind = new Dictionary<LumberYardHardwareKind, LumberYardHardwareLot>();
+            foreach (LumberYardHardwareLot lot in yard.HardwareStock.Lots)
+            {
+                Assert.IsFalse(byKind.ContainsKey(lot.HardwareKind), "one lot per kind");
+                byKind[lot.HardwareKind] = lot;
+            }
+            Assert.AreEqual(1, byKind[LumberYardHardwareKind.DoorHandle].HardwareUnits);
+            Assert.AreEqual(4, byKind[LumberYardHardwareKind.DoorHinge].HardwareUnits);
+            Assert.AreEqual(2, byKind[LumberYardHardwareKind.IronLatch].HardwareUnits);
+            foreach (LumberYardHardwareLot lot in yard.HardwareStock.Lots)
+            {
+                Assert.AreEqual("smith-1", lot.SourceBlacksmithBusinessId);
+                Assert.AreEqual(42, lot.ForgedDayIndex);
+                Assert.AreEqual(45, lot.UnitCostCents);
+                Assert.AreEqual(string.Empty, lot.IronImportOrderId,
+                    "the iron import order id is not recoverable from a forged piece — it stays empty ('when known'), never invented");
+                Assert.AreEqual(job.SupplierNote, lot.SupplierNote, "every kind lot records the breakdown in its note");
+                foreach (string lotId in materialLotIds)
+                    Assert.IsTrue(lot.SupplierNote.Contains(lotId), $"note names material lot {lotId}");
+            }
+            Assert.AreEqual(3, job.YardLotIds.Count, "the job records every kind lot it created");
+            Assert.AreEqual(byKind[LumberYardHardwareKind.DoorHandle].LotId, job.YardLotId,
+                "YardLotId is the first kind lot in display-name order (door-handle)");
+            Assert.AreEqual(job.YardLotIds[0], job.YardLotId);
+            Assert.IsTrue(job.YardLotIds.Contains(byKind[LumberYardHardwareKind.DoorHinge].LotId));
+            Assert.IsTrue(job.YardLotIds.Contains(byKind[LumberYardHardwareKind.IronLatch].LotId));
             Assert.AreEqual(10000 - 7 * 45, yardCash.BalanceCents, "the yard pays 7 pieces at 45c");
             Assert.AreEqual(7 * 45, smithCash.BalanceCents, "the smith is credited the same 315c");
         }

@@ -246,9 +246,21 @@ namespace LandLedgers.Economy.Creation
     public sealed class NpcBusinessLifecycleService
     {
         /// <summary>
+        /// B1 (2026-11-17): consecutive struggle weeks before an orderly
+        /// close. PROVISIONAL calibration for the owner to correct — the
+        /// survival reserve is roughly a month of operating buffer, so
+        /// eight weeks below it means two months without rebuilding the
+        /// buffer, after the cost-cut, borrow, and customer-seeking
+        /// responses have all had their chance. Same standing as the
+        /// per-type survival-reserve table: calibration, not canon.
+        /// </summary>
+        public const int CloseAfterConsecutiveStruggleWeeks = 8;
+
+        /// <summary>
         /// Weekly evaluation. Cash above the survival reserve is healthy;
         /// below it the business struggles and responds. Two consecutive
         /// healthy weeks bring a struggling business back to Operating.
+        /// Eight consecutive struggle weeks close it orderly.
         /// </summary>
         public void EvaluateWeek(
             NpcBusinessLifeRecord record,
@@ -349,6 +361,22 @@ namespace LandLedgers.Economy.Creation
                         diagnostics.Add($"{record.BusinessInstanceId}: customer-seeking spend refused: {refusal}");
                     }
                 }
+            }
+
+            // Response 4 (B1, 2026-11-17): sustained struggle ends in an
+            // orderly close. A shop that cannot rebuild a month's operating
+            // buffer for two consecutive months has exhausted the responses
+            // above; it closes through the existing CloseOrderly wind-down
+            // (debts settled or explicitly assumed, assets liquidated to
+            // real buyers, staff released, residual returned) instead of
+            // trading indefinitely on nothing. A recovery before the
+            // threshold never reaches this branch: the healthy path resets
+            // ConsecutiveStruggleWeeks to 0 first.
+            if (record.ConsecutiveStruggleWeeks >= CloseAfterConsecutiveStruggleWeeks)
+            {
+                CloseOrderly(record,
+                    $"cash below the {survivalReserveCents}c survival reserve for {record.ConsecutiveStruggleWeeks} consecutive weeks",
+                    context, diagnostics);
             }
         }
 

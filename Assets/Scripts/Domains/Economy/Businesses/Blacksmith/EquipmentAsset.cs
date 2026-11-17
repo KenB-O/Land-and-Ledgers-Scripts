@@ -15,7 +15,7 @@ namespace LandLedgers.Economy.Blacksmith
     public sealed class EquipmentAsset
     {
         public string AssetId = string.Empty;
-        public string Kind = string.Empty; // "plow", "harrow", "horseshoe-set", ...
+        public string Kind = string.Empty; // "plow", "harrow", "horseshoe", ...
         public string DisplayName = string.Empty;
 
         [Range(0f, 1f)]
@@ -181,6 +181,20 @@ namespace LandLedgers.Economy.Blacksmith
         public int FuelUnits; // forge coal
         public int MinutesAtLevel1; // TTS-1 quantum; skill scales it
         public string RequiredSkillId = string.Empty;
+
+        /// <summary>
+        /// D1: fractional consumption in quarter-units per item — one material
+        /// or fuel unit is four quarters. 0 means the whole-unit
+        /// MaterialUnits/FuelUnits apply (every legacy recipe). A horseshoe
+        /// consumes 1 quarter-iron + 1 quarter-coal: one iron-stock unit is
+        /// a ~5 lb bar that cuts into four shoe lengths, and one forge-coal
+        /// unit fires four shoe forgings. The integer stock ledger stays
+        /// the authority; the forge keeps the cut remainder (see
+        /// BlacksmithRuntime) so four shoes consume exactly one iron unit
+        /// and one coal unit, never a fractional accounting bug.
+        /// </summary>
+        public int MaterialQuartersPerItem;
+        public int FuelQuartersPerItem;
 
         public SmithingRecipe() { }
 

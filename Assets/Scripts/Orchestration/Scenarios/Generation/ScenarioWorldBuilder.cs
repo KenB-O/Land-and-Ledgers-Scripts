@@ -420,7 +420,7 @@ namespace LandLedgers.Orchestration.Scenarios.Generation
             {
                 case "general-store":
                 case "general": return new[] { "flour-sack", "coffee-beans", "nails-keg" };
-                case "blacksmith": return new[] { "horseshoe-set", "nails-keg", "plowshare" };
+                case "blacksmith": return new[] { "horseshoe", "nails-keg", "plowshare" }; // D1: individual shoes, not a set
                 case "saloon": return new[] { "whiskey-bottle", "beer-keg" };
                 case "bakery": return new[] { "flour-sack", "bread-loaf" };
                 case "livery": return new[] { "oats-bushel", "harness-set" };

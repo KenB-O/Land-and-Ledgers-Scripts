@@ -128,5 +128,5 @@ No unrelated local assets were staged or modified. No gameplay balancing, scene/
 
 ## Publication
 
-This report and both completed raw runs are prepared for publication on the Codex development branch `codex/universal-business-construction-unity-integration-2026-11-17`, based on Muse tip `8cb914eaa7facbf882b40a27b4aae3cdd007198e`. Remote verification and the final commit SHA must be recorded after push. Do not merge to `main` or force-push.
+This report and both completed raw runs were first published on `codex/universal-business-construction-unity-integration-2026-11-17` in commit `2134520e4cb8ccfcf6edd0c8926645a53cc5f099`. `git ls-remote --heads origin refs/heads/codex/universal-business-construction-unity-integration-2026-11-17` returned that exact SHA. A following report-only commit records this correction and the final branch tip is given in the completion handoff. The Muse source tip remains identifiable as `8cb914eaa7facbf882b40a27b4aae3cdd007198e`. This branch was not merged to `main` and was not force-pushed.
 Additional Muse iteration guidance: Reports/Diagnostics/CODEX_TO_MUSE_DEVELOPMENT_NOTES_2026-11-17.md.

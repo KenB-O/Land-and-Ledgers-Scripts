@@ -361,6 +361,12 @@ namespace LandLedgers.Persistence
         /// never money).
         /// </summary>
         public List<HouseholdPurchasingNeed> purchasingNeeds = new();
+        /// <summary>
+        /// M4-R1: open household housing-search needs (F-M1-7). Saved so a
+        /// Continue restores needs that were open at save time instead of
+        /// losing them and re-opening them the next day.
+        /// </summary>
+        public List<HousingSearchNeed> housingSearchNeeds = new();
         public List<string> validationMessages = new();
         public List<RentalPropertySaveDto> rentalProperties = new();
         public List<RentalApplicantSaveDto> rentalApplicants = new();

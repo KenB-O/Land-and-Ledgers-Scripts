@@ -2170,5 +2170,17 @@ namespace LandLedgers.Orchestration.Systems
         {
             PurchasingNeeds.ImportState(inNeeds);
         }
+
+        /// <summary>M4-R1: exports housing-search needs for the PopulationSaveDto section (F-M1-7).</summary>
+        public void ExportHousingSearchNeeds(List<HousingSearchNeed> outNeeds)
+        {
+            HousingSearchNeeds.ExportState(outNeeds);
+        }
+
+        /// <summary>M4-R1: imports housing-search needs from the PopulationSaveDto section (F-M1-7).</summary>
+        public void ImportHousingSearchNeeds(IEnumerable<HousingSearchNeed> inNeeds)
+        {
+            HousingSearchNeeds.ImportState(inNeeds);
+        }
     }
 }

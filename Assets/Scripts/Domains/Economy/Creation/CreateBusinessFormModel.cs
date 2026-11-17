@@ -397,13 +397,18 @@ namespace LandLedgers.Economy.Creation
                 _ => PremisesPreference.Auto,
             };
 
+            // C1: pass the form's capability choices through to the intent. They
+            // used to be consumed only to merge premises requirements and then
+            // dropped, so a player's chosen capabilities never reached the business
+            // TryCreate formed. TryCreate now attaches intent ids to the instance.
             return new CreateBusinessIntent(
                 businessType,
                 displayName,
                 new BusinessOwnership(shares),
                 requirement,
                 preference,
-                totalCapital);
+                totalCapital,
+                capabilityIds);
         }
 
     }

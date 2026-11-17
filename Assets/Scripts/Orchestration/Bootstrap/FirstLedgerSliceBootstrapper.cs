@@ -718,6 +718,7 @@ namespace LandLedgers.FirstLedger
             AppendStartupTiming(timing, stepTimer, "business/runtime configure");
 
             ConfigureAcquisitionMarket();
+            ConfigureContentsPresenceContract();
             ApplyFreshAcquisitionMarketSeedAuthority();
             acquisitionMarket?.RebuildMarket();
             AppendStartupTiming(timing, stepTimer, "acquisition market");
@@ -825,6 +826,7 @@ namespace LandLedgers.FirstLedger
             // Refresh derived destinations before restored journeys bind to their physical targets.
             GetComponent<PhysicalRegionalTownRuntime>()?.RefreshWorldFrame(townWorld);
             ConfigureAcquisitionMarket();
+            ConfigureContentsPresenceContract();
             acquisitionMarket?.RebuildMarket();
             ConfigurePlayerDebtManager();
             ConfigureOpportunityPressureRuntime();
@@ -1434,6 +1436,38 @@ namespace LandLedgers.FirstLedger
             }
 
             acquisitionMarket.Configure(townWorld, storeRuntime, sharedBusinessRuntime, populationManager, timeManager, civicFoundation, playerPortfolioManager);
+        }
+
+        /// <summary>
+        /// G-2 (W-G4 Workstream 2): binds the player physical-presence
+        /// contract to the acquisition market's contents selection API.
+        /// The driver is constructed here, in Orchestration, because the
+        /// manager (Domains) cannot construct it — it talks to the
+        /// PlayerDirector, which lives in Orchestration/Player. Only
+        /// when null, so test injection is respected and a re-boot does
+        /// not replace a bound contract. Runs on New Game and Continue
+        /// alike (both call sites sit next to ConfigureAcquisitionMarket);
+        /// the driver resolves its scene objects lazily at first use, so
+        /// boot ordering never matters. The authorized-agent source is
+        /// deliberately NOT bound: no production authorized-agent
+        /// authority exists, so the contract is constructed with a null
+        /// source and refuses agent actions loudly — an agent is never
+        /// assumed authorized.
+        /// </summary>
+        private void ConfigureContentsPresenceContract()
+        {
+            if (acquisitionMarket == null)
+            {
+                return;
+            }
+
+            if (acquisitionMarket.ContentsPresenceContract != null)
+            {
+                return;
+            }
+
+            acquisitionMarket.ContentsPresenceContract =
+                new PlayerFurnishingPresenceContract(new PlayerFurnishingPresenceDriver());
         }
 
         private void ApplyFreshAcquisitionMarketSeedAuthority()

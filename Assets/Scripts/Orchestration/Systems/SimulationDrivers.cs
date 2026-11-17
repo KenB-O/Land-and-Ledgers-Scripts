@@ -5172,8 +5172,13 @@ namespace LandLedgers.Orchestration.Systems
         /// the hub's journey model (the hub owns the model; no production
         /// authority instance existed). The dead never travel: the
         /// availability seam refuses deceased travelers at departure.
+        /// G-2 (W-G4 Workstream 2): public, not private — the production
+        /// presence driver (PlayerFurnishingPresenceDriver) must share
+        /// this single live instance for IsOffMap. A second authority
+        /// would read empty state and miss live off-map journeys, so
+        /// the driver never constructs one. One word changed, no logic.
         /// </summary>
-        private OffMapJourneyAuthority OffMapJourneys
+        public OffMapJourneyAuthority OffMapJourneys
         {
             get
             {

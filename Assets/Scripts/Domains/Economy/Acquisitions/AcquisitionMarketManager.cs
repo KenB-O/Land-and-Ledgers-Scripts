@@ -729,6 +729,9 @@ namespace LandLedgers.Economy
         [SerializeField]
         private OpportunityPressureRuntimeManager opportunityPressureRuntime;
 
+        [SerializeField]
+        private SimulationSystemsHub systemsHub;
+
         [Header("Listing Caps")]
         [SerializeField, Range(1, 8)]
         private int maxLandListings = 4;
@@ -7401,6 +7404,19 @@ namespace LandLedgers.Economy
             timeManager ??= TimeManager.Instance != null ? TimeManager.Instance : FindAnyObjectByType<TimeManager>();
             civicFoundation ??= FindAnyObjectByType<CivicFoundationManager>();
             opportunityPressureRuntime ??= FindAnyObjectByType<OpportunityPressureRuntimeManager>();
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+
+            // G-2 (W-G4 Workstream 2): the contents seams, bound from
+            // production state. Only when null, so test injection is
+            // respected. The lambdas resolve through the hub at call
+            // time (registers are created lazily), never at bind time.
+            // The presence contract is NOT bound here: it needs the
+            // PlayerDirector-based driver, which Domains cannot
+            // construct — the bootstrapper binds it (see
+            // FirstLedgerSliceBootstrapper.ConfigureContentsPresenceContract).
+            SellerFurnishingRegisterForBuilding ??= ResolveSellerRegisterForBuilding;
+            BuyerFurnishingRegisterForBuilding ??= ResolveBuyerRegisterForBuilding;
+            ContentsPlacementResolver ??= new SceneContentsPlacementResolver(AllScenePlacements);
         }
 
         private void SubscribeToTime()
@@ -8230,6 +8246,94 @@ namespace LandLedgers.Economy
         }
 
         /// <summary>
+        /// G-2 (W-G4 Workstream 2): resolves the production hub for the
+        /// contents seams, re-finding it when the cached reference is
+        /// null (the manager's Awake can run before the hub exists in
+        /// the scene). Null when no hub is present — the seams then
+        /// return null and the deal refuses loudly, never silently.
+        /// Follows the RecordSellerFinanceAtClose precedent (the manager
+        /// already resolves the hub this way).
+        /// </summary>
+        private SimulationSystemsHub ResolveSystemsHub()
+        {
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            return systemsHub;
+        }
+
+        /// <summary>
+        /// G-2: the seller seam's production resolver — the unique hub
+        /// register holding a live binding in the building (see
+        /// ContentsCloseWiring.ResolveSellerRegisterForBuilding).
+        /// </summary>
+        private HouseholdFurnishingRegister ResolveSellerRegisterForBuilding(int buildingInstanceId)
+        {
+            SimulationSystemsHub hub = ResolveSystemsHub();
+            if (hub == null) return null;
+            return ContentsCloseWiring.ResolveSellerRegisterForBuilding(buildingInstanceId, hub.AllFurnishingRegisters);
+        }
+
+        /// <summary>
+        /// G-2: the buyer seam's production resolver — the hub's register
+        /// for the player household. The building id is not part of the
+        /// buyer lookup: the buyer register is the player's register
+        /// whatever building is being bought.
+        /// </summary>
+        private HouseholdFurnishingRegister ResolveBuyerRegisterForBuilding(int buildingInstanceId)
+        {
+            SimulationSystemsHub hub = ResolveSystemsHub();
+            if (hub == null) return null;
+            int playerHouseholdId = ContentsCloseWiring.FindPlayerHouseholdId(populationManager?.State);
+            if (playerHouseholdId < 0) return null;
+            return hub.FurnishingRegisterFor(playerHouseholdId);
+        }
+
+        /// <summary>
+        /// G-2: the placement resolver's scene enumeration — every
+        /// placement component in the scene. The resolver matches on
+        /// the stable placement id and returns the placement's own
+        /// building authority.
+        /// </summary>
+        private IEnumerable<BuildingEquipmentPlacement> AllScenePlacements()
+        {
+            return UnityEngine.Object.FindObjectsByType<BuildingEquipmentPlacement>(FindObjectsSortMode.None);
+        }
+
+        /// <summary>
+        /// G-2: the seller's HouseholdState for stove settlement — only
+        /// when the selection's seller is a household (SellerOwnerKind
+        /// "household", SellerOwnerId the plain household id). A business
+        /// seller has no HouseholdState; the transfer then records the
+        /// skipped settlement loudly, as before.
+        /// </summary>
+        private HouseholdState ResolveSellerHousehold(PropertyContentsSelection contents)
+        {
+            if (contents == null) return null;
+            if (contents.SellerOwnerKind != HouseholdFurnishingRegister.OwnerKindHousehold) return null;
+            if (!int.TryParse(contents.SellerOwnerId, out int sellerHouseholdId)) return null;
+            PopulationState population = populationManager?.State;
+            if (population == null || population.households == null) return null;
+            foreach (HouseholdState household in population.households)
+            {
+                if (household != null && household.id == sellerHouseholdId) return household;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// G-2: the seller's stove registry for stove settlement — the
+        /// hub's registry for the seller household (created on demand,
+        /// the same lazy pattern as FurnishingRegisterFor). Null when
+        /// the seller is not a known household or no hub is present.
+        /// </summary>
+        private HouseholdStoveRegistry ResolveSellerStoveRegistry(HouseholdState sellerHousehold)
+        {
+            if (sellerHousehold == null) return null;
+            SimulationSystemsHub hub = ResolveSystemsHub();
+            if (hub == null) return null;
+            return hub.HouseholdStoveRegistryFor(sellerHousehold.id);
+        }
+
+        /// <summary>
         /// D-6: agreement-time contents validation for the player flow.
         /// Returns null when the selection may be agreed, or the exact
         /// reason it may not. Resolves the seller's furnishing register
@@ -8292,8 +8396,10 @@ namespace LandLedgers.Economy
             // the pre-flight runs in the same block, before any money
             // moves, so a reserved asset, an unresolvable placement, or
             // a buyer-register conflict fails the deal before funding.
-            // Conservation is NOT checked in this flow: no structure
-            // value exists here yet (Agent F's split, F6).
+            // G-2: conservation IS checked in this flow now, with the
+            // D-8 implied structure value (agreed price minus contents)
+            // — see the conservation block after the transfer pre-flight
+            // below.
             HouseholdFurnishingRegister closeSellerRegister = null;
             HouseholdFurnishingRegister closeBuyerRegister = null;
             if (deal.Contents != null)
@@ -8333,6 +8439,52 @@ namespace LandLedgers.Economy
                 {
                     deal.closingFailureCause = AcquisitionClosingFailureCause.ContentsRefused;
                     deal.closingFailureSummary = "contents transfer cannot run at close: " + string.Join("; ", transferProblems) + " — the deal fails before any money moves.";
+                    RefreshDealWorkflowReadouts(listing, deal);
+                    ApplyDealFailure(deal, deal.closingFailureSummary, false, out message);
+                    return false;
+                }
+
+                // G-2 (W-G4 Workstream 2): close-time conservation with
+                // the D-8 implied structure value — the agreed price minus
+                // the agreed contents value, the SAME value the negotiation
+                // produced (D-8 §16: validate and close must use this
+                // value, never the F6 anchor). The F6 split
+                // (SplitStructureAndContents) is the negotiation's opening
+                // anchor, not the close-time check: its structure-only is
+                // the as-standing estimate minus fixtures, which disagrees
+                // with the negotiated price on any discounted deal, so
+                // feeding it here would fail conservation on a legitimately
+                // negotiated price. The agreed price here is the same
+                // definition finalPrice uses below (tentative price when
+                // one was agreed, else the asking price).
+                // The check itself is definitional in this flow — the
+                // implied value is derived from the same agreed price it
+                // is checked against — so its bite is the refusal below
+                // when the agreed price does not cover the contents
+                // (the selection API's TryImpliedStructureValueCents
+                // refuses the same way); the CheckConservation call pins
+                // the D-8 convention at the close so a future independent
+                // source is caught. The full agreement-vs-close drift
+                // check (an agreement-time implied value persisted on the
+                // deal) is a follow-up, not this slice.
+                int agreedPriceCents = deal.tentativePriceCents > 0 ? deal.tentativePriceCents : listing.askingPriceCents;
+                int contentsValueCents = deal.Contents.TotalContentsValueCents;
+                if (agreedPriceCents < contentsValueCents)
+                {
+                    string shortfall = "the agreed price " + agreedPriceCents + "c does not cover the contents value "
+                        + contentsValueCents + "c — the implied structure value would be negative.";
+                    deal.closingFailureCause = AcquisitionClosingFailureCause.ContentsRefused;
+                    deal.closingFailureSummary = shortfall;
+                    RefreshDealWorkflowReadouts(listing, deal);
+                    ApplyDealFailure(deal, shortfall, false, out message);
+                    return false;
+                }
+                int impliedStructureCents = agreedPriceCents - contentsValueCents;
+                string conservationProblem = PropertyContentsSelection.CheckConservation(impliedStructureCents, contentsValueCents, agreedPriceCents);
+                if (conservationProblem != null)
+                {
+                    deal.closingFailureCause = AcquisitionClosingFailureCause.ContentsRefused;
+                    deal.closingFailureSummary = "contents conservation failed at close: " + conservationProblem;
                     RefreshDealWorkflowReadouts(listing, deal);
                     ApplyDealFailure(deal, deal.closingFailureSummary, false, out message);
                     return false;
@@ -8389,15 +8541,19 @@ namespace LandLedgers.Economy
             // is logged loudly, and the deal stays closed (title moved;
             // manual reconciliation required, like the NPC flow's
             // title-verification failure). It never voids the close.
-            // Stove fuel settlement is skipped in this flow (the seller's
-            // stove registry + household seams are G's wiring — the
-            // transfer records the skip loudly).
+            // G-2: stove fuel settlement runs when the seller is a known
+            // household (registry + household resolved below); a business
+            // seller or an unknown seller still skips it, and the
+            // transfer records the skip loudly rather than silently
+            // orphaning fuel.
             if (deal.Contents != null)
             {
                 var transferDiag = new List<string>();
+                HouseholdState sellerHousehold = ResolveSellerHousehold(deal.Contents);
+                HouseholdStoveRegistry sellerStoves = ResolveSellerStoveRegistry(sellerHousehold);
                 PropertyContentsTransferResult transfer = PropertyContentsTransfer.TransferAtClose(
                     deal.Contents, closeSellerRegister, closeBuyerRegister, ContentsPlacementResolver,
-                    "property-acquisition:" + deal.listingId, GetCurrentDayIndex(), null, null, transferDiag);
+                    "property-acquisition:" + deal.listingId, GetCurrentDayIndex(), sellerStoves, sellerHousehold, transferDiag);
                 foreach (string line in transferDiag)
                     Debug.Log($"[Acquisitions] {line}", this);
                 if (!transfer.Succeeded)

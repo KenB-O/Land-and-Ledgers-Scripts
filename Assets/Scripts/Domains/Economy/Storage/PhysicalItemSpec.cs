@@ -296,6 +296,29 @@ namespace LandLedgers.Economy.Storage
                 UnknownSpec("meat_unspecified", "Meat (category-level, composition unspecified)", "unit"), // Unknown: no authored mass in source.
                 UnknownSpec("household_goods_unspecified", "Household Goods (category-level, item unspecified)", "unit"), // Unknown: no authored mass in source.
                 UnknownSpec("clothing_unspecified", "Clothing (category-level, item unspecified)", "unit"), // Unknown: no authored mass in source.
+                // Exact General Store SKUs (HouseholdInventory.cs Definitions):
+                // the catalog gained these ids without a matching seed, so the
+                // catalog-agreement test failed on the first of them ('beef').
+                // Identity copied verbatim from the catalog; every physical
+                // field Unknown, same as every other seed.
+                UnknownSpec("beef", "Beef", "lb"), // Unknown: no authored mass in source.
+                UnknownSpec("bacon", "Bacon", "lb"), // Unknown: no authored mass in source.
+                UnknownSpec("cheese", "Cheese", "lb"), // Unknown: no authored mass in source.
+                UnknownSpec("candles", "Candles", "each"), // Unknown: no authored mass in source.
+                UnknownSpec("lantern", "Lantern", "each"), // Unknown: no authored mass in source.
+                UnknownSpec("thread", "Thread", "spool"), // Unknown: no authored mass in source.
+                UnknownSpec("buttons", "Buttons", "card"), // Unknown: no authored mass in source.
+                UnknownSpec("nails_hardware_lot", "Nails / Hardware", "lot"), // Unknown: no authored mass in source.
+                UnknownSpec("hand_tool", "Hand Tool", "each"), // Unknown: no authored mass in source.
+                UnknownSpec("farm_tool", "Farm Tool", "each"), // Unknown: no authored mass in source.
+                UnknownSpec("patent_remedy", "Patent Remedy", "bottle"), // Unknown: no authored mass in source.
+                UnknownSpec("medicine_bottle", "Medicine Bottle", "bottle"), // Unknown: no authored mass in source.
+                UnknownSpec("basic_cloth", "Basic Cloth", "yd"), // Unknown: no authored mass in source.
+                UnknownSpec("flannel", "Flannel", "yd"), // Unknown: no authored mass in source.
+                UnknownSpec("workwear", "Workwear", "set"), // Unknown: no authored mass in source.
+                UnknownSpec("boots", "Boots", "pair"), // Unknown: no authored mass in source.
+                UnknownSpec("blanket", "Blanket", "each"), // Unknown: no authored mass in source.
+                UnknownSpec("hat", "Hat", "each"), // Unknown: no authored mass in source.
                 // Non-household ids the tree already names as tangible items.
                 // Unit "lb" from BakeryBreadCatalog.FlourItemId ("bakery-flour", lb).
                 UnknownSpec("bakery-flour", "Flour", "lb"), // Unknown: no authored mass in source.

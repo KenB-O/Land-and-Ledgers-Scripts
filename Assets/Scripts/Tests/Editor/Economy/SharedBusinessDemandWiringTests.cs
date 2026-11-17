@@ -62,6 +62,8 @@ namespace LandLedgers.Editor.Economy
             public SupplierDirectory Directory = new SupplierDirectory();
             public List<string> Diag = new List<string>();
             public int HouseholdId = 7;
+            private readonly Dictionary<string, TestSupplier> suppliersById =
+                new Dictionary<string, TestSupplier>();
 
             public Fixture()
             {
@@ -87,10 +89,21 @@ namespace LandLedgers.Editor.Economy
 
             public TestSupplier AddSupplier(string id, string category, int stock, int priceCents)
             {
-                var supplier = new TestSupplier { SupplierBusinessId = id };
+                // One business stocks many categories: registering a second
+                // TestSupplier under the same id would REPLACE the first in
+                // SupplierDirectory (documented restore semantics — a
+                // restored business replaces its old runtime), silently
+                // dropping the earlier category. Merge into the one
+                // supplier object per business id instead, which is what
+                // "the general store can buy/sell whatever" means.
+                if (!suppliersById.TryGetValue(id, out TestSupplier supplier))
+                {
+                    supplier = new TestSupplier { SupplierBusinessId = id };
+                    suppliersById[id] = supplier;
+                    Directory.Register(supplier);
+                }
                 supplier.Stock[category] = stock;
                 supplier.Prices[category] = priceCents;
-                Directory.Register(supplier);
                 return supplier;
             }
 

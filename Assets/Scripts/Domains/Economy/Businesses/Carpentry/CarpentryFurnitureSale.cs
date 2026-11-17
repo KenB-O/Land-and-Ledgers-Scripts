@@ -15,6 +15,8 @@ namespace LandLedgers.Economy.Businesses.Carpentry
         public HouseholdLedger Ledger;
         public HouseholdFurnishingRegister Furnishings;
         public List<FurnishingWant> Wants = new List<FurnishingWant>();
+        /// <summary>G-3: the household's home building instance id — the delivery + install location for a store purchase.</summary>
+        public int HomeBuildingId = -1;
     }
 
     /// <summary>

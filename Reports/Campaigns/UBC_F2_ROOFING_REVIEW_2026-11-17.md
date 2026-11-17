@@ -72,9 +72,13 @@ phase at exactly two materials) — this lane does not re-pin them.
   future shingle good needs a priced supply (import or yard), not
   just a labour rate.
 - **Other (not in the evidence).** No other period roofing — slate,
-  metal/tin, sod, thatch, tar paper — appears in Canon, the
-  Technical Bible, the E1 report, or the prices source for this
-  setting. None is modelled, none is proposed. If a future design
+  metal/tin, sod, thatch, tar paper — is modelled, proposed, priced, or
+  supplied anywhere in Canon, the Technical Bible, the E1 report, or the
+  prices source for this setting. (Canon mentions "tar paper" once as a
+  period-change availability input and "earth/sod" once as a general local
+  building material, neither as a roofing good; its "slate" hits are school
+  slates and the substring inside "translate".) None is modelled, none is
+  proposed. If a future design
   wants one, it needs its own historical anchor first; this lane
   invents none.
 

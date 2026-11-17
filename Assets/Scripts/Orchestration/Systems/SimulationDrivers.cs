@@ -15,6 +15,7 @@ using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Postal;
 using LandLedgers.Economy.Storage;
 using LandLedgers.Economy.Businesses.BoardingHouse;
+using LandLedgers.Economy.Businesses.Carpentry;
 using LandLedgers.Economy.Businesses.FuelDealer;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.Logging;
@@ -4555,6 +4556,11 @@ namespace LandLedgers.Orchestration.Systems
             // sleep in the live game (Canon §22 double-booking).
             DriveDailyActivityPlans(absoluteDayIndex);
 
+            // G-1 (W-G4 Workstream 1): the carpentry workshop's day runs
+            // before generic production — supply runs first, so the
+            // workshop has lumber, nails and cloth before its start leg,
+            // the C-7 camp-supply order (feed before the crew works).
+            DriveCarpentryWorkshop(absoluteDayIndex);
             // Generic production processes are persisted on their Business and
             // advance through the same TaskAuthority on the daily simulation
             // boundary. This is execution of an already-started physical process;
@@ -5166,8 +5172,13 @@ namespace LandLedgers.Orchestration.Systems
         /// the hub's journey model (the hub owns the model; no production
         /// authority instance existed). The dead never travel: the
         /// availability seam refuses deceased travelers at departure.
+        /// G-2 (W-G4 Workstream 2): public, not private — the production
+        /// presence driver (PlayerFurnishingPresenceDriver) must share
+        /// this single live instance for IsOffMap. A second authority
+        /// would read empty state and miss live off-map journeys, so
+        /// the driver never constructs one. One word changed, no logic.
         /// </summary>
-        private OffMapJourneyAuthority OffMapJourneys
+        public OffMapJourneyAuthority OffMapJourneys
         {
             get
             {
@@ -6129,12 +6140,237 @@ namespace LandLedgers.Orchestration.Systems
                 Debug.Log("[SimulationDrivers] boarding-house weekly: " + string.Join(" | ", diagnostics));
         }
 
+        /// <summary>
+        /// G-1 (expanded campaign 2026-11-16, W-G4 Workstream 1): the
+        /// carpentry workshop's day. Supply runs first (lumber from the
+        /// yard, then nails/cloth from the store), then the furniture
+        /// start leg, then the advance leg, then the sale of finished
+        /// pieces to wanting households. Each leg is independent: a
+        /// refused leg is logged day-keyed and the day continues — a
+        /// refused day is retried tomorrow, and the workshop still runs
+        /// on the stock it holds. The workshop is scenario-optional
+        /// (zero by default: no carpentry slot, no workshop), so a
+        /// missing workshop is a silent return, not a refusal — the
+        /// bootstrapper already logs a missing configured workshop as
+        /// an error at Configure time. The production legs go through
+        /// CarpentryProduction (the equipment-output binding), never
+        /// the generic inventory-output path.
+        /// </summary>
+        private void DriveCarpentryWorkshop(int absoluteDayIndex)
+        {
+            if (hub == null || sharedBusinessRuntime == null) return;
+            BusinessInstanceState workshop = null;
+            BusinessInstanceState yardBusiness = null;
+            BusinessInstanceState storeBusiness = null;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business == null) continue;
+                if (workshop == null && CarpentryProduction.IsCarpentryWorkshop(business)) workshop = business;
+                if (yardBusiness == null && business.BusinessType == BusinessType.LumberYard) yardBusiness = business;
+                if (storeBusiness == null && business.BusinessType == BusinessType.GeneralStore) storeBusiness = business;
+            }
+            if (workshop == null) return;
+            if (workshop.RuntimeState == null)
+            {
+                LogRefusalDayKeyed("carpentry:no-runtime", absoluteDayIndex,
+                    "[SimulationDrivers] carpentry workshop skipped: no formed business runtime state — production settles from real cash, never unpaid.");
+                return;
+            }
+            EntityId businessId = EntityId.For(EntityKind.Business, StableBusinessRuntimeId(workshop.InstanceId));
+            BusinessEquipmentRegister register = hub.EquipmentRegisterFor(workshop.InstanceId);
+            GenericProductionRuntime runtime = hub.GenericProduction.ForBusiness(workshop, businessId, absoluteDayIndex);
+            var production = new CarpentryProduction(workshop, register);
+            var diag = new List<string>();
+
+            // (b) Lumber: the yard's real retail path, buyer-collected.
+            if (yardBusiness == null || yardBusiness.RuntimeState == null)
+            {
+                LogRefusalDayKeyed("carpentry:no-yard", absoluteDayIndex,
+                    "[SimulationDrivers] carpentry lumber skipped: no lumber yard business with runtime state is present.");
+            }
+            else
+            {
+                var yard = hub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+                var workshopCash = new Series2BusinessRuntimeCashPort(workshop.RuntimeState);
+                var yardCash = new Series2BusinessRuntimeCashPort(yardBusiness.RuntimeState);
+                if (!CarpentryLumberProcurement.TryMaintainLumberStock(yard, workshop, workshopCash, yardCash,
+                        absoluteDayIndex, diag, out CarpentryLumberReceipt receipt, out bool purchased, out string lumberError))
+                {
+                    LogRefusalDayKeyed("carpentry:lumber", absoluteDayIndex,
+                        "[SimulationDrivers] carpentry lumber refused: " + lumberError);
+                }
+                else if (purchased && receipt != null)
+                {
+                    Debug.Log($"[SimulationDrivers] carpentry day {absoluteDayIndex}: bought {receipt.Units} lumber units from the lumber yard at {receipt.UnitPriceCents}c each (sale {receipt.SaleId}, {receipt.TotalCents}c).", this);
+                }
+            }
+
+            // (c) Nails/cloth: the store's real retail lots, at the live
+            // selling price read from the store manager (C-7 pattern).
+            LandLedgers.FirstLedger.GeneralStoreRuntimeManager storeManager =
+                FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+            if (storeBusiness == null || storeBusiness.RuntimeState == null || storeManager == null)
+            {
+                LogRefusalDayKeyed("carpentry:no-store", absoluteDayIndex,
+                    "[SimulationDrivers] carpentry supplies skipped: no General Store business with runtime state and store manager is present.");
+            }
+            else
+            {
+                var workshopCash = new Series2BusinessRuntimeCashPort(workshop.RuntimeState);
+                var storeCash = new Series2BusinessRuntimeCashPort(storeBusiness.RuntimeState);
+                if (!CarpentrySuppliesPurchase.TryMaintainSupplies(storeBusiness.RuntimeState, workshop, workshopCash, storeCash,
+                        storeBusiness.RuntimeState.BusinessId, storeManager.GetItemSellingPriceCents, absoluteDayIndex, diag, out string suppliesError))
+                {
+                    LogRefusalDayKeyed("carpentry:supplies", absoluteDayIndex,
+                        "[SimulationDrivers] carpentry supplies refused: " + suppliesError);
+                }
+            }
+
+            // (a) Start + advance through the furniture binding. The
+            // workers list is the same shape as DriveGenericProduction
+            // (owner first, then active employees).
+            var workers = new List<EntityId>();
+            if (workshop.Owner != null && workshop.Owner.PersonId >= 0)
+            {
+                workers.Add(EntityId.For(EntityKind.Person, workshop.Owner.PersonId));
+            }
+            if (workshop.RuntimeState?.EmploymentRegistry != null)
+            {
+                foreach (EmploymentRelationship relationship in workshop.RuntimeState.EmploymentRegistry.GetActiveByEmployer(workshop.InstanceId))
+                {
+                    if (relationship != null && relationship.EmployeePersonId >= 0)
+                    {
+                        workers.Add(EntityId.For(EntityKind.Person, relationship.EmployeePersonId));
+                    }
+                }
+            }
+            if (workshop.GenericConfiguration.ActiveProcesses.All(process => process == null || process.Completed))
+            {
+                if (!production.TryBeginEligibleFurniture(runtime, workers, absoluteDayIndex, out _, out string startReason))
+                {
+                    LogRefusalDayKeyed("carpentry:start", absoluteDayIndex,
+                        "[SimulationDrivers] carpentry start refused: " + startReason);
+                }
+            }
+            if (workshop.GenericConfiguration.ActiveProcesses.Count > 0)
+            {
+                if (!production.TryAdvanceFurnitureProcesses(runtime, 24 * 60, absoluteDayIndex, out string advanceReason))
+                {
+                    LogRefusalDayKeyed("carpentry:advance", absoluteDayIndex,
+                        "[SimulationDrivers] carpentry advance refused: " + advanceReason);
+                }
+            }
+
+            // (d) Sell finished pieces to wanting households.
+            DriveCarpentryFurnitureSales(workshop, register, absoluteDayIndex, diag);
+
+            foreach (string line in diag) Debug.Log(line, this);
+        }
+
+        /// <summary>
+        /// G-1: the workshop sale leg. Buyer candidates are assembled
+        /// from the live population: each household with a ledger and
+        /// members gets its ranked B6 wants (the evaluator's inputs are
+        /// resolved from the hub — furnishing register, sleeping and
+        /// dining registries derived from it, stove registry, storage
+        /// registry for the storage want — priced at the F2 retail
+        /// baseline). A household with no ledger or no active members
+        /// cannot buy and is skipped, never invented. The sale itself
+        /// runs in CarpentryFurnitureSale (cash + title + registers);
+        /// a disputed sale is logged day-keyed, never silent.
+        /// </summary>
+        private void DriveCarpentryFurnitureSales(BusinessInstanceState workshop, BusinessEquipmentRegister register, int absoluteDayIndex, List<string> diag)
+        {
+            if (populationManager == null || populationManager.State == null || populationManager.State.households == null)
+            {
+                LogRefusalDayKeyed("carpentry:no-population", absoluteDayIndex,
+                    "[SimulationDrivers] carpentry furniture sales skipped: no population state to find buying households in.");
+                return;
+            }
+            var candidates = new List<CarpentryFurnitureSaleCandidate>();
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null) continue;
+                HouseholdLedger ledger = hub.HouseholdLedgers.Get(household.id);
+                if (ledger == null) continue;
+                List<int> members = householdMemberships != null ? householdMemberships.GetActiveMembers(household.id) : null;
+                if (members == null || members.Count == 0) continue;
+                HouseholdFurnishingRegister furnishings = hub.FurnishingRegisterFor(household.id);
+                var inputs = new HouseholdFurnishingEvaluationInputs
+                {
+                    HouseholdId = household.id,
+                    MemberIds = members,
+                    CashCents = ledger.GetBalanceCents(),
+                    Furnishings = furnishings,
+                    Sleeping = new SleepingPlaceRegistry { HouseholdId = household.id, Furnishings = furnishings, HomeBuildingInstanceId = household.homeBuildingId },
+                    Dining = new DiningPlaceRegistry { HouseholdId = household.id, Furnishings = furnishings, HomeBuildingInstanceId = household.homeBuildingId },
+                    Stoves = hub.HouseholdStoveRegistryFor(household.id),
+                    HasStorageZone = HasLiveStorageZone(household.id),
+                    StoredLotUnits = StoredLotUnits(household.id),
+                    ReplacementCostCentsForKind = FurnitureValuation.ReplacementCostCentsForKind,
+                    DayIndex = absoluteDayIndex,
+                };
+                candidates.Add(new CarpentryFurnitureSaleCandidate
+                {
+                    HouseholdId = household.id,
+                    Ledger = ledger,
+                    Furnishings = furnishings,
+                    Wants = HouseholdFurnishingEvaluator.EvaluateWants(inputs),
+                });
+            }
+            var workshopCash = new Series2BusinessRuntimeCashPort(workshop.RuntimeState);
+            if (!CarpentryFurnitureSale.TrySellFinishedPieces(workshop, register, workshopCash, candidates, absoluteDayIndex, diag, out string saleError))
+            {
+                LogRefusalDayKeyed("carpentry:sale", absoluteDayIndex,
+                    "[SimulationDrivers] carpentry furniture sale disputed: " + saleError);
+            }
+        }
+
+        /// <summary>
+        /// G-1: the B6 storage-want input — true when the household has
+        /// at least one live storage binding (an installed, usable
+        /// storage fixture with a live binding, per the storage
+        /// registry). After a Continue the bindings are empty until the
+        /// install path binds fixtures again (the B5 follow-up), so a
+        /// just-loaded household reads as having no storage — the
+        /// cabinet want then fires on its stored lots, which is the
+        /// evaluator's honest reading of the state at that moment.
+        /// </summary>
+        private bool HasLiveStorageZone(int householdId)
+        {
+            FurnishingStorageRegistry storage = hub.FurnishingStorageRegistryFor(householdId);
+            return storage != null && storage.StorageFixtures() != null && storage.StorageFixtures().Count > 0;
+        }
+
+        /// <summary>
+        /// G-1: the B6 storage-want input — the household's lots on hand
+        /// (live QuantityUnits summed across its inventory lots).
+        /// </summary>
+        private int StoredLotUnits(int householdId)
+        {
+            FurnishingStorageRegistry storage = hub.FurnishingStorageRegistryFor(householdId);
+            if (storage?.Inventory?.State?.Lots == null) return 0;
+            int total = 0;
+            foreach (HouseholdItemLot lot in storage.Inventory.State.Lots)
+            {
+                if (lot != null) total += lot.QuantityUnits;
+            }
+            return total;
+        }
+
         private void DriveGenericProduction(int absoluteDayIndex)
         {
             if (hub == null || sharedBusinessRuntime == null) return;
             foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
             {
                 if (business == null) continue;
+                // G-1: the carpentry workshop never runs through the
+                // generic path — its processes start and advance through
+                // the furniture binding in DriveCarpentryWorkshop. The
+                // generic advance would create inventory furniture (the
+                // W-G4 break) and advance the same process twice in one
+                // day, double-counting minutes.
+                if (CarpentryProduction.IsCarpentryWorkshop(business)) continue;
                 EntityId businessId = EntityId.For(EntityKind.Business, StableBusinessRuntimeId(business.InstanceId));
 
                 // Policy scheduling is deliberately performed before process

@@ -718,6 +718,7 @@ namespace LandLedgers.FirstLedger
             AppendStartupTiming(timing, stepTimer, "business/runtime configure");
 
             ConfigureAcquisitionMarket();
+            ConfigureContentsPresenceContract();
             ApplyFreshAcquisitionMarketSeedAuthority();
             acquisitionMarket?.RebuildMarket();
             AppendStartupTiming(timing, stepTimer, "acquisition market");
@@ -825,6 +826,7 @@ namespace LandLedgers.FirstLedger
             // Refresh derived destinations before restored journeys bind to their physical targets.
             GetComponent<PhysicalRegionalTownRuntime>()?.RefreshWorldFrame(townWorld);
             ConfigureAcquisitionMarket();
+            ConfigureContentsPresenceContract();
             acquisitionMarket?.RebuildMarket();
             ConfigurePlayerDebtManager();
             ConfigureOpportunityPressureRuntime();
@@ -1436,6 +1438,38 @@ namespace LandLedgers.FirstLedger
             acquisitionMarket.Configure(townWorld, storeRuntime, sharedBusinessRuntime, populationManager, timeManager, civicFoundation, playerPortfolioManager);
         }
 
+        /// <summary>
+        /// G-2 (W-G4 Workstream 2): binds the player physical-presence
+        /// contract to the acquisition market's contents selection API.
+        /// The driver is constructed here, in Orchestration, because the
+        /// manager (Domains) cannot construct it — it talks to the
+        /// PlayerDirector, which lives in Orchestration/Player. Only
+        /// when null, so test injection is respected and a re-boot does
+        /// not replace a bound contract. Runs on New Game and Continue
+        /// alike (both call sites sit next to ConfigureAcquisitionMarket);
+        /// the driver resolves its scene objects lazily at first use, so
+        /// boot ordering never matters. The authorized-agent source is
+        /// deliberately NOT bound: no production authorized-agent
+        /// authority exists, so the contract is constructed with a null
+        /// source and refuses agent actions loudly — an agent is never
+        /// assumed authorized.
+        /// </summary>
+        private void ConfigureContentsPresenceContract()
+        {
+            if (acquisitionMarket == null)
+            {
+                return;
+            }
+
+            if (acquisitionMarket.ContentsPresenceContract != null)
+            {
+                return;
+            }
+
+            acquisitionMarket.ContentsPresenceContract =
+                new PlayerFurnishingPresenceContract(new PlayerFurnishingPresenceDriver());
+        }
+
         private void ApplyFreshAcquisitionMarketSeedAuthority()
         {
             if (acquisitionMarket == null || townWorld == null || townWorld.Settings == null)
@@ -1752,6 +1786,34 @@ namespace LandLedgers.FirstLedger
             if (pass9 != null && !pass9.EquipmentRegisters.Exists(existing => existing != null
                     && string.Equals(existing.BusinessInstanceId, workshop.InstanceId, StringComparison.Ordinal)))
                 pass9.EquipmentRegisters.Add(register);
+            // G-1 (W-G4 Workstream 1, premises binding): the workshop
+            // works from the owner's home (the Millward home, ordinal 7
+            // in the integration tree) — the D-5 carpenter's workshop
+            // design carries living quarters, and no dedicated workshop
+            // building exists in the dev town. The binding is the live
+            // runtime mechanism (AssignedBuildingId, read by the journey
+            // network and the drivers, persisted in the business save
+            // DTO) and is idempotent: on Continue the restored
+            // assignment stands and TryAssignPremises is a no-op, so
+            // this runs on NewGame and Continue alike. The roster
+            // requirement is deliberately NOT changed here: it drives
+            // formation-time trait matching, which cannot name Don's
+            // specific home — the explicit post-formation binding is
+            // the precise mechanism.
+            populationManager ??= FindAnyObjectByType<PopulationManager>();
+            PersonState ownerPerson = populationManager?.State?.GetPerson(ownerPersonId);
+            if (ownerPerson == null || ownerPerson.homeBuildingId < 0)
+            {
+                Debug.LogError($"[WorldStartup] Carpentry workshop '{carpentryKey}' premises refused: owner '{ownerPersonKey}' has no home building assigned — the workshop runs without premises until the owner has a home.", this);
+            }
+            else if (workshop.TryAssignPremises(ownerPerson.homeBuildingId))
+            {
+                Debug.Log($"[WorldStartup] Carpentry workshop '{carpentryKey}' ({workshop.InstanceId}): premises bound to the owner's home building {ownerPerson.homeBuildingId}.", this);
+            }
+            else
+            {
+                Debug.Log($"[WorldStartup] Carpentry workshop '{carpentryKey}' ({workshop.InstanceId}): premises already bound to building {workshop.AssignedBuildingId}.", this);
+            }
             Debug.Log($"[WorldStartup] Carpentry workshop '{carpentryKey}' ({workshop.InstanceId}): {templateMessage} {endowmentReport}", this);
             foreach (string line in diag) Debug.Log($"[WorldStartup] {line}", this);
         }

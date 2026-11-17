@@ -48,6 +48,69 @@ namespace LandLedgers.Economy.Businesses.Carpentry
     /// </summary>
     public static class CarpentryLumberProcurement
     {
+        /// <summary>
+        /// G-1 (W-G4 Workstream 1): the lumber reorder policy — PROPOSED
+        /// DEFAULTS for the owner to correct, not measured values. The
+        /// workshop opens with 15 lumber units; one day's run consumes
+        /// 1-4 (shelf/crate 1, table/bed 2, cabinet 3-4, chair batch 4),
+        /// so a trigger of 6 is about two days of heavy use and a
+        /// reorder of 10 restores the stock to about 16, near the
+        /// opening level. The trigger and the quantity are the driver's
+        /// policy, not the procurement service's: TryBuyLumber itself
+        /// buys exactly the units it is asked for, at the yard's live
+        /// quoted retail price.
+        /// </summary>
+        public const int ReorderTriggerUnits = 6;
+        public const int ReorderQuantityUnits = 10;
+
+        /// <summary>
+        /// G-1: the driver's lumber leg. Reads the workshop's lumber on
+        /// hand; when it is at or above the reorder trigger nothing is
+        /// bought (receipt null, purchased false, true returned — a
+        /// quiet no-op, not a refusal). Below the trigger it buys the
+        /// reorder quantity through TryBuyLumber (the yard's real retail
+        /// path, buyer-collected, full refund on a refused sale). A
+        /// refused purchase returns false with the error — the driver
+        /// logs it day-keyed and retries tomorrow; a refused day is not
+        /// a lost day, the workshop still runs on the lumber it holds.
+        /// </summary>
+        public static bool TryMaintainLumberStock(
+            LumberYardShopRuntime yard,
+            BusinessInstanceState workshop,
+            IBusinessCashPort workshopCash,
+            IBusinessCashPort yardCash,
+            int dayIndex,
+            List<string> diag,
+            out CarpentryLumberReceipt receipt,
+            out bool purchased,
+            out string error)
+        {
+            receipt = null;
+            purchased = false;
+            error = string.Empty;
+            diag = diag ?? new List<string>();
+            if (workshop == null || workshop.GenericConfiguration == null)
+            {
+                error = "Carpentry lumber maintenance requires a workshop with a generic configuration to read its lumber stock from.";
+                return false;
+            }
+            float onHand = workshop.GenericConfiguration.GetInventoryQuantity("lumber");
+            if (onHand >= ReorderTriggerUnits)
+            {
+                // Quiet no-op (the C-7 ShouldOrder posture): a day with
+                // nothing to buy logs nothing — the driver dumps the diag
+                // list, so a daily "nothing bought" line would be spam.
+                return true;
+            }
+            if (!TryBuyLumber(yard, workshop, workshopCash, yardCash, ReorderQuantityUnits, dayIndex, diag, out receipt, out error))
+            {
+                receipt = null;
+                return false;
+            }
+            purchased = true;
+            return true;
+        }
+
         public static bool TryBuyLumber(
             LumberYardShopRuntime yard,
             BusinessInstanceState workshop,

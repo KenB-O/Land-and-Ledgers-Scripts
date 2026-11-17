@@ -376,6 +376,12 @@ namespace LandLedgers.Persistence
         // bootstrap-owned runtime remains empty until the authored Bakery is
         // configured, while current saves round-trip its actual lots/batches.
         public LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime.BakeryShopRuntimeSaveDto BakeryRuntime;
+        // L1 (Agent L1, universal business campaign 2026-11-17): live
+        // blacksmith runtime state (material stock + lot ledger, forged
+        // horseshoes/hardware, repair orders/quotes/pickups/liens, quarter
+        // pools). Additive; old saves leave this null and load with an
+        // empty smith — the honest old-save default.
+        public LandLedgers.Economy.Blacksmith.BlacksmithRuntime.BlacksmithRuntimeSaveDto BlacksmithRuntime;
 
         /// <summary>
         /// Plan 07 (Slice 07): staged bakery chain state (chain DTO,
@@ -486,6 +492,15 @@ namespace LandLedgers.Persistence
 
         public Series2BakeryProductionDriver BakeryDriver;
         public LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime BakeryRuntime;
+        /// <summary>
+        /// L1 (Agent L1, universal business campaign 2026-11-17): live
+        /// blacksmith runtime, held here in the established Pass 9 holder
+        /// pattern ("Codex fills these fields with the live model
+        /// instances"). Null until a production driver owns a smith
+        /// (D3 delivery driver follow-up F-L1-1); a null holder captures
+        /// as an empty section, exactly like the bakery's.
+        /// </summary>
+        public LandLedgers.Economy.Blacksmith.BlacksmithRuntime BlacksmithRuntime;
 
         /// <summary>
         /// Plan 07 (Slice 07): live staged bakery chain and its PRIVATE
@@ -1117,6 +1132,18 @@ namespace LandLedgers.Persistence
                 diag.Add("Series2Pass9Save: no live BakeryShopRuntime supplied; bakery stock and production state saved empty.");
             }
 
+            // L1 (2026-11-17): blacksmith runtime (smith stock, horseshoes,
+            // hardware, repair orders). Null holder captures as an empty
+            // section, like the bakery's.
+            if (BlacksmithRuntime != null)
+            {
+                dto.BlacksmithRuntime = BlacksmithRuntime.CaptureSaveDto();
+            }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no live BlacksmithRuntime supplied; smith stock, horseshoes, hardware and repair orders saved empty.");
+            }
+
             // Plan 07 (Slice 07): staged bakery chain, with the private
             // scheduler's events folded into the chain DTO.
             if (StagedBakeryChain != null)
@@ -1610,6 +1637,37 @@ namespace LandLedgers.Persistence
                         BusinessInstanceId = bakeryRuntime.BusinessInstanceId,
                     });
                 diag.Add("Series2Pass9Save: no Bakery runtime section in save; live runtime cleared (old-save default).");
+            }
+
+            // L1 (2026-11-17): blacksmith runtime. Same identity-guard +
+            // clear-on-missing-section rule as the bakery above: a section
+            // for another smith never overwrites the live one, and a live
+            // smith with no section in the save restores as empty.
+            if (BlacksmithRuntime != null && dto.BlacksmithRuntime != null)
+            {
+                if (!string.Equals(BlacksmithRuntime.BusinessInstanceId,
+                        dto.BlacksmithRuntime.BusinessInstanceId ?? string.Empty,
+                        StringComparison.Ordinal))
+                {
+                    diag.Add($"Series2Pass9Save: Blacksmith runtime identity mismatch; live '{BlacksmithRuntime.BusinessInstanceId}' was not overwritten by saved '{dto.BlacksmithRuntime.BusinessInstanceId}'.");
+                }
+                else
+                {
+                    BlacksmithRuntime.LoadFromSaveDto(dto.BlacksmithRuntime);
+                }
+            }
+            else if (dto.BlacksmithRuntime != null)
+            {
+                diag.Add("Series2Pass9Save: Blacksmith runtime data present in save but no live runtime owner was supplied; smith state NOT restored.");
+            }
+            else if (BlacksmithRuntime != null)
+            {
+                BlacksmithRuntime.LoadFromSaveDto(
+                    new LandLedgers.Economy.Blacksmith.BlacksmithRuntime.BlacksmithRuntimeSaveDto
+                    {
+                        BusinessInstanceId = BlacksmithRuntime.BusinessInstanceId,
+                    });
+                diag.Add("Series2Pass9Save: no Blacksmith runtime section in save; live runtime cleared (old-save default).");
             }
 
             // Plan 07 (Slice 07): do NOT rebuild hooks here (no

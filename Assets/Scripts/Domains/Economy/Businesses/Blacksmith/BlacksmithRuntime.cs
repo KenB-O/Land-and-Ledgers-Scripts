@@ -876,5 +876,176 @@ namespace LandLedgers.Economy.Blacksmith
                 pickupAnnounceLedger.NotifyReady(order, dayIndex, diagnostics);
             return null;
         }
+
+        // --- L1 (2026-11-17): save/load -------------------------------------------
+        // The smith is a real production runtime (material + lot ledger, forged
+        // horseshoes/hardware, repair orders/quotes/pickups/liens, revenue) and
+        // until this pass it had no save surface at all: no DTO, no Capture,
+        // no section in SystemsSaveDto or Series2Pass9SaveDto, so a Continue
+        // restored an empty smith. Every sub-authority below already saves
+        // (RepairQueue / RepairQuoteBook / RepairPickupLedger /
+        // ArtisanLienRegister are null-safe clear-then-load); this DTO is the
+        // missing runtime-level wrapper, including the D1 quarter pools,
+        // which the D1 comment (lines 79-81) said a save pass must persist
+        // together with materialStock. Persisted via Series2Pass9SaveDto
+        // (bakery/yard precedent); the live instance is handed to the Pass 9
+        // state by the production driver that owns the smith (F-L1-1).
+
+        /// <summary>L1: the whole smith, flattened for the save file.</summary>
+        [Serializable]
+        public sealed class BlacksmithRuntimeSaveDto
+        {
+            public string BusinessInstanceId = string.Empty;
+            public string BusinessName = string.Empty;
+            public bool ForgeStationReady;
+            public bool ForgeStationDerivedFromComponents;
+            public List<string> MaterialIds = new List<string>();
+            public List<int> MaterialUnits = new List<int>();
+            public List<SmithMaterialLotEntry> MaterialLots = new List<SmithMaterialLotEntry>();
+            public List<string> ConsumedLotIds = new List<string>();
+            public List<EquipmentAsset> Assets = new List<EquipmentAsset>();
+            public RepairQueue.RepairQueueDto RepairOrders = new RepairQueue.RepairQueueDto();
+            public RepairQuoteBook.RepairQuoteBookDto QuoteBook = new RepairQuoteBook.RepairQuoteBookDto();
+            public RepairPickupLedger.RepairPickupLedgerDto PickupLedger = new RepairPickupLedger.RepairPickupLedgerDto();
+            public ArtisanLienRegister.ArtisanLienRegisterDto LienRegister = new ArtisanLienRegister.ArtisanLienRegisterDto();
+            public int NextAssetNumber;
+            public int RepairRevenueCents;
+            /// <summary>L1: cut-bar quarters waiting for the next shoe forgings (0..3).</summary>
+            public int IronShoeQuarters;
+            /// <summary>L1: fired-coal quarters waiting for the next shoe forgings (0..3).</summary>
+            public int CoalShoeQuarters;
+            /// <summary>L1: source lot of the waiting iron quarters (empty when none).</summary>
+            public string IronShoeQuarterLotId = string.Empty;
+            /// <summary>L1: source lot of the waiting coal quarters (empty when none).</summary>
+            public string CoalShoeQuarterLotId = string.Empty;
+
+            /// <summary>One FIFO lot ledger entry, flattened for the DTO.</summary>
+            [Serializable]
+            public sealed class SmithMaterialLotEntry
+            {
+                public string MaterialId = string.Empty;
+                public string LotId = string.Empty;
+                public string MaterialName = string.Empty;
+                public string OriginName = string.Empty;
+                public int Units;
+            }
+        }
+
+        public BlacksmithRuntimeSaveDto CaptureSaveDto()
+        {
+            var dto = new BlacksmithRuntimeSaveDto
+            {
+                BusinessInstanceId = businessInstanceId ?? string.Empty,
+                BusinessName = businessName ?? string.Empty,
+                ForgeStationReady = forgeStationReady,
+                ForgeStationDerivedFromComponents = ForgeStationDerivedFromComponents,
+                NextAssetNumber = nextAssetNumber,
+                RepairRevenueCents = Math.Max(0, repairRevenueCents),
+                IronShoeQuarters = Math.Max(0, ironShoeQuarters),
+                CoalShoeQuarters = Math.Max(0, coalShoeQuarters),
+                IronShoeQuarterLotId = ironShoeQuarterLotId ?? string.Empty,
+                CoalShoeQuarterLotId = coalShoeQuarterLotId ?? string.Empty,
+            };
+            foreach (var kv in materialStock)
+            {
+                dto.MaterialIds.Add(kv.Key);
+                dto.MaterialUnits.Add(kv.Value);
+            }
+            foreach (var kv in materialLotLedger)
+            {
+                if (kv.Value == null) continue;
+                foreach (SmithMaterialLot lot in kv.Value)
+                {
+                    if (lot == null) continue;
+                    dto.MaterialLots.Add(new BlacksmithRuntimeSaveDto.SmithMaterialLotEntry
+                    {
+                        MaterialId = kv.Key,
+                        LotId = lot.LotId ?? string.Empty,
+                        MaterialName = lot.MaterialName ?? string.Empty,
+                        OriginName = lot.OriginName ?? string.Empty,
+                        Units = lot.Units,
+                    });
+                }
+            }
+            dto.ConsumedLotIds.AddRange(consumedLotIds);
+            foreach (var kv in assets)
+                if (kv.Value != null) dto.Assets.Add(kv.Value);
+            dto.RepairOrders = repairQueue.ToSaveDto();
+            dto.QuoteBook = quoteBook.ToSaveDto();
+            dto.PickupLedger = pickupLedger.ToSaveDto();
+            dto.LienRegister = lienRegister.ToSaveDto();
+            return dto;
+        }
+
+        /// <summary>
+        /// Clear-then-load, idempotent. A null DTO clears the runtime to
+        /// empty. Lot entries rebuild the FIFO queues in stored order per
+        /// material. Stock is restored from its own parallel lists, not
+        /// summed from the ledger, because returned units are untraced.
+        /// Quarter pools are clamped to 0..3 on load — the only values the
+        /// forge can produce (a whole unit cut yields 3 waiting after the
+        /// first shoe spends one); anything larger can only come from a
+        /// corrupt save and must not mint free quarters.
+        /// </summary>
+        public void LoadFromSaveDto(BlacksmithRuntimeSaveDto dto)
+        {
+            businessInstanceId = string.Empty;
+            businessName = string.Empty;
+            forgeStationReady = false;
+            ForgeStationDerivedFromComponents = false;
+            materialStock.Clear();
+            materialLotLedger.Clear();
+            consumedLotIds.Clear();
+            assets.Clear();
+            nextAssetNumber = 1;
+            repairRevenueCents = 0;
+            ironShoeQuarters = 0;
+            coalShoeQuarters = 0;
+            ironShoeQuarterLotId = string.Empty;
+            coalShoeQuarterLotId = string.Empty;
+            repairQueue.LoadFromSaveDto(null);
+            quoteBook.LoadFromSaveDto(null);
+            pickupLedger.LoadFromSaveDto(null);
+            lienRegister.LoadFromSaveDto(null);
+            if (dto == null) return;
+            businessInstanceId = dto.BusinessInstanceId ?? string.Empty;
+            businessName = dto.BusinessName ?? string.Empty;
+            forgeStationReady = dto.ForgeStationReady;
+            ForgeStationDerivedFromComponents = dto.ForgeStationDerivedFromComponents;
+            for (int i = 0; i < dto.MaterialIds.Count && i < dto.MaterialUnits.Count; i++)
+                if (!string.IsNullOrWhiteSpace(dto.MaterialIds[i]))
+                    materialStock[dto.MaterialIds[i]] = Math.Max(0, dto.MaterialUnits[i]);
+            foreach (BlacksmithRuntimeSaveDto.SmithMaterialLotEntry entry in dto.MaterialLots)
+            {
+                if (entry == null || string.IsNullOrWhiteSpace(entry.MaterialId)) continue;
+                if (!materialLotLedger.TryGetValue(entry.MaterialId, out Queue<SmithMaterialLot> lots))
+                {
+                    lots = new Queue<SmithMaterialLot>();
+                    materialLotLedger[entry.MaterialId] = lots;
+                }
+                lots.Enqueue(new SmithMaterialLot
+                {
+                    LotId = entry.LotId ?? string.Empty,
+                    MaterialName = entry.MaterialName ?? string.Empty,
+                    OriginName = entry.OriginName ?? string.Empty,
+                    Units = Math.Max(0, entry.Units),
+                });
+            }
+            foreach (string lotId in dto.ConsumedLotIds)
+                if (!string.IsNullOrWhiteSpace(lotId)) consumedLotIds.Add(lotId);
+            nextAssetNumber = Math.Max(1, dto.NextAssetNumber);
+            repairRevenueCents = Math.Max(0, dto.RepairRevenueCents);
+            ironShoeQuarters = Math.Max(0, Math.Min(HorseshoeQuartersPerUnit - 1, dto.IronShoeQuarters));
+            coalShoeQuarters = Math.Max(0, Math.Min(HorseshoeQuartersPerUnit - 1, dto.CoalShoeQuarters));
+            ironShoeQuarterLotId = dto.IronShoeQuarterLotId ?? string.Empty;
+            coalShoeQuarterLotId = dto.CoalShoeQuarterLotId ?? string.Empty;
+            repairQueue.LoadFromSaveDto(dto.RepairOrders);
+            quoteBook.LoadFromSaveDto(dto.QuoteBook);
+            pickupLedger.LoadFromSaveDto(dto.PickupLedger);
+            lienRegister.LoadFromSaveDto(dto.LienRegister);
+            foreach (EquipmentAsset asset in dto.Assets)
+                if (asset != null && !string.IsNullOrWhiteSpace(asset.AssetId))
+                    assets[asset.AssetId] = asset;
+        }
     }
 }

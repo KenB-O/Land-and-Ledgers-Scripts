@@ -3204,14 +3204,13 @@ namespace LandLedgers.FirstLedger
         // NPC-owned Blacksmith business, so the daily hardware delivery
         // (SimulationDrivers) has a live smith to draw from. First
         // smith only; a second smith is warned about and gets nothing
-        // here. There is NO Pass 9 holder for the smith — its shop
-        // stock is not a Pass 9 section yet, so the hub is the live
-        // holder and the yard lots a delivery creates persist through
-        // the Pass 9 yard section. Called at NewGame and in the restore
-        // window, immediately after ConfigureLiveSawmillSaveOwner. The
-        // development town has no Blacksmith business today, so this
-        // warns and wires nothing until one is formed — the drive never
-        // invents a smith.
+        // here. The hub is the live holder; the Pass 9 state (L1) holds
+        // the same instance for save capture, so a Continue restores
+        // the smith's real stock instead of an empty section. Called at
+        // NewGame and in the restore window, immediately after
+        // ConfigureLiveSawmillSaveOwner. The development town has no
+        // Blacksmith business today, so this warns and wires nothing
+        // until one is formed — the drive never invents a smith.
         private void ConfigureLiveBlacksmithSaveOwner()
         {
             if (sharedBusinessRuntime == null || saveLoadManager == null)
@@ -3249,6 +3248,11 @@ namespace LandLedgers.FirstLedger
                 Debug.LogWarning("[BlacksmithRuntime] Live owner was not created: hub returned no runtime.", this);
                 return;
             }
+
+            // F-L1-1: hand the live runtime to the Pass 9 holder (L1),
+            // so a Continue captures the smith's real stock instead of
+            // saving an empty section.
+            pass9.BlacksmithRuntime = liveSmithRuntime;
 
             foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
             {

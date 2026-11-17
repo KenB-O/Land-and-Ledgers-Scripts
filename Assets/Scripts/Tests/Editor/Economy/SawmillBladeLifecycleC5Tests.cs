@@ -473,9 +473,19 @@ namespace LandLedgers.Editor.Economy
             // Schema 2 nests spare blades under their owning business, so
             // the blade surfaces attributed to the mill; there is no flat
             // entry that could name an unconfigured business any more.
-            Assert.AreEqual(1, valid.OpeningSpareBlades.Count);
-            Assert.AreEqual(MillKey, valid.OpeningSpareBlades[0].businessKey,
-                "the derived view attributes the blade to its owning business");
+            // K2: the OpeningSpareBlades derived view is deleted. The
+            // blade is attributed to its owning business by direct
+            // owner-record iteration instead of the view's stamp.
+            var attributedBlades = new List<(string businessKey, DevelopmentTownConfiguration.BusinessSpareBladeDefinition spare)>();
+            foreach (DevelopmentTownConfiguration.BusinessDefinition business in valid.Businesses)
+            {
+                if (business?.opening?.spareBlades == null) continue;
+                foreach (DevelopmentTownConfiguration.BusinessSpareBladeDefinition spare in business.opening.spareBlades)
+                    attributedBlades.Add((business.key, spare));
+            }
+            Assert.AreEqual(1, attributedBlades.Count);
+            Assert.AreEqual(MillKey, attributedBlades[0].businessKey,
+                "direct iteration attributes the blade to its owning business");
 
             DevelopmentTownConfiguration duplicate = BuildConfig(new[] { SpareEntry(), SpareEntry() });
             Assert.IsFalse(duplicate.Validate(out string duplicateError), "a duplicate blade id fails validation");

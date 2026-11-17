@@ -65,12 +65,17 @@ namespace LandLedgers.Economy.Businesses.Sawmill
             }
 
             // Validate everything before mutating anything, so a refusal
-            // receives nothing.
+            // receives nothing. K2: direct owner-record iteration. The
+            // deleted OpeningSpareBlades view projected this business's
+            // own opening.spareBlades and stamped the owning key onto
+            // them; the business is already resolved above, so its own
+            // array is the entry set and no key filter is needed. All
+            // error messages use the businessKey parameter, as before.
             var spares = new List<string>();
             var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (DevelopmentTownConfiguration.BusinessSpareBladeDefinition entry in configuration.OpeningSpareBlades)
+            foreach (DevelopmentTownConfiguration.BusinessSpareBladeDefinition entry in business.opening?.spareBlades ?? Array.Empty<DevelopmentTownConfiguration.BusinessSpareBladeDefinition>())
             {
-                if (entry == null || !string.Equals(entry.businessKey, businessKey, StringComparison.OrdinalIgnoreCase)) continue;
+                if (entry == null) continue;
                 if (string.IsNullOrWhiteSpace(entry.bladeId))
                 {
                     error = $"Opening spare blades for '{businessKey}' contains an entry with a blank blade id — nothing was received.";

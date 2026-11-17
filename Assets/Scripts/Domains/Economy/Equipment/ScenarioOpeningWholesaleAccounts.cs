@@ -47,7 +47,7 @@ namespace LandLedgers.Economy.Equipment
             error = string.Empty;
             diag = diag ?? new List<string>();
             if (configuration == null || string.IsNullOrWhiteSpace(sellerBusinessKey)
-                || !configuration.TryGetBusiness(sellerBusinessKey, out _)
+                || !configuration.TryGetBusiness(sellerBusinessKey, out DevelopmentTownConfiguration.BusinessDefinition sellerBusiness)
                 || sellerRuntime == null || sellerBusinessRuntimeState == null
                 || buyerBusiness == null || buyerBusiness.RuntimeState == null
                 || buyerBusiness.BusinessType != BusinessType.GeneralStore)
@@ -65,14 +65,34 @@ namespace LandLedgers.Economy.Equipment
 
             // Collect this seller's entries and validate everything
             // before mutating anything, so a refusal books nothing.
+            // K2: direct owner-record iteration. The deleted
+            // WholesaleAccounts view projected every business's opening
+            // wholesaleAgreements and stamped the seller key onto them.
+            // This seller's own opening record is the entry set, and the
+            // config-wide hasAnyEntry flag still scans every business, so
+            // the fallback rule is unchanged: it books only when the
+            // config lists no wholesale accounts at all, for any seller.
+            // A seller with no entries of its own while another seller
+            // has entries gets no fallback and no booking, exactly as
+            // before (pinned by WholesaleAccounts_OtherSellerEntry_BlocksFallback).
             var entries = new List<DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition>();
             bool hasAnyEntry = false;
-            foreach (DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition candidate in configuration.WholesaleAccounts)
+            foreach (DevelopmentTownConfiguration.BusinessDefinition candidateBusiness in configuration.Businesses)
             {
-                if (candidate == null) continue;
-                hasAnyEntry = true;
-                if (!string.Equals(candidate.sellerBusinessKey, sellerBusinessKey, StringComparison.OrdinalIgnoreCase)) continue;
-                entries.Add(candidate);
+                if (candidateBusiness?.opening?.wholesaleAgreements == null) continue;
+                foreach (DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition candidate in candidateBusiness.opening.wholesaleAgreements)
+                {
+                    if (candidate == null) continue;
+                    hasAnyEntry = true;
+                }
+            }
+            if (sellerBusiness?.opening?.wholesaleAgreements != null)
+            {
+                foreach (DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition candidate in sellerBusiness.opening.wholesaleAgreements)
+                {
+                    if (candidate == null) continue;
+                    entries.Add(candidate);
+                }
             }
 
             foreach (DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition entry in entries)

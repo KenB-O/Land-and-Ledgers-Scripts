@@ -15,7 +15,12 @@ namespace LandLedgers.Economy
     /// </summary>
     public static class OpeningEconomyAudit
     {
-        /// <summary>Authored opening figures, all in cents.</summary>
+        /// <summary>Authored opening figures, all in cents.
+        /// K2: these two dictionaries are this audit file's OWN fields.
+        /// They share names with the deleted DevelopmentTownConfiguration
+        /// derived views (BusinessCashTargets, HouseholdCashTargets) but
+        /// are not those views and never read them; the bootstrapper fills
+        /// them from direct owner-record iteration.</summary>
         public sealed class AuthoredOpening
         {
             public Dictionary<string, int> BusinessCashTargets =

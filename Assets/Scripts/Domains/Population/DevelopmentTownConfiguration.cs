@@ -224,6 +224,11 @@ namespace LandLedgers.Population
         [Serializable]
         public sealed class BusinessSpareBladeDefinition
         {
+            // K2: nothing populates this from config any more. The deleted
+            // OpeningSpareBlades view used to stamp the owning business key
+            // onto the shared record; consumers now resolve the owner
+            // through TryGetBusiness. Tests may still set it on hand-built
+            // entries. The field stays for serialization stability.
             [NonSerialized] public string businessKey;
             public string bladeId = string.Empty;
         }
@@ -273,6 +278,11 @@ namespace LandLedgers.Population
         [Serializable]
         public sealed class BakeryWholesaleAccountDefinition
         {
+            // K2: nothing populates this from config any more. The deleted
+            // WholesaleAccounts view used to stamp the owning seller key
+            // onto the shared record; consumers now resolve the seller
+            // through TryGetBusiness. Tests may still set it on hand-built
+            // entries. The field stays for serialization stability.
             [NonSerialized] public string sellerBusinessKey;
             public string buyerBusinessKey = string.Empty;
             public string productId = string.Empty;
@@ -319,17 +329,24 @@ namespace LandLedgers.Population
         // now iterate the owning BusinessDefinition and HouseholdDefinition
         // records directly; schema-2 opening allocations are the single
         // authority. The nested DTO types stay.
+        //
+        // K2 (2026-11-17): the last two derived views
+        // (OpeningSpareBlades, WholesaleAccounts) are deleted the same
+        // way. Both projected the owning business's opening arrays and
+        // stamped the owning key onto the shared record as a side effect;
+        // their consumers now resolve the owning business through
+        // TryGetBusiness and read business.opening directly. The nested
+        // DTO types stay, including the NonSerialized businessKey /
+        // sellerBusinessKey fields, which nothing populates from config
+        // any more. The single-value readers below (OpeningLoggingCamp-
+        // ProvisionCoverDays and friends) are NOT derived views: they
+        // already read the owning business's opening record directly
+        // through FindBusinessByOperation, so they stay as they are.
 
         public BusinessDefinition FindBusinessByOperation(string operationId) => Businesses.FirstOrDefault(b =>
             b != null && string.Equals(b.operationId, operationId, StringComparison.OrdinalIgnoreCase));
 
         public BusinessDefinition FindBusiness(string businessKey) => TryGetBusiness(businessKey, out BusinessDefinition business) ? business : null;
-
-        [Obsolete("Read spare blades from each owning BusinessDefinition.")]
-        public IReadOnlyList<BusinessSpareBladeDefinition> OpeningSpareBlades => Businesses.SelectMany(b =>
-            (b?.opening?.spareBlades ?? Array.Empty<BusinessSpareBladeDefinition>()).Select(x => { x.businessKey = b.key; return x; })).ToArray();
-        public IReadOnlyList<BakeryWholesaleAccountDefinition> WholesaleAccounts => Businesses.SelectMany(b =>
-            (b?.opening?.wholesaleAgreements ?? Array.Empty<BakeryWholesaleAccountDefinition>()).Select(x => { x.sellerBusinessKey = b.key; return x; })).ToArray();
         public int OpeningLoggingCampProvisionCoverDays => FindBusinessByOperation("sawmill")?.opening?.loggingCampProvisionCoverDays ?? 0;
         public int OpeningBakeryFuelUnits => FindBusinessByOperation("bakery")?.opening?.bakeryFuelUnits ?? 0;
         public int OpeningBakeryFlourPounds => FindBusinessByOperation("bakery")?.opening?.bakeryFlourPounds ?? 0;
@@ -606,14 +623,22 @@ namespace LandLedgers.Population
             }
             // C-5: opening spare blades are optional and zero by default.
             // When present, every entry must name a configured business and
-            // a non-blank unique blade id (case-insensitive).
+            // a non-blank unique blade id (case-insensitive). K2: direct
+            // owner-record iteration. The deleted OpeningSpareBlades view
+            // projected these same entries and stamped the owning key onto
+            // them; the owning business is known here by construction, so
+            // the business check is the loop itself.
             var openingSpareBladeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (BusinessSpareBladeDefinition spare in OpeningSpareBlades)
+            foreach (BusinessDefinition business in Businesses)
             {
-                if (spare == null || !TryGetBusiness(spare.businessKey, out _)
-                    || string.IsNullOrWhiteSpace(spare.bladeId)
-                    || !openingSpareBladeIds.Add(spare.bladeId.Trim()))
-                { error = "Opening spare blades must reference a configured business and a non-blank unique blade id."; return false; }
+                if (business == null) continue;
+                foreach (BusinessSpareBladeDefinition spare in business.opening?.spareBlades ?? Array.Empty<BusinessSpareBladeDefinition>())
+                {
+                    if (spare == null
+                        || string.IsNullOrWhiteSpace(spare.bladeId)
+                        || !openingSpareBladeIds.Add(spare.bladeId.Trim()))
+                    { error = "Opening spare blades must reference a configured business and a non-blank unique blade id."; return false; }
+                }
             }
             // A2 plan 27 (P10): timber stands are optional and zero by
             // default. When present, every stand needs a unique non-blank

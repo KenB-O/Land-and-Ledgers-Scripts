@@ -4068,6 +4068,53 @@ namespace LandLedgers.Economy
         }
 
         /// <summary>
+        /// B2: releases a closed business's building back to the leasable
+        /// pool. Assigned building ids were add-only until now, so a
+        /// closed shop's building never returned and the lease market
+        /// could never gain a listing from it. Returns null on success,
+        /// a loud refusal otherwise (unknown building, or never assigned).
+        /// </summary>
+        public string ReleaseNpcBusinessPremises(int buildingId)
+        {
+            AutoWire();
+            if (buildingId < 0)
+                return "ReleaseNpcBusinessPremises: no building id to release.";
+            if (townWorld == null || townWorld.Buildings == null)
+                return $"ReleaseNpcBusinessPremises: no town world to release building {buildingId} from.";
+            if (!townWorld.TryGetBuildingById(buildingId, out PlacedBuilding building) || building == null)
+                return $"ReleaseNpcBusinessPremises: building {buildingId} does not exist in the town world.";
+            if (!assignedBuildingIds.Contains(buildingId))
+                return $"ReleaseNpcBusinessPremises: building {buildingId} was not assigned — nothing to release.";
+            assignedBuildingIds.Remove(buildingId);
+            return null;
+        }
+
+        /// <summary>
+        /// B2: the town's actual unassigned commercial buildings, for the
+        /// lease market's seeding. A building counts when it is not
+        /// assigned, not player-owned, and can host a workplace other
+        /// than a civic one — the same commercial test town generation
+        /// uses. Query only; nothing is claimed.
+        /// </summary>
+        public List<PlacedBuilding> ListUnassignedCommercialBuildings()
+        {
+            AutoWire();
+            var result = new List<PlacedBuilding>();
+            if (townWorld == null || townWorld.Buildings == null) return result;
+            foreach (PlacedBuilding building in townWorld.Buildings)
+            {
+                if (building == null || building.definition == null) continue;
+                if (building.playerOwned) continue;
+                if (assignedBuildingIds.Contains(building.id)) continue;
+                if (!building.definition.CanHostWorkplace) continue;
+                if (building.definition.PrimaryUse == BuildingUseType.Civic) continue;
+                result.Add(building);
+            }
+
+            return result;
+        }
+
+        /// <summary>
         /// M1-R1: premises plot id for a business, resolved through its
         /// assigned placed building. Returns false when the business has no
         /// assigned premises or the town world cannot resolve it. The

@@ -110,6 +110,8 @@ namespace LandLedgers.Persistence
         // observation logs and investigations).
         public NpcEntrepreneurshipDriver.NpcEntrepreneurshipDriverSaveDto npcEntrepreneurship = new();
         public NpcBusinessEventLogSaveDto npcBusinessEvents = new();
+        // B2: the commercial lease market (listings and agreements).
+        public CommercialLeaseMarketSaveDto commercialLeaseMarket = new();
         public NpcPropertyLifeService.NpcPropertyLifeSaveDto npcPropertyLife = new();
         public ConstructionProjectExecutor.ConstructionProjectSaveDto constructionProjects = new();
         public NpcConstructionCommissioner.NpcConstructionCommissionerSaveDto npcConstructionCommissioner = new();

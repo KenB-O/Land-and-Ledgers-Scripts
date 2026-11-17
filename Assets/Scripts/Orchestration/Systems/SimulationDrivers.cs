@@ -4675,18 +4675,90 @@ namespace LandLedgers.Orchestration.Systems
                     CreationPort = hub.NpcBusinessCreation,
                     Suppliers = supplierDirectory,
                     PersonAlreadyOwnsBusiness = PersonOwnsBusiness,
-                    // PremisesFinder and EquipmentFinder intentionally remain
-                    // unbound until production can return actual property
-                    // rights and an actual stocked/sold equipment asset. A
-                    // free building id plus fixed rent, or a provenance string
-                    // without a transaction, is not evidence that the Person
-                    // can lawfully open a Business.
+                    // B2: the premises and equipment finders are bound to
+                    // the commercial lease market. The premises finder
+                    // returns the building the typed assigner would pick
+                    // for a Generic retail shop (query only — claiming
+                    // happens at formation) when that building has an
+                    // offerable lease listing; the equipment finder returns
+                    // the lease's included fixtures (counter, shelving,
+                    // scale), which are part of the leased premises and
+                    // carry the lease as their provenance. A building with
+                    // no listing, or a listing with no landlord, is not
+                    // offered — no free premises, no invented landlord.
+                    PremisesFinder = FindLeasedShopPremises,
+                    EquipmentFinder = FindLeasedShopFixtures,
+                    LeaseMarket = hub.CommercialLeaseMarket,
+                    UnassignedCommercialPremises = ListUnassignedCommercialPremisesRefs,
                 }, diag);
             if (diag.Count > 0)
             {
                 Debug.Log("[SimulationDrivers] entrepreneurship week " + absoluteDayIndex + ": " +
                     string.Join(" | ", diag));
             }
+        }
+
+        /// <summary>
+        /// B2: the premises finder for NPC formation — the building the
+        /// typed assigner would pick for a Generic retail shop, when it
+        /// has an offerable lease listing. Query only; claiming happens
+        /// at formation through the creation adapter.
+        /// </summary>
+        private NpcPremisesOption FindLeasedShopPremises(NpcOpportunity opportunity)
+        {
+            if (hub == null || sharedBusinessRuntime == null) return null;
+            if (!sharedBusinessRuntime.TryAssignNpcBusinessPremises(BusinessType.Generic,
+                PremisesKind.DedicatedStorefront, out int buildingId))
+                return null;
+            CommercialLeaseListing listing = hub.CommercialLeaseMarket.FindOfferableListingForBuilding(buildingId);
+            if (listing == null) return null;
+            return new NpcPremisesOption
+            {
+                Description = "leased shop building " + buildingId,
+                Tenure = NpcPremisesTenure.Rented,
+                ParcelOrBuildingRef = "building:" + buildingId,
+                AgreementRef = listing.ListingId,
+                UpfrontCostCents = listing.DepositCents + listing.MonthlyRentCents,
+                RecurringCostCents = listing.MonthlyRentCents,
+            };
+        }
+
+        /// <summary>
+        /// B2: the equipment finder for NPC formation — the fitted-shop
+        /// fixtures included in the same lease the premises finder
+        /// returns (counter, shelving, scale). The fixtures are part of
+        /// the leased premises; the lease is their provenance.
+        /// </summary>
+        private NpcEquipmentOption FindLeasedShopFixtures(NpcOpportunity opportunity)
+        {
+            if (hub == null || sharedBusinessRuntime == null) return null;
+            if (!sharedBusinessRuntime.TryAssignNpcBusinessPremises(BusinessType.Generic,
+                PremisesKind.DedicatedStorefront, out int buildingId))
+                return null;
+            CommercialLeaseListing listing = hub.CommercialLeaseMarket.FindOfferableListingForBuilding(buildingId);
+            if (listing == null) return null;
+            return new NpcEquipmentOption
+            {
+                Description = "fitted-shop fixtures included in the lease of building " + buildingId,
+                ItemId = CommercialLeaseCalibration.LeasedFixturesItemId,
+                CostCents = 0,
+                Provenance = CommercialLeaseCalibration.LeasedFixturesProvenancePrefix + listing.ListingId +
+                    " (fixtures included: " + string.Join(", ", listing.IncludedFixtures) + ")",
+            };
+        }
+
+        /// <summary>B2: the town's actual unassigned commercial buildings, as lease-market refs.</summary>
+        private List<CommercialLeasePremisesRef> ListUnassignedCommercialPremisesRefs()
+        {
+            var refs = new List<CommercialLeasePremisesRef>();
+            if (sharedBusinessRuntime == null) return refs;
+            foreach (PlacedBuilding building in sharedBusinessRuntime.ListUnassignedCommercialBuildings())
+            {
+                if (building == null) continue;
+                refs.Add(new CommercialLeasePremisesRef(building.id, building.plotId));
+            }
+
+            return refs;
         }
 
         /// <summary>
@@ -4759,12 +4831,138 @@ namespace LandLedgers.Orchestration.Systems
                         : NpcBusinessLifecycleDriver.DefaultSurvivalReserveCents(
                             info != null ? info.BusinessType : BusinessType.Generic),
                     DayIndex = absoluteDayIndex,
+                    // B2: a business that closes this week returns its
+                    // building to the lease market (see
+                    // ReleaseClosedBusinessPremises).
+                    OnBusinessClosed = ReleaseClosedBusinessPremises,
                 }, diag);
+            // B2: settle due commercial rent for every Active lease.
+            CommercialLeaseRentSettlementResult rentResult = new CommercialLeaseRentSettlement().SettleDue(
+                hub.CommercialLeaseMarket,
+                new NpcBusinessRuntimeCashPort(sharedBusinessRuntime),
+                landlordPersonId =>
+                {
+                    int householdId = ResolvePersonHouseholdId(landlordPersonId);
+                    return householdId >= 0 && hub.HouseholdLedgers != null
+                        ? hub.HouseholdLedgers.GetOrCreate(householdId)
+                        : null;
+                },
+                hub.FinancialObligations,
+                hub.Ids,
+                absoluteDayIndex,
+                diag);
+            foreach (string rentNote in rentResult.Notes)
+                diag.Add(rentNote);
             if (diag.Count > 0)
             {
                 Debug.Log("[SimulationDrivers] npc business lifecycle week " + absoluteDayIndex + ": " +
                     string.Join(" | ", diag));
             }
+        }
+
+        /// <summary>
+        /// B2: a business that closed this week returns its building to
+        /// the lease market. A leased shop ends its lease (the building
+        /// is re-listed with the same landlord, and the deposit is
+        /// refunded when no rent is outstanding on the lease); a shop the
+        /// business held itself is listed with the former owner as
+        /// landlord. A release failure is logged loudly — a building that
+        /// cannot be released is never silently kept.
+        /// </summary>
+        private void ReleaseClosedBusinessPremises(
+            NpcBusinessLifecycleDriver.NpcLifecycleBusinessInfo info,
+            NpcBusinessLifeRecord record)
+        {
+            int dayIndex = record != null ? record.LastEvaluatedDayIndex : 0;
+            var diag = new List<string>();
+            int buildingId = info?.Business != null ? info.Business.AssignedBuildingId : -1;
+            if (buildingId < 0)
+            {
+                diag.Add($"CommercialLease: business '{info?.BusinessInstanceId}' closed with no assigned building — nothing to release.");
+            }
+            else if (sharedBusinessRuntime == null || hub == null)
+            {
+                diag.Add($"CommercialLease: business '{info?.BusinessInstanceId}' closed but the runtime or hub is missing — building {buildingId} NOT released.");
+            }
+            else
+            {
+                string releaseRefusal = sharedBusinessRuntime.ReleaseNpcBusinessPremises(buildingId);
+                if (releaseRefusal != null)
+                {
+                    diag.Add($"CommercialLease: {releaseRefusal}");
+                }
+                else
+                {
+                    CommercialLeaseMarket market = hub.CommercialLeaseMarket;
+                    CommercialLeaseAgreement lease = market.FindActiveLeaseForBusiness(info.BusinessInstanceId);
+                    if (lease != null)
+                    {
+                        market.EndLease(lease, dayIndex, diag);
+                        RefundLeaseDeposit(lease, dayIndex, diag);
+                    }
+                    else
+                    {
+                        int plotId = -1;
+                        if (sharedBusinessRuntime.TryGetBusinessPremisesPlotId(info.Business, out int resolvedPlotId))
+                            plotId = resolvedPlotId;
+                        market.ListBuilding(buildingId, plotId,
+                            record?.FounderPersonId ?? -1, record?.OwnerName ?? string.Empty,
+                            dayIndex, diag);
+                    }
+                }
+            }
+
+            if (diag.Count > 0)
+                Debug.Log("[SimulationDrivers] closed-business premises release: " + string.Join(" | ", diag));
+        }
+
+        /// <summary>
+        /// B2: refunds a lease deposit on a clean lease end. The deposit
+        /// is refunded only when no rent Payable on the lease is still
+        /// unsettled; otherwise it is held and the reason is logged — the
+        /// offset against arrears is a follow-up, not a silent loss.
+        /// </summary>
+        private void RefundLeaseDeposit(CommercialLeaseAgreement lease, int dayIndex, List<string> diag)
+        {
+            if (lease == null || lease.DepositPaidCents <= 0) return;
+            bool arrearsOutstanding = false;
+            if (hub?.FinancialObligations != null)
+            {
+                foreach (string payableId in lease.RentPayableIds)
+                {
+                    FinancialObligation payable = hub.FinancialObligations.Find(payableId);
+                    if (payable != null && !payable.Settled) { arrearsOutstanding = true; break; }
+                }
+            }
+
+            if (arrearsOutstanding)
+            {
+                diag.Add($"CommercialLease: lease '{lease.AgreementId}' deposit {lease.DepositPaidCents}c HELD — rent arrears are still outstanding on the lease (offset against arrears is a follow-up).");
+                return;
+            }
+
+            int landlordHouseholdId = ResolvePersonHouseholdId(lease.LandlordPersonId);
+            int tenantHouseholdId = lease.TenantHouseholdId;
+            HouseholdLedger landlordLedger = landlordHouseholdId >= 0 && hub?.HouseholdLedgers != null
+                ? hub.HouseholdLedgers.GetOrCreate(landlordHouseholdId) : null;
+            HouseholdLedger tenantLedger = tenantHouseholdId >= 0 && hub?.HouseholdLedgers != null
+                ? hub.HouseholdLedgers.GetOrCreate(tenantHouseholdId) : null;
+            if (landlordLedger == null || tenantLedger == null)
+            {
+                diag.Add($"CommercialLease: lease '{lease.AgreementId}' deposit {lease.DepositPaidCents}c NOT refunded — " +
+                    $"landlord ledger {(landlordLedger == null ? "missing" : "found")} / tenant ledger {(tenantLedger == null ? "missing" : "found")}.");
+                return;
+            }
+
+            string refundRefusal = landlordLedger.TryTransferTo(tenantLedger, dayIndex,
+                lease.DepositPaidCents,
+                $"lease deposit refund for {lease.AgreementId} (lease ended)",
+                HouseholdIncomeSource.OtherDocumented, lease.AgreementId,
+                $"lease deposit refund for {lease.AgreementId}",
+                "person:" + lease.LandlordPersonId);
+            diag.Add(refundRefusal == null
+                ? $"CommercialLease: lease '{lease.AgreementId}' deposit {lease.DepositPaidCents}c refunded to H{tenantHouseholdId}."
+                : $"CommercialLease: lease '{lease.AgreementId}' deposit refund FAILED: {refundRefusal}.");
         }
 
         private bool PersonOwnsBusiness(int personId)

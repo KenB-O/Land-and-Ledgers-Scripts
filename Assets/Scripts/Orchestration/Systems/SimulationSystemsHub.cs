@@ -1046,6 +1046,7 @@ namespace LandLedgers.Orchestration.Systems
         private NpcOpportunityObservationLog npcOpportunityObservation;
         private NpcEntrepreneurshipDriver npcEntrepreneurshipDriver;
         private NpcBusinessEventLog npcBusinessEvents;
+        private CommercialLeaseMarket commercialLeaseMarket;
         private NpcPropertyLifeService npcPropertyLife;
         private ConstructionProjectExecutor constructionProjectExecutor;
         private readonly List<ConstructionProject> constructionProjects = new List<ConstructionProject>();
@@ -1198,6 +1199,12 @@ namespace LandLedgers.Orchestration.Systems
         public NpcEntrepreneurshipDriver NpcEntrepreneurship =>
             npcEntrepreneurshipDriver ??= new NpcEntrepreneurshipDriver();
         public NpcBusinessEventLog NpcBusinessEvents => npcBusinessEvents ??= new NpcBusinessEventLog();
+        /// <summary>
+        /// B2: the commercial lease market — listings and agreements for
+        /// NPC business premises. Owned here so the entrepreneurship
+        /// drive, the lifecycle drive, and the save path share one book.
+        /// </summary>
+        public CommercialLeaseMarket CommercialLeaseMarket => commercialLeaseMarket ??= new CommercialLeaseMarket();
         public NpcPropertyLifeService NpcPropertyLife => npcPropertyLife ??= new NpcPropertyLifeService();
         public ConstructionProjectExecutor ConstructionExecutor => constructionProjectExecutor ??= new ConstructionProjectExecutor();
         public IList<ConstructionProject> ConstructionProjects => constructionProjects;
@@ -1867,6 +1874,7 @@ namespace LandLedgers.Orchestration.Systems
                 npcOpportunityObservation = NpcOpportunityObservation.CaptureSaveDto(),
                 npcEntrepreneurship = NpcEntrepreneurship.CaptureSaveDto(),
                 npcBusinessEvents = NpcBusinessEvents.CaptureSaveDto(),
+                commercialLeaseMarket = CommercialLeaseMarket.CaptureSaveDto(),
                 npcPropertyLife = NpcPropertyLife.CaptureSaveDto(),
                 constructionProjects = ConstructionExecutor.CaptureSaveDto(new List<ConstructionProject>(ConstructionProjects)),
                 npcConstructionCommissioner = NpcConstructionCommissioner.CaptureSaveDto(),
@@ -2003,6 +2011,7 @@ namespace LandLedgers.Orchestration.Systems
             NpcOpportunityObservation.LoadFromSaveDto(dto.npcOpportunityObservation);
             NpcEntrepreneurship.LoadFromSaveDto(dto.npcEntrepreneurship);
             NpcBusinessEvents.LoadFromSaveDto(dto.npcBusinessEvents);
+            CommercialLeaseMarket.LoadFromSaveDto(dto.commercialLeaseMarket);
             NpcPropertyLife.LoadFromSaveDto(dto.npcPropertyLife, diagnostics);
             ConstructionProjects.Clear();
             foreach (ConstructionProject project in ConstructionExecutor.LoadFromSaveDto(dto.constructionProjects, diagnostics))

@@ -446,6 +446,13 @@ namespace LandLedgers.World.Property
         public void ImportState(IEnumerable<HousingSearchNeed> inNeeds)
         {
             if (inNeeds == null) return;
+            // M4-R1 (F-M1-7): clear-then-load, like the household ledger and
+            // inventory registries. A load replaces the live registry, never
+            // merges into it, so a second load in the same session cannot
+            // duplicate needs and a smaller save cannot leave stale ones.
+            all.Clear();
+            openByHousehold.Clear();
+            sequence = 0;
             foreach (HousingSearchNeed need in inNeeds)
             {
                 if (need == null || need.HouseholdId < 0 || string.IsNullOrWhiteSpace(need.NeedId)) continue;
@@ -458,6 +465,13 @@ namespace LandLedgers.World.Property
                         continue;
                     }
                     openByHousehold[need.HouseholdId] = need;
+                }
+                // Advance the id sequence past any imported id, so a later
+                // OpenNeed never reuses an id that already exists.
+                if (need.NeedId.StartsWith("hsn-", StringComparison.Ordinal)
+                    && int.TryParse(need.NeedId.Substring(4), out int imported))
+                {
+                    sequence = Math.Max(sequence, imported + 1);
                 }
             }
         }

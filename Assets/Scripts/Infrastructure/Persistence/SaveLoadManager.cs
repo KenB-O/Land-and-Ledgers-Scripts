@@ -392,6 +392,7 @@ namespace LandLedgers.Persistence
                         save.population.missedMeals,
                         save.population.mealPreparations);
                     systemsHub.ImportPurchasingNeeds(save.population.purchasingNeeds);
+                    systemsHub.ImportHousingSearchNeeds(save.population.housingSearchNeeds);
 
                     // Phase B (Real People): OQ-8 deterministic repair. Legacy
                     // saves carry household cash in the retired
@@ -1041,6 +1042,7 @@ namespace LandLedgers.Persistence
                         save.population.missedMeals,
                         save.population.mealPreparations);
                     systemsHub.ExportPurchasingNeeds(save.population.purchasingNeeds);
+                    systemsHub.ExportHousingSearchNeeds(save.population.housingSearchNeeds);
                 }
             }
 

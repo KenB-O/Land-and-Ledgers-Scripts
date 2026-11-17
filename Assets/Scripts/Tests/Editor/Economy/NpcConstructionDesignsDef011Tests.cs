@@ -16,8 +16,8 @@ namespace LandLedgers.EditorTests.Economy
     /// D-5 (expanded campaign): second design + first business design.
     /// The production catalog now holds three designs — settler cabin,
     /// family cabin (two rooms, sleeps 6) and carpenter's workshop (shop
-    /// floor plus living quarters) — all lumber-only, all priced by the
-    /// production price port and supplied by the yard. These tests pin
+    /// floor plus living quarters) — all lumber plus door hardware (D2),
+    /// all priced by the production price port and supplied by the yard. These tests pin
     /// the production presets themselves (not fixture copies), prove the
     /// evaluator picks the cheapest adequate design once a second design
     /// exists, prove the workshop commissions with a business reason and
@@ -135,7 +135,11 @@ namespace LandLedgers.EditorTests.Economy
             public Fixture()
             {
                 Prices.Prices["lumber"] = 40;
+                // D2: the yard's simple-hardware convention (forged pieces
+                // dominate the bucket) prices the door-hardware requirement.
+                Prices.Prices["door hardware"] = 45;
                 Source.Stock["lumber"] = 10000;
+                Source.Stock["door hardware"] = 10000;
                 Custody.Grant(7, "saw");
                 Parcels.HolderByParcel["parcel-9"] = "household:7";
             }
@@ -263,7 +267,19 @@ namespace LandLedgers.EditorTests.Economy
             int total = 0;
             foreach (BuildingDesignPhase phase in design.Phases ?? new List<BuildingDesignPhase>())
                 foreach (ConstructionMaterialRequirement requirement in phase.Materials ?? new List<ConstructionMaterialRequirement>())
-                    total += Math.Max(0, requirement != null ? requirement.RequiredUnits : 0);
+                    if (requirement != null && requirement.MaterialKind == ConstructionMaterialKind.Lumber)
+                        total += Math.Max(0, requirement.RequiredUnits);
+            return total;
+        }
+
+        /// <summary>D2: door-hardware units across all phases (one requirement, in the roof phase).</summary>
+        private static int TotalHardware(BuildingDesign design)
+        {
+            int total = 0;
+            foreach (BuildingDesignPhase phase in design.Phases ?? new List<BuildingDesignPhase>())
+                foreach (ConstructionMaterialRequirement requirement in phase.Materials ?? new List<ConstructionMaterialRequirement>())
+                    if (requirement != null && requirement.MaterialKind == ConstructionMaterialKind.Hardware)
+                        total += Math.Max(0, requirement.RequiredUnits);
             return total;
         }
 
@@ -283,7 +299,12 @@ namespace LandLedgers.EditorTests.Economy
             return total;
         }
 
-        private static void AssertLumberOnly(BuildingDesign design)
+        /// <summary>
+        /// D2: every requirement is either yard lumber ("lumber") or yard
+        /// door hardware ("door hardware") — wood and metal stay distinct,
+        /// and every requirement names the yard as its supplier.
+        /// </summary>
+        private static void AssertDesignMaterials(BuildingDesign design)
         {
             foreach (BuildingDesignPhase phase in design.Phases)
             {
@@ -291,11 +312,21 @@ namespace LandLedgers.EditorTests.Economy
                 foreach (ConstructionMaterialRequirement requirement in phase.Materials)
                 {
                     Assert.IsNotNull(requirement, "every requirement exists");
-                    Assert.AreEqual(ConstructionMaterialKind.Lumber, requirement.MaterialKind,
-                        $"design '{design.DesignId}' phase '{phase.PhaseName}' uses lumber only, not {requirement.MaterialKind}");
                     Assert.AreEqual("lumber-yard", requirement.SupplierBusinessId,
                         "every requirement names the yard as its supplier");
-                    Assert.AreEqual("lumber", requirement.MaterialDisplayName);
+                    if (requirement.MaterialKind == ConstructionMaterialKind.Lumber)
+                    {
+                        Assert.AreEqual("lumber", requirement.MaterialDisplayName);
+                    }
+                    else if (requirement.MaterialKind == ConstructionMaterialKind.Hardware)
+                    {
+                        Assert.AreEqual("door hardware", requirement.MaterialDisplayName,
+                            $"design '{design.DesignId}' phase '{phase.PhaseName}' hardware is the one door-hardware line");
+                    }
+                    else
+                    {
+                        Assert.Fail($"design '{design.DesignId}' phase '{phase.PhaseName}' uses unexpected material kind {requirement.MaterialKind}");
+                    }
                 }
                 Assert.IsTrue(phase.RequiredToolItemIds.Contains("saw"),
                     $"design '{design.DesignId}' phase '{phase.PhaseName}' needs the saw");
@@ -319,12 +350,17 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(300, design.Phases[1].Materials[0].RequiredUnits);
             Assert.AreEqual(300, design.Phases[2].Materials[0].RequiredUnits);
             Assert.AreEqual(640, TotalLumber(design), "40 + 300 + 300 lumber, verbatim the DEF-011 design");
+            Assert.AreEqual(2, design.Phases[2].Materials.Count, "the roof phase carries lumber and door hardware");
+            Assert.AreEqual(ConstructionMaterialKind.Hardware, design.Phases[2].Materials[1].MaterialKind);
+            Assert.AreEqual("door hardware", design.Phases[2].Materials[1].MaterialDisplayName);
+            Assert.AreEqual(9, design.Phases[2].Materials[1].RequiredUnits, "1 door + 1 window: 6 + 3 door-hardware units");
+            Assert.AreEqual(9, TotalHardware(design));
             Assert.AreEqual(600, TotalLabor(design), "120 + 240 + 240 labour minutes");
             Assert.AreEqual(4, TotalSleepingCapacity(design));
             Assert.AreEqual(1, design.SpaceSpecs.Count);
             Assert.IsTrue(string.IsNullOrWhiteSpace(design.RequiredPrefabId),
                 "no prefab required — data-only structure");
-            AssertLumberOnly(design);
+            AssertDesignMaterials(design);
         }
 
         [Test]
@@ -340,6 +376,11 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(450, design.Phases[1].Materials[0].RequiredUnits);
             Assert.AreEqual(450, design.Phases[2].Materials[0].RequiredUnits);
             Assert.AreEqual(960, TotalLumber(design), "60 + 450 + 450 lumber, ~1.5x the settler cabin");
+            Assert.AreEqual(2, design.Phases[2].Materials.Count, "the roof phase carries lumber and door hardware");
+            Assert.AreEqual(ConstructionMaterialKind.Hardware, design.Phases[2].Materials[1].MaterialKind);
+            Assert.AreEqual("door hardware", design.Phases[2].Materials[1].MaterialDisplayName);
+            Assert.AreEqual(18, design.Phases[2].Materials[1].RequiredUnits, "2 doors + 2 windows: 12 + 6 door-hardware units");
+            Assert.AreEqual(18, TotalHardware(design));
             Assert.AreEqual(900, TotalLabor(design), "180 + 360 + 360 labour minutes");
             Assert.AreEqual(6, TotalSleepingCapacity(design), "main room 4 + second room 2");
             Assert.AreEqual(2, design.SpaceSpecs.Count);
@@ -349,7 +390,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(2, design.SpaceSpecs[1].SleepingCapacity);
             Assert.IsTrue(string.IsNullOrWhiteSpace(design.RequiredPrefabId),
                 "no prefab required — data-only structure");
-            AssertLumberOnly(design);
+            AssertDesignMaterials(design);
         }
 
         [Test]
@@ -365,6 +406,11 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(600, design.Phases[1].Materials[0].RequiredUnits);
             Assert.AreEqual(500, design.Phases[2].Materials[0].RequiredUnits);
             Assert.AreEqual(1180, TotalLumber(design), "80 + 600 + 500 lumber");
+            Assert.AreEqual(2, design.Phases[2].Materials.Count, "the roof phase carries lumber and door hardware");
+            Assert.AreEqual(ConstructionMaterialKind.Hardware, design.Phases[2].Materials[1].MaterialKind);
+            Assert.AreEqual("door hardware", design.Phases[2].Materials[1].MaterialDisplayName);
+            Assert.AreEqual(18, design.Phases[2].Materials[1].RequiredUnits, "2 doors + 2 windows: 12 + 6 door-hardware units");
+            Assert.AreEqual(18, TotalHardware(design));
             Assert.AreEqual(1140, TotalLabor(design), "240 + 480 + 420 labour minutes");
             Assert.AreEqual(2, TotalSleepingCapacity(design), "the shop floor sleeps nobody; the quarters sleep 2");
             Assert.AreEqual(2, design.SpaceSpecs.Count);
@@ -374,7 +420,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(2, design.SpaceSpecs[1].SleepingCapacity);
             Assert.IsTrue(string.IsNullOrWhiteSpace(design.RequiredPrefabId),
                 "no prefab required — data-only structure");
-            AssertLumberOnly(design);
+            AssertDesignMaterials(design);
         }
 
         [Test]
@@ -399,16 +445,16 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void Estimates_PriceAtProductionLumberRate()
+        public void Estimates_PriceAtProductionRates()
         {
             var c = new Fixture();
 
-            Assert.AreEqual(25600, NpcPropertyDecisionEngine.EstimateBuildCostCents(
-                ProductionDesignPresets.SettlerCabin(), c.Prices), "640 lumber at 40c");
-            Assert.AreEqual(38400, NpcPropertyDecisionEngine.EstimateBuildCostCents(
-                ProductionDesignPresets.FamilyCabin(), c.Prices), "960 lumber at 40c");
-            Assert.AreEqual(47200, NpcPropertyDecisionEngine.EstimateBuildCostCents(
-                ProductionDesignPresets.CarpentersWorkshop(), c.Prices), "1180 lumber at 40c");
+            Assert.AreEqual(26005, NpcPropertyDecisionEngine.EstimateBuildCostCents(
+                ProductionDesignPresets.SettlerCabin(), c.Prices), "640 lumber at 40c + 9 door hardware at 45c");
+            Assert.AreEqual(39210, NpcPropertyDecisionEngine.EstimateBuildCostCents(
+                ProductionDesignPresets.FamilyCabin(), c.Prices), "960 lumber at 40c + 18 door hardware at 45c");
+            Assert.AreEqual(48010, NpcPropertyDecisionEngine.EstimateBuildCostCents(
+                ProductionDesignPresets.CarpentersWorkshop(), c.Prices), "1180 lumber at 40c + 18 door hardware at 45c");
         }
 
         [Test]
@@ -493,7 +539,7 @@ namespace LandLedgers.EditorTests.Economy
 
             Assert.AreEqual(1, requests.Count, string.Join("; ", f.Diag));
             Assert.AreEqual("settler-cabin", requests[0].DesignId,
-                "the workshop sleeps 2 and is adequate, but at 47200c it is dearer than the 25600c cabin — the evaluator never auto-commissions a business building for a housing need when a cheaper house exists: " + string.Join("; ", f.Diag));
+                "the workshop sleeps 2 and is adequate, but at 48010c it is dearer than the 26005c cabin — the evaluator never auto-commissions a business building for a housing need when a cheaper house exists: " + string.Join("; ", f.Diag));
         }
 
         // ----------------------------------------------------------------
@@ -517,7 +563,7 @@ namespace LandLedgers.EditorTests.Economy
             NpcConstructionRecord record = c.Commissioner.FindRecordForProject(project.ProjectId);
             Assert.IsNotNull(record, "commissioning opens the principal's record");
             Assert.AreEqual(NpcConstructionReason.NewEnterprise, record.Reason);
-            Assert.IsTrue(record.EvaluationSummary.Contains("47200c"),
+            Assert.IsTrue(record.EvaluationSummary.Contains("48010c"),
                 "the summary carries the estimate: " + record.EvaluationSummary);
             Assert.IsTrue(record.EvaluationSummary.Contains("sleeps 2/2"),
                 "the summary carries the quarters capacity: " + record.EvaluationSummary);
@@ -542,10 +588,11 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(3, project.WorkPackages.Count);
             foreach (WorkPackage package in project.WorkPackages)
                 Assert.AreEqual(WorkPackageStatus.Complete, package.Status);
-            // Materials 1180 lumber at 40c = 47200c, paid exactly once.
-            Assert.AreEqual(100000 - 47200, c.HouseholdLedger.GetBalanceCents());
-            Assert.AreEqual(47200, c.YardPurse.ReadBalanceCents());
+            // Materials 1180 lumber at 40c + 18 door hardware at 45c = 48010c, paid exactly once.
+            Assert.AreEqual(100000 - 48010, c.HouseholdLedger.GetBalanceCents());
+            Assert.AreEqual(48010, c.YardPurse.ReadBalanceCents());
             Assert.AreEqual(10000 - 1180, c.Source.Stock["lumber"]);
+            Assert.AreEqual(10000 - 18, c.Source.Stock["door hardware"]);
             // The building registers as a workshop, with a 0-sleeping shop
             // floor and 2-sleeping living quarters.
             List<Building> onParcel = c.Housing.BuildingsForParcel("parcel-9");
@@ -575,8 +622,9 @@ namespace LandLedgers.EditorTests.Economy
 
             // Extra drives change nothing: no double staging, no double occupancy, no double payment.
             for (int day = 40; day < 43; day++) driver.Drive(day, c.Diag);
-            Assert.AreEqual(100000 - 47200, c.HouseholdLedger.GetBalanceCents());
+            Assert.AreEqual(100000 - 48010, c.HouseholdLedger.GetBalanceCents());
             Assert.AreEqual(10000 - 1180, c.Source.Stock["lumber"]);
+            Assert.AreEqual(10000 - 18, c.Source.Stock["door hardware"]);
         }
 
         [Test]
@@ -596,10 +644,11 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(3, project.WorkPackages.Count);
             foreach (WorkPackage package in project.WorkPackages)
                 Assert.AreEqual(WorkPackageStatus.Complete, package.Status);
-            // Materials 960 lumber at 40c = 38400c, paid exactly once.
-            Assert.AreEqual(100000 - 38400, c.HouseholdLedger.GetBalanceCents());
-            Assert.AreEqual(38400, c.YardPurse.ReadBalanceCents());
+            // Materials 960 lumber at 40c + 18 door hardware at 45c = 39210c, paid exactly once.
+            Assert.AreEqual(100000 - 39210, c.HouseholdLedger.GetBalanceCents());
+            Assert.AreEqual(39210, c.YardPurse.ReadBalanceCents());
             Assert.AreEqual(10000 - 960, c.Source.Stock["lumber"]);
+            Assert.AreEqual(10000 - 18, c.Source.Stock["door hardware"]);
             List<Building> onParcel = c.Housing.BuildingsForParcel("parcel-9");
             Assert.AreEqual(1, onParcel.Count);
             Assert.AreEqual("cabin", onParcel[0].Kind);
@@ -635,7 +684,7 @@ namespace LandLedgers.EditorTests.Economy
 
             Assert.IsTrue(evaluation.IsViable, string.Join("; ", c.Diag));
             string allDecisions = string.Join(" | ", evaluation.Lines);
-            Assert.IsTrue(allDecisions.Contains("family-cabin ~38400c (sleeps 6)"),
+            Assert.IsTrue(allDecisions.Contains("family-cabin ~39210c (sleeps 6)"),
                 "the dearer adequate alternative is recorded, not vetoed: " + allDecisions);
             Assert.IsFalse(allDecisions.Contains("carpenters-workshop"),
                 "the workshop sleeps 2 and is not adequate for 4, so it is not an alternative: " + allDecisions);
@@ -655,14 +704,17 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsNotNull(cabin);
             Assert.AreEqual(3, cabin.Phases.Count);
             Assert.AreEqual(640, TotalLumber(cabin));
+            Assert.AreEqual(9, TotalHardware(cabin), "the door-hardware requirement survives save/load");
             Assert.AreEqual(4, TotalSleepingCapacity(cabin));
             BuildingDesign family = restored.FindDesign("family-cabin");
             Assert.IsNotNull(family);
             Assert.AreEqual(960, TotalLumber(family));
+            Assert.AreEqual(18, TotalHardware(family));
             Assert.AreEqual(6, TotalSleepingCapacity(family));
             BuildingDesign workshop = restored.FindDesign("carpenters-workshop");
             Assert.IsNotNull(workshop);
             Assert.AreEqual(1180, TotalLumber(workshop));
+            Assert.AreEqual(18, TotalHardware(workshop));
             Assert.AreEqual(2, TotalSleepingCapacity(workshop));
             Assert.AreEqual("workshop", workshop.KindLabel);
         }

@@ -9,12 +9,30 @@ namespace LandLedgers.Economy
     /// Game; the tests below pin them directly, so a design can never
     /// drift from what production registers without a test failing.
     ///
-    /// Every design is lumber-only: lumber is the only material the
-    /// production price port can price and the yard can supply
-    /// (LumberYardConstructionPricePort returns -1 for masonry, paint,
-    /// glass, roofing and anything else). A design naming any other
+    /// Every design is lumber plus door hardware: lumber and hardware are
+    /// the only materials the production price port can price and the yard
+    /// can supply (LumberYardConstructionPricePort returns -1 for masonry,
+    /// paint, glass, roofing and anything else). A design naming any other
     /// material refuses at evaluation — cost unknowable, never guessed —
     /// so no design here may invent a supplier or a price.
+    ///
+    /// D2 door hardware: the roof phase carries the openings (E1's openings
+    /// labour was folded into the roof phase by E2, and the hardware rides
+    /// with it; a later pass may split a dedicated openings phase once
+    /// doors, hardware and glass exist as real materials). One "door
+    /// hardware" requirement per design, one display name, supplied by the
+    /// yard — the sale adapter requires one consistent hardware display
+    /// name per package, and the yard fills the bucket nails-first from
+    /// its real lots. Quantities are a provisional rule, for the owner to
+    /// correct: per door 4 forged pieces (2 hinges, 1 latch, 1 handle) +
+    /// 2 nails units; per window 2 forged pieces (1 hinge, 1 latch, for
+    /// the shutter) + 1 nails unit. Settler cabin 1 door + 1 window = 9;
+    /// family cabin 2 doors + 2 windows = 18; workshop 2 doors (shop +
+    /// quarters) + 2 windows = 18. Wood and metal stay distinct: the
+    /// lumber requirement is the door and frame timber, the hardware
+    /// requirement is the iron that hangs and latches it — no door appears
+    /// from a completion percentage while the hardware is unavailable,
+    /// because the executor stages all-or-nothing from the site stockpile.
     ///
     /// Numbers are documented proposed defaults under the delegation
     /// doctrine (owner corrects what he disagrees with). The settler
@@ -28,8 +46,9 @@ namespace LandLedgers.Economy
     /// equipment installation, trade from the building — is out of
     /// Phase 2 scope; this design is the building, not the business
     /// runtime. Estimates at the 40c yard retail lumber rate (C-4:
-    /// 32c wholesale, 25% markup): cabin 25,600c, family cabin 38,400c,
-    /// workshop 47,200c.
+    /// 32c wholesale, 25% markup) plus door hardware at the 45c
+    /// simple-hardware yard convention: cabin 26,005c, family cabin
+    /// 39,210c, workshop 48,010c.
     /// </summary>
     public static class ProductionDesignPresets
     {
@@ -59,9 +78,10 @@ namespace LandLedgers.Economy
             var roof = new BuildingDesignPhase
             {
                 PhaseName = "Framing - roof", Sequence = 2, LaborMinutes = 240,
-                Notes = "log roof",
+                Notes = "log roof, doors and window openings",
             };
             roof.Materials.Add(LumberRequirement("REQ-roof-lumber", 300));
+            roof.Materials.Add(HardwareRequirement("REQ-roof-hardware", 9));
             roof.RequiredToolItemIds.Add("saw");
             design.Phases.Add(sills);
             design.Phases.Add(walls);
@@ -96,9 +116,10 @@ namespace LandLedgers.Economy
             var roof = new BuildingDesignPhase
             {
                 PhaseName = "Framing - roof", Sequence = 2, LaborMinutes = 360,
-                Notes = "log roof",
+                Notes = "log roof, doors and window openings",
             };
             roof.Materials.Add(LumberRequirement("REQ-roof-lumber", 450));
+            roof.Materials.Add(HardwareRequirement("REQ-roof-hardware", 18));
             roof.RequiredToolItemIds.Add("saw");
             design.Phases.Add(sills);
             design.Phases.Add(walls);
@@ -134,9 +155,10 @@ namespace LandLedgers.Economy
             var roof = new BuildingDesignPhase
             {
                 PhaseName = "Framing - roof", Sequence = 2, LaborMinutes = 420,
-                Notes = "log roof",
+                Notes = "log roof, doors and window openings",
             };
             roof.Materials.Add(LumberRequirement("REQ-roof-lumber", 500));
+            roof.Materials.Add(HardwareRequirement("REQ-roof-hardware", 18));
             roof.RequiredToolItemIds.Add("saw");
             design.Phases.Add(sills);
             design.Phases.Add(walls);
@@ -161,6 +183,27 @@ namespace LandLedgers.Economy
                 MaterialDisplayName = "lumber",
                 RequiredUnits = units,
                 UnitLabel = "board feet",
+                ProvenanceKind = ConstructionMaterialProvenanceKind.AnyRealSource,
+                SupplierBusinessId = "lumber-yard",
+                SupplierDisplayName = "Lumber Yard",
+            };
+        }
+
+        /// <summary>
+        /// D2: one door-hardware requirement per design, in the roof phase
+        /// with the openings. The yard is the supplier; the price port
+        /// prices it from the first stocked yard hardware lot (30c nails
+        /// or 45c simple hardware, whichever lot is first in FIFO order).
+        /// </summary>
+        private static ConstructionMaterialRequirement HardwareRequirement(string requirementId, int units)
+        {
+            return new ConstructionMaterialRequirement
+            {
+                RequirementId = requirementId,
+                MaterialKind = ConstructionMaterialKind.Hardware,
+                MaterialDisplayName = "door hardware",
+                RequiredUnits = units,
+                UnitLabel = "units",
                 ProvenanceKind = ConstructionMaterialProvenanceKind.AnyRealSource,
                 SupplierBusinessId = "lumber-yard",
                 SupplierDisplayName = "Lumber Yard",

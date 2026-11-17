@@ -191,7 +191,12 @@ namespace LandLedgers.EditorTests.Economy
                 Assert.IsNotNull(project, string.Join("; ", Diag));
                 int day = startDay;
                 int guard = 0;
-                while (project.Status != ConstructionProjectStatus.Complete && guard++ < 40)
+                // E2: the guard is a hang-guard, not a duration claim. A
+                // recalibrated workshop needs ~52 drive days with the
+                // fixture's single worker (48 work-days at 600 min/day plus
+                // staging, completion and occupancy steps); a family cabin
+                // needs ~28. 120 leaves headroom without hiding a stall.
+                while (project.Status != ConstructionProjectStatus.Complete && guard++ < 120)
                 {
                     Budgets.EnsureDay(day);
                     driver.Drive(day, Diag);
@@ -319,7 +324,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(300, design.Phases[1].Materials[0].RequiredUnits);
             Assert.AreEqual(300, design.Phases[2].Materials[0].RequiredUnits);
             Assert.AreEqual(640, TotalLumber(design), "40 + 300 + 300 lumber, verbatim the DEF-011 design");
-            Assert.AreEqual(600, TotalLabor(design), "120 + 240 + 240 labour minutes");
+            Assert.AreEqual(5400, TotalLabor(design), "E2 PROVISIONAL recalibration: 1200 + 2100 + 2100 labour minutes (site prep 600 + sills 600, walls 2100, roof 1500 + openings 600)");
             Assert.AreEqual(4, TotalSleepingCapacity(design));
             Assert.AreEqual(1, design.SpaceSpecs.Count);
             Assert.IsTrue(string.IsNullOrWhiteSpace(design.RequiredPrefabId),
@@ -340,7 +345,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(450, design.Phases[1].Materials[0].RequiredUnits);
             Assert.AreEqual(450, design.Phases[2].Materials[0].RequiredUnits);
             Assert.AreEqual(960, TotalLumber(design), "60 + 450 + 450 lumber, ~1.5x the settler cabin");
-            Assert.AreEqual(900, TotalLabor(design), "180 + 360 + 360 labour minutes");
+            Assert.AreEqual(14400, TotalLabor(design), "E2 PROVISIONAL recalibration: 2400 + 5400 + 6600 labour minutes (site prep 1200 + sills 1200, walls 5400, roof 4200 + openings 1200 + interior 1200)");
             Assert.AreEqual(6, TotalSleepingCapacity(design), "main room 4 + second room 2");
             Assert.AreEqual(2, design.SpaceSpecs.Count);
             Assert.AreEqual("main room", design.SpaceSpecs[0].Label);
@@ -365,7 +370,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(600, design.Phases[1].Materials[0].RequiredUnits);
             Assert.AreEqual(500, design.Phases[2].Materials[0].RequiredUnits);
             Assert.AreEqual(1180, TotalLumber(design), "80 + 600 + 500 lumber");
-            Assert.AreEqual(1140, TotalLabor(design), "240 + 480 + 420 labour minutes");
+            Assert.AreEqual(28800, TotalLabor(design), "E2 PROVISIONAL recalibration: 6000 + 9600 + 13200 labour minutes (site prep 2400 + sills/foundation 3600, walls 9600, roof 7200 + openings 2400 + fit-out 3600)");
             Assert.AreEqual(2, TotalSleepingCapacity(design), "the shop floor sleeps nobody; the quarters sleep 2");
             Assert.AreEqual(2, design.SpaceSpecs.Count);
             Assert.AreEqual("workshop floor", design.SpaceSpecs[0].Label);
@@ -618,6 +623,91 @@ namespace LandLedgers.EditorTests.Economy
                 Assert.AreEqual(1, occupancies,
                     $"P{personId} occupies the completed family cabin exactly once");
             }
+        }
+
+        // ----------------------------------------------------------------
+        // E2: recalibrated labour takes real calendar time (brief 18 N, P)
+        // ----------------------------------------------------------------
+
+        [Test]
+        public void Workshop_TakesRealCalendarTime_OneWorker()
+        {
+            var c = new Fixture();
+            c.RegisterPresets();
+            c.FundHousehold(7, 100000);
+            c.MembersByHousehold[7] = new List<int> { 101, 102 };
+            var driver = c.NewDriver(maxUnitsPerTrip: 28);
+
+            ConstructionProject project = driver.Commission(
+                c.DesignRequest("carpenters-workshop", NpcConstructionReason.NewEnterprise,
+                    new List<int> { 101, 102 }), c.Parcels, 10, c.Diag);
+            Assert.IsNotNull(project, string.Join("; ", c.Diag));
+            NpcConstructionRecord record = c.Commissioner.FindRecordForProject(project.ProjectId);
+            Assert.IsNotNull(record);
+
+            int day = 10;
+            int completedDay = -1;
+            while (completedDay < 0 && day < 80)
+            {
+                c.Budgets.EnsureDay(day);
+                driver.Drive(day, c.Diag);
+                if (day == 11)
+                {
+                    // The first labour day books one 600-minute chunk, not the full 6000-minute sills package.
+                    NpcBuildPackageFunding sillsFunding = record.FindFunding(project.WorkPackages[0].PackageId);
+                    Assert.IsNotNull(sillsFunding);
+                    Assert.AreEqual(600, sillsFunding.WorkerMinutesCommitted,
+                        "E2: the funding line records the day's chunk, never the full requested duration: " + string.Join("; ", c.Diag));
+                    Assert.AreEqual(600, project.WorkPackages[0].LaborMinutesCommitted);
+                }
+                if (project.Status == ConstructionProjectStatus.Complete) completedDay = day;
+                day++;
+            }
+            Assert.AreNotEqual(-1, completedDay, "the workshop completes: " + string.Join("; ", c.Diag));
+            Assert.IsTrue(completedDay > 50,
+                $"one worker at 600 min/day needs 48 work-days plus staging for 28,800 minutes; completed day {completedDay} is too fast: " + string.Join("; ", c.Diag));
+            Assert.IsTrue(completedDay <= 70, "the build finishes without stalling: " + string.Join("; ", c.Diag));
+            Assert.AreEqual(28800, project.TotalLaborMinutesCommitted, "every recalibrated minute was really worked");
+            int totalCommitted = 0;
+            foreach (WorkPackage package in project.WorkPackages)
+            {
+                NpcBuildPackageFunding funding = record.FindFunding(package.PackageId);
+                Assert.IsNotNull(funding);
+                totalCommitted += funding.WorkerMinutesCommitted;
+            }
+            Assert.AreEqual(28800, totalCommitted,
+                "E2: the funding lines record the chunks actually committed, so wage pro-rating sees 28,800 minutes, not one full request per day");
+            Assert.IsFalse(string.IsNullOrWhiteSpace(project.BuildingId));
+        }
+
+        [Test]
+        public void SettlerCabin_StallsWithoutLumber_NoPaymentNoProgress()
+        {
+            var c = new Fixture();
+            c.RegisterPresets();
+            c.FundHousehold(7, 100000);
+            c.MembersByHousehold[7] = new List<int> { 101, 102 };
+            c.Source.Stock["lumber"] = 0; // empty yard
+            var driver = c.NewDriver(maxUnitsPerTrip: 28);
+
+            ConstructionProject project = driver.Commission(
+                c.DesignRequest("settler-cabin", NpcConstructionReason.Overcrowding,
+                    new List<int> { 101, 102 }), c.Parcels, 10, c.Diag);
+            Assert.IsNotNull(project, string.Join("; ", c.Diag));
+
+            for (int day = 10; day < 15; day++)
+            {
+                c.Budgets.EnsureDay(day);
+                driver.Drive(day, c.Diag);
+            }
+
+            Assert.AreNotEqual(ConstructionProjectStatus.Complete, project.Status);
+            foreach (WorkPackage package in project.WorkPackages)
+                Assert.AreEqual(WorkPackageStatus.Ready, package.Status, "nothing stages without lumber");
+            Assert.AreEqual(0, project.TotalLaborMinutesCommitted, "no labour without staged materials");
+            Assert.AreEqual(100000, c.HouseholdLedger.GetBalanceCents(), "no payment without a staging");
+            Assert.AreEqual(0, c.YardPurse.ReadBalanceCents());
+            Assert.AreEqual(0, c.Source.Stock["lumber"]);
         }
 
         // ----------------------------------------------------------------

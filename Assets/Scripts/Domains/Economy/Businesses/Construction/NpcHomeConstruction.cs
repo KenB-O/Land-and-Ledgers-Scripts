@@ -75,7 +75,19 @@ namespace LandLedgers.Economy
         public int Sequence;
         public List<ConstructionMaterialRequirement> Materials = new List<ConstructionMaterialRequirement>();
         public List<string> MaterialProvenance = new List<string>();
+        /// <summary>
+        /// E2: TOTAL person-minutes this package requires, copied from the
+        /// design phase. Credited only as labour tasks are actually worked
+        /// (see WorkCommittedLabor) — never at reserve time, never by
+        /// planned date alone.
+        /// </summary>
         public int LaborMinutesRequired;
+        /// <summary>
+        /// E2: person-minutes actually worked on this package so far.
+        /// Advances only through WorkCommittedLabor, one day's chunk at a
+        /// time; the package completes only when this reaches
+        /// LaborMinutesRequired.
+        /// </summary>
         public int LaborMinutesCommitted;
         public List<string> RequiredToolItemIds = new List<string>();
         public List<string> DependsOnPackageIds = new List<string>();
@@ -481,6 +493,14 @@ namespace LandLedgers.Economy
         /// refused LOUDLY. Labor minutes are credited to the package ONLY as
         /// the task is worked (see <see cref="WorkCommittedLabor"/>), never at
         /// reserve time.
+        ///
+        /// E2: commits ONE DAY'S CHUNK at a time, never the package's full
+        /// labour in one call. LaborMinutesRequired is total person-minutes
+        /// (one worker-day is 600 minutes; a schedule reservation cannot
+        /// cross midnight), so a caller asking for a recalibrated package's
+        /// full labour would otherwise be refused outright, every day,
+        /// forever. The caller re-commits on later days until the package
+        /// is fully worked; partial work persists on the package.
         /// </summary>
         public string CommitLabor(
             ConstructionProject project,
@@ -516,6 +536,30 @@ namespace LandLedgers.Economy
                 }
             }
 
+            // E2: one day's chunk at a time. The package's labour is total
+            // person-minutes; a reservation cannot cross midnight and one
+            // worker-day is 600 minutes, so committing a recalibrated
+            // package's full labour (up to 13,200 minutes) in one call
+            // would be refused outright — every day, forever — by the
+            // past-midnight guard and the daily budget. Commit only what
+            // this worker can actually do today: the package's remaining
+            // labour, the minutes left before midnight, and the worker's
+            // remaining daily budget. The caller re-commits on later days
+            // until the package is fully worked.
+            int remainingLabor = Math.Max(0, package.LaborMinutesRequired - package.LaborMinutesCommitted);
+            int minutesToMidnight = Math.Max(0, 1440 - startMinuteOfDay);
+            int dayMinutes = Math.Min(WorkTimeMath.ClampToWholeMinutes(durationMinutes),
+                Math.Min(remainingLabor, minutesToMidnight));
+            if (budgets != null && personId >= 0)
+            {
+                budgets.EnsureDay(dayIndex);
+                WorkTimeBudget budget = budgets.GetOrCreate(EntityId.For(EntityKind.Person, personId));
+                dayMinutes = Math.Min(dayMinutes, budget.MinutesRemaining);
+            }
+            if (dayMinutes <= 0)
+                return $"ConstructionProjectExecutor.CommitLabor: P{personId} has no work minutes left for package '{package.PackageId}' today " +
+                    $"(package needs {remainingLabor} more, {minutesToMidnight} minutes left in the day, daily budget exhausted) — the package waits for a later day.";
+
             string reservationLabel = $"{label} [{project.ProjectId}/{package.PackageId}]";
 
             // Pass VIII Worker 3: equipment first — the package's required
@@ -548,7 +592,7 @@ namespace LandLedgers.Economy
             }
 
             string refusal = scheduleTracker.TryReserve(
-                personId, PersonActivityKind.Building, dayIndex, startMinuteOfDay, durationMinutes, reservationLabel);
+                personId, PersonActivityKind.Building, dayIndex, startMinuteOfDay, dayMinutes, reservationLabel);
             if (refusal != null)
             {
                 ReleaseEquipmentKeys(EquipmentReservations, project, package.PackageId, diag);
@@ -557,7 +601,7 @@ namespace LandLedgers.Economy
             }
             string scheduleReservationId = FindReservationId(scheduleTracker, personId, dayIndex, reservationLabel);
 
-            int committed = WorkTimeMath.ClampToWholeMinutes(durationMinutes);
+            int committed = dayMinutes;
             if (budgets.CurrentAbsoluteDayIndex >= 0)
                 budgets.EnsureDay(dayIndex);
             string definitionId = $"construction-labor:{package.PhaseName}";
@@ -674,6 +718,15 @@ namespace LandLedgers.Economy
         /// labor credit before the worker actually advances the task. The task
         /// must be bound to THIS package (see CommitLabor) — minutes worked
         /// on another package's task can never credit this one.
+        ///
+        /// E2: credits at most what the day's task covers and the package
+        /// still needs. Callers pass the package's full required labour;
+        /// a task committed for one day's chunk must only ever credit that
+        /// chunk — crediting the full request would finish a recalibrated
+        /// multi-day package in a single day. The task's remaining planned
+        /// minutes are the chunk's size (construction-labour definitions
+        /// carry no skill id, so the task authority books the chunk
+        /// unscaled).
         /// </summary>
         public string WorkCommittedLabor(
             ConstructionProject project,
@@ -706,10 +759,21 @@ namespace LandLedgers.Economy
             WorkTask task = tasks.FindTask(laborTaskId);
             if (task == null)
                 return $"ConstructionProjectExecutor.WorkCommittedLabor: no labor task '{laborTaskId}'.";
+            // E2: never credit more than the day's task covers or the
+            // package still needs — a caller asking for the package's full
+            // required labour must not finish a multi-day package in one
+            // day. The task's remaining planned minutes are the chunk
+            // CommitLabor booked for today.
+            int remainingPackage = Math.Max(0, package.LaborMinutesRequired - package.LaborMinutesCommitted);
+            int workable = Math.Min(WorkTimeMath.ClampToWholeMinutes(minutesToWork),
+                Math.Min(task.MinutesRemaining, remainingPackage));
+            if (workable <= 0)
+                return $"ConstructionProjectExecutor.WorkCommittedLabor: task '{laborTaskId}' has no workable minutes left for package '{package.PackageId}' " +
+                    $"(task remaining {task.MinutesRemaining}, package remaining {remainingPackage}) — refusing phantom credit.";
             int before = task.MinutesWorked;
             bool completed;
             string refusal;
-            if (!tasks.RecordWorkProgress(task.TaskId, minutesToWork, budgets, dayIndex, out completed, out refusal))
+            if (!tasks.RecordWorkProgress(task.TaskId, workable, budgets, dayIndex, out completed, out refusal))
                 return refusal;
             int worked = Math.Max(0, task.MinutesWorked - before);
             package.LaborMinutesCommitted += worked;

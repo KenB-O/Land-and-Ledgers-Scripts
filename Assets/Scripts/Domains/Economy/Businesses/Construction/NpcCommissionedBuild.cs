@@ -1260,15 +1260,53 @@ namespace LandLedgers.Economy
             string problem = executor.CommitLabor(project, package, personId, tracker, custody, tasks, budgets,
                 dayIndex, startMinuteOfDay, durationMinutes, "own labor", diag);
             if (problem != null) return problem;
+            // E2: record the chunk the executor actually committed today,
+            // never the requested duration. CommitLabor works one day's
+            // chunk at a time; recording the full request once per day
+            // would inflate WorkerMinutesCommitted (and any wage or
+            // accounting derived from it) by one full package per day.
+            int committedMinutes = CommittedMinutesForLatestTask(project, package, tasks);
             NpcBuildPackageFunding funding = record.FindFunding(package.PackageId);
             if (funding != null)
             {
                 funding.LaborKind = NpcBuildLaborKind.OwnLabor;
                 if (!funding.WorkerPersonIds.Contains(personId)) funding.WorkerPersonIds.Add(personId);
-                funding.WorkerMinutesCommitted += WorkTimeMath.ClampToWholeMinutes(durationMinutes);
+                funding.WorkerMinutesCommitted += Math.Max(0, committedMinutes);
             }
-            record.Decisions.Add($"day {dayIndex}: P{personId} (own labor) committed {durationMinutes} min to '{package.PhaseName}'.");
+            record.Decisions.Add($"day {dayIndex}: P{personId} (own labor) committed {committedMinutes} min to '{package.PhaseName}'.");
             return null;
+        }
+
+        /// <summary>
+        /// E2: the minutes the executor actually committed for the
+        /// package's newest labour task. CommitLabor works one day's chunk
+        /// at a time (the package's remaining labour, the minutes left
+        /// before midnight, the worker's remaining daily budget), so the
+        /// funding line must record the chunk, never the full requested
+        /// duration — wages are pro-rated from WorkerMinutesCommitted, and
+        /// recording the request would overpay a multi-day package once
+        /// per day. Construction-labour definitions carry no skill id, so
+        /// the task authority books the chunk unscaled; the task's planned
+        /// minutes ARE the chunk. Returns 0 when no task can be found
+        /// (never a guessed number).
+        /// </summary>
+        private static int CommittedMinutesForLatestTask(ConstructionProject project, WorkPackage package, TaskAuthority tasks)
+        {
+            if (project == null || package == null || tasks == null) return 0;
+            string taskId = null;
+            for (int i = project.LaborTaskBindings.Count - 1; i >= 0; i--)
+            {
+                LaborTaskBinding binding = project.LaborTaskBindings[i];
+                if (binding != null && string.Equals(binding.PackageId, package.PackageId, StringComparison.Ordinal))
+                {
+                    taskId = binding.TaskId;
+                    break;
+                }
+            }
+            if (string.IsNullOrWhiteSpace(taskId)) return 0;
+            WorkTask task = tasks.FindTask(taskId);
+            if (task == null) return 0;
+            return Math.Max(0, task.PlannedMinutes);
         }
 
         // Pass VIII Worker 3: the pre-universal-task compatibility overloads
@@ -1328,7 +1366,8 @@ namespace LandLedgers.Economy
                 diag.Add($"NpcCommissioner.HireWorker: P{workerPersonId} is hired (employment '{relationship.Id}') but their time was refused: {commitProblem}");
                 return commitProblem;
             }
-            RecordHiredCommit(record, package, workerPersonId, relationship.Id, durationMinutes);
+            RecordHiredCommit(record, package, workerPersonId, relationship.Id,
+                CommittedMinutesForLatestTask(project, package, tasks));
             NpcBuildPackageFunding funding = record.FindFunding(package.PackageId);
             if (funding != null)
                 funding.Notes = $"wages to household:{workerHouseholdId} at {agreedWeeklyWageCents}c/week pro-rated";
@@ -1346,7 +1385,7 @@ namespace LandLedgers.Economy
         /// which is where the wage is agreed.
         /// </summary>
         private static void RecordHiredCommit(NpcConstructionRecord record, WorkPackage package,
-            int workerPersonId, string employmentId, int durationMinutes)
+            int workerPersonId, string employmentId, int committedMinutes)
         {
             if (record == null || package == null) return;
             NpcBuildPackageFunding funding = record.FindFunding(package.PackageId);
@@ -1355,7 +1394,10 @@ namespace LandLedgers.Economy
             if (!funding.WorkerPersonIds.Contains(workerPersonId)) funding.WorkerPersonIds.Add(workerPersonId);
             if (!string.IsNullOrWhiteSpace(employmentId) && !funding.EmploymentIds.Contains(employmentId))
                 funding.EmploymentIds.Add(employmentId);
-            funding.WorkerMinutesCommitted += WorkTimeMath.ClampToWholeMinutes(durationMinutes);
+            // E2: committedMinutes is the day's chunk the executor actually
+            // booked (see CommittedMinutesForLatestTask), never the full
+            // requested duration — wages pro-rate from this total.
+            funding.WorkerMinutesCommitted += Math.Max(0, committedMinutes);
         }
 
         /// <summary>
@@ -1397,8 +1439,9 @@ namespace LandLedgers.Economy
                 diag.Add($"NpcCommissioner.CommitHiredLabor: P{relationship.EmployeePersonId} (employment '{employmentId}') time refused: {commitProblem}");
                 return commitProblem;
             }
-            RecordHiredCommit(record, package, relationship.EmployeePersonId, employmentId, durationMinutes);
-            record.Decisions.Add($"day {dayIndex}: P{relationship.EmployeePersonId} (employment '{employmentId}') committed {durationMinutes} min more to '{package.PhaseName}'.");
+            int committedMinutes = CommittedMinutesForLatestTask(project, package, tasks);
+            RecordHiredCommit(record, package, relationship.EmployeePersonId, employmentId, committedMinutes);
+            record.Decisions.Add($"day {dayIndex}: P{relationship.EmployeePersonId} (employment '{employmentId}') committed {committedMinutes} min more to '{package.PhaseName}'.");
             return null;
         }
 

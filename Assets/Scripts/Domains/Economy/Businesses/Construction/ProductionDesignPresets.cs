@@ -19,17 +19,39 @@ namespace LandLedgers.Economy
     /// Numbers are documented proposed defaults under the delegation
     /// doctrine (owner corrects what he disagrees with). The settler
     /// cabin is verbatim the DEF-011 production design. The family cabin
-    /// is ~1.5x the settler cabin in lumber (960 vs 640) and labour
-    /// (900 vs 600 min), a two-room cabin for a household the settler
-    /// cabin cannot sleep. The carpenter's workshop is a frontier
-    /// workshop with living quarters (the shopkeeper lives on the
-    /// premises, as period shops did): the shop floor is a 0-sleeping
-    /// work space, the quarters sleep 2. Business operation itself —
-    /// equipment installation, trade from the building — is out of
-    /// Phase 2 scope; this design is the building, not the business
-    /// runtime. Estimates at the 40c yard retail lumber rate (C-4:
-    /// 32c wholesale, 25% markup): cabin 25,600c, family cabin 38,400c,
-    /// workshop 47,200c.
+    /// is ~1.5x the settler cabin in lumber (960 vs 640), a two-room
+    /// cabin for a household the settler cabin cannot sleep. The
+    /// carpenter's workshop is a frontier workshop with living quarters
+    /// (the shopkeeper lives on the premises, as period shops did): the
+    /// shop floor is a 0-sleeping work space, the quarters sleep 2.
+    /// Business operation itself — equipment installation, trade from
+    /// the building — is out of Phase 2 scope; this design is the
+    /// building, not the business runtime. Estimates at the 40c yard
+    /// retail lumber rate (C-4: 32c wholesale, 25% markup): cabin
+    /// 25,600c, family cabin 38,400c, workshop 47,200c.
+    ///
+    /// E2 (2026-11-17, workstream E): labour recalibrated from the E1
+    /// historical calibration report
+    /// (Reports/Research/HISTORICAL_CONSTRUCTION_AND_BLACKSMITH_CALIBRATION_2026-11-17.md).
+    /// All labour values are PROVISIONAL, ordinary preset, materials
+    /// staged: settler cabin 600 to 5,400 person-minutes (90 ph),
+    /// family cabin 900 to 14,400 (240 ph), carpenter's workshop 1,140
+    /// to 28,800 (480 ph). The E1 phase allocations are FOLDED into the
+    /// existing three phases here — site preparation into Sills, openings
+    /// and interior work into Roof — so the phase count, materials and
+    /// lumber totals are unchanged; totals are preserved exactly. A
+    /// later H-lane may split site preparation, openings and interior
+    /// into their own phases once the procurement leg handles labour-only
+    /// phases (today it refuses a package spanning zero suppliers) and
+    /// once doors, hardware and glass exist as real materials for the
+    /// openings phase. LabourMinutes is TOTAL person-minutes, never
+    /// elapsed minutes: one worker-day is 600 minutes, so a package is
+    /// worked across as many days as its total requires (see
+    /// ConstructionProjectExecutor.CommitLabor, which commits one day's
+    /// chunk at a time). If E1 comes back NOT VERIFIED, retune ONLY the
+    /// LaborMinutes numbers and the totals pinned in
+    /// NpcConstructionDesignsDef011Tests — the phase structure, materials
+    /// and lumber totals do not move with the calibration.
     /// </summary>
     public static class ProductionDesignPresets
     {
@@ -44,22 +66,22 @@ namespace LandLedgers.Economy
             };
             var sills = new BuildingDesignPhase
             {
-                PhaseName = "Sills", Sequence = 0, LaborMinutes = 120,
-                Notes = "sill logs laid on grade",
+                PhaseName = "Sills", Sequence = 0, LaborMinutes = 1200,
+                Notes = "E2 PROVISIONAL: site preparation 600 + sills 600, folded (see class notes)",
             };
             sills.Materials.Add(LumberRequirement("REQ-sill-lumber", 40));
             sills.RequiredToolItemIds.Add("saw");
             var walls = new BuildingDesignPhase
             {
-                PhaseName = "Framing - walls", Sequence = 1, LaborMinutes = 240,
+                PhaseName = "Framing - walls", Sequence = 1, LaborMinutes = 2100,
                 Notes = "log walls",
             };
             walls.Materials.Add(LumberRequirement("REQ-wall-lumber", 300));
             walls.RequiredToolItemIds.Add("saw");
             var roof = new BuildingDesignPhase
             {
-                PhaseName = "Framing - roof", Sequence = 2, LaborMinutes = 240,
-                Notes = "log roof",
+                PhaseName = "Framing - roof", Sequence = 2, LaborMinutes = 2100,
+                Notes = "E2 PROVISIONAL: log roof 1500 + door and window openings 600, folded (see class notes)",
             };
             roof.Materials.Add(LumberRequirement("REQ-roof-lumber", 300));
             roof.RequiredToolItemIds.Add("saw");
@@ -81,22 +103,22 @@ namespace LandLedgers.Economy
             };
             var sills = new BuildingDesignPhase
             {
-                PhaseName = "Sills", Sequence = 0, LaborMinutes = 180,
-                Notes = "sill logs laid on grade",
+                PhaseName = "Sills", Sequence = 0, LaborMinutes = 2400,
+                Notes = "E2 PROVISIONAL: site preparation 1200 + sills 1200, folded (see class notes)",
             };
             sills.Materials.Add(LumberRequirement("REQ-sill-lumber", 60));
             sills.RequiredToolItemIds.Add("saw");
             var walls = new BuildingDesignPhase
             {
-                PhaseName = "Framing - walls", Sequence = 1, LaborMinutes = 360,
+                PhaseName = "Framing - walls", Sequence = 1, LaborMinutes = 5400,
                 Notes = "log walls",
             };
             walls.Materials.Add(LumberRequirement("REQ-wall-lumber", 450));
             walls.RequiredToolItemIds.Add("saw");
             var roof = new BuildingDesignPhase
             {
-                PhaseName = "Framing - roof", Sequence = 2, LaborMinutes = 360,
-                Notes = "log roof",
+                PhaseName = "Framing - roof", Sequence = 2, LaborMinutes = 6600,
+                Notes = "E2 PROVISIONAL: log roof 4200 + doors and windows 1200 + interior partition and finish 1200, folded (see class notes)",
             };
             roof.Materials.Add(LumberRequirement("REQ-roof-lumber", 450));
             roof.RequiredToolItemIds.Add("saw");
@@ -119,22 +141,22 @@ namespace LandLedgers.Economy
             };
             var sills = new BuildingDesignPhase
             {
-                PhaseName = "Sills", Sequence = 0, LaborMinutes = 240,
-                Notes = "sill logs laid on grade",
+                PhaseName = "Sills", Sequence = 0, LaborMinutes = 6000,
+                Notes = "E2 PROVISIONAL: site preparation 2400 + sills/foundation 3600, folded (see class notes)",
             };
             sills.Materials.Add(LumberRequirement("REQ-sill-lumber", 80));
             sills.RequiredToolItemIds.Add("saw");
             var walls = new BuildingDesignPhase
             {
-                PhaseName = "Framing - walls", Sequence = 1, LaborMinutes = 480,
+                PhaseName = "Framing - walls", Sequence = 1, LaborMinutes = 9600,
                 Notes = "log walls",
             };
             walls.Materials.Add(LumberRequirement("REQ-wall-lumber", 600));
             walls.RequiredToolItemIds.Add("saw");
             var roof = new BuildingDesignPhase
             {
-                PhaseName = "Framing - roof", Sequence = 2, LaborMinutes = 420,
-                Notes = "log roof",
+                PhaseName = "Framing - roof", Sequence = 2, LaborMinutes = 13200,
+                Notes = "E2 PROVISIONAL: log roof 7200 + doors and windows 2400 + interior fit-out 3600, folded (see class notes)",
             };
             roof.Materials.Add(LumberRequirement("REQ-roof-lumber", 500));
             roof.RequiredToolItemIds.Add("saw");

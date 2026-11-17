@@ -364,6 +364,8 @@ namespace LandLedgers.Orchestration.Systems
         private readonly HashSet<string> fuelDealerSupplierRegistrationLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> fuelDealerSupplierWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> sawmillTransferWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> hardwareTransferWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> hardwareImportWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> sawmillProductionWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> fellingWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> logHaulWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
@@ -2018,6 +2020,362 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// D3 (F-D2-1): the smith-to-yard hardware delivery drive, the
+        /// DriveSawmillToYardTransfer pattern for forged construction
+        /// hardware. Runs after the sawmill transfer so the day's
+        /// hardware moves into the yard before anything downstream
+        /// reads it. The smith has no Pass 9 holder (its shop stock is
+        /// not a Pass 9 section yet), so the smith runtime resolves
+        /// through the hub when a formed Blacksmith business exists —
+        /// and the drive skips loudly when no blacksmith business is
+        /// formed at all (the development town has none today), rather
+        /// than inventing a smith. The yard resolves Pass 9 primary,
+        /// hub fallback, as in the sawmill drive.
+        /// </summary>
+        private void DriveBlacksmithToYardHardwareTransfers(int absoluteDayIndex)
+        {
+            // 1. Resolve the smith and the yard (D1 pattern).
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogHardwareTransferWarningOnce("no-business-runtime",
+                    "Smith-to-yard hardware transfer skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogHardwareTransferWarningOnce("no-pass9",
+                    "Smith-to-yard hardware transfer skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            BusinessInstanceState smithBusiness = null;
+            BusinessInstanceState yardBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.Blacksmith)
+                {
+                    if (smithBusiness == null) smithBusiness = business;
+                    else LogHardwareTransferWarningOnce("second-smith",
+                        $"Second Blacksmith business '{business.InstanceId}' is unwired: the hardware transfer moves the first smith only.");
+                }
+                else if (business.BusinessType == BusinessType.LumberYard)
+                {
+                    if (yardBusiness == null) yardBusiness = business;
+                    else LogHardwareTransferWarningOnce("second-yard",
+                        $"Second LumberYard business '{business.InstanceId}' is unwired: the hardware transfer moves into the first yard only.");
+                }
+            }
+
+            // No Pass 9 smith holder exists yet, so the smith resolves
+            // through the hub when a formed Blacksmith business exists.
+            // No formed smith means no delivery at all — the drive
+            // never invents one.
+            BlacksmithRuntime smithy = null;
+            if (smithBusiness == null || string.IsNullOrWhiteSpace(smithBusiness.InstanceId))
+            {
+                LogHardwareTransferWarningOnce("no-smith",
+                    "Smith-to-yard hardware transfer skipped: no formed Blacksmith business is present in the shared runtime.");
+                return;
+            }
+            smithy = hub.BlacksmithRuntimeFor(smithBusiness.InstanceId);
+            if (smithy == null)
+            {
+                LogHardwareTransferWarningOnce("hub-no-smith",
+                    "Smith-to-yard hardware transfer skipped: hub returned no blacksmith runtime.");
+                return;
+            }
+
+            // Agent 3 note 68 ruling (2), as in the sawmill drive:
+            // pass9.LumberYard is PRIMARY — the bootstrapper owns the
+            // holder. The hub accessor is the fallback only when the
+            // holder is null AND the business is formed, with a warning.
+            LumberYardShopRuntime yard = pass9.LumberYard;
+            if (yard == null)
+            {
+                if (yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId))
+                {
+                    LogHardwareTransferWarningOnce("no-yard",
+                        "Smith-to-yard hardware transfer skipped: no formed LumberYard business is present in the shared runtime.");
+                    return;
+                }
+
+                LogHardwareTransferWarningOnce("holder-fallback-yard",
+                    $"Smith-to-yard hardware transfer: Pass 9 yard holder is null; resolving the formed LumberYard '{yardBusiness.InstanceId}' through the hub (empty runtime until the bootstrapper owns it).");
+                yard = hub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+                if (yard == null)
+                {
+                    LogHardwareTransferWarningOnce("hub-no-yard",
+                        "Smith-to-yard hardware transfer skipped: hub returned no yard runtime.");
+                    return;
+                }
+            }
+
+            // 2. Resolve the driver from the hub.
+            BlacksmithToYardHardwareTransferDriver driver = hub.BlacksmithToYardHardwareTransferDriver;
+            if (driver == null)
+            {
+                LogHardwareTransferWarningOnce("no-driver",
+                    "Smith-to-yard hardware transfer skipped: no smith-to-yard hardware transfer driver is registered in the hub.");
+                return;
+            }
+
+            // C-4 (OD-C5): the delivery is a wholesale PURCHASE — bind
+            // the cash ports fresh each drive from the smith and yard
+            // business runtime states (the byproduct-transfer pattern).
+            // A delivery with no formed business runtime state has no
+            // cash to debit or credit, so the drive is skipped loudly
+            // rather than moving hardware unpaid.
+            if (smithBusiness?.RuntimeState == null)
+            {
+                LogHardwareTransferWarningOnce("no-smith-cash",
+                    "Smith-to-yard hardware transfer skipped: no formed Blacksmith business runtime state to credit.");
+                return;
+            }
+            if (yardBusiness?.RuntimeState == null)
+            {
+                LogHardwareTransferWarningOnce("no-yard-cash",
+                    "Smith-to-yard hardware transfer skipped: no formed LumberYard business runtime state to debit.");
+                return;
+            }
+            driver.YardCash = new Series2BusinessRuntimeCashPort(yardBusiness.RuntimeState);
+            driver.SmithCash = new Series2BusinessRuntimeCashPort(smithBusiness.RuntimeState);
+
+            var diag = new List<string>();
+
+            // 3. Re-attempt pass: open Planned jobs from prior days
+            // BEFORE the begin pass (FIFO: an older job names older
+            // pieces than today's forging). Failed and Transferred jobs
+            // are terminal and are never re-attempted. Each open job
+            // runs once via RunDelivery with its stored pieces and cost
+            // — no new BeginDelivery, so the duplicate and open-job
+            // guards are not re-triggered.
+            var openJobs = new List<BlacksmithToYardHardwareTransferJob>();
+            openJobs.AddRange(driver.JobsInState(BlacksmithToYardHardwareTransferJobState.Planned));
+            openJobs.Sort((a, b) =>
+            {
+                int byDay = a.CreatedDayIndex.CompareTo(b.CreatedDayIndex);
+                return byDay != 0 ? byDay : string.CompareOrdinal(a.JobId, b.JobId);
+            });
+
+            int reattemptedCount = 0;
+            int begunCount = 0;
+            int transferredCount = 0;
+            int failedCount = 0;
+            int settledCents = 0;
+
+            foreach (BlacksmithToYardHardwareTransferJob openJob in openJobs)
+            {
+                reattemptedCount++;
+                if (RunHardwareTransferJobOnce(driver, openJob, absoluteDayIndex, diag, ref failedCount) && openJob.State == BlacksmithToYardHardwareTransferJobState.Transferred)
+                {
+                    transferredCount++;
+                    if (openJob.SettledPriceCents >= 0) settledCents += openJob.SettledPriceCents;
+                }
+            }
+
+            // 4. Begin pass: scan smith shop stock for unreserved forged
+            // hardware pieces with no open job, grouped by forged day —
+            // one yard lot carries one forged day, so one job per day
+            // group. A piece with a Planned job is handled by the
+            // re-attempt pass; a Transferred piece is already gone from
+            // stock. A Failed job does NOT skip the piece: the open-job
+            // guard refuses only Planned jobs, so a fresh begin is the
+            // recovery path. A reserved piece is skipped for today.
+            var piecesByDay = new Dictionary<int, List<string>>();
+            foreach (KeyValuePair<string, EquipmentAsset> entry in smithy.Assets)
+            {
+                EquipmentAsset piece = entry.Value;
+                if (piece == null) continue;
+                if (!BlacksmithRuntime.IsHardwareKind(piece.Kind)) continue;
+                if (piece.IsReserved) continue;
+                if (driver.IsPieceInOpenJob(piece.AssetId)) continue;
+                if (!piecesByDay.TryGetValue(piece.MadeDayIndex, out List<string> dayPieces))
+                {
+                    dayPieces = new List<string>();
+                    piecesByDay[piece.MadeDayIndex] = dayPieces;
+                }
+                dayPieces.Add(piece.AssetId);
+            }
+            var forgedDays = new List<int>(piecesByDay.Keys);
+            forgedDays.Sort();
+
+            if (openJobs.Count == 0 && forgedDays.Count == 0)
+            {
+                LogHardwareTransferWarningOnce("nothing-to-deliver",
+                    "Smith-to-yard hardware transfer: no forged hardware in smith shop stock and no open jobs to re-attempt.");
+                return;
+            }
+
+            foreach (int forgedDay in forgedDays)
+            {
+                List<string> pieceIds = piecesByDay[forgedDay];
+                pieceIds.Sort(StringComparer.Ordinal);
+                // C-4 (OD-C5): the delivery is a wholesale purchase at
+                // the driver's wholesale unit price — never a zero-cost
+                // gift (a zero-cost lot quotes 1c at retail and the
+                // smith earns nothing, the F6 defect).
+                BlacksmithToYardHardwareTransferJob job = driver.BeginDelivery(pieceIds, BlacksmithToYardHardwareTransferDriver.WholesaleHardwareUnitCostCents, absoluteDayIndex, out string beginRefusal);
+                if (job == null)
+                {
+                    diag.Add($"[HardwareTransfer] Day {absoluteDayIndex}: forged day {forgedDay} ({pieceIds.Count} pieces) could not begin — {beginRefusal}");
+                    continue;
+                }
+                begunCount++;
+                if (RunHardwareTransferJobOnce(driver, job, absoluteDayIndex, diag, ref failedCount) && job.State == BlacksmithToYardHardwareTransferJobState.Transferred)
+                {
+                    transferredCount++;
+                    if (job.SettledPriceCents >= 0) settledCents += job.SettledPriceCents;
+                }
+            }
+
+            // 7. Summary.
+            Debug.Log($"[HardwareTransfer] Day {absoluteDayIndex}: re-attempted {reattemptedCount} open job(s), began {begunCount} new job(s), {transferredCount} job(s) transferred ({settledCents}c settled wholesale), {failedCount} job(s) failed. {string.Join(" | ", diag)}", this);
+        }
+
+        /// <summary>
+        /// D3 (F-D2-1): runs one open hardware delivery job once and
+        /// handles its refusal. An intake refusal leaves the job Planned
+        /// and the retry safe (note 100 Q2); a failed job is reconciled
+        /// with a diagnostic naming the pieces. Never re-calls
+        /// RunDelivery the same day; the job is re-attempted on the next
+        /// day's drive. Returns true when the run succeeded.
+        /// </summary>
+        private bool RunHardwareTransferJobOnce(BlacksmithToYardHardwareTransferDriver driver, BlacksmithToYardHardwareTransferJob job, int dayIndex, List<string> diag, ref int failedCount)
+        {
+            if (driver == null || job == null) return false;
+            if (!driver.RunDelivery(job.JobId, dayIndex, out string refusal))
+            {
+                diag.Add($"[HardwareTransfer] Day {dayIndex}: job '{job.JobId}' refused — {refusal}");
+                // Step 5 reconciliation: both terminal paths. The
+                // mismatch path keys on the driver's own exact text
+                // ("cannot be verified"); the pieces already moved, the
+                // yard lot stays in yard stock, and no credit is
+                // invented — the pieces are gone from smith stock, so
+                // the next day's begin pass cannot move them again.
+                if (job.State == BlacksmithToYardHardwareTransferJobState.Failed)
+                {
+                    failedCount++;
+                    if (refusal != null && refusal.Contains("cannot be verified"))
+                    {
+                        diag.Add($"[HardwareTransfer] Day {dayIndex}: job '{job.JobId}' ({job.PieceBreakdown}) mismatched its run — the output lot already exists in yard stock and no credit is invented; the pieces are gone from smith stock, so no double-move is possible.");
+                    }
+                    else
+                    {
+                        diag.Add($"[HardwareTransfer] Day {dayIndex}: job '{job.JobId}' ({job.PieceBreakdown}) FAILED — the pieces stay in the smithy, never re-invented; a fresh BeginDelivery is the recovery path.");
+                    }
+                }
+                return false;
+            }
+            // C-4: custody moved but the smith credit was refused — the
+            // driver recorded the unsettled debit loudly in its own
+            // diagnostics, and the production summary must carry it too
+            // (the driver's diagnostics list is not read in production).
+            if (job.SettledPriceCents < 0)
+            {
+                diag.Add($"[HardwareTransfer] Day {dayIndex}: job '{job.JobId}' transferred custody but the smith credit is UNSETTLED — the yard paid and the smith has not been credited; reconcile the books before the next drive.");
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// D3 (F-D2-2): the lumber yard nails import drive. Runs after
+        /// the hardware transfer so the day's deliveries land before
+        /// the import driver counts covered stock — a replenishment
+        /// arriving today never triggers a second order the same day.
+        /// The yard resolves Pass 9 primary, hub fallback, as in the
+        /// sawmill drive. The cash port binds fresh each drive from the
+        /// yard business runtime state; when the yard has no runtime
+        /// state the port stays null and the driver orders on honest
+        /// credit only, never on cash it cannot prove. The liability
+        /// ledger and id registry come from the hub (always available).
+        /// </summary>
+        private void DriveLumberYardHardwareImports(int absoluteDayIndex)
+        {
+            sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
+            if (sharedBusinessRuntime == null)
+            {
+                LogHardwareImportWarningOnce("no-business-runtime",
+                    "Lumber yard nails import skipped: shared business runtime is missing.");
+                return;
+            }
+
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            Series2Pass9SaveState pass9 = save != null ? save.Series2Pass9State : null;
+            if (pass9 == null)
+            {
+                LogHardwareImportWarningOnce("no-pass9",
+                    "Lumber yard nails import skipped: Pass 9 save state is missing.");
+                return;
+            }
+
+            BusinessInstanceState yardBusiness = null;
+            IReadOnlyList<BusinessInstanceState> businesses = sharedBusinessRuntime.Businesses;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (business == null) continue;
+                if (business.BusinessType == BusinessType.LumberYard)
+                {
+                    if (yardBusiness == null) yardBusiness = business;
+                    else LogHardwareImportWarningOnce("second-yard",
+                        $"Second LumberYard business '{business.InstanceId}' is unwired: the nails import orders for the first yard only.");
+                }
+            }
+
+            LumberYardShopRuntime yard = pass9.LumberYard;
+            if (yard == null)
+            {
+                if (yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId))
+                {
+                    LogHardwareImportWarningOnce("no-yard",
+                        "Lumber yard nails import skipped: no formed LumberYard business is present in the shared runtime.");
+                    return;
+                }
+
+                LogHardwareImportWarningOnce("holder-fallback-yard",
+                    $"Lumber yard nails import: Pass 9 yard holder is null; resolving the formed LumberYard '{yardBusiness.InstanceId}' through the hub (empty runtime until the bootstrapper owns it).");
+                yard = hub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+                if (yard == null)
+                {
+                    LogHardwareImportWarningOnce("hub-no-yard",
+                        "Lumber yard nails import skipped: hub returned no yard runtime.");
+                    return;
+                }
+            }
+
+            LumberYardHardwareImportDriver driver = hub.LumberYardHardwareImportDriver;
+            if (driver == null)
+            {
+                LogHardwareImportWarningOnce("no-driver",
+                    "Lumber yard nails import skipped: no lumber yard nails import driver is registered in the hub.");
+                return;
+            }
+
+            if (yardBusiness?.RuntimeState != null)
+            {
+                driver.YardCash = new Series2BusinessRuntimeCashPort(yardBusiness.RuntimeState);
+            }
+            else
+            {
+                driver.YardCash = null;
+                LogHardwareImportWarningOnce("no-yard-cash",
+                    "Lumber yard nails import: no formed LumberYard business runtime state — cash orders are unavailable and the driver orders on honest credit only.");
+            }
+            driver.LiabilityLedger = hub.Liabilities;
+            driver.IdRegistry = hub.Ids;
+
+            string summary = driver.Drive(absoluteDayIndex);
+            Debug.Log($"[HardwareImport] Day {absoluteDayIndex}: {summary}", this);
+        }
+
+        /// <summary>
         /// F7 yard-transfer wiring: runs one open transfer job once and
         /// handles its refusal. An intake refusal leaves the job Planned
         /// and the retry safe (note 100 Q2); a failed job is reconciled
@@ -2215,6 +2573,18 @@ namespace LandLedgers.Orchestration.Systems
         {
             string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
             if (sawmillTransferWarningsLogged.Add(warningKey)) Debug.LogWarning("[SawmillTransfer] " + message, this);
+        }
+
+        private void LogHardwareTransferWarningOnce(string key, string message)
+        {
+            string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
+            if (hardwareTransferWarningsLogged.Add(warningKey)) Debug.LogWarning("[HardwareTransfer] " + message, this);
+        }
+
+        private void LogHardwareImportWarningOnce(string key, string message)
+        {
+            string warningKey = string.IsNullOrWhiteSpace(key) ? "<missing>" : key;
+            if (hardwareImportWarningsLogged.Add(warningKey)) Debug.LogWarning("[HardwareImport] " + message, this);
         }
 
         private void LogSawmillProductionWarningOnce(string key, string message)
@@ -3041,6 +3411,28 @@ namespace LandLedgers.Orchestration.Systems
         {
             if (driver == null || hub == null) return;
             hub.RegisterSawmillToYardTransferDriver(driver);
+        }
+
+        /// <summary>
+        /// D3 (F-D2-1): registers the smith-to-yard hardware transfer
+        /// driver with the hub. Forwarder only — no BindBusiness-style
+        /// side effects (note 100 Q6 boundary).
+        /// </summary>
+        public void RegisterBlacksmithToYardHardwareTransferDriver(BlacksmithToYardHardwareTransferDriver driver)
+        {
+            if (driver == null || hub == null) return;
+            hub.RegisterBlacksmithToYardHardwareTransferDriver(driver);
+        }
+
+        /// <summary>
+        /// D3 (F-D2-2): registers the lumber yard nails import driver
+        /// with the hub. Forwarder only — no BindBusiness-style side
+        /// effects (note 100 Q6 boundary).
+        /// </summary>
+        public void RegisterLumberYardHardwareImportDriver(LumberYardHardwareImportDriver driver)
+        {
+            if (driver == null || hub == null) return;
+            hub.RegisterLumberYardHardwareImportDriver(driver);
         }
 
         // CAMPAIGN-B (DEF-042): resolve the general-store business a shopping
@@ -4602,6 +4994,14 @@ namespace LandLedgers.Orchestration.Systems
             // ByproductStock), so the order between them is narrative,
             // not a correctness dependency.
             DriveSawmillToYardTransfer(absoluteDayIndex);
+            // D3 (F-D2-1): the day's forged hardware moves into yard
+            // hardware lots before the nails import counts covered
+            // stock, so a delivery landing today is already on hand
+            // when the import driver decides.
+            DriveBlacksmithToYardHardwareTransfers(absoluteDayIndex);
+            // D3 (F-D2-2): the yard's nails import — receive due
+            // imports, then order when the covered-stock signal fires.
+            DriveLumberYardHardwareImports(absoluteDayIndex);
             // C-6: a retail sale's lumber travels by the real freight
             // chain the day after the buyer-side flow queues it — the
             // day's sawn lumber is already in the yard (above).

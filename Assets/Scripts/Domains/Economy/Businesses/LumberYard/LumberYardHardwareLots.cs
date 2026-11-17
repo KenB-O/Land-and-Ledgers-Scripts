@@ -156,7 +156,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         /// Receives hardware forged by a NAMED blacksmith business instance —
         /// the primary honest supply path (the smith forges from imported iron
         /// stock; the iron import order is recorded when the smith reports
-        /// it). Returns the refusal, or null.
+        /// it). The optional supplier note carries the delivery's piece
+        /// breakdown (D3: the delivery driver records which pieces make up
+        /// the lot, so the lot's provenance names its contents, not just
+        /// its unit count). Returns the refusal, or null.
         /// </summary>
         public string ReceiveFromBlacksmith(
             EntityId yardLotId,
@@ -167,7 +170,8 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             string ironImportOrderId,
             int acquiredDayIndex,
             int unitCostCents,
-            List<string> diag)
+            List<string> diag,
+            string supplierNote = "")
         {
             diag = diag ?? diagnostics;
             var lot = new LumberYardHardwareLot
@@ -186,6 +190,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             lot.SourceBlacksmithBusinessId = blacksmithBusinessId.Trim();
             lot.ForgedDayIndex = forgedDayIndex;
             lot.IronImportOrderId = ironImportOrderId ?? string.Empty;
+            lot.SupplierNote = supplierNote ?? string.Empty;
 
             lots.Add(lot);
             diag.Add($"LumberYardHardwareStock ({yardBusinessId}): received {units} {kind} units "

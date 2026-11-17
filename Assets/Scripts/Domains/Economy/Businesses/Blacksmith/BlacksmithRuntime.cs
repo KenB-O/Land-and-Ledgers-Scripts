@@ -393,6 +393,47 @@ namespace LandLedgers.Economy.Blacksmith
         }
 
         /// <summary>
+        /// D3: the inverse of TakeHardware — returns one forged hardware
+        /// piece to shop stock. The delivery driver's unwind path only:
+        /// a piece taken for a yard delivery whose sale then fails goes
+        /// back into stock exactly as it left, never duplicated and never
+        /// lost. Refuses a null asset, a non-hardware kind, or an asset
+        /// id already in stock (a second return of the same piece would
+        /// duplicate it). Returns the refusal, or null.
+        /// </summary>
+        public string ReturnHardwareToStock(EquipmentAsset asset, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            if (asset == null)
+            {
+                diagnostics.Add("BlacksmithRuntime: no hardware asset given to return.");
+                return "BlacksmithRuntime: no hardware asset given to return.";
+            }
+
+            if (!IsHardwareKind(asset.Kind))
+            {
+                diagnostics.Add($"BlacksmithRuntime: asset '{asset.AssetId}' is a {asset.Kind}, not forged construction hardware; return refused.");
+                return $"BlacksmithRuntime: asset '{asset.AssetId}' is a {asset.Kind}, not forged construction hardware; return refused.";
+            }
+
+            if (string.IsNullOrWhiteSpace(asset.AssetId))
+            {
+                diagnostics.Add("BlacksmithRuntime: hardware asset has no id; return refused.");
+                return "BlacksmithRuntime: hardware asset has no id; return refused.";
+            }
+
+            if (assets.ContainsKey(asset.AssetId))
+            {
+                diagnostics.Add($"BlacksmithRuntime: hardware '{asset.AssetId}' is already in shop stock; a second return would duplicate it.");
+                return $"BlacksmithRuntime: hardware '{asset.AssetId}' is already in shop stock; a second return would duplicate it.";
+            }
+
+            assets[asset.AssetId] = asset;
+            diagnostics.Add($"BlacksmithRuntime: hardware '{asset.AssetId}' returned to shop stock.");
+            return null;
+        }
+
+        /// <summary>
         /// D1/D2: draw one forge-quarter of a material. If quarters are on hand,
         /// take one. Otherwise draw one whole unit from stock (FIFO lot
         /// provenance), cut it into four quarters, and spend one of them.

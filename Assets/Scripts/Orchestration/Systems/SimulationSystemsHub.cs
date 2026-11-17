@@ -260,6 +260,23 @@ namespace LandLedgers.Orchestration.Systems
         // wired by FirstLedgerSliceBootstrapper.ConfigureSawmillYardTransferWiring.
         private SawmillToYardTransferDriver sawmillToYardTransferDriver;
 
+        // D3 (F-D2-1): one live blacksmith runtime per Blacksmith
+        // business. No Pass 9 holder exists for the smith (the smith's
+        // shop stock is not a Pass 9 section yet — a future save pass
+        // owns that, like the D1 quarter pools); the hub is the live
+        // holder, and the yard lots a delivery creates persist through
+        // the Pass 9 yard section. A business with no runtime holds no
+        // smith stock.
+        private Dictionary<string, BlacksmithRuntime> blacksmithRuntimes;
+
+        // D3 (F-D2-1, F-D2-2): one shared smith-to-yard hardware
+        // transfer driver and one shared nails import driver. Single
+        // instances, not lists — one shared authority each, wired by
+        // FirstLedgerSliceBootstrapper.ConfigureBlacksmithYardHardwareWiring
+        // and ConfigureLumberYardHardwareImportWiring.
+        private BlacksmithToYardHardwareTransferDriver blacksmithToYardHardwareTransferDriver;
+        private LumberYardHardwareImportDriver lumberYardHardwareImportDriver;
+
         /// <summary>Slice S2: the equipment register for one business, created on first use (empty).</summary>
         public BusinessEquipmentRegister EquipmentRegisterFor(string businessInstanceId)
         {
@@ -529,6 +546,39 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// D3 (F-D2-1, D1 mirror): the blacksmith runtime for one
+        /// business, created on first use (empty — the forge station is
+        /// not ready until the business formation path owns it, and the
+        /// runtime name falls back to the business id). The smith cannot
+        /// forge in production until it holds iron, so an empty holder
+        /// simply has nothing to deliver.
+        /// </summary>
+        public BlacksmithRuntime BlacksmithRuntimeFor(string businessInstanceId)
+        {
+            if (string.IsNullOrWhiteSpace(businessInstanceId)) return null;
+            blacksmithRuntimes ??= new Dictionary<string, BlacksmithRuntime>(StringComparer.Ordinal);
+            if (!blacksmithRuntimes.TryGetValue(businessInstanceId, out BlacksmithRuntime smithy) || smithy == null)
+            {
+                smithy = new BlacksmithRuntime(businessInstanceId, businessInstanceId, false);
+                blacksmithRuntimes[businessInstanceId] = smithy;
+            }
+            return smithy;
+        }
+
+        /// <summary>
+        /// D3 (F-D2-1, D1 mirror): adopts a runtime (e.g. one restored
+        /// from a save seam) as the hub's live holder for its business.
+        /// Replaces by business id, never merges — the save data is
+        /// authoritative, and re-registering the same runtime is idempotent.
+        /// </summary>
+        public void RegisterBlacksmithRuntime(BlacksmithRuntime runtime)
+        {
+            if (runtime == null || string.IsNullOrWhiteSpace(runtime.BusinessInstanceId)) return;
+            blacksmithRuntimes ??= new Dictionary<string, BlacksmithRuntime>(StringComparer.Ordinal);
+            blacksmithRuntimes[runtime.BusinessInstanceId] = runtime;
+        }
+
+        /// <summary>
         /// B8 (Agent B, expanded campaign 2026-11-16): the stove
         /// registry for one household, created on first use and derived
         /// from the household's furnishing register via
@@ -691,6 +741,34 @@ namespace LandLedgers.Orchestration.Systems
 
         /// <summary>F7 yard-transfer wiring: the live sawmill-to-yard transfer driver, or null when unwired.</summary>
         public SawmillToYardTransferDriver SawmillToYardTransferDriver => sawmillToYardTransferDriver;
+
+        /// <summary>
+        /// D3 (F-D2-1): adopts the smith-to-yard hardware transfer
+        /// driver as the hub's live holder. Single instance;
+        /// re-registering the same driver is idempotent.
+        /// </summary>
+        public void RegisterBlacksmithToYardHardwareTransferDriver(BlacksmithToYardHardwareTransferDriver driver)
+        {
+            if (driver == null) return;
+            blacksmithToYardHardwareTransferDriver = driver;
+        }
+
+        /// <summary>D3 (F-D2-1): the live smith-to-yard hardware transfer driver, or null when unwired.</summary>
+        public BlacksmithToYardHardwareTransferDriver BlacksmithToYardHardwareTransferDriver => blacksmithToYardHardwareTransferDriver;
+
+        /// <summary>
+        /// D3 (F-D2-2): adopts the lumber yard nails import driver as
+        /// the hub's live holder. Single instance; re-registering the
+        /// same driver is idempotent.
+        /// </summary>
+        public void RegisterLumberYardHardwareImportDriver(LumberYardHardwareImportDriver driver)
+        {
+            if (driver == null) return;
+            lumberYardHardwareImportDriver = driver;
+        }
+
+        /// <summary>D3 (F-D2-2): the live lumber yard nails import driver, or null when unwired.</summary>
+        public LumberYardHardwareImportDriver LumberYardHardwareImportDriver => lumberYardHardwareImportDriver;
 
         // Pass IV Worker 2: the unified reservation authority (persisted),
         // the hub-owned draft-power service (reserves through the authority),
@@ -1831,6 +1909,11 @@ namespace LandLedgers.Orchestration.Systems
                 // transfer driver. Null at capture means unwired — the
                 // section stays an empty DTO, never null.
                 sawmillToYardTransferDriver = sawmillToYardTransferDriver != null ? sawmillToYardTransferDriver.ToSaveDto() : new SawmillToYardTransferDriver.SawmillToYardTransferDriverSaveDto(),
+                // D3 (F-D2-1, F-D2-2): one section per shared hardware
+                // driver. Null at capture means unwired — the sections
+                // stay empty DTOs, never null.
+                blacksmithToYardHardwareTransferDriver = blacksmithToYardHardwareTransferDriver != null ? blacksmithToYardHardwareTransferDriver.ToSaveDto() : new BlacksmithToYardHardwareTransferDriver.BlacksmithToYardHardwareTransferDriverSaveDto(),
+                lumberYardHardwareImportDriver = lumberYardHardwareImportDriver != null ? lumberYardHardwareImportDriver.ToSaveDto() : new LumberYardHardwareImportDriver.LumberYardHardwareImportDriverSaveDto(),
                 // Pass IV (Worker 1): deterministic due-event schedule.
                 dueEvents = DueEvents.CaptureSaveDto(),
                 // Pass IV Worker 2: unified reservations, draft holds, capacity registrations.
@@ -1943,8 +2026,9 @@ namespace LandLedgers.Orchestration.Systems
             Housing.LoadFromSaveDto(dto.housing);
             LodgingRegistry.LoadFromSaveDto(dto.lodgingRegistry);
             LoadBoardingHouseRuntimes(dto.boardingHouseRuntimes);
-            // Sawmill sections (driver, counters, ledger, transfer driver) are NOT restored
-            // here. They load after the Pass 9 mill restore via
+            // Sawmill sections (driver, counters, ledger, transfer driver) and the D3
+            // hardware driver sections (smith-to-yard transfer driver, nails import
+            // driver) are NOT restored here. They load after the Pass 9 mill restore via
             // FirstLedgerSliceBootstrapper.ApplySawmillRestoreAfterPass9 — loading
             // them here would run before the yard is restored and drop valid jobs
             // (plan 25).
@@ -2047,6 +2131,32 @@ namespace LandLedgers.Orchestration.Systems
             else diagnostics.Add("SimulationSystemsHub: log-lot custody ledger section skipped — no ledger constructed yet; the bootstrapper owns construction.");
             if (sawmillToYardTransferDriver != null) sawmillToYardTransferDriver.LoadFromSaveDto(dto.sawmillToYardTransferDriver);
             else diagnostics.Add("SimulationSystemsHub: sawmill-to-yard transfer driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
+            return diagnostics;
+        }
+
+        /// <summary>
+        /// D3 (F-D2-1, F-D2-2): deferred hardware-driver restore.
+        /// Called ONLY from FirstLedgerSliceBootstrapper
+        /// .ApplySawmillRestoreAfterPass9 after the Pass 9 yard restore
+        /// — never from LoadFromSaveDto — because the transfer driver
+        /// loads re-attach against yard lots that do not exist until
+        /// the Pass 9 restore runs. The import driver's order book has
+        /// no yard-stock dependency, but it restores on the same
+        /// deferred path so both hardware drivers share one restore
+        /// point and one construction owner (the bootstrapper).
+        /// </summary>
+        public List<string> LoadHardwareDriverSectionsFromSaveDto(SystemsSaveDto dto)
+        {
+            var diagnostics = new List<string>();
+            if (dto == null)
+            {
+                return diagnostics;
+            }
+
+            if (blacksmithToYardHardwareTransferDriver != null) blacksmithToYardHardwareTransferDriver.LoadFromSaveDto(dto.blacksmithToYardHardwareTransferDriver);
+            else diagnostics.Add("SimulationSystemsHub: smith-to-yard hardware transfer driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
+            if (lumberYardHardwareImportDriver != null) lumberYardHardwareImportDriver.LoadFromSaveDto(dto.lumberYardHardwareImportDriver);
+            else diagnostics.Add("SimulationSystemsHub: lumber yard nails import driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
             return diagnostics;
         }
 

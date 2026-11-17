@@ -211,6 +211,15 @@ namespace LandLedgers.EditorTests.Integration
             "LawyerDraftedContract", "LawyerFeeSchedule", "LawyerOfficeRequirements", "LawyerTitleSearchService",
             "LawyerWillDraftingService", "LegalFeeInvoice", "LenderCommitment", "LivelihoodReadModel",
             "LivelihoodReadModelBuilder", "LoanOffer", "LoanPaymentDue", "LoanPaymentSchedule",
+            // D3 (2026-11-17): "LumberYardHardwareReorderPolicy" is the
+            // yard's nails reorder policy and "LumberYardHardwareReorderSignal"
+            // is its data-only signal — both consumed inside the yard
+            // hardware feature by LumberYardHardwareImportDriver (the
+            // wired driver, registered in the hub and driven by
+            // SimulationDrivers), the same precedent as
+            // AssetAppraisalResult / AssetSaleRecord above. The signal
+            // never orders; the driver reads it and decides.
+            "LumberYardHardwareReorderPolicy", "LumberYardHardwareReorderSignal",
             "ManagerActivityLog", "ManagerActivityRecord", "ManagerActivitySaveDto", "ManagerBorrowExecutor",
             "ManagerDecisionExecutionLedger", "ManagerExecutedActionRecord", "ManagerExecutionContext", "ManagerOpenRecruitmentExecutor",
             "ManagerOrderMaintenanceExecutor", "ManagerPendingRequest", "ManagerPriceChangeExecutor", "ManagerProcureExecutor",

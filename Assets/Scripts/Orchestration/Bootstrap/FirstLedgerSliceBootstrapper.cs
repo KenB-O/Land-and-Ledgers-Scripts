@@ -13,6 +13,7 @@ using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.LumberYard;
 using LandLedgers.Economy.Businesses.Logging;
 using LandLedgers.Economy.Businesses.Sawmill;
+using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Financing;
@@ -602,6 +603,7 @@ namespace LandLedgers.FirstLedger
             ConfigureLiveBakerySaveOwner();
             ConfigureLiveLumberYardSaveOwner();
             ConfigureLiveSawmillSaveOwner();
+            ConfigureLiveBlacksmithSaveOwner();
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             // F1 part 2 (O-F3): the carpentry workshop is configured on
             // NewGame and Continue alike (the endowment is marker-gated;
@@ -2324,11 +2326,16 @@ namespace LandLedgers.FirstLedger
             systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
             if (systemsHub == null)
             {
-                Debug.LogWarning("[SaveLoad] Sawmill restore after Pass 9 was not applied: no SimulationSystemsHub found; the four sawmill sections will not restore.", this);
+                Debug.LogWarning("[SaveLoad] Sawmill restore after Pass 9 was not applied: no SimulationSystemsHub found; the four sawmill sections and the two hardware driver sections will not restore.", this);
                 return;
             }
 
             foreach (string diagnostic in systemsHub.LoadSawmillSectionsFromSaveDto(systems))
+            {
+                Debug.LogWarning($"[SaveLoad] {diagnostic}");
+            }
+
+            foreach (string diagnostic in systemsHub.LoadHardwareDriverSectionsFromSaveDto(systems))
             {
                 Debug.LogWarning($"[SaveLoad] {diagnostic}");
             }
@@ -2455,6 +2462,9 @@ namespace LandLedgers.FirstLedger
             // D1: same window, same rule — the mill holder must exist
             // before the Pass XL restore consumes the state.
             ConfigureLiveSawmillSaveOwner();
+            // D3: same window, same rule — the smith holder must exist
+            // before the Pass XL restore consumes the state.
+            ConfigureLiveBlacksmithSaveOwner();
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             // F1 part 2 (O-F3): the carpentry workshop is re-established
             // after every restore (the endowment is marker-gated; the
@@ -2640,6 +2650,19 @@ namespace LandLedgers.FirstLedger
             }
 
             Debug.Log($"[LumberYardRuntime] Bootstrap owns one live LumberYardShopRuntime for '{yardBusiness.RuntimeDisplayName}' ({yardBusiness.InstanceId}); its Pass 9 state is registered with SaveLoadManager.", this);
+
+            // D3 (F-D2-2): nails arrive by import — register the
+            // material ("nails-hardware", Pittsburgh ironworks via
+            // railhead) so the import driver has a legitimate route to
+            // order through. The registration is idempotent; the import
+            // driver's constructor ensures it again defensively.
+            var importDiag = new List<string>();
+            LumberYardSupply.EnsureHardwareImportable(importDiag);
+            foreach (string line in importDiag) Debug.Log($"[LumberYardRuntime] {line}", this);
+
+            // D3 (F-D2-2): bind the nails import driver into the daily
+            // flow. Runs on NewGame and restore alike.
+            ConfigureLumberYardHardwareImportWiring(yardBusiness, pass9);
         }
 
         // D1: mirrors ConfigureLiveLumberYardSaveOwner for the sawmill.
@@ -3146,6 +3169,178 @@ namespace LandLedgers.FirstLedger
             drivers.RegisterSawmillToYardTransferDriver(driver);
 
             Debug.Log($"[SawmillToYardTransfer] Bootstrap wired the sawmill-to-yard transfer driver for '{millBusiness.InstanceId}' to yard '{yardBusiness.InstanceId}'.", this);
+        }
+
+        // D3 (F-D2-1): mirrors ConfigureLiveSawmillSaveOwner for the
+        // blacksmith. Owns one live BlacksmithRuntime for the first
+        // NPC-owned Blacksmith business, so the daily hardware delivery
+        // (SimulationDrivers) has a live smith to draw from. First
+        // smith only; a second smith is warned about and gets nothing
+        // here. There is NO Pass 9 holder for the smith — its shop
+        // stock is not a Pass 9 section yet, so the hub is the live
+        // holder and the yard lots a delivery creates persist through
+        // the Pass 9 yard section. Called at NewGame and in the restore
+        // window, immediately after ConfigureLiveSawmillSaveOwner. The
+        // development town has no Blacksmith business today, so this
+        // warns and wires nothing until one is formed — the drive never
+        // invents a smith.
+        private void ConfigureLiveBlacksmithSaveOwner()
+        {
+            if (sharedBusinessRuntime == null || saveLoadManager == null)
+            {
+                Debug.LogWarning("[BlacksmithRuntime] Live owner was not created: shared business runtime or SaveLoadManager is missing.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[BlacksmithRuntime] Live owner was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            BusinessInstanceState smithBusiness = FindDevelopmentBusiness(BusinessType.Blacksmith);
+            if (smithBusiness == null || string.IsNullOrWhiteSpace(smithBusiness.InstanceId))
+            {
+                Debug.LogWarning("[BlacksmithRuntime] Live owner was not created: no authored Blacksmith business instance is present in the shared runtime.", this);
+                return;
+            }
+
+            Series2Pass9SaveState pass9 = saveLoadManager.Series2Pass9State;
+            if (pass9 == null)
+            {
+                pass9 = new Series2Pass9SaveState();
+                saveLoadManager.Series2Pass9State = pass9;
+            }
+
+            // Reuse, never replace: the hub accessor creates the runtime
+            // on first use and returns the live holder afterwards.
+            BlacksmithRuntime liveSmithRuntime = systemsHub.BlacksmithRuntimeFor(smithBusiness.InstanceId);
+            if (liveSmithRuntime == null)
+            {
+                Debug.LogWarning("[BlacksmithRuntime] Live owner was not created: hub returned no runtime.", this);
+                return;
+            }
+
+            foreach (BusinessInstanceState candidate in sharedBusinessRuntime.Businesses)
+            {
+                if (candidate == null || candidate.BusinessType != BusinessType.Blacksmith) continue;
+                if (string.Equals(candidate.InstanceId, smithBusiness.InstanceId, StringComparison.Ordinal)) continue;
+                Debug.LogWarning($"[BlacksmithRuntime] Second Blacksmith business '{candidate.InstanceId}' is unwired: the hub holds one smith only, so its stock is not delivered.", this);
+                break;
+            }
+
+            Debug.Log($"[BlacksmithRuntime] Bootstrap owns one live BlacksmithRuntime for '{smithBusiness.RuntimeDisplayName}' ({smithBusiness.InstanceId}).", this);
+
+            // D3 (F-D2-1): bind the smith-to-yard hardware transfer
+            // driver into the daily flow. Runs on NewGame and restore
+            // alike. The yard business is resolved here with
+            // FindDevelopmentBusiness, the same call
+            // ConfigureLiveLumberYardSaveOwner uses; the yard owner runs
+            // before the smith owner in both paths, so pass9.LumberYard
+            // already exists.
+            BusinessInstanceState yardBusiness = FindDevelopmentBusiness(BusinessType.LumberYard);
+            ConfigureBlacksmithYardHardwareWiring(smithBusiness, yardBusiness, pass9);
+        }
+
+        // D3 (F-D2-1): mirrors ConfigureSawmillYardTransferWiring for
+        // the smith. Constructs the smith-to-yard hardware transfer
+        // driver (reusing the hub's live instance when one already
+        // exists — a second call in the same session, e.g. restore
+        // after NewGame, must never replace the driver the save
+        // restore re-attached jobs to) and registers it with
+        // SimulationDrivers, which forwards it to the hub. Runs on
+        // NewGame and restore alike.
+        private void ConfigureBlacksmithYardHardwareWiring(BusinessInstanceState smithBusiness, BusinessInstanceState yardBusiness, Series2Pass9SaveState pass9)
+        {
+            if (smithBusiness == null || string.IsNullOrWhiteSpace(smithBusiness.InstanceId) || yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId) || pass9 == null)
+            {
+                Debug.LogWarning("[HardwareTransfer] Wiring was not created: no authored Blacksmith or LumberYard business instance, or no Pass 9 state.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[HardwareTransfer] Wiring was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                Debug.LogWarning("[HardwareTransfer] Wiring was not created: SimulationDrivers is missing.", this);
+                return;
+            }
+
+            BlacksmithRuntime liveSmithRuntime = systemsHub.BlacksmithRuntimeFor(smithBusiness.InstanceId);
+            if (liveSmithRuntime == null)
+            {
+                Debug.LogWarning("[HardwareTransfer] Wiring was not created: hub returned no smith runtime.", this);
+                return;
+            }
+
+            LumberYardShopRuntime liveYardRuntime = systemsHub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+            if (liveYardRuntime == null)
+            {
+                Debug.LogWarning("[HardwareTransfer] Wiring was not created: hub returned no yard runtime.", this);
+                return;
+            }
+
+            BlacksmithToYardHardwareTransferDriver driver = systemsHub.BlacksmithToYardHardwareTransferDriver;
+            if (driver == null)
+            {
+                driver = new BlacksmithToYardHardwareTransferDriver(liveSmithRuntime, liveYardRuntime, new List<string>());
+            }
+            drivers.RegisterBlacksmithToYardHardwareTransferDriver(driver);
+
+            Debug.Log($"[HardwareTransfer] Bootstrap wired the smith-to-yard hardware transfer driver for '{smithBusiness.InstanceId}' to yard '{yardBusiness.InstanceId}'.", this);
+        }
+
+        // D3 (F-D2-2): mirrors ConfigureSawmillYardTransferWiring for
+        // the yard's nails import. Constructs the import driver (reusing
+        // the hub's live instance when one already exists — a second call
+        // in the same session, e.g. restore after NewGame, must never
+        // replace the driver the save restore re-attached orders to) and
+        // registers it with SimulationDrivers, which forwards it to the
+        // hub. Runs on NewGame and restore alike.
+        private void ConfigureLumberYardHardwareImportWiring(BusinessInstanceState yardBusiness, Series2Pass9SaveState pass9)
+        {
+            if (yardBusiness == null || string.IsNullOrWhiteSpace(yardBusiness.InstanceId) || pass9 == null)
+            {
+                Debug.LogWarning("[HardwareImport] Wiring was not created: no authored LumberYard business instance, or no Pass 9 state.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[HardwareImport] Wiring was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                Debug.LogWarning("[HardwareImport] Wiring was not created: SimulationDrivers is missing.", this);
+                return;
+            }
+
+            LumberYardShopRuntime liveYardRuntime = systemsHub.LumberYardRuntimeFor(yardBusiness.InstanceId);
+            if (liveYardRuntime == null)
+            {
+                Debug.LogWarning("[HardwareImport] Wiring was not created: hub returned no yard runtime.", this);
+                return;
+            }
+
+            LumberYardHardwareImportDriver driver = systemsHub.LumberYardHardwareImportDriver;
+            if (driver == null)
+            {
+                driver = new LumberYardHardwareImportDriver(liveYardRuntime, new List<string>());
+            }
+            drivers.RegisterLumberYardHardwareImportDriver(driver);
+
+            Debug.Log($"[HardwareImport] Bootstrap wired the lumber yard nails import driver for yard '{yardBusiness.InstanceId}'.", this);
         }
 
         // C3: mirrors ConfigureLiveLumberYardSaveOwner for the construction

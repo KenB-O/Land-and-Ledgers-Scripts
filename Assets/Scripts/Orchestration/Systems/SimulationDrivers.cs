@@ -4649,6 +4649,10 @@ namespace LandLedgers.Orchestration.Systems
             // the NX-1B nutrition teeth never bit. Wire it here with the
             // work-time budgets so missed meals reduce usable minutes for real.
             DriveBoardingHouseDays(absoluteDayIndex);
+            // M1-R1: the housing-search drive was dead end to end (F-M1-1
+            // through F-M1-3, F-M1-9). Boarding only, after the boarding
+            // daily drive so the runtimes it resolves ports from are live.
+            DriveHousingSearchDay(absoluteDayIndex);
             DriveStoreFeedProcurement(absoluteDayIndex);
             DriveBusinessHorseFeedProcurement(absoluteDayIndex);
             // Plan 05 Slice 4 (rev1 section 5b): reserve the day's assigned
@@ -6169,6 +6173,54 @@ namespace LandLedgers.Orchestration.Systems
             }
             if (diagnostics.Count > 0)
                 Debug.Log("[SimulationDrivers] boarding-house: " + string.Join(" | ", diagnostics));
+        }
+
+        /// <summary>
+        /// M1-R1: daily housing-search drive, boarding only (see
+        /// HousingSearchDrive). Households with open needs and no occupancy
+        /// are boarded through the real planner, adapter, and executor.
+        /// Suitably housed households wait for the rental leg, which needs a
+        /// rent source first (F-M1-5). The drive resolves its boarding ports
+        /// and already-boarded checks from the hub runtimes, so no new
+        /// authority is created here.
+        /// </summary>
+        private void DriveHousingSearchDay(int absoluteDayIndex)
+        {
+            if (hub == null || populationManager == null || populationManager.State == null) return;
+            var diagnostics = new List<string>();
+            HousingSearchDrive.DriveResult result = HousingSearchDrive.Drive(
+                populationManager.State,
+                hub.HousingSearchNeeds,
+                hub.Housing,
+                hub.LodgingRegistry,
+                businessInstanceId =>
+                {
+                    if (hub.BoardingHouseRuntimes == null) return null;
+                    foreach (BoardingHouseShopRuntime runtime in hub.BoardingHouseRuntimes)
+                    {
+                        if (runtime != null && string.Equals(runtime.BusinessInstanceId, businessInstanceId, System.StringComparison.Ordinal))
+                            return (IBoarderCheckInPort)runtime;
+                    }
+                    return null;
+                },
+                personId =>
+                {
+                    if (hub.BoardingHouseRuntimes == null) return false;
+                    foreach (BoardingHouseShopRuntime runtime in hub.BoardingHouseRuntimes)
+                    {
+                        if (runtime != null && runtime.BoarderRegister != null
+                            && runtime.BoarderRegister.FindRecord(personId) != null)
+                            return true;
+                    }
+                    return false;
+                },
+                hub.HouseholdLedgers,
+                absoluteDayIndex,
+                diagnostics);
+            if (result.NeedsSeen > 0)
+                diagnostics.Add($"housing search: {result.NeedsSeen} open need(s), {result.Boarded} boarded, {result.StillOpen} still open, {result.Skipped} skipped.");
+            if (diagnostics.Count > 0)
+                Debug.Log("[SimulationDrivers] housing-search: " + string.Join(" | ", diagnostics));
         }
 
         private void DriveBoardingHouseWeeks(int absoluteDayIndex)

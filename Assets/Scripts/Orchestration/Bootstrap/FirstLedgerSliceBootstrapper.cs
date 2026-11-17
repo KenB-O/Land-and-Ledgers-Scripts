@@ -30,6 +30,7 @@ using LandLedgers.Primitives;
 using LandLedgers.Time;
 using LandLedgers.UI;
 using LandLedgers.World;
+using LandLedgers.World.Property;
 using UnityEngine;
 using EntityId = LandLedgers.Primitives.EntityId;
 using UnityEngine.Serialization;
@@ -2091,6 +2092,36 @@ namespace LandLedgers.FirstLedger
                 }
 
                 drivers.RegisterBoardingHouseRuntime(runtime);
+
+                // M1-R1: publish the boarding house rooms as lodging
+                // registrations, so the housing search, migration planning,
+                // and employer lodging see real open beds. Without this call
+                // the lodging registry stayed empty in production (F-M1-6)
+                // and the housing search could never resolve a boarding
+                // option. The parcel is the canonical key for the premises
+                // plot; the bridge refuses rather than inventing one.
+                if (sharedBusinessRuntime.TryGetBusinessPremisesPlotId(business, out int plotId))
+                {
+                    string parcelId = PlayerTitleBridge.ParcelKeyForPlot(plotId);
+                    int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
+                    var bridge = new BoardingLodgingBridge();
+                    var bridgeDiag = new List<string>();
+                    string lodgingRefusal = bridge.RegisterHouse(
+                        runtime, parcelId, dayIndex, systemsHub.Housing, systemsHub.LodgingRegistry, bridgeDiag);
+                    if (!string.IsNullOrWhiteSpace(lodgingRefusal))
+                    {
+                        Debug.LogWarning($"[WorldStartup] Boarding House '{business.InstanceId}' lodging registration refused: {lodgingRefusal}", this);
+                    }
+                    else
+                    {
+                        Debug.Log($"[WorldStartup] Registered boarding-house lodging '{business.InstanceId}' on parcel '{parcelId}'.", this);
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning($"[WorldStartup] Boarding House '{business.InstanceId}' has no resolvable premises plot; lodging not registered.", this);
+                }
+
                 Debug.Log($"[WorldStartup] Registered boarding-house runtime '{business.InstanceId}' with {bedCapacity} authored bed(s).", this);
             }
         }

@@ -571,10 +571,12 @@ namespace LandLedgers.EditorTests.Economy
         [Test]
         public void LifecycleDriver_OnBusinessClosed_NotInvoked_ForStrugglingBusiness()
         {
-            // B1's 8-week close lives on its own unmerged branch; in this
-            // tree EvaluateWeek never closes, so the hook must not fire
-            // for a business that only struggles. The positive path
-            // (close -> release -> re-list) is a post-B1-merge check.
+            // B1's 8-week close is merged, so a business at 7 struggle
+            // weeks closes on this evaluation. The guard is pinned below
+            // the threshold instead: at 6 weeks the evaluation only
+            // increments the count, the business stays struggling, and
+            // the hook must not fire. The positive path (close ->
+            // release -> re-list) is the B3 check.
             var record = new NpcBusinessLifeRecord
             {
                 BusinessInstanceId = "biz-x",
@@ -582,7 +584,7 @@ namespace LandLedgers.EditorTests.Economy
                 FounderPersonId = FounderPersonId,
                 OwnerName = "Test Founder",
                 State = NpcBusinessLifeState.Struggling,
-                ConsecutiveStruggleWeeks = 7,
+                ConsecutiveStruggleWeeks = 6,
             };
             var info = new NpcBusinessLifecycleDriver.NpcLifecycleBusinessInfo
             {
@@ -614,7 +616,7 @@ namespace LandLedgers.EditorTests.Economy
 
             Assert.IsFalse(callbackInvoked, "The close hook fires only on a close, never on a struggle week.");
             Assert.AreEqual(NpcBusinessLifeState.Struggling, record.State);
-            Assert.AreEqual(8, record.ConsecutiveStruggleWeeks);
+            Assert.AreEqual(7, record.ConsecutiveStruggleWeeks);
         }
     }
 }

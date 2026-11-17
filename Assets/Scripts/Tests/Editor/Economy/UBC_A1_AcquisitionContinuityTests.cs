@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
+using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
@@ -47,7 +48,8 @@ namespace LandLedgers.Editor.Economy
             Assert.AreSame(store, transferred, "Transfer must move the same business object, not a replacement.");
             Assert.AreEqual(instanceId, transferred.InstanceId, "Business id must survive the sale.");
             Assert.AreEqual(BusinessOwnerKind.Player, transferred.Owner.OwnerKind);
-            Assert.AreSame(store, context.SharedBusinessRuntime.FindByInstanceId(instanceId));
+            Assert.IsTrue(context.SharedBusinessRuntime.TryFindByInstanceId(instanceId, out BusinessInstanceState surviving));
+            Assert.AreSame(store, surviving);
         }
 
         [Test]

@@ -5,6 +5,7 @@ using System.Linq;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.Wheelwright;
 using LandLedgers.Primitives;
+using EntityId = LandLedgers.Primitives.EntityId;
 using NUnit.Framework;
 using UnityEngine;
 

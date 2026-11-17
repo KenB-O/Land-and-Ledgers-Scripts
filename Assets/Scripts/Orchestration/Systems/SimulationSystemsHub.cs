@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using LandLedgers.Animals;
 using LandLedgers.Civic;
 using LandLedgers.Economy;
@@ -222,6 +223,8 @@ namespace LandLedgers.Orchestration.Systems
         // method) then. A holder with no registry holds no workstation —
         // the gate still refuses loudly.
         private Dictionary<string, BusinessWorkstations> workstationRegisters;
+        private Dictionary<string, string> workstationBusinessIdByRuntimeId;
+        private HashSet<string> ambiguousWorkstationRuntimeIds;
 
         // C-3: hub-owned per-business support contexts (Canon 5.2: fuel
         // and consumable stocks, trained operator skills, repair
@@ -387,12 +390,48 @@ namespace LandLedgers.Orchestration.Systems
         {
             if (string.IsNullOrWhiteSpace(holderId)) return null;
             workstationRegisters ??= new Dictionary<string, BusinessWorkstations>(StringComparer.Ordinal);
+            RegisterWorkstationRuntimeId(holderId);
             if (!workstationRegisters.TryGetValue(holderId, out BusinessWorkstations registry) || registry == null)
             {
                 registry = new BusinessWorkstations(holderId);
                 workstationRegisters[holderId] = registry;
             }
             return registry;
+        }
+
+        private void RegisterWorkstationRuntimeId(string businessInstanceId)
+        {
+            string runtimeId = SawmillProductionDriver.BusinessEntityIdFor(businessInstanceId).Id
+                .ToString(CultureInfo.InvariantCulture);
+            workstationBusinessIdByRuntimeId ??= new Dictionary<string, string>(StringComparer.Ordinal);
+            ambiguousWorkstationRuntimeIds ??= new HashSet<string>(StringComparer.Ordinal);
+            if (ambiguousWorkstationRuntimeIds.Contains(runtimeId)) return;
+
+            if (workstationBusinessIdByRuntimeId.TryGetValue(runtimeId, out string existingId)
+                && !string.Equals(existingId, businessInstanceId, StringComparison.Ordinal))
+            {
+                // A hash collision must fail closed; never give one business
+                // another business's workstation through a task-owner alias.
+                workstationBusinessIdByRuntimeId.Remove(runtimeId);
+                ambiguousWorkstationRuntimeIds.Add(runtimeId);
+                return;
+            }
+
+            workstationBusinessIdByRuntimeId[runtimeId] = businessInstanceId;
+        }
+
+        private BusinessWorkstations WorkstationRegisterForTaskOwner(string holderKind, string holderId)
+        {
+            if (!string.Equals(holderKind, "business", StringComparison.OrdinalIgnoreCase)
+                || !int.TryParse(holderId, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                return WorkstationRegisterFor(holderId);
+
+            if (ambiguousWorkstationRuntimeIds != null && ambiguousWorkstationRuntimeIds.Contains(holderId))
+                return null;
+            return workstationBusinessIdByRuntimeId != null
+                   && workstationBusinessIdByRuntimeId.TryGetValue(holderId, out string businessInstanceId)
+                ? WorkstationRegisterFor(businessInstanceId)
+                : null;
         }
 
         /// <summary>
@@ -910,11 +949,13 @@ namespace LandLedgers.Orchestration.Systems
                 // production gate never set them, so every workstation-coded
                 // check refused "no workstation registry supplied" — only
                 // the ThreeBusinessSlice fixture set them, on its own local
-                // gate. The registry is keyed by holder id (the holder kind
-                // is ignored); definitions come from the catalog; components
+                // gate. Business task owners carry a stable numeric EntityId,
+                // while these registries are keyed by business instance id;
+                // resolve that runtime identity through the hub's collision-
+                // checked map. Definitions come from the catalog; components
                 // resolve from the gate's own asset collection; support is
                 // the merge of every registered per-business context.
-                WorkstationsFor = (holderKind, holderId) => WorkstationRegisterFor(holderId),
+                WorkstationsFor = WorkstationRegisterForTaskOwner,
                 FindWorkstationDefinition = WorkstationCatalog.Find,
                 FindComponent = FindGateComponent,
                 SupportSupplier = CollectGateSupport,

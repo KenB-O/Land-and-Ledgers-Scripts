@@ -3748,7 +3748,9 @@ namespace LandLedgers.Orchestration.Systems
         {
             if (driver == null || hub == null) return;
             hub.RegisterBlacksmithCoalImportDriver(driver);
+        }
 
+        /// <summary>
         /// F1 (workstream F, glass leg): registers the lumber yard
         /// window-glass import driver with the hub. Forwarder only — no
         /// BindBusiness-style side effects (note 100 Q6 boundary).

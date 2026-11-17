@@ -1,15 +1,19 @@
 using EntityId = LandLedgers.Primitives.EntityId;
 
+using System.Globalization;
 using System.Collections.Generic;
+using LandLedgers.Economy.Businesses.Logging;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.Primitives;
+using LandLedgers.Orchestration.Systems;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
 using NUnit.Framework;
+using UnityEngine;
 
 namespace LandLedgers.Editor.Economy
 {
@@ -35,6 +39,33 @@ namespace LandLedgers.Editor.Economy
     public sealed class SawmillWorkstationEstablishmentTests
     {
         private const string MillInstanceId = "test-sawmill-1";
+
+        [Test]
+        public void HubEquipmentGate_ResolvesWorkstationByHashedBusinessTaskOwner()
+        {
+            var gameObject = new GameObject("workstation-owner-resolution-test");
+            try
+            {
+                SimulationSystemsHub hub = gameObject.AddComponent<SimulationSystemsHub>();
+                hub.InstallEquipmentTaskGate();
+                BusinessWorkstations registered = hub.WorkstationRegisterFor(MillInstanceId);
+                string runtimeOwnerId = SawmillProductionDriver.BusinessEntityIdFor(MillInstanceId).Id
+                    .ToString(CultureInfo.InvariantCulture);
+
+                Assert.AreSame(registered,
+                    hub.InstalledEquipmentTaskGate.WorkstationsFor("business", runtimeOwnerId),
+                    "TaskAuthority passes the numeric business EntityId; the hub must resolve it to the same instance-keyed workstation registry.");
+
+                string unknownOwnerId = SawmillProductionDriver.BusinessEntityIdFor("unregistered-mill").Id
+                    .ToString(CultureInfo.InvariantCulture);
+                Assert.IsNull(hub.InstalledEquipmentTaskGate.WorkstationsFor("business", unknownOwnerId),
+                    "Unknown numeric business owners must fail closed instead of creating a misleading empty registry.");
+            }
+            finally
+            {
+                Object.DestroyImmediate(gameObject);
+            }
+        }
 
         private static EquipmentAsset ComponentAsset(string assetId, string kind) =>
             new EquipmentAsset

@@ -2364,6 +2364,10 @@ namespace LandLedgers.FirstLedger
             }
 
             foreach (string diagnostic in systemsHub.LoadHardwareDriverSectionsFromSaveDto(systems))
+            {
+                Debug.LogWarning($"[SaveLoad] {diagnostic}");
+            }
+
             foreach (string diagnostic in systemsHub.LoadGlassDriverSectionFromSaveDto(systems))
             {
                 Debug.LogWarning($"[SaveLoad] {diagnostic}");

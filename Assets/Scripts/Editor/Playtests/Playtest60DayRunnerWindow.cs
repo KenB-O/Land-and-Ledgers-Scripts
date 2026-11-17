@@ -384,6 +384,7 @@ namespace LandLedgers.Editor.Playtests
 
                 current.startupGatePassed = true;
                 current.status = "RUNNING";
+                awaitingStartupGate = false;
                 current.startAbsoluteDayIndex = time.CurrentAbsoluteDayIndex;
                 current.endAbsoluteDayIndex = current.startAbsoluteDayIndex + current.targetDays;
                 current.startGameDate = time.CurrentDate.ToString();
@@ -765,7 +766,11 @@ namespace LandLedgers.Editor.Playtests
             if (string.IsNullOrWhiteSpace(json)) return;
             try { current = JsonUtility.FromJson<RunSession>(json); }
             catch { current = null; }
-            if (current != null && (current.status == "ARMED" || current.status == "RUNNING") && !EditorApplication.isPlaying)
+            // Entering Play Mode can reload the domain before isPlaying flips
+            // to true. Preserve an armed session during that transition so the
+            // runtime startup gate can decide whether the run is valid.
+            if (current != null && (current.status == "ARMED" || current.status == "RUNNING")
+                && !EditorApplication.isPlaying && !EditorApplication.isPlayingOrWillChangePlaymode)
             {
                 current.status = "ABORTED";
                 current.result = "INCOMPLETE";

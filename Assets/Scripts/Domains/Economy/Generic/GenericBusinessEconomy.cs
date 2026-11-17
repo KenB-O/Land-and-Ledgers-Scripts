@@ -727,6 +727,19 @@ namespace LandLedgers.Economy
             }
 
             business.GenericConfiguration.SetSetupTemplateId(template.TemplateId);
+            // C1: record the installed vertical on the business's canonical
+            // capability list, using the template's own id as the capability id
+            // (the live generic path's vocabulary for these verticals). Before
+            // this, TryApply installed methods, policies and retail lines but
+            // left CapabilityIds empty, so a player-formed Generic business
+            // carried no record of what it was set up to do — the same drop as
+            // the formation intent (see BusinessCreationAuthority.TryCreate).
+            // Blank records nothing (no activity installed) and General
+            // Merchandise records nothing (a disabled-catalog plan, not an
+            // installed operation). Recording grants no operation: AddCapability
+            // dedups, and feasibility is still decided at execution from real
+            // equipment, workspace, premises right, people, materials and
+            // authority. Reapplying a template stays idempotent.
             switch (template.TemplateId)
             {
                 case GeneralMerchandiseId:
@@ -734,9 +747,11 @@ namespace LandLedgers.Economy
                     break;
                 case BakeryId:
                     GenericBusinessVerticalService.ConfigureBakery(business);
+                    business.AddCapability(template.TemplateId);
                     break;
                 case SmithyId:
                     GenericBusinessVerticalService.ConfigurePrairieForkSmithy(business);
+                    business.AddCapability(template.TemplateId);
                     break;
                 case CarpentryId:
                     // F1 part 2 (O-F3): installs the eight furniture methods
@@ -746,6 +761,7 @@ namespace LandLedgers.Economy
                     // endowment installs the tools and workstation; furniture
                     // retail is F2).
                     GenericBusinessVerticalService.ConfigureCarpentry(business);
+                    business.AddCapability(template.TemplateId);
                     break;
             }
 

@@ -372,7 +372,8 @@ namespace LandLedgers.Economy.Creation
             BusinessOwnership ownership,
             PremisesRequirement premisesRequirement = null,
             PremisesPreference premisesPreference = PremisesPreference.Auto,
-            int startingCapitalCents = 0)
+            int startingCapitalCents = 0,
+            IEnumerable<string> capabilityIds = null)
         {
             this.businessType = businessType;
             this.displayName = displayName ?? string.Empty;
@@ -380,6 +381,25 @@ namespace LandLedgers.Economy.Creation
             this.premisesRequirement = premisesRequirement ?? new PremisesRequirement();
             this.premisesPreference = premisesPreference;
             this.startingCapitalCents = Mathf.Max(0, startingCapitalCents);
+            // C1: the capability list was a dead field — private, no setter, and no
+            // constructor parameter, so no intent could ever carry a capability and
+            // TryCreate could never attach one. The player form's AddCapability
+            // choices were silently dropped at ToIntent. Copy the supplied ids
+            // (deduped, blanks ignored); AddCapability on the instance dedups again.
+            if (capabilityIds != null)
+            {
+                foreach (string id in capabilityIds)
+                {
+                    if (string.IsNullOrWhiteSpace(id)) continue;
+                    string trimmed = id.Trim();
+                    bool exists = false;
+                    foreach (string existing in this.capabilityIds)
+                    {
+                        if (string.Equals(existing, trimmed, StringComparison.OrdinalIgnoreCase)) { exists = true; break; }
+                    }
+                    if (!exists) this.capabilityIds.Add(trimmed);
+                }
+            }
         }
 
         /// <summary>Human-readable problems; empty means the intent is actionable.</summary>
@@ -570,6 +590,22 @@ namespace LandLedgers.Economy.Creation
             {
                 diagnostics.Add($"Instance construction failed: {ex.Message}");
                 return false;
+            }
+
+            // Step 5b (C1): attach the intent's capabilities to the created instance.
+            // The NPC adapter used to do this by hand after every TryCreate
+            // (NpcBusinessCreationAdapter), while player-formed businesses came out
+            // with an empty capability list — the NPC/player parity break. Attaching
+            // here covers every formation path (player form, presenter, roster, NPC).
+            // AddCapability dedups; this grants no operation — feasibility is still
+            // decided at execution from real equipment, workspace, premises right,
+            // people, materials and authority.
+            if (intent.CapabilityIds != null)
+            {
+                foreach (string capabilityId in intent.CapabilityIds)
+                {
+                    instance.AddCapability(capabilityId);
+                }
             }
 
             // Step 6: capital terms on an intent are not themselves a cash

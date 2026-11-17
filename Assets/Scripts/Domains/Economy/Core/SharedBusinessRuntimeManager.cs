@@ -3976,6 +3976,27 @@ namespace LandLedgers.Economy
             return new ManagerCreationContext(this).TryAssignPremises(businessType, kind, out buildingId);
         }
 
+        /// <summary>
+        /// M1-R1: premises plot id for a business, resolved through its
+        /// assigned placed building. Returns false when the business has no
+        /// assigned premises or the town world cannot resolve it. The
+        /// boarding-lodging feeder needs the plot to build the canonical
+        /// parcel key for the lodging building.
+        /// </summary>
+        public bool TryGetBusinessPremisesPlotId(BusinessInstanceState business, out int plotId)
+        {
+            plotId = -1;
+            if (business == null || townWorld == null
+                || business.AssignedBuildingId < 0
+                || !townWorld.TryGetBuildingById(business.AssignedBuildingId, out PlacedBuilding building)
+                || building == null)
+            {
+                return false;
+            }
+            plotId = building.plotId;
+            return plotId >= 0;
+        }
+
         private void ResetWeeklySettlementForType(BusinessType businessType)
         {
             BusinessProfileDefinition profile = FindProfile(businessType);

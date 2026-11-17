@@ -15,6 +15,15 @@ namespace LandLedgers.Economy
         public string PhaseName = string.Empty;
         public int Sequence;
         public List<ConstructionMaterialRequirement> Materials = new List<ConstructionMaterialRequirement>();
+        /// <summary>
+        /// E2: TOTAL person-minutes of labour the phase requires — never
+        /// elapsed minutes, never crew-minutes. One worker-day is 600
+        /// minutes (WorkTimeBudget.DefaultDailyWorkMinutes), so a phase is
+        /// worked across as many days as its total requires; the executor
+        /// commits one day's chunk at a time and credits minutes only as
+        /// they are actually worked. Crew size changes elapsed time,
+        /// never this total.
+        /// </summary>
         public int LaborMinutes;
         /// <summary>
         /// TUNING: tool item ids the crew must hold (e.g. "saw", "hammer",

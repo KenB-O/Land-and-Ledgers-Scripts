@@ -3241,6 +3241,10 @@ namespace LandLedgers.FirstLedger
             // already exists.
             BusinessInstanceState yardBusiness = FindDevelopmentBusiness(BusinessType.LumberYard);
             ConfigureBlacksmithYardHardwareWiring(smithBusiness, yardBusiness, pass9);
+
+            // D4 (F-D2-3): bind the smith's iron import driver into
+            // the daily flow. Runs on NewGame and restore alike.
+            ConfigureBlacksmithIronImportWiring(smithBusiness, pass9);
         }
 
         // D3 (F-D2-1): mirrors ConfigureSawmillYardTransferWiring for
@@ -3295,6 +3299,52 @@ namespace LandLedgers.FirstLedger
             drivers.RegisterBlacksmithToYardHardwareTransferDriver(driver);
 
             Debug.Log($"[HardwareTransfer] Bootstrap wired the smith-to-yard hardware transfer driver for '{smithBusiness.InstanceId}' to yard '{yardBusiness.InstanceId}'.", this);
+        }
+
+        // D4 (F-D2-3): mirrors ConfigureLumberYardHardwareImportWiring
+        // for the smith's iron import. Constructs the import driver
+        // (reusing the hub's live instance when one already exists — a
+        // second call in the same session, e.g. restore after NewGame,
+        // must never replace the driver the save restore re-attached
+        // orders to) and registers it with SimulationDrivers, which
+        // forwards it to the hub. Runs on NewGame and restore alike.
+        private void ConfigureBlacksmithIronImportWiring(BusinessInstanceState smithBusiness, Series2Pass9SaveState pass9)
+        {
+            if (smithBusiness == null || string.IsNullOrWhiteSpace(smithBusiness.InstanceId) || pass9 == null)
+            {
+                Debug.LogWarning("[HardwareImport] Wiring was not created: no authored Blacksmith business instance, or no Pass 9 state.", this);
+                return;
+            }
+
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null)
+            {
+                Debug.LogWarning("[HardwareImport] Wiring was not created: SimulationSystemsHub is missing.", this);
+                return;
+            }
+
+            SimulationDrivers drivers = FindAnyObjectByType<SimulationDrivers>();
+            if (drivers == null)
+            {
+                Debug.LogWarning("[HardwareImport] Wiring was not created: SimulationDrivers is missing.", this);
+                return;
+            }
+
+            BlacksmithRuntime liveSmithRuntime = systemsHub.BlacksmithRuntimeFor(smithBusiness.InstanceId);
+            if (liveSmithRuntime == null)
+            {
+                Debug.LogWarning("[HardwareImport] Wiring was not created: hub returned no smith runtime.", this);
+                return;
+            }
+
+            BlacksmithIronImportDriver driver = systemsHub.BlacksmithIronImportDriver;
+            if (driver == null)
+            {
+                driver = new BlacksmithIronImportDriver(liveSmithRuntime, new List<string>());
+            }
+            drivers.RegisterBlacksmithIronImportDriver(driver);
+
+            Debug.Log($"[HardwareImport] Bootstrap wired the smith iron import driver for smith '{smithBusiness.InstanceId}'.", this);
         }
 
         // D3 (F-D2-2): mirrors ConfigureSawmillYardTransferWiring for

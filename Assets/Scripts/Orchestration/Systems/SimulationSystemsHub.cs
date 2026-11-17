@@ -269,13 +269,16 @@ namespace LandLedgers.Orchestration.Systems
         // smith stock.
         private Dictionary<string, BlacksmithRuntime> blacksmithRuntimes;
 
-        // D3 (F-D2-1, F-D2-2): one shared smith-to-yard hardware
-        // transfer driver and one shared nails import driver. Single
-        // instances, not lists — one shared authority each, wired by
-        // FirstLedgerSliceBootstrapper.ConfigureBlacksmithYardHardwareWiring
-        // and ConfigureLumberYardHardwareImportWiring.
+        // D3 (F-D2-1, F-D2-2) and D4 (F-D2-3): one shared smith-to-yard
+        // hardware transfer driver, one shared nails import driver, and
+        // one shared iron import driver. Single instances, not lists —
+        // one shared authority each, wired by
+        // FirstLedgerSliceBootstrapper.ConfigureBlacksmithYardHardwareWiring,
+        // ConfigureLumberYardHardwareImportWiring, and
+        // ConfigureBlacksmithIronImportWiring.
         private BlacksmithToYardHardwareTransferDriver blacksmithToYardHardwareTransferDriver;
         private LumberYardHardwareImportDriver lumberYardHardwareImportDriver;
+        private BlacksmithIronImportDriver blacksmithIronImportDriver;
 
         /// <summary>Slice S2: the equipment register for one business, created on first use (empty).</summary>
         public BusinessEquipmentRegister EquipmentRegisterFor(string businessInstanceId)
@@ -769,6 +772,20 @@ namespace LandLedgers.Orchestration.Systems
 
         /// <summary>D3 (F-D2-2): the live lumber yard nails import driver, or null when unwired.</summary>
         public LumberYardHardwareImportDriver LumberYardHardwareImportDriver => lumberYardHardwareImportDriver;
+
+        /// <summary>
+        /// D4 (F-D2-3): adopts the smith's iron import driver as the
+        /// hub's live holder. Single instance; re-registering the
+        /// same driver is idempotent.
+        /// </summary>
+        public void RegisterBlacksmithIronImportDriver(BlacksmithIronImportDriver driver)
+        {
+            if (driver == null) return;
+            blacksmithIronImportDriver = driver;
+        }
+
+        /// <summary>D4 (F-D2-3): the live smith's iron import driver, or null when unwired.</summary>
+        public BlacksmithIronImportDriver BlacksmithIronImportDriver => blacksmithIronImportDriver;
 
         // Pass IV Worker 2: the unified reservation authority (persisted),
         // the hub-owned draft-power service (reserves through the authority),
@@ -1914,6 +1931,9 @@ namespace LandLedgers.Orchestration.Systems
                 // stay empty DTOs, never null.
                 blacksmithToYardHardwareTransferDriver = blacksmithToYardHardwareTransferDriver != null ? blacksmithToYardHardwareTransferDriver.ToSaveDto() : new BlacksmithToYardHardwareTransferDriver.BlacksmithToYardHardwareTransferDriverSaveDto(),
                 lumberYardHardwareImportDriver = lumberYardHardwareImportDriver != null ? lumberYardHardwareImportDriver.ToSaveDto() : new LumberYardHardwareImportDriver.LumberYardHardwareImportDriverSaveDto(),
+                // D4 (F-D2-3): one section for the smith's iron import
+                // driver. Same null rule as the D3 sections.
+                blacksmithIronImportDriver = blacksmithIronImportDriver != null ? blacksmithIronImportDriver.ToSaveDto() : new BlacksmithIronImportDriver.BlacksmithIronImportDriverSaveDto(),
                 // Pass IV (Worker 1): deterministic due-event schedule.
                 dueEvents = DueEvents.CaptureSaveDto(),
                 // Pass IV Worker 2: unified reservations, draft holds, capacity registrations.
@@ -2140,9 +2160,9 @@ namespace LandLedgers.Orchestration.Systems
         /// .ApplySawmillRestoreAfterPass9 after the Pass 9 yard restore
         /// — never from LoadFromSaveDto — because the transfer driver
         /// loads re-attach against yard lots that do not exist until
-        /// the Pass 9 restore runs. The import driver's order book has
-        /// no yard-stock dependency, but it restores on the same
-        /// deferred path so both hardware drivers share one restore
+        /// the Pass 9 restore runs. The import drivers' order books have
+        /// no yard-stock dependency, but they restore on the same
+        /// deferred path so all three hardware drivers share one restore
         /// point and one construction owner (the bootstrapper).
         /// </summary>
         public List<string> LoadHardwareDriverSectionsFromSaveDto(SystemsSaveDto dto)
@@ -2157,6 +2177,8 @@ namespace LandLedgers.Orchestration.Systems
             else diagnostics.Add("SimulationSystemsHub: smith-to-yard hardware transfer driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
             if (lumberYardHardwareImportDriver != null) lumberYardHardwareImportDriver.LoadFromSaveDto(dto.lumberYardHardwareImportDriver);
             else diagnostics.Add("SimulationSystemsHub: lumber yard nails import driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
+            if (blacksmithIronImportDriver != null) blacksmithIronImportDriver.LoadFromSaveDto(dto.blacksmithIronImportDriver);
+            else diagnostics.Add("SimulationSystemsHub: smith iron import driver section skipped — no driver constructed yet; the bootstrapper owns construction.");
             return diagnostics;
         }
 

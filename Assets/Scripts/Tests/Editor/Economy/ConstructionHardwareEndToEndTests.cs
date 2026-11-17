@@ -206,20 +206,26 @@ namespace LandLedgers.EditorTests.Economy
                     priced, day, Diag, out sale);
             }
 
-            /// <summary>Stages one package from the site stockpile, works it with real labour, and advances it.</summary>
+            /// <summary>Stages one package from the site stockpile, works it with real labour, and advances it. E2: labour is total person-minutes and one worker-day is 600 minutes, so a recalibrated package takes several days of real work. Commit and work one day at a time until the package is fully worked; the day cursor advances past every worked day so the next package never double-books the worker.</summary>
             public void DrivePackageToComplete(ConstructionProject project, WorkPackage package,
-                ConstructionSiteStockpile stockpile, ConstructionFreightPlan plan, int day)
+                ConstructionSiteStockpile stockpile, ConstructionFreightPlan plan, ref int day)
             {
                 Assert.IsNull(RunMaterialLeg(project, package, stockpile, plan, day),
                     $"package '{package.PackageId}' procures, freights and stages: " + string.Join("; ", Diag));
                 Assert.AreEqual(WorkPackageStatus.MaterialsStaged, package.Status);
-                Assert.IsNull(Executor.CommitLabor(project, package, 5, Tracker,
-                    Custody, Tasks, Budgets, day, 360, package.LaborMinutesRequired, "build", Diag),
-                    string.Join("; ", Diag));
-                string taskId = project.LaborTaskIds[project.LaborTaskIds.Count - 1];
-                Assert.IsNull(Executor.WorkCommittedLabor(project, package, taskId,
-                    package.LaborMinutesRequired, Tasks, Budgets, day, Diag), string.Join("; ", Diag));
-                Assert.IsNull(Executor.AdvancePackage(project, package, day, Diag), string.Join("; ", Diag));
+                int lastWorkedDay = day;
+                while (package.LaborMinutesCommitted < package.LaborMinutesRequired)
+                {
+                    Assert.IsNull(Executor.CommitLabor(project, package, 5, Tracker,
+                        Custody, Tasks, Budgets, day, 360, package.LaborMinutesRequired, "build", Diag),
+                        string.Join("; ", Diag));
+                    string taskId = project.LaborTaskIds[project.LaborTaskIds.Count - 1];
+                    Assert.IsNull(Executor.WorkCommittedLabor(project, package, taskId,
+                        package.LaborMinutesRequired, Tasks, Budgets, day, Diag), string.Join("; ", Diag));
+                    lastWorkedDay = day;
+                    day++;
+                }
+                Assert.IsNull(Executor.AdvancePackage(project, package, lastWorkedDay, Diag), string.Join("; ", Diag));
                 Assert.AreEqual(WorkPackageStatus.Complete, package.Status);
             }
         }
@@ -257,15 +263,16 @@ namespace LandLedgers.EditorTests.Economy
             var stockpile = new ConstructionSiteStockpile();
             var plan = c.FreightPlan(c.Wagon("wagon-1", 100000f, 100f), "parcel-9 site", 5, 6, 7);
 
-            c.DrivePackageToComplete(project, project.WorkPackages[0], stockpile, plan, 11);
-            c.DrivePackageToComplete(project, project.WorkPackages[1], stockpile, plan, 12);
+            int day = 11;
+            c.DrivePackageToComplete(project, project.WorkPackages[0], stockpile, plan, ref day);
+            c.DrivePackageToComplete(project, project.WorkPackages[1], stockpile, plan, ref day);
             // The roof package is the doors/openings phase: 300 lumber + 9 hardware.
             WorkPackage roof = project.WorkPackages[2];
             Assert.AreEqual(2, roof.Materials.Count);
             Assert.AreEqual(9, roof.Materials[1].RequiredUnits);
-            c.DrivePackageToComplete(project, roof, stockpile, plan, 13);
+            c.DrivePackageToComplete(project, roof, stockpile, plan, ref day);
 
-            Assert.IsNull(c.Executor.CompleteProject(project, ProductionDesignPresets.SettlerCabin(), c.Housing, 13, c.Diag),
+            Assert.IsNull(c.Executor.CompleteProject(project, ProductionDesignPresets.SettlerCabin(), c.Housing, day, c.Diag),
                 string.Join("; ", c.Diag));
             Assert.AreEqual(ConstructionProjectStatus.Complete, project.Status);
             Assert.IsFalse(string.IsNullOrWhiteSpace(project.BuildingId));
@@ -304,8 +311,9 @@ namespace LandLedgers.EditorTests.Economy
             var plan = c.FreightPlan(c.Wagon("wagon-1", 100000f, 100f), "parcel-9 site", 5, 6, 7);
 
             // Sills and walls build: they need lumber only.
-            c.DrivePackageToComplete(project, project.WorkPackages[0], stockpile, plan, 11);
-            c.DrivePackageToComplete(project, project.WorkPackages[1], stockpile, plan, 12);
+            int day = 11;
+            c.DrivePackageToComplete(project, project.WorkPackages[0], stockpile, plan, ref day);
+            c.DrivePackageToComplete(project, project.WorkPackages[1], stockpile, plan, ref day);
 
             // The roof package cannot even be priced — the price port reads
             // the yard's real lots and there are none.
@@ -319,7 +327,7 @@ namespace LandLedgers.EditorTests.Economy
                 c.Executor, project, roof, c.SalePort, c.Prices, c.Directory,
                 c.FreightCoordinator, plan, stockpile,
                 c.Cash, "household:7", c.Obligations, c.Ids,
-                0, 13, c.Diag, out noSale);
+                0, day, c.Diag, out noSale);
             Assert.IsNotNull(refusal, "procurement refuses with the shelves empty");
             Assert.IsTrue(refusal.Contains("door hardware"),
                 "the refusal names the missing hardware: " + refusal);
@@ -333,7 +341,7 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(100000 - 13600, c.HouseholdLedger.GetBalanceCents(),
                 "only the lumber packages were paid for — no hardware charge invented");
             Assert.AreEqual(13600, c.YardPurse.ReadBalanceCents());
-            string completionRefusal = c.Executor.CompleteProject(project, ProductionDesignPresets.SettlerCabin(), c.Housing, 13, c.Diag);
+            string completionRefusal = c.Executor.CompleteProject(project, ProductionDesignPresets.SettlerCabin(), c.Housing, day, c.Diag);
             Assert.IsNotNull(completionRefusal,
                 "completion refuses while the roof package is unfinished: " + string.Join("; ", c.Diag));
             Assert.AreNotEqual(ConstructionProjectStatus.Complete, project.Status,

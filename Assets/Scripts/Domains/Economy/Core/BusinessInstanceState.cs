@@ -905,6 +905,22 @@ namespace LandLedgers.Economy
             return owner != null && owner.OwnerKind == BusinessOwnerKind.Player;
         }
 
+        /// <summary>
+        /// UBC I2 (F5): the development opening-stock endowment resolves the
+        /// NPC General Store by kind, not by roster order. The store owner is
+        /// whoever owns the NPC General Store; pinning person id 1 broke the
+        /// moment the opening roster changed order. A live runtime is required
+        /// because the callers register notions and feed against it.
+        /// </summary>
+        public static bool IsDevelopmentNpcGeneralStore(BusinessInstanceState business)
+        {
+            return business != null
+                && business.BusinessType == BusinessType.GeneralStore
+                && business.Owner != null
+                && business.Owner.OwnerKind == BusinessOwnerKind.Npc
+                && business.RuntimeState != null;
+        }
+
         public static BusinessInstanceState Create(string instanceId, BusinessProfileDefinition profile, int assignedBuildingId, BusinessOwnerIdentity owner)
         {
             return Create(instanceId, profile, assignedBuildingId, owner, null);

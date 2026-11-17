@@ -1561,9 +1561,7 @@ namespace LandLedgers.FirstLedger
             if (sharedBusinessRuntime?.Businesses == null) return null;
             foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
             {
-                if (business != null && business.BusinessType == BusinessType.GeneralStore
-                    && business.Owner != null && business.Owner.OwnerKind == BusinessOwnerKind.Npc
-                    && business.Owner.PersonId == 1 && business.RuntimeState != null)
+                if (BusinessInstanceState.IsDevelopmentNpcGeneralStore(business))
                     return business;
             }
             Debug.LogError("[WorldStartup] Development opening-stock endowment was not applied: configured NPC General Store owner was not found.", this);

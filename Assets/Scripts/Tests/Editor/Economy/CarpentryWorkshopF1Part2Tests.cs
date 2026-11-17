@@ -52,8 +52,14 @@ namespace LandLedgers.Editor.Economy
             int openingLumberUnits)
         {
             var config = ScriptableObject.CreateInstance<DevelopmentTownConfiguration>();
-            SetPrivateField(config, "configurationId", "f1p2-test-town");
-            SetPrivateField(config, "seedOffset", 0);
+            // Schema 2 (foundation pass): configurationId, seedOffset and
+            // freightBusinessKey live on the nested GeneralSettings; the
+            // equipment and lumber live on the workshop's opening record
+            // and the horse/wagon on the freight business's opening
+            // record. The flat top-level fields no longer exist.
+            config.Settings.configurationId = "f1p2-test-town";
+            config.Settings.seedOffset = 0;
+            config.Settings.freightBusinessKey = "freight-company";
             SetPrivateField(config, "people", new[]
             {
                 new DevelopmentTownConfiguration.PersonDefinition
@@ -74,19 +80,40 @@ namespace LandLedgers.Editor.Economy
                 new DevelopmentTownConfiguration.RelationshipDefinition
                 { firstPersonKey = "don-millward", secondPersonKey = "grace-millward", relationship = 0 },
             });
+            // Schema 2: no matched entry means the workshop's opening
+            // carries a null equipment record, so the derived view omits
+            // it and the endowment reports "No opening equipment is
+            // configured" and installs nothing (not even the lumber).
+            // An empty (non-null) record would instead be a
+            // present-but-empty entry that the workstation gate refuses.
+            DevelopmentTownConfiguration.BusinessOpeningEquipment workshopEquipment = null;
+            if (openingEquipment != null)
+                foreach (DevelopmentTownConfiguration.BusinessOpeningEquipment entry in openingEquipment)
+                    if (entry != null && string.Equals(entry.businessKey, WorkshopKey, StringComparison.OrdinalIgnoreCase))
+                    { workshopEquipment = entry; break; }
             SetPrivateField(config, "businesses", new[]
             {
                 new DevelopmentTownConfiguration.BusinessDefinition
                 {
                     key = WorkshopKey, operationId = "carpentry-workshop", ownerPersonKey = "don-millward",
                     businessId = WorkshopInstanceId, premisesRequired = true, openingCashCents = 10000,
+                    opening = new DevelopmentTownConfiguration.BusinessOpeningConfiguration
+                    {
+                        equipment = workshopEquipment,
+                        carpentryLumberUnits = openingLumberUnits,
+                    },
+                },
+                new DevelopmentTownConfiguration.BusinessDefinition
+                {
+                    key = "freight-company", operationId = "livery-freight", ownerPersonKey = "don-millward",
+                    businessId = "f1p2-test-freight", premisesRequired = false,
+                    opening = new DevelopmentTownConfiguration.BusinessOpeningConfiguration
+                    {
+                        openingHorseId = "A0",
+                        openingWagonId = "f1p2-test-wagon",
+                    },
                 },
             });
-            SetPrivateField(config, "freightBusinessKey", "freight-company");
-            SetPrivateField(config, "openingHorseId", "A0");
-            SetPrivateField(config, "openingWagonId", "f1p2-test-wagon");
-            SetPrivateField(config, "openingEquipment", openingEquipment ?? Array.Empty<DevelopmentTownConfiguration.BusinessOpeningEquipment>());
-            SetPrivateField(config, "openingCarpentryLumberUnits", openingLumberUnits);
             return config;
         }
 

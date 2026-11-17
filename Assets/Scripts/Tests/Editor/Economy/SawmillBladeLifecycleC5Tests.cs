@@ -164,8 +164,14 @@ namespace LandLedgers.Editor.Economy
             DevelopmentTownConfiguration.BusinessSpareBladeDefinition[] openingSpareBlades)
         {
             var config = ScriptableObject.CreateInstance<DevelopmentTownConfiguration>();
-            SetPrivateField(config, "configurationId", "test-town");
-            SetPrivateField(config, "seedOffset", 0);
+            // Schema 2 (foundation pass): configurationId, seedOffset and
+            // freightBusinessKey live on the nested GeneralSettings; the
+            // horse, wagon, employees, spare blades and equipment live
+            // on the mill's opening record. The flat top-level fields no
+            // longer exist.
+            config.Settings.configurationId = "test-town";
+            config.Settings.seedOffset = 0;
+            config.Settings.freightBusinessKey = MillKey;
             SetPrivateField(config, "people", new[]
             {
                 new DevelopmentTownConfiguration.PersonDefinition
@@ -186,19 +192,21 @@ namespace LandLedgers.Editor.Economy
                 {
                     key = MillKey, operationId = "sawmill", ownerPersonKey = OwnerKey,
                     businessId = MillInstanceId, premisesRequired = false,
+                    opening = new DevelopmentTownConfiguration.BusinessOpeningConfiguration
+                    {
+                        openingHorseId = "A0",
+                        openingWagonId = "test-wagon",
+                        employees = Array.Empty<DevelopmentTownConfiguration.BusinessEmployeeDefinition>(),
+                        spareBlades = openingSpareBlades ?? Array.Empty<DevelopmentTownConfiguration.BusinessSpareBladeDefinition>(),
+                        equipment = new DevelopmentTownConfiguration.BusinessOpeningEquipment(),
+                    },
                 },
             });
-            SetPrivateField(config, "freightBusinessKey", MillKey);
-            SetPrivateField(config, "openingHorseId", "A0");
-            SetPrivateField(config, "openingWagonId", "test-wagon");
-            SetPrivateField(config, "openingEmployees", Array.Empty<DevelopmentTownConfiguration.BusinessEmployeeDefinition>());
-            SetPrivateField(config, "openingSpareBlades", openingSpareBlades ?? Array.Empty<DevelopmentTownConfiguration.BusinessSpareBladeDefinition>());
-            SetPrivateField(config, "openingEquipment", Array.Empty<DevelopmentTownConfiguration.BusinessOpeningEquipment>());
             return config;
         }
 
-        private static DevelopmentTownConfiguration.BusinessSpareBladeDefinition SpareEntry(string bladeId = SpareBladeId, string businessKey = MillKey) =>
-            new DevelopmentTownConfiguration.BusinessSpareBladeDefinition { businessKey = businessKey, bladeId = bladeId };
+        private static DevelopmentTownConfiguration.BusinessSpareBladeDefinition SpareEntry(string bladeId = SpareBladeId) =>
+            new DevelopmentTownConfiguration.BusinessSpareBladeDefinition { businessKey = MillKey, bladeId = bladeId };
 
         private static bool ApplySpareBlades(
             DevelopmentTownConfiguration config, BusinessRuntimeState state, SawmillShopRuntime mill,
@@ -458,10 +466,16 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void SpareBladeConfigValidation_DuplicateBlankAndUnknownBusiness_Refused()
+        public void SpareBladeConfigValidation_DuplicateAndBlank_Refused()
         {
             DevelopmentTownConfiguration valid = BuildConfig(new[] { SpareEntry() });
             Assert.IsTrue(valid.Validate(out string validError), validError);
+            // Schema 2 nests spare blades under their owning business, so
+            // the blade surfaces attributed to the mill; there is no flat
+            // entry that could name an unconfigured business any more.
+            Assert.AreEqual(1, valid.OpeningSpareBlades.Count);
+            Assert.AreEqual(MillKey, valid.OpeningSpareBlades[0].businessKey,
+                "the derived view attributes the blade to its owning business");
 
             DevelopmentTownConfiguration duplicate = BuildConfig(new[] { SpareEntry(), SpareEntry() });
             Assert.IsFalse(duplicate.Validate(out string duplicateError), "a duplicate blade id fails validation");
@@ -469,9 +483,6 @@ namespace LandLedgers.Editor.Economy
 
             DevelopmentTownConfiguration blank = BuildConfig(new[] { SpareEntry(bladeId: "") });
             Assert.IsFalse(blank.Validate(out string blankError), "a blank blade id fails validation");
-
-            DevelopmentTownConfiguration unknown = BuildConfig(new[] { SpareEntry(businessKey: "bakery") });
-            Assert.IsFalse(unknown.Validate(out string unknownError), "an unconfigured business fails validation");
         }
 
         // ---- Lubrication consumption + persistence ----

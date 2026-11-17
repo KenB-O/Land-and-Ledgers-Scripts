@@ -30,6 +30,16 @@ namespace LandLedgers.Economy.Blacksmith
     /// (ForgeHorseshoe: slower, lower-condition shoes at low capability,
     /// never a guaranteed perfect shoe). The gate still applies to every
     /// whole-unit recipe and to repair work.
+    ///
+    /// D2 extension: the same reasoning covers small forged construction
+    /// hardware (door hinges, iron latches, door handles). One piece is
+    /// one small forging from bar stock, graded by capability through
+    /// ForgeHardware exactly like a shoe — slower and flawed-but-usable
+    /// at low capability, never a guaranteed perfect piece. Nails are
+    /// NOT forged here: the nail-forging rate is uncalibrated (E1), so
+    /// nails arrive by legitimate import (LumberYardSupply registers
+    /// "nails-hardware" at 30c) or from the yard's opening endowment,
+    /// never from an invented smith recipe.
     /// </summary>
     public sealed class BlacksmithRuntime
     {
@@ -70,6 +80,29 @@ namespace LandLedgers.Economy.Blacksmith
         /// skilled farrier forges one basic shoe from bar stock in ~10-15
         /// minutes; the mid-capability figure lands at 20.</summary>
         public const int HorseshoeMasterMinutes = 10;
+
+        /// <summary>D2: construction hardware kinds the smith forges one piece at a time.</summary>
+        public const string DoorHingeKind = "door-hinge";
+        public const string IronLatchKind = "iron-latch";
+        public const string DoorHandleKind = "door-handle";
+
+        /// <summary>D2: the forged construction-hardware kinds, in forge order.</summary>
+        public static readonly string[] HardwareKinds = { DoorHingeKind, IronLatchKind, DoorHandleKind };
+
+        /// <summary>D2: true when the kind is a forged construction-hardware piece.</summary>
+        public static bool IsHardwareKind(string kind)
+        {
+            if (string.IsNullOrWhiteSpace(kind)) return false;
+            foreach (string hardware in HardwareKinds)
+                if (string.Equals(hardware, kind, StringComparison.Ordinal)) return true;
+            return false;
+        }
+
+        /// <summary>D2: minutes to forge one hardware piece at capability 0 (complete novice).</summary>
+        public const int HardwareNoviceMinutes = 30;
+
+        /// <summary>D2: minutes to forge one hardware piece at capability 1.0 (master).</summary>
+        public const int HardwareMasterMinutes = 10;
 
         private string businessInstanceId = string.Empty;
         private string businessName = string.Empty;
@@ -155,8 +188,8 @@ namespace LandLedgers.Economy.Blacksmith
             double quality = HorseshoeQualityForCapability(capability);
 
             var lotNotes = new List<string>();
-            if (!DrawShoeQuarter(recipe.MaterialId, ref ironShoeQuarters, ref ironShoeQuarterLotId, lotNotes, diagnostics)) return null;
-            if (!DrawShoeQuarter(ImportCatalog.ForgeCoalId, ref coalShoeQuarters, ref coalShoeQuarterLotId, lotNotes, diagnostics)) return null;
+            if (!DrawForgeQuarter(recipe.MaterialId, ref ironShoeQuarters, ref ironShoeQuarterLotId, lotNotes, diagnostics)) return null;
+            if (!DrawForgeQuarter(ImportCatalog.ForgeCoalId, ref coalShoeQuarters, ref coalShoeQuarterLotId, lotNotes, diagnostics)) return null;
 
             var asset = new EquipmentAsset
             {
@@ -218,13 +251,154 @@ namespace LandLedgers.Economy.Blacksmith
             return asset;
         }
 
+        // --- D2: capability-graded construction-hardware forging -------------------
+
+        /// <summary>D2: minutes to forge one hardware piece at this capability.</summary>
+        public static int HardwareMinutesForCapability(double capability)
+            => SkillOutcomeCurves.MinutesForCapability(HardwareNoviceMinutes, HardwareMasterMinutes, capability);
+
+        /// <summary>D2: condition of a hardware piece forged at this capability (0.60..1.00).</summary>
+        public static double HardwareQualityForCapability(double capability)
+            => SkillOutcomeCurves.QualityForCapability(capability);
+
         /// <summary>
-        /// D1: draw one shoe-quarter of a material. If quarters are on hand,
+        /// D2: forge ONE construction-hardware piece (door hinge, iron latch
+        /// or door handle). No journeyman gate — the same D1 reasoning as a
+        /// shoe: one small forging from bar stock is ordinary physically
+        /// feasible work. Capability instead grades the outcome: a
+        /// low-capability smith is slower and produces a flawed-but-usable
+        /// piece (Condition01 below 1.0), never a guaranteed perfect
+        /// product. Each piece consumes 1 quarter-iron + 1 quarter-coal
+        /// from the same pools the shoes draw from (cut bar and fired coal
+        /// are not shoe-specific), so four pieces consume exactly one iron
+        /// unit and one coal unit — a hinge, latch or handle is ~0.5-1.5 lb
+        /// of iron with forging loss, like a shoe. Calibration, provisional,
+        /// for the owner to correct. The returned asset is shop stock; the
+        /// yard takes it into its hardware lots through
+        /// LumberYardShopRuntime.ReceiveHardwareFromBlacksmith, and the
+        /// construction sale draws it from there. Nails are NOT forged
+        /// here (see the class note). Returns null and consumes nothing on
+        /// any refusal.
+        /// </summary>
+        public EquipmentAsset ForgeHardware(string hardwareKind, EntityId smithPersonId, int dayIndex, SkillService skillService, List<string> diagnostics, out int minutesUsed)
+        {
+            minutesUsed = 0;
+            diagnostics = diagnostics ?? new List<string>();
+
+            if (!IsHardwareKind(hardwareKind))
+            {
+                diagnostics.Add($"BlacksmithRuntime: '{hardwareKind}' is not a forged construction-hardware kind (door-hinge, iron-latch, door-handle).");
+                return null;
+            }
+
+            SmithingRecipe recipe = DefaultRecipes().Find(r => r.EquipmentKind == hardwareKind);
+            if (recipe == null)
+            {
+                diagnostics.Add($"BlacksmithRuntime: no recipe for '{hardwareKind}'.");
+                return null;
+            }
+
+            if (!forgeStationReady)
+            {
+                diagnostics.Add($"BlacksmithRuntime: forge station is not ready; cannot forge a {recipe.DisplayName}.");
+                return null;
+            }
+
+            if (skillService == null)
+            {
+                diagnostics.Add("BlacksmithRuntime: no SkillService; cannot assess the smith's smithing skill.");
+                return null;
+            }
+
+            // Sufficiency first: refuse without consuming anything.
+            bool ironOk = ironShoeQuarters > 0 || MaterialOnHand(recipe.MaterialId) >= 1;
+            bool coalOk = coalShoeQuarters > 0 || MaterialOnHand(ImportCatalog.ForgeCoalId) >= 1;
+            if (!ironOk)
+            {
+                diagnostics.Add($"BlacksmithRuntime: no {recipe.MaterialId} for a {recipe.DisplayName} (no cut quarters, no whole unit in stock).");
+                return null;
+            }
+            if (!coalOk)
+            {
+                diagnostics.Add($"BlacksmithRuntime: no {ImportCatalog.ForgeCoalId} for a {recipe.DisplayName} (no fired quarters, no whole unit in stock).");
+                return null;
+            }
+
+            double capability = skillService.GetCapability(smithPersonId, recipe.RequiredSkillId);
+            minutesUsed = HardwareMinutesForCapability(capability);
+            double quality = HardwareQualityForCapability(capability);
+
+            var lotNotes = new List<string>();
+            if (!DrawForgeQuarter(recipe.MaterialId, ref ironShoeQuarters, ref ironShoeQuarterLotId, lotNotes, diagnostics)) return null;
+            if (!DrawForgeQuarter(ImportCatalog.ForgeCoalId, ref coalShoeQuarters, ref coalShoeQuarterLotId, lotNotes, diagnostics)) return null;
+
+            var asset = new EquipmentAsset
+            {
+                AssetId = Guid.NewGuid().ToString("N"),
+                Kind = hardwareKind,
+                DisplayName = recipe.DisplayName,
+                Condition01 = (float)quality,
+                OwnerKind = "business",
+                OwnerId = businessInstanceId,
+                MadeByBusinessId = businessInstanceId,
+                MadeByBusinessName = businessName,
+                MadeDayIndex = dayIndex,
+                MaterialLotIds = new List<string>(),
+            };
+            if (!string.IsNullOrWhiteSpace(ironShoeQuarterLotId)) asset.MaterialLotIds.Add(ironShoeQuarterLotId);
+            if (!string.IsNullOrWhiteSpace(coalShoeQuarterLotId)) asset.MaterialLotIds.Add(coalShoeQuarterLotId);
+            assets[asset.AssetId] = asset;
+
+            string lots = lotNotes.Count > 0 ? $" ({string.Join(", ", lotNotes)})" : string.Empty;
+            diagnostics.Add($"BlacksmithRuntime: forged one {recipe.DisplayName} {asset.AssetId} (condition {quality:0.00}, {minutesUsed} min) by {smithPersonId}, capability {capability:0.00}.{lots}");
+            return asset;
+        }
+
+        /// <summary>
+        /// D2: release one forged hardware piece from shop stock to the caller
+        /// (yard delivery, retail sale, freight). Returns null on an unknown
+        /// id, a non-hardware kind, or a reserved asset — the asset stays in
+        /// stock in every refusal.
+        /// </summary>
+        public EquipmentAsset TakeHardware(string assetId, List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            if (string.IsNullOrWhiteSpace(assetId))
+            {
+                diagnostics.Add("BlacksmithRuntime: no hardware id given to release.");
+                return null;
+            }
+
+            if (!assets.TryGetValue(assetId, out EquipmentAsset asset) || asset == null)
+            {
+                diagnostics.Add($"BlacksmithRuntime: no asset '{assetId}' in shop stock.");
+                return null;
+            }
+
+            if (!IsHardwareKind(asset.Kind))
+            {
+                diagnostics.Add($"BlacksmithRuntime: asset '{assetId}' is a {asset.Kind}, not forged construction hardware.");
+                return null;
+            }
+
+            if (asset.IsReserved)
+            {
+                diagnostics.Add($"BlacksmithRuntime: hardware '{assetId}' is reserved by {asset.ReservedBy}; release refused.");
+                return null;
+            }
+
+            assets.Remove(assetId);
+            diagnostics.Add($"BlacksmithRuntime: hardware '{assetId}' released from shop stock.");
+            return asset;
+        }
+
+        /// <summary>
+        /// D1/D2: draw one forge-quarter of a material. If quarters are on hand,
         /// take one. Otherwise draw one whole unit from stock (FIFO lot
         /// provenance), cut it into four quarters, and spend one of them.
         /// Returns false only when no quarter and no whole unit exist.
         /// </summary>
-        private bool DrawShoeQuarter(string materialId, ref int quarters, ref string quarterLotId, List<string> lotNotes, List<string> diagnostics)
+        private bool DrawForgeQuarter(string materialId, ref int quarters, ref string quarterLotId, List<string> lotNotes, List<string> diagnostics)
         {
             if (quarters > 0)
             {
@@ -234,7 +408,7 @@ namespace LandLedgers.Economy.Blacksmith
 
             if (MaterialOnHand(materialId) < 1)
             {
-                diagnostics.Add($"BlacksmithRuntime: no {materialId} left to cut a shoe-quarter from.");
+                diagnostics.Add($"BlacksmithRuntime: no {materialId} left to cut a forge-quarter from.");
                 return false;
             }
 
@@ -405,6 +579,16 @@ namespace LandLedgers.Economy.Blacksmith
                 // ForgeHorseshoe scales by capability.
                 new SmithingRecipe(HorseshoeKind, "Horseshoe", ImportCatalog.IronStockId, 0, 0, 28, FarrierSkillId)
                 { MaterialQuartersPerItem = 1, FuelQuartersPerItem = 1 },
+                // D2: one hardware piece per forging, priced in quarters like a
+                // shoe. MinutesAtLevel1 is the novice baseline that
+                // ForgeHardware scales by capability. Smithing skill: hinges,
+                // latches and handles are forge work, not farrier work.
+                new SmithingRecipe(DoorHingeKind, "Door hinge", ImportCatalog.IronStockId, 0, 0, 30, SmithingSkillId)
+                { MaterialQuartersPerItem = 1, FuelQuartersPerItem = 1 },
+                new SmithingRecipe(IronLatchKind, "Iron latch", ImportCatalog.IronStockId, 0, 0, 30, SmithingSkillId)
+                { MaterialQuartersPerItem = 1, FuelQuartersPerItem = 1 },
+                new SmithingRecipe(DoorHandleKind, "Door handle", ImportCatalog.IronStockId, 0, 0, 30, SmithingSkillId)
+                { MaterialQuartersPerItem = 1, FuelQuartersPerItem = 1 },
                 new SmithingRecipe("wagon-part", "Wagon ironwork (tire/shoe)", ImportCatalog.IronStockId, 4, 1, 120, SmithingSkillId),
                 new SmithingRecipe("hand-tool", "Hand tool", ImportCatalog.IronStockId, 1, 1, 45, SmithingSkillId),
                 new SmithingRecipe("plowshare", "Replacement plowshare", ImportCatalog.SteelStockId, 2, 1, 90, SmithingSkillId),
@@ -521,12 +705,14 @@ namespace LandLedgers.Economy.Blacksmith
                 diagnostics.Add($"BlacksmithRuntime: no recipe for '{equipmentKind}'.");
                 return null;
             }
-            // D1: fractional (quarter-priced) recipes are forged one item at a
-            // time through ForgeHorseshoe — this whole-unit path cannot mint
+            // D1/D2: fractional (quarter-priced) recipes are forged one item
+            // at a time through ForgeHorseshoe (shoes) or ForgeHardware
+            // (hinges, latches, handles) — this whole-unit path cannot mint
             // them, or a caller could spend 0 whole units for a perfect shoe.
             if (recipe.MaterialQuartersPerItem > 0 || recipe.FuelQuartersPerItem > 0)
             {
-                diagnostics.Add($"BlacksmithRuntime: '{equipmentKind}' is priced in quarters; forge one at a time with ForgeHorseshoe.");
+                string forgeMethod = IsHardwareKind(equipmentKind) ? "ForgeHardware" : "ForgeHorseshoe";
+                diagnostics.Add($"BlacksmithRuntime: '{equipmentKind}' is priced in quarters; forge one at a time with {forgeMethod}.");
                 return null;
             }
             if (!forgeStationReady)

@@ -3399,7 +3399,7 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void QueuedShellConstructionProgressesAcrossWeeksAndCompletes()
+        public void QueuedShellConstructionDoesNotCompleteFromElapsedWeeksWithoutCommittedWork()
         {
             using TestWorld context = TestWorld.Create();
             Assert.IsTrue(context.TryFindBuildableOption(out int plotId, out int optionIndex, out _));
@@ -3410,17 +3410,30 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, context.AcquisitionMarket.ActiveConstructionProjects.Count);
             StringAssert.Contains("Queued shell", queueMessage);
 
+            int ownerCashBefore = context.PlayerPortfolio.OwnerCashCents;
+            int lumberBefore = context.GetSawmillStock();
+            int hardwareBefore = context.GetBlacksmithHardwareStock();
+
             for (int week = 0; week < 8 && context.GetPlot(plotId).buildingId < 0; week++)
             {
-                context.AcquisitionMarket.ResolveWeeklyConstructionQueue(out _);
+                Assert.IsFalse(context.AcquisitionMarket.ResolveWeeklyConstructionQueue(out _));
             }
 
-            Assert.GreaterOrEqual(context.GetPlot(plotId).buildingId, 0);
-            Assert.AreEqual(0, context.AcquisitionMarket.ActiveConstructionProjects.Count);
+            Assert.AreEqual(-1, context.GetPlot(plotId).buildingId,
+                "A shell must not be created by elapsed time without committed construction work.");
+            Assert.AreEqual(1, context.AcquisitionMarket.ActiveConstructionProjects.Count,
+                "A blocked request remains available for a real construction integration to resume.");
+            ConstructionProjectState project = context.AcquisitionMarket.ActiveConstructionProjects[0];
+            Assert.IsFalse(project.inputsCommitted, "Inputs must not be paid for or consumed before real work can start.");
+            Assert.AreEqual(0, project.weeksProgressed);
+            Assert.AreEqual(ownerCashBefore, context.PlayerPortfolio.OwnerCashCents);
+            Assert.AreEqual(lumberBefore, context.GetSawmillStock());
+            Assert.AreEqual(hardwareBefore, context.GetBlacksmithHardwareStock());
+            StringAssert.Contains("real construction project binding", project.blockedReason);
         }
 
         [Test]
-        public void QueuedShellConstructionStallsWhenInputsAreThinThenRecovers()
+        public void QueuedShellWithAvailableInputsStillWaitsForRealLaborAndCustody()
         {
             using TestWorld context = TestWorld.Create();
             Assert.IsTrue(context.TryFindBuildableOption(out int plotId, out int optionIndex, out _));
@@ -3428,20 +3441,18 @@ namespace LandLedgers.Editor.Economy
             context.SetBlacksmithHardwareStock(0);
 
             Assert.IsTrue(context.AcquisitionMarket.TryQueueConstructOnOwnedPlot(plotId, optionIndex, out string queueMessage), queueMessage);
-            bool progressed = context.AcquisitionMarket.ResolveWeeklyConstructionQueue(out string blockedSummary);
-
-            Assert.IsFalse(progressed);
-            Assert.AreEqual(-1, context.GetPlot(plotId).buildingId);
-            StringAssert.Contains("blocked", context.AcquisitionMarket.ActiveConstructionProjects[0].statusText.ToLowerInvariant());
-
+            int ownerCashBefore = context.PlayerPortfolio.OwnerCashCents;
             context.SetSawmillStock(400);
             context.SetBlacksmithHardwareStock(50);
-            for (int week = 0; week < 8 && context.GetPlot(plotId).buildingId < 0; week++)
-            {
-                context.AcquisitionMarket.ResolveWeeklyConstructionQueue(out _);
-            }
+            for (int week = 0; week < 4; week++)
+                Assert.IsFalse(context.AcquisitionMarket.ResolveWeeklyConstructionQueue(out _));
 
-            Assert.GreaterOrEqual(context.GetPlot(plotId).buildingId, 0, blockedSummary);
+            Assert.AreEqual(-1, context.GetPlot(plotId).buildingId);
+            Assert.AreEqual(400, context.GetSawmillStock(), "Available goods remain in supplier custody until a real project accepts them.");
+            Assert.AreEqual(50, context.GetBlacksmithHardwareStock());
+            Assert.AreEqual(ownerCashBefore, context.PlayerPortfolio.OwnerCashCents);
+            Assert.IsFalse(context.AcquisitionMarket.ActiveConstructionProjects[0].inputsCommitted);
+            Assert.AreEqual(0, context.AcquisitionMarket.ActiveConstructionProjects[0].weeksProgressed);
         }
 
         [Test]
@@ -3508,7 +3519,7 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void QueuedConstructionDistinguishesBuilderLaneWaitFromInputBlocker()
+        public void QueuedShellDoesNotClaimBuilderLaneAsCommittedLabor()
         {
             using TestWorld context = TestWorld.Create();
             context.Settings.minimumLocalCarpenterCount = 1;
@@ -3518,23 +3529,17 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(context.AcquisitionMarket.TryQueueConstructOnOwnedPlot(firstPlotId, firstOptionIndex, out string firstQueueMessage), firstQueueMessage);
             Assert.IsTrue(context.AcquisitionMarket.TryQueueConstructOnOwnedPlot(secondPlotId, secondOptionIndex, out string secondQueueMessage), secondQueueMessage);
 
-            Assert.IsTrue(context.AcquisitionMarket.ResolveWeeklyConstructionQueue(out string review), review);
+            Assert.IsFalse(context.AcquisitionMarket.ResolveWeeklyConstructionQueue(out string review), review);
 
-            ConstructionProjectState waiting = null;
-            for (int i = 0; i < context.AcquisitionMarket.ActiveConstructionProjects.Count; i++)
+            foreach (ConstructionProjectState project in context.AcquisitionMarket.ActiveConstructionProjects)
             {
-                ConstructionProjectState project = context.AcquisitionMarket.ActiveConstructionProjects[i];
-                if (project != null && project.plotId == secondPlotId)
-                {
-                    waiting = project;
-                    break;
-                }
+                Assert.NotNull(project);
+                Assert.AreEqual(ConstructionProjectProgressState.BlockedBeforeStart, project.progressState);
+                Assert.IsFalse(project.inputsCommitted);
+                Assert.AreEqual(0, project.weeksProgressed);
+                StringAssert.Contains("real construction project binding", project.blockedReason);
             }
-
-            Assert.NotNull(waiting);
-            Assert.AreEqual(ConstructionProjectProgressState.WaitingForLane, waiting.progressState);
-            StringAssert.Contains("waiting for lane", context.AcquisitionMarket.BuildConstructionQueueSummary());
-            StringAssert.Contains("waiting for builder lane", waiting.statusText);
+            StringAssert.Contains("blocked/stalled", review);
         }
 
         [Test]
@@ -3557,30 +3562,24 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void StartedConstructionStallsWhenBuilderLaborDisappearsThenRecovers()
+        public void AbstractBuilderCapacityDoesNotCreateCommittedConstructionWork()
         {
             using TestWorld context = TestWorld.Create();
             Assert.IsTrue(context.TryFindBuildableOption(out int plotId, out int optionIndex, out _));
             Assert.IsTrue(context.AcquisitionMarket.TryQueueConstructOnOwnedPlot(plotId, optionIndex, out string queueMessage), queueMessage);
 
             ConstructionProjectState project = context.AcquisitionMarket.ActiveConstructionProjects[0];
-            project.weeksRequired = Mathf.Max(2, project.weeksRequired);
-            Assert.IsTrue(context.AcquisitionMarket.ResolveWeeklyConstructionQueue(out string firstReview), firstReview);
-            Assert.AreEqual(ConstructionProjectProgressState.InProgress, project.progressState);
-
-            context.PopulationManager.State.people.Clear();
-            Assert.IsFalse(context.AcquisitionMarket.ResolveWeeklyConstructionQueue(out _));
-
-            Assert.AreEqual(ConstructionProjectProgressState.Stalled, project.progressState);
-            StringAssert.Contains("Stalled", context.AcquisitionMarket.BuildConstructionQueueDetailText());
-
             context.SeedLaborPool(24);
             for (int week = 0; week < 8 && context.GetPlot(plotId).buildingId < 0; week++)
             {
-                context.AcquisitionMarket.ResolveWeeklyConstructionQueue(out _);
+                Assert.IsFalse(context.AcquisitionMarket.ResolveWeeklyConstructionQueue(out _));
             }
 
-            Assert.GreaterOrEqual(context.GetPlot(plotId).buildingId, 0);
+            Assert.AreEqual(-1, context.GetPlot(plotId).buildingId);
+            Assert.AreEqual(ConstructionProjectProgressState.BlockedBeforeStart, project.progressState);
+            Assert.IsFalse(project.inputsCommitted);
+            Assert.AreEqual(0, project.weeksProgressed);
+            StringAssert.Contains("real construction project binding", project.blockedReason);
         }
 
     }

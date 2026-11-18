@@ -2083,6 +2083,21 @@ namespace LandLedgers.Economy
                     continue;
                 }
 
+                if (project.projectKind == ConstructionProjectKind.BuildingShell)
+                {
+                    // The player shell queue currently has no binding to the
+                    // ConstructionProjectExecutor's committed work packages,
+                    // real person-time, material custody, or completed-building
+                    // housing handoff. Do not spend a quote and then represent
+                    // elapsed weeks as work. Keep the request visible and
+                    // recoverable until that production integration is supplied.
+                    BlockConstructionProject(project,
+                        "This shell request is waiting for a real construction project binding: " +
+                        "authorized site, staged materials, assigned worker tasks, and completion registration must all be connected before work can begin.");
+                    blockedThisWeek++;
+                    continue;
+                }
+
                 int queueAhead = CountConstructionProjectsAhead(ordered, i);
                 if (builderSlotsRemaining <= 0)
                 {

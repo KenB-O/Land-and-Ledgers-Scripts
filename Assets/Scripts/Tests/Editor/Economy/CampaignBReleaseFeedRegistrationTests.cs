@@ -215,5 +215,30 @@ namespace LandLedgers.Editor.Economy
             Assert.IsFalse(duplicate.Ordered, "an outstanding feed order blocks a duplicate");
             Assert.AreEqual(1, service.Orders.Count);
         }
+
+        [Test]
+        public void FeedReorder_WithPartialStoreStock_OrdersOnlyUncoveredCapacity()
+        {
+            var market = ReleaseShapedMarket();
+            var service = new OffMapNamedSkuProcurementService(
+                StoreInstanceId, market, new FakeBusinessCashPort(50000));
+            Assert.IsNull(market.RegisterCounterparty(
+                StoreHorseFeedReorder.BuildMillbrookCounterparty()));
+
+            StoreHorseFeedReorderResult result = StoreHorseFeedReorder.RunDay(
+                ReorderInputs(service, storeSacksOnHand: 13, dayIndex: 5), new List<string>());
+
+            Assert.IsTrue(result.Ordered, result.Refusal);
+            Assert.AreEqual(7, result.Order.UnitsOrdered,
+                "The 20-sack coverage target must subtract the 13 sacks already on the retail shelf.");
+            Assert.AreEqual(105, result.Order.TotalCostCents,
+                "Only the seven-sack deficit is a legitimate purchase obligation.");
+            Assert.AreEqual(6, result.Order.ExpectedArrivalDayIndex);
+
+            StoreHorseFeedReorderResult repeat = StoreHorseFeedReorder.RunDay(
+                ReorderInputs(service, storeSacksOnHand: 13, dayIndex: 5), new List<string>());
+            Assert.IsFalse(repeat.Ordered, "The deficit order must not be duplicated while it is outstanding.");
+            Assert.AreEqual(1, service.Orders.Count);
+        }
     }
 }

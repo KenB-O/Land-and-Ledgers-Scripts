@@ -184,5 +184,67 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(1000 - 350, customerLedger.GetBalanceCents(), "customer paid");
             Assert.AreEqual(350, businessCash.CurrentCashCents, "shop received — conserved");
         }
+
+        [Test]
+        public void Repair_UnaffordableCustomer_LeavesAssetMaterialsAndLedgersUnchanged()
+        {
+            var smithy = NewSmithy();
+            var diagnostics = new List<string>();
+            RepairWorkOrder order = smithy.Repairs.Intake("Farmer Jo", "farm-1", "EQ-farm-1-002",
+                "Moldboard plow", "share chipped", "smithing", "farm-1", RepairUrgency.Routine, 50, diagnostics);
+            Assert.IsNull(smithy.Repairs.Diagnose(order.WorkOrderId, "share chipped through, needs replacement",
+                2, ImportCatalog.IronStockId, 90));
+            Assert.IsNull(smithy.Repairs.AgreeTerms(order.WorkOrderId, 350));
+
+            var asset = new EquipmentAsset { AssetId = "EQ-farm-1-002", Kind = "plow", Condition01 = 0.3f };
+            EntityId smith = Person(7);
+            var skills = SkilledSmith(smith, BlacksmithRuntime.SmithingSkillId, 200);
+            var customerLedger = new HouseholdLedger(10);
+            var businessCash = new LandLedgers.Economy.BusinessRuntimeState();
+            int ironBefore = smithy.MaterialOnHand(ImportCatalog.IronStockId);
+            int ironLotBefore = smithy.LotUnitsOnHand(ImportCatalog.IronStockId, "IMP-TEST-1");
+
+            string refusal = smithy.CompleteRepair(order.WorkOrderId, asset, smith, 51,
+                skills, customerLedger, diagnostics, businessCash: businessCash);
+
+            Assert.IsNotNull(refusal, "an unaffordable agreed repair must refuse settlement");
+            Assert.AreEqual(RepairOrderStatus.Quoted, order.Status);
+            Assert.AreEqual(0.3f, asset.Condition01, 0.0001f, "failed payment cannot improve equipment");
+            Assert.AreEqual(ironBefore, smithy.MaterialOnHand(ImportCatalog.IronStockId), "failed payment cannot consume stock");
+            Assert.AreEqual(ironLotBefore, smithy.LotUnitsOnHand(ImportCatalog.IronStockId, "IMP-TEST-1"), "lot provenance stays intact");
+            Assert.AreEqual(0, customerLedger.GetBalanceCents());
+            Assert.AreEqual(0, businessCash.CurrentCashCents);
+            Assert.AreEqual(0, smithy.RepairRevenueCents);
+        }
+
+        [Test]
+        public void Repair_MissingParts_RefusesBeforeChargingCustomer()
+        {
+            var smithy = new BlacksmithRuntime("smith-no-stock", "Test Smithy", true);
+            var diagnostics = new List<string>();
+            RepairWorkOrder order = smithy.Repairs.Intake("Farmer Jo", "farm-1", "EQ-farm-1-003",
+                "Moldboard plow", "share chipped", "smithing", "farm-1", RepairUrgency.Routine, 50, diagnostics);
+            Assert.IsNull(smithy.Repairs.Diagnose(order.WorkOrderId, "share chipped through, needs replacement",
+                2, ImportCatalog.IronStockId, 90));
+            Assert.IsNull(smithy.Repairs.AgreeTerms(order.WorkOrderId, 350));
+
+            var asset = new EquipmentAsset { AssetId = "EQ-farm-1-003", Kind = "plow", Condition01 = 0.3f };
+            EntityId smith = Person(8);
+            var skills = SkilledSmith(smith, BlacksmithRuntime.SmithingSkillId, 200);
+            var customerLedger = new HouseholdLedger(11);
+            customerLedger.RecordInflow(50, 1000, HouseholdIncomeSource.OtherDocumented,
+                "test", "test funds", "test");
+            var businessCash = new LandLedgers.Economy.BusinessRuntimeState();
+
+            string refusal = smithy.CompleteRepair(order.WorkOrderId, asset, smith, 51,
+                skills, customerLedger, diagnostics, businessCash: businessCash);
+
+            Assert.IsNotNull(refusal, "a parts shortage must refuse before settlement");
+            Assert.AreEqual(RepairOrderStatus.Quoted, order.Status);
+            Assert.AreEqual(0.3f, asset.Condition01, 0.0001f);
+            Assert.AreEqual(1000, customerLedger.GetBalanceCents());
+            Assert.AreEqual(0, businessCash.CurrentCashCents);
+            Assert.AreEqual(0, smithy.RepairRevenueCents);
+        }
     }
 }

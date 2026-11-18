@@ -874,22 +874,21 @@ namespace LandLedgers.Economy.Blacksmith
             if (level < JourneymanLevelFloor)
                 return $"BlacksmithRuntime: smith {smithPersonId} is level {level} in {neededSkill} (needs {JourneymanLevelFloor}).";
 
-            if (!string.IsNullOrWhiteSpace(order.MaterialId) && order.MaterialUnitsNeeded > 0)
-            {
-                if (MaterialOnHand(order.MaterialId) < order.MaterialUnitsNeeded)
-                    return $"BlacksmithRuntime: short {order.MaterialUnitsNeeded - MaterialOnHand(order.MaterialId)}x {order.MaterialId} for {workOrderId}.";
-                materialStock[order.MaterialId] -= order.MaterialUnitsNeeded;
-                // D4K (additive): provenance — the consumed units trace to real lots.
-                var consumedLotNotes = new List<string>();
-                RecordLotConsumption(order.MaterialId, order.MaterialUnitsNeeded, consumedLotNotes);
-                diagnostics.Add(
-                    $"BlacksmithRuntime: {workOrderId} consumed {order.MaterialUnitsNeeded}x {order.MaterialId} " +
-                    $"from lots [{string.Join(", ", consumedLotNotes.ToArray())}].");
-            }
+            // Check the material position before asking for payment. The
+            // check is repeated nowhere after settlement, so an unavailable
+            // part cannot leave the customer charged for work the shop cannot
+            // complete.
+            if (!string.IsNullOrWhiteSpace(order.MaterialId) && order.MaterialUnitsNeeded > 0
+                && MaterialOnHand(order.MaterialId) < order.MaterialUnitsNeeded)
+                return $"BlacksmithRuntime: short {order.MaterialUnitsNeeded - MaterialOnHand(order.MaterialId)}x {order.MaterialId} for {workOrderId}.";
 
-            if (asset != null)
-                asset.RepairTo(1f);
-
+            // Settle the customer's agreed price before any irreversible
+            // material or condition mutation. RecordOutflow can refuse (for
+            // example when the customer cannot afford the work); a refused
+            // repair must leave the real lot and equipment exactly as they
+            // were. Once the debit succeeds, the remaining mutations below
+            // are deterministic and cannot fail on this single-threaded
+            // simulation path.
             if (customerLedger != null && order.AgreedPriceCents > 0)
             {
                 string rejection = customerLedger.RecordOutflow(dayIndex, order.AgreedPriceCents,
@@ -902,6 +901,20 @@ namespace LandLedgers.Economy.Blacksmith
                     businessCash.AddWeeklyLocalTransferRevenue(order.AgreedPriceCents,
                         $"repair {order.WorkOrderId}: {order.AssetDescription} ({order.DiagnosedProblem})");
             }
+
+            if (!string.IsNullOrWhiteSpace(order.MaterialId) && order.MaterialUnitsNeeded > 0)
+            {
+                materialStock[order.MaterialId] -= order.MaterialUnitsNeeded;
+                // D4K (additive): provenance — the consumed units trace to real lots.
+                var consumedLotNotes = new List<string>();
+                RecordLotConsumption(order.MaterialId, order.MaterialUnitsNeeded, consumedLotNotes);
+                diagnostics.Add(
+                    $"BlacksmithRuntime: {workOrderId} consumed {order.MaterialUnitsNeeded}x {order.MaterialId} " +
+                    $"from lots [{string.Join(", ", consumedLotNotes.ToArray())}].");
+            }
+
+            if (asset != null)
+                asset.RepairTo(1f);
 
             order.Status = RepairOrderStatus.Complete;
             order.CompletedDayIndex = dayIndex;

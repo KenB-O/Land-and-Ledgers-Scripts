@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Businesses.Logging;
 using LandLedgers.Economy.Farming.Crops;
 using LandLedgers.Economy.Farming.Dairy;
@@ -84,6 +85,17 @@ namespace LandLedgers.EditorTests.Orchestration
             Assert.IsNotNull(tasks.GetDefinition(LoggingTaskIds.SkidLogs), "skid logs");
             Assert.IsNotNull(tasks.GetDefinition(PostalService.SortMailTaskId), "sort mail");
             Assert.IsNotNull(tasks.GetDefinition(PostalService.DeliverLocalMailTaskId), "deliver mail");
+        }
+
+        [Test]
+        public void RegisterTaskCatalogs_RegistersBlacksmithSkillsWithTheLiveSkillAuthority()
+        {
+            var skills = new SkillService();
+
+            SimulationSystemsHub.RegisterTaskCatalogs(new TaskAuthority(), skills, new PostalService(), new List<string>());
+
+            Assert.IsNotNull(skills.GetSkill(BlacksmithRuntime.SmithingSkillId), "smithing must be trainable from completed work");
+            Assert.IsNotNull(skills.GetSkill(BlacksmithRuntime.FarrierSkillId), "farrier work must be trainable from completed work");
         }
 
         [Test]

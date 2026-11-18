@@ -1920,6 +1920,12 @@ namespace LandLedgers.Orchestration.Systems
             TimberHarvest.RegisterTaskDefinitions(tasks);
             Sawmill.RegisterTaskDefinitions(tasks);
 
+            // Blacksmith skill definitions must exist in the live skill
+            // authority so completed work can build real smithing/farrier
+            // capability. GetCapability's novice fallback keeps unknown ids
+            // callable, but cannot make an unregistered skill trainable.
+            BlacksmithRuntime.RegisterSkills(skills, diagnostics);
+
             // Travel + freight + post.
             JourneyTravel.RegisterTaskDefinitions(tasks);
             FreightCompanyRuntime.RegisterTaskDefinitions(tasks);

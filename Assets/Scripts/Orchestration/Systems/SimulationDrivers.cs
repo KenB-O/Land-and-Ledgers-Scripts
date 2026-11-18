@@ -364,6 +364,7 @@ namespace LandLedgers.Orchestration.Systems
         private DailyNeedsService dailyNeedsService;
         private HouseholdConsumptionPlanner consumptionPlanner;
         private SupplierDirectory supplierDirectory;
+        private Series2BakerySupplierAdapter bakerySupplierAdapter;
         private readonly HashSet<string> fuelDealerSupplierRegistrationLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> fuelDealerSupplierWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> sawmillTransferWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
@@ -482,6 +483,65 @@ namespace LandLedgers.Orchestration.Systems
             RegisterFuelDealerSuppliers();
             SeedLocalGeneralStoreKnowledge();
             BuildHouseholdShoppingLoop();
+        }
+
+        /// <summary>
+        /// Registers the authored bakery as a direct household bread seller.
+        /// The adapter reads saleable bread from the existing BakeryShopRuntime
+        /// and credits the same business cash authority; it creates no stock.
+        /// </summary>
+        public void RegisterBakerySupplier(BakeryShopRuntime bakery, BusinessInstanceState business)
+        {
+            if (bakery == null || business == null || business.RuntimeState == null
+                || business.BusinessType != BusinessType.Bakery
+                || bakery.BusinessInstanceId != business.InstanceId
+                || business.AssignedBuildingId < 0)
+            {
+                return;
+            }
+
+            supplierDirectory ??= new SupplierDirectory();
+            var cash = new Series2BusinessRuntimeCashPort(business.RuntimeState);
+            string locationId = TownJourneyNetworkBuilder.LocationIdForBuilding(business.AssignedBuildingId);
+            bakerySupplierAdapter = RegisterBakerySupplierInDirectory(
+                supplierDirectory, bakery, cash, business.InstanceId, business.RuntimeDisplayName, locationId);
+            if (bakerySupplierAdapter == null)
+            {
+                return;
+            }
+
+            bakerySupplierAdapter.DayIndex = timeManager != null
+                ? Math.Max(0, timeManager.CurrentAbsoluteDayIndex)
+                : 0;
+            SeedLocalBakeryKnowledge();
+            BuildHouseholdShoppingLoop();
+            Debug.Log($"[BakeryRetail] Registered '{business.RuntimeDisplayName}' ({business.InstanceId}) as a direct bread seller at {locationId}; stock and revenue remain on the bakery authorities.", this);
+        }
+
+        /// <summary>Pure registration seam: a bakery can be registered only against its own named business cash.</summary>
+        public static Series2BakerySupplierAdapter RegisterBakerySupplierInDirectory(
+            SupplierDirectory directory,
+            BakeryShopRuntime bakery,
+            IBusinessIdentityCashPort cash,
+            string businessId,
+            string businessName,
+            string locationId)
+        {
+            if (directory == null || bakery == null || cash == null
+                || string.IsNullOrWhiteSpace(businessId)
+                || !string.Equals(bakery.BusinessInstanceId, businessId, StringComparison.Ordinal)
+                || !string.Equals(cash.BusinessId, businessId, StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(businessName)
+                || string.IsNullOrWhiteSpace(locationId)
+                || !locationId.StartsWith("building:", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            var adapter = new Series2BakerySupplierAdapter(
+                bakery, cash, businessId, businessName, locationId);
+            Series2BakerySupplierAdapter.RegisterIn(directory, adapter);
+            return adapter;
         }
 
         /// <summary>
@@ -3880,6 +3940,7 @@ namespace LandLedgers.Orchestration.Systems
             // shopping loop already exists. Bootstrap can construct the loop
             // before B60 registers, then register the store later.
             SeedLocalGeneralStoreKnowledge();
+            SeedLocalBakeryKnowledge();
             if (hub == null || populationManager?.State == null || householdMemberships == null || supplierDirectory == null)
             {
                 return;
@@ -4093,6 +4154,16 @@ namespace LandLedgers.Orchestration.Systems
                 populationManager.State.people, supplierDirectory.All, sellerKnowledge, dayIndex);
         }
 
+        private void SeedLocalBakeryKnowledge()
+        {
+            if (populationManager?.State?.people == null || supplierDirectory == null || sellerKnowledge == null)
+                return;
+
+            int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
+            SeedLocalBakeryKnowledge(
+                populationManager.State.people, supplierDirectory.All, sellerKnowledge, dayIndex);
+        }
+
         /// <summary>
         /// Pure policy seam used to protect the generic placeholder id.
         /// A registered adapter whose business id fell back to
@@ -4137,6 +4208,33 @@ namespace LandLedgers.Orchestration.Systems
                     if (!IsEligibleLocalGeneralStoreSupplier(supplier)) continue;
                     knowledge.LearnSupplier(person.id, supplier.SupplierBusinessId,
                         "local public General Store", dayIndex);
+                }
+            }
+        }
+
+        /// <summary>Local residents know the specifically identified, building-backed town bakery.</summary>
+        public static void SeedLocalBakeryKnowledge(
+            IEnumerable<PersonState> people,
+            IEnumerable<IGoodsSupplier> suppliers,
+            ShopperSellerKnowledge knowledge,
+            int dayIndex)
+        {
+            if (people == null || suppliers == null || knowledge == null) return;
+            foreach (PersonState person in people)
+            {
+                if (person == null || person.id < 0 || person.deathDayIndex >= 0 || person.isOffMap) continue;
+                foreach (IGoodsSupplier supplier in suppliers)
+                {
+                    if (supplier is not Series2BakerySupplierAdapter bakery
+                        || string.IsNullOrWhiteSpace(bakery.SupplierBusinessId)
+                        || string.IsNullOrWhiteSpace(bakery.LocationId)
+                        || !bakery.LocationId.StartsWith("building:", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    knowledge.LearnSupplier(person.id, bakery.SupplierBusinessId,
+                        "local bakery", dayIndex);
                 }
             }
         }
@@ -8633,6 +8731,10 @@ namespace LandLedgers.Orchestration.Systems
                 return; // no population yet — nothing to feed
             }
             EnsureTownJourneyNetwork();
+            // The direct-retail adapter derives price from bread lot age.
+            // Refresh its day before supplier search/price checks each day.
+            if (bakerySupplierAdapter != null)
+                bakerySupplierAdapter.DayIndex = Math.Max(0, absoluteDayIndex);
             // P6: fall back to the hub's journey model when the driver carries
             // no explicit one — the model is hub-owned now. Missing locations
             // block embodied errands, but not household inventory consumption.

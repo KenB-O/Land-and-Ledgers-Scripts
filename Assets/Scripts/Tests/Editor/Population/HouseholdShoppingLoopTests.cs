@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Population;
@@ -669,6 +670,62 @@ namespace LandLedgers.EditorTests.Population
             StringAssert.Contains("available stock", result.FailureReason);
             Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
             Assert.AreEqual(10000, f.Balance(), "A failed no-stock search must not debit household cash.");
+        }
+
+        [Test]
+        public void ExecuteNeed_BakeryOutOfBread_UsesRealGeneralStoreBreadStock()
+        {
+            Fixture f = Fixture.Create();
+            f.Fund(5000);
+
+            f.Port.OfferList.Add(new GeneralStoreCategoryOffer
+            {
+                CategoryId = "retail_bread",
+                OfferedItemIds = new List<string> { HouseholdItemCatalog.BreadId },
+                StoreUnitsPerItemUnit = 1,
+            });
+            f.Port.Stock["retail_bread"] = 2;
+            f.Port.Prices["retail_bread"] = 75;
+            f.Port.Targets["retail_bread"] = 2;
+
+            var bakery = new BakeryShopRuntime("bakery-1");
+            var bakeryCash = new BusinessRuntimeState();
+            bakeryCash.BindBusinessIdentity("bakery-1");
+            var bakerySupplier = new Series2BakerySupplierAdapter(
+                bakery,
+                new Series2BusinessRuntimeCashPort(bakeryCash),
+                "bakery-1",
+                "Glenn's Bakery",
+                "building:42")
+            {
+                DayIndex = f.Day,
+            };
+            f.Directory.Register(bakerySupplier);
+            f.Journeys.RegisterLocation(new JourneyLocation(
+                "building:42", JourneyLocationKind.Store, "Glenn's Bakery", 4f, 0f));
+            Assert.IsNull(f.Journeys.AddEdge("home", "building:42", 4f, "main street"));
+            f.Knowledge.LearnSupplier(1, "bakery-1", "local bakery", f.Day);
+
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 1);
+            int storeCashBefore = f.StoreCash();
+            int householdCashBefore = f.Balance();
+
+            ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
+
+            Assert.IsTrue(result.Success, result.FailureReason);
+            Assert.AreEqual("General Store", result.Counterparty,
+                "An empty bakery cannot sell bread; the known store remains a legitimate alternative.");
+            Assert.AreEqual(1, result.UnitsAcquired);
+            Assert.AreEqual(75, result.BuyerOutflowCents);
+            Assert.AreEqual(75, result.StoreCashInCents);
+            Assert.AreEqual(householdCashBefore - 75, f.Balance());
+            Assert.AreEqual(storeCashBefore + 75, f.StoreCash());
+            Assert.AreEqual(1, f.Port.CategoryStockUnits("retail_bread"));
+            Assert.AreEqual(0, bakery.BreadShelf.Count, "The fallback must not create bakery stock.");
+            Assert.AreEqual(0, bakeryCash.CurrentCashCents,
+                "The bakery receives no money when it has no bread to sell.");
+            Assert.AreEqual(1, f.Inventories.GetOrCreate(f.HouseholdId)
+                .GetAvailableUnits(HouseholdItemCatalog.BreadId));
         }
 
         [Test]

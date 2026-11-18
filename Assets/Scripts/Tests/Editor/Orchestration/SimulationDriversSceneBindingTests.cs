@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Reflection;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Population;
@@ -83,6 +84,25 @@ namespace LandLedgers.EditorTests.Orchestration
             public int Sell(string categoryId, int requestedUnits, int dayIndex, List<string> diagnostics) => 0;
         }
 
+        private sealed class BakeryBusinessCash : IBusinessIdentityCashPort
+        {
+            public BakeryBusinessCash(string businessId) => BusinessId = businessId;
+            public string BusinessId { get; }
+            public int BalanceCents { get; private set; } = 5000;
+            public string TryDebit(int amountCents, string reason)
+            {
+                if (amountCents < 0 || amountCents > BalanceCents) return "insufficient test cash";
+                BalanceCents -= amountCents;
+                return null;
+            }
+            public string Credit(int amountCents, string reason)
+            {
+                if (amountCents < 0) return "negative test credit";
+                BalanceCents += amountCents;
+                return null;
+            }
+        }
+
         [Test]
         public void Rebind_AttachesDiscoveredTownWorldToHubParcelAuthorities()
         {
@@ -133,6 +153,55 @@ namespace LandLedgers.EditorTests.Orchestration
             Assert.IsFalse(knowledge.Knows(1, "mill-1"), "Registering B60 must not reveal unrelated suppliers.");
             Assert.That(knowledge.Records.Count, Is.EqualTo(1), "Repeated bootstrap calls must not duplicate knowledge records.");
             Assert.That(knowledge.Records[0].LearnedDayIndex, Is.EqualTo(12), "Idempotence preserves the original discovery event.");
+        }
+
+        [Test]
+        public void BakerySupplierRegistration_UsesMatchingBusinessCashAndSeedsOnlyLocalResidents()
+        {
+            var directory = new SupplierDirectory();
+            var firstRuntime = new BakeryShopRuntime("bakery-1");
+            BakeryBusinessCash cash = new BakeryBusinessCash("bakery-1");
+            Series2BakerySupplierAdapter first = SimulationDrivers.RegisterBakerySupplierInDirectory(
+                directory, firstRuntime, cash, "bakery-1", "Glenn's Bakery", "building:42");
+
+            Assert.IsNotNull(first);
+            Assert.AreEqual(1, directory.All.Count);
+            Assert.IsTrue(first.OffersItem(HouseholdItemCatalog.BreadId));
+            Assert.IsFalse(first.OffersItem("cooked_meal"), "A bread seller must not silently advertise an unrelated item.");
+            Assert.AreEqual(0, first.ItemStockUnits(HouseholdItemCatalog.BreadId),
+                "Registration must not create opening bread stock.");
+
+            var restoredRuntime = new BakeryShopRuntime("bakery-1");
+            Series2BakerySupplierAdapter restored = SimulationDrivers.RegisterBakerySupplierInDirectory(
+                directory, restoredRuntime, new BakeryBusinessCash("bakery-1"),
+                "bakery-1", "Glenn's Bakery", "building:42");
+            Assert.AreEqual(1, directory.All.Count, "Restore must replace the old runtime adapter, not leave a second seller.");
+            Assert.AreSame(restored, directory.All[0]);
+
+            Assert.IsNull(SimulationDrivers.RegisterBakerySupplierInDirectory(
+                directory, new BakeryShopRuntime("bakery-2"), cash,
+                "bakery-2", "Another Bakery", "building:43"),
+                "A bakery must not be wired to a different business's cash authority.");
+            Assert.IsNull(SimulationDrivers.RegisterBakerySupplierInDirectory(
+                directory, new BakeryShopRuntime("bakery-3"), new BakeryBusinessCash("bakery-3"),
+                "bakery-3", "Unplaced Bakery", string.Empty),
+                "A seller without an authored building location cannot create a walkable shopping destination.");
+
+            var people = new List<PersonState>
+            {
+                new PersonState { id = 1, deathDayIndex = -1 },
+                new PersonState { id = 2, deathDayIndex = 10 },
+                new PersonState { id = 3, isOffMap = true },
+            };
+            var knowledge = new ShopperSellerKnowledge();
+            SimulationDrivers.SeedLocalBakeryKnowledge(people, directory.All, knowledge, 12);
+            SimulationDrivers.SeedLocalBakeryKnowledge(people, directory.All, knowledge, 13);
+
+            Assert.IsTrue(knowledge.Knows(1, "bakery-1"));
+            Assert.IsFalse(knowledge.Knows(2, "bakery-1"));
+            Assert.IsFalse(knowledge.Knows(3, "bakery-1"));
+            Assert.AreEqual(1, knowledge.Records.Count, "Repeated bootstrap must not duplicate seller knowledge.");
+            Assert.AreEqual(12, knowledge.Records[0].LearnedDayIndex);
         }
     }
 }

@@ -2644,6 +2644,10 @@ namespace LandLedgers.FirstLedger
                 pass9.BakeryDriver = new Series2BakeryProductionDriver(liveBakeryRuntime, liveFuelSource);
             }
             else pass9.BakeryDriver.AttachFuelSource(liveFuelSource);
+            // Register direct household retail against this same restored or
+            // newly created bakery runtime. The supplier adapter reads its
+            // genuine shelf and business cash; it does not create inventory.
+            FindAnyObjectByType<SimulationDrivers>()?.RegisterBakerySupplier(liveBakeryRuntime, bakeryBusiness);
             // Detailed freight state is owned by the same Pass 9 save section
             // before any daily driver can create or restore a shipment.
             // SimulationDrivers reuses this instance; it must not keep a

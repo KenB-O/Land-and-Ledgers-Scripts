@@ -4,7 +4,7 @@
 
 - Unity project: `F:\Land & Ledgers`, Unity `6000.4.2f1`.
 - Development branch: `codex/freight-physical-delivery-recovery-2026-11-17`.
-- Starting and current source baseline: `4615119d24592a47cb38341fdaebfecc0eaba4b3`.
+- Starting source baseline: `4615119d24592a47cb38341fdaebfecc0eaba4b3`.
 - The owner-authored Main Scene, prefabs, terrain, fonts, and local asset packs were not changed by this pass.
 - Unity ended in Edit Mode. No scene was saved.
 
@@ -63,4 +63,4 @@ Two earlier PlayMode startups made the Editor temporarily unresponsive during sc
 
 ## Publication status
 
-Source and focused tests are prepared for a scoped checkpoint on `codex/freight-physical-delivery-recovery-2026-11-17`. Publication status is recorded in the Git handoff; the branch must not be represented as published until the commit and remote SHA are verified.
+The scoped source, tests, and this report are committed and pushed on `codex/freight-physical-delivery-recovery-2026-11-17`. The verified remote branch head is the same as the local HEAD; the final SHA is reported in the task handoff.

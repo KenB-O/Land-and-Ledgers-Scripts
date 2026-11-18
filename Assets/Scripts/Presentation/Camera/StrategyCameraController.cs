@@ -241,7 +241,7 @@ namespace LandLedgers.CameraSystem
                 closeViewPivotActive = false;
             }
             ApplyBounds(dt);
-            if (!closeViewPivotActive)
+            if (!closeViewPivotActive && targetZoomDistance > settings.closeControlStartDistance)
             {
                 ApplyTerrainTargetHeight(dt);
             }
@@ -379,6 +379,19 @@ namespace LandLedgers.CameraSystem
                         settings.EvaluateWheelZoomMultiplier(targetZoomDistance),
                         settings.EvaluateDistanceWheelZoomScale(targetZoomDistance));
                     float newZoom = ClampZoom(targetZoomDistance - zoomInput);
+
+                    if (settings.focusViewCenterWhenZoomingClose
+                        && !closeViewPivotActive
+                        && newZoom <= settings.closeControlStartDistance
+                        && TryAdoptCloseViewPivot(true))
+                    {
+                        zoomInput = CalculateWheelZoomInput(
+                            scrollY,
+                            settings.wheelZoomSensitivity,
+                            settings.EvaluateWheelZoomMultiplier(targetZoomDistance),
+                            settings.EvaluateDistanceWheelZoomScale(targetZoomDistance));
+                        newZoom = ClampZoom(targetZoomDistance - zoomInput);
+                    }
 
                     if (!Mathf.Approximately(newZoom, targetZoomDistance))
                     {
@@ -654,29 +667,31 @@ namespace LandLedgers.CameraSystem
             }
         }
 
-        private void TryAdoptCloseViewPivot()
+        private bool TryAdoptCloseViewPivot(bool enteringCloseRange = false)
         {
-            if (!settings.focusViewCenterWhenRotatingClose
+            bool focusView = enteringCloseRange
+                ? settings.focusViewCenterWhenZoomingClose
+                : settings.focusViewCenterWhenRotatingClose;
+            if (!focusView
                 || followTarget != null
                 || controlledCamera == null
                 || cameraTransform == null
-                || targetZoomDistance > settings.closeControlStartDistance
-                || Vector3.Distance(transform.position, targetFocusPosition) > 0.15f)
+                || (!enteringCloseRange && targetZoomDistance > settings.closeControlStartDistance))
             {
-                return;
+                return false;
             }
 
             float localZoom = Mathf.Abs(cameraTransform.localPosition.z);
             if (localZoom <= 0.001f)
             {
-                return;
+                return false;
             }
 
             float actualWorldDistance = Vector3.Distance(controlledCamera.transform.position, transform.position);
             float worldPerLocalUnit = actualWorldDistance / localZoom;
             if (worldPerLocalUnit <= 0.001f)
             {
-                return;
+                return false;
             }
 
             Vector3 cameraPosition = controlledCamera.transform.position;
@@ -690,25 +705,29 @@ namespace LandLedgers.CameraSystem
                     settings.closePivotLayers,
                     QueryTriggerInteraction.Ignore))
             {
-                return;
+                return false;
             }
 
             float minimumWorldDistance = settings.minZoomDistance * worldPerLocalUnit;
             if (hit.distance < minimumWorldDistance || hit.distance >= maximumPivotDistance - 0.05f)
             {
-                return;
+                return false;
             }
+
+            float rebasedZoom = hit.distance / worldPerLocalUnit;
+            if (enteringCloseRange && rebasedZoom > settings.closeControlStartDistance)
+                return false;
 
             Vector2 focusXZ = new(hit.point.x, hit.point.z);
             if (TryGetBounds(out _, out Rect softBounds, out _) && !softBounds.Contains(focusXZ))
             {
-                return;
+                return false;
             }
 
             // The hit lies on the view ray, so rebasing focus and zoom together
             // preserves the camera's world position and viewing direction.
             targetFocusPosition = hit.point;
-            targetZoomDistance = ClampZoom(hit.distance / worldPerLocalUnit);
+            targetZoomDistance = ClampZoom(rebasedZoom);
             transform.position = targetFocusPosition;
             movementVelocity = Vector3.zero;
             zoomVelocity = 0f;
@@ -729,6 +748,7 @@ namespace LandLedgers.CameraSystem
             RefreshManualPitchOffset();
             closeViewPivotActive = true;
             ApplyRigImmediate();
+            return true;
         }
 
         private void SmoothAndApplyRig(float dt)
@@ -805,13 +825,33 @@ namespace LandLedgers.CameraSystem
             ApplyRig(targetYaw, currentPitch, targetZoomDistance);
         }
 
+        private float ResolveCameraObstruction(float yawDegrees, float pitchDegrees, float desiredDistance)
+        {
+            if (settings == null || !settings.preventCameraObstruction || desiredDistance <= 0f)
+                return desiredDistance;
+
+            float startOffset = Mathf.Min(settings.cameraObstructionStartOffset, desiredDistance * 0.5f);
+            float castDistance = desiredDistance - startOffset;
+            if (castDistance <= 0f)
+                return desiredDistance;
+
+            Quaternion armRotation = Quaternion.Euler(0f, yawDegrees, 0f)
+                * Quaternion.Euler(pitchDegrees, 0f, 0f);
+            Vector3 direction = (transform.rotation * armRotation * Vector3.back).normalized;
+            Vector3 origin = transform.position + direction * startOffset;
+            if (!Physics.SphereCast(origin, settings.cameraObstructionRadius, direction,
+                    out RaycastHit hit, castDistance, settings.cameraObstructionLayers,
+                    QueryTriggerInteraction.Ignore))
+                return desiredDistance;
+
+            float safeDistance = startOffset + hit.distance - settings.cameraObstructionPadding;
+            // The target zoom stays intact; only the rendered camera arm shortens
+            // until the wall or furnishing is no longer between it and the focus.
+            return Mathf.Clamp(safeDistance, 0.2f, desiredDistance);
+        }
+
         private void ApplyRig(float yawDegrees, float pitchDegrees, float zoomDistance)
         {
-            if (controlledCamera != null)
-            {
-                controlledCamera.fieldOfView = settings.fieldOfView;
-            }
-
             if (yawPivot != null)
             {
                 yawPivot.localPosition = Vector3.zero;
@@ -826,7 +866,8 @@ namespace LandLedgers.CameraSystem
 
             if (cameraTransform != null)
             {
-                cameraTransform.localPosition = new Vector3(0f, 0f, -ClampZoom(zoomDistance));
+                float safeDistance = ResolveCameraObstruction(yawDegrees, pitchDegrees, zoomDistance);
+                cameraTransform.localPosition = new Vector3(0f, 0f, -Mathf.Max(0.2f, safeDistance));
                 cameraTransform.localRotation = Quaternion.identity;
             }
         }

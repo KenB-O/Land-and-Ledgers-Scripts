@@ -32,13 +32,21 @@ MonoBehaviour:
   rotationSmoothing: 0.055
   closeControlStartDistance: 16
   standardControlDistance: 40
-  closePanSensitivity: 0.2
+  closePanSensitivity: 0.08
   closeRotationSensitivity: 0.25
   focusViewCenterWhenRotatingClose: 1
+  focusViewCenterWhenZoomingClose: 1
   closePivotLayers:
     serializedVersion: 2
     m_Bits: 4294967295
-  minZoomDistance: 8
+  preventCameraObstruction: 1
+  cameraObstructionLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  cameraObstructionRadius: 0.14
+  cameraObstructionPadding: 0.12
+  cameraObstructionStartOffset: 0.35
+  minZoomDistance: 1.5
   maxZoomDistance: 200
   wheelZoomSensitivity: 4
   closeZoomWheelMultiplier: 1.5
@@ -49,6 +57,7 @@ MonoBehaviour:
   preciseWheelZoomScale: 0.25
   farWheelZoomScale: 2
   maximumWheelZoomScale: 4
+  preserveAbsolutePitchWhileZooming: 1
   zoomSmoothing: 0.1
   closePitch: 20
   farPitch: 40

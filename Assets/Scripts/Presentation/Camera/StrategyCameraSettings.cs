@@ -106,13 +106,28 @@ namespace LandLedgers.CameraSystem
         [Tooltip("When a close-range mouse rotation begins, use the nearest surface under the view center as the orbit focus when it is within zoom limits.")]
         public bool focusViewCenterWhenRotatingClose = true;
 
+        [Tooltip("When zooming into close range, rebase the orbit focus onto the nearest surface under the view center.")]
+        public bool focusViewCenterWhenZoomingClose = true;
+
         [Tooltip("Layers eligible to provide the physical close-range orbit focus.")]
         public LayerMask closePivotLayers = ~0;
+
+        [Header("Camera Obstruction")]
+        [Tooltip("Shorten the camera arm before it passes through walls or large furnishings.")]
+        public bool preventCameraObstruction = true;
+        [Tooltip("Layers that can stop the camera arm. Exclude floor-only layers if they cause false stops.")]
+        public LayerMask cameraObstructionLayers = ~0;
+        [Tooltip("Radius of the camera arm sweep.")]
+        [Min(0f)] public float cameraObstructionRadius = 0.14f;
+        [Tooltip("Extra distance kept between the camera and an obstruction.")]
+        [Min(0f)] public float cameraObstructionPadding = 0.12f;
+        [Tooltip("Ignore obstructions very near the focus point.")]
+        [Min(0f)] public float cameraObstructionStartOffset = 0.35f;
 
         [Header("Zoom")]
         [Tooltip("Closest camera distance from the focus point.")]
         [Min(0.1f)]
-        public float minZoomDistance = 12f;
+        public float minZoomDistance = 2f;
 
         [Tooltip("Farthest camera distance from the focus point.")]
         [Min(0.1f)]
@@ -393,6 +408,9 @@ namespace LandLedgers.CameraSystem
                 maxZoomDistance);
             closePanSensitivity = Mathf.Clamp(closePanSensitivity, 0.05f, 1f);
             closeRotationSensitivity = Mathf.Clamp(closeRotationSensitivity, 0.05f, 1f);
+            cameraObstructionRadius = Mathf.Max(0f, cameraObstructionRadius);
+            cameraObstructionPadding = Mathf.Max(0f, cameraObstructionPadding);
+            cameraObstructionStartOffset = Mathf.Max(0f, cameraObstructionStartOffset);
             defaultZoomDistance = Mathf.Clamp(defaultZoomDistance, minZoomDistance, maxZoomDistance);
             wheelZoomSensitivity = Mathf.Max(0f, wheelZoomSensitivity);
             closeZoomWheelMultiplier = Mathf.Max(0.1f, closeZoomWheelMultiplier);

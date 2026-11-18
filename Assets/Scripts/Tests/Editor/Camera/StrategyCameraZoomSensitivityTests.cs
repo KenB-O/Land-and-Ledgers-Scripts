@@ -1,5 +1,6 @@
 using LandLedgers.CameraSystem;
 using NUnit.Framework;
+using System.Reflection;
 using UnityEngine;
 
 namespace LandLedgers.Tests.Camera
@@ -97,6 +98,104 @@ namespace LandLedgers.Tests.Camera
             }
             finally
             {
+                Object.DestroyImmediate(settings);
+            }
+        }
+
+        [Test]
+        public void CloseViewCanZoomTowardFurnitureAndDoesNotRequireFirstPersonDistance()
+        {
+            StrategyCameraSettings settings = ScriptableObject.CreateInstance<StrategyCameraSettings>();
+            try
+            {
+                settings.minZoomDistance = 1.5f;
+                settings.closeControlStartDistance = 8f;
+                settings.Sanitize();
+
+                Assert.AreEqual(1.5f, settings.minZoomDistance, 0.001f);
+                Assert.IsTrue(settings.focusViewCenterWhenZoomingClose);
+                Assert.AreEqual(0.2f, settings.EvaluateClosePanSensitivity(1.5f), 0.001f);
+                Assert.AreEqual(1f, settings.EvaluateClosePanSensitivity(40f), 0.001f);
+            }
+            finally
+            {
+                Object.DestroyImmediate(settings);
+            }
+        }
+
+        [Test]
+        public void CameraArmStopsAtWallAndRestoresItsRequestedDistanceWhenClear()
+        {
+            const int obstructionLayer = 31;
+            StrategyCameraSettings settings = ScriptableObject.CreateInstance<StrategyCameraSettings>();
+            GameObject rig = new("Camera obstruction test rig");
+            GameObject yawObject = new("YawPivot");
+            GameObject pitchObject = new("PitchPivot");
+            GameObject cameraObject = new("Camera");
+            GameObject wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            try
+            {
+                settings.cameraObstructionLayers = 1 << obstructionLayer;
+                settings.cameraObstructionStartOffset = 0.35f;
+                settings.cameraObstructionPadding = 0.12f;
+                settings.cameraObstructionRadius = 0.14f;
+                rig.transform.position = Vector3.zero;
+                yawObject.transform.SetParent(rig.transform, false);
+                pitchObject.transform.SetParent(yawObject.transform, false);
+                cameraObject.transform.SetParent(pitchObject.transform, false);
+                UnityEngine.Camera camera = cameraObject.AddComponent<UnityEngine.Camera>();
+                StrategyCameraController controller = rig.AddComponent<StrategyCameraController>();
+                controller.ConfigureRigReferences(settings, yawObject.transform, pitchObject.transform, camera, null);
+
+                wall.layer = obstructionLayer;
+                wall.transform.position = new Vector3(0f, 0f, -4f);
+                wall.transform.localScale = new Vector3(4f, 4f, 1f);
+                Physics.SyncTransforms();
+
+                MethodInfo resolve = typeof(StrategyCameraController).GetMethod(
+                    "ResolveCameraObstruction", BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.IsNotNull(resolve);
+                float obstructed = (float)resolve.Invoke(controller, new object[] { 0f, 0f, 10f });
+                Assert.That(obstructed, Is.InRange(3f, 3.5f));
+
+                wall.transform.position = new Vector3(10f, 0f, -4f);
+                Physics.SyncTransforms();
+                float clear = (float)resolve.Invoke(controller, new object[] { 0f, 0f, 10f });
+                Assert.AreEqual(10f, clear, 0.001f);
+            }
+            finally
+            {
+                Object.DestroyImmediate(wall);
+                Object.DestroyImmediate(rig);
+                Object.DestroyImmediate(settings);
+            }
+        }
+
+        [Test]
+        public void ApplyingOrbitPreservesTheAuthoredCameraFieldOfView()
+        {
+            StrategyCameraSettings settings = ScriptableObject.CreateInstance<StrategyCameraSettings>();
+            GameObject rig = new("Camera field of view preservation rig");
+            GameObject yawObject = new("YawPivot");
+            GameObject pitchObject = new("PitchPivot");
+            GameObject cameraObject = new("Camera");
+            try
+            {
+                yawObject.transform.SetParent(rig.transform, false);
+                pitchObject.transform.SetParent(yawObject.transform, false);
+                cameraObject.transform.SetParent(pitchObject.transform, false);
+                UnityEngine.Camera camera = cameraObject.AddComponent<UnityEngine.Camera>();
+                camera.fieldOfView = 70f;
+                StrategyCameraController controller = rig.AddComponent<StrategyCameraController>();
+                controller.ConfigureRigReferences(settings, yawObject.transform, pitchObject.transform, camera, null);
+
+                controller.JumpTo(Vector3.zero, 30f, 5f, 35f);
+
+                Assert.AreEqual(70f, camera.fieldOfView, 0.001f);
+            }
+            finally
+            {
+                Object.DestroyImmediate(rig);
                 Object.DestroyImmediate(settings);
             }
         }

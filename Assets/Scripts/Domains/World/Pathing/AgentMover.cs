@@ -129,6 +129,7 @@ namespace LandLedgers.Pathing
         private readonly List<GridCoord> currentPath = new();
         private readonly List<Vector3> currentWorldPath = new();
         private Vector3 routeDestinationWorld;
+        private int routeGeneration;
         private Vector3 desiredPresentationForward;
         private double lastAuthoritativeRouteTimeSeconds;
         private bool hasAuthoritativeRouteTimeSample;
@@ -167,6 +168,8 @@ namespace LandLedgers.Pathing
         private Quaternion rightLowerLegBaseRotation = Quaternion.identity;
 
         public IReadOnlyList<GridCoord> CurrentPath => currentPath;
+        /// <summary>Changes whenever a new physical route replaces the previous route.</summary>
+        public int RouteGeneration => routeGeneration;
         public bool IsHidden => state == AgentMoveState.Hidden;
         public bool IsMoving => state == AgentMoveState.Moving;
         public bool IsRouteActive => state == AgentMoveState.Moving || state == AgentMoveState.DoorPause;
@@ -627,6 +630,7 @@ namespace LandLedgers.Pathing
             currentWorldPath.Clear();
             if (worldPath != null) currentWorldPath.AddRange(worldPath);
             if (currentWorldPath.Count == 0) return;
+            routeGeneration++;
             if (pathingManager?.Grid != null)
                 foreach (Vector3 point in currentWorldPath) currentPath.Add(pathingManager.Grid.WorldToCoord(point));
             routeDestinationWorld = currentWorldPath[^1];
@@ -658,6 +662,8 @@ namespace LandLedgers.Pathing
             {
                 currentPath.AddRange(path);
             }
+
+            routeGeneration++;
 
             currentWorldPath.Clear();
             if (path != null)

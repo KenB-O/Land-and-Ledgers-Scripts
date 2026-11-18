@@ -1527,6 +1527,19 @@ namespace LandLedgers.FirstLedger
         public DomesticActivityMovementResult TryReachDomesticActivity(
             DomesticLaborDriver.InFlightDomesticTask flight, string activityLocationId, out string reason)
         {
+            return TryReachDomesticActivity(flight, activityLocationId, double.NaN, out reason);
+        }
+
+        /// <summary>
+        /// Routes a domestic task using the same authoritative clock sample
+        /// that advanced its driver tick. This prevents route watchdogs from
+        /// silently disabling themselves when the presentation director's
+        /// optional TimeManager lookup is unavailable or stale.
+        /// </summary>
+        public DomesticActivityMovementResult TryReachDomesticActivity(
+            DomesticLaborDriver.InFlightDomesticTask flight, string activityLocationId,
+            double currentGameSeconds, out string reason)
+        {
             reason = string.Empty;
             if (flight == null || flight.PersonId < 0 || activityLocationId == null
                 || townWorld == null || pathingManager == null)
@@ -1585,7 +1598,54 @@ namespace LandLedgers.FirstLedger
                 return DomesticActivityMovementResult.Arrived;
             }
 
-            if (managed.mover.IsRouteActive) return DomesticActivityMovementResult.Traveling;
+            double routeClock = ResolveDomesticActivityRouteClock(
+                currentGameSeconds, CurrentSimulationGameSeconds);
+            bool sameTaskAndDestination = ShouldPreserveDomesticActivityRouteDeadline(
+                managed.domesticActivityTaskId, managed.domesticActivityLocationId,
+                managed.domesticActivityRouteStartedGameSeconds, flight.TaskIdString, activityLocationId);
+            bool currentlyOwnedRoute = !managed.mover.IsRouteActive
+                || ShouldContinueOwnedDomesticActivityRoute(
+                    managed.domesticActivityTaskId, managed.domesticActivityRouteGeneration,
+                    managed.domesticActivityLocationId, flight.TaskIdString, activityLocationId,
+                    managed.mover.RouteGeneration);
+            if (sameTaskAndDestination && currentlyOwnedRoute
+                && ShouldAbortStalledDomesticActivityRoute(routeClock,
+                    managed.domesticActivityRouteStartedGameSeconds,
+                    managed.domesticActivityLastProgressGameSeconds,
+                    managed.domesticActivityNoProgressTimeoutGameSeconds,
+                    managed.domesticActivityRouteTimeoutGameSeconds,
+                    managed.mover.RemainingWorldRouteDistance,
+                    managed.domesticActivityLastRemainingDistance))
+            {
+                string taskId = managed.domesticActivityTaskId;
+                if (managed.mover.IsRouteActive) managed.mover.CancelActiveRoute();
+                ClearDomesticActivityRoute(managed);
+                managed.routeMode = AgentRouteMode.None;
+                reason = $"The physical route for domestic task {taskId} did not reach '{activityLocationId}' within its bounded travel allowance; the task was released for retry.";
+                return DomesticActivityMovementResult.Unsupported;
+            }
+
+            if (managed.mover.IsRouteActive)
+            {
+                if (ShouldContinueOwnedDomesticActivityRoute(
+                        managed.domesticActivityTaskId, managed.domesticActivityRouteGeneration,
+                        managed.domesticActivityLocationId, flight.TaskIdString, activityLocationId,
+                        managed.mover.RouteGeneration))
+                {
+                    double now = routeClock;
+                    float remaining = managed.mover.RemainingWorldRouteDistance;
+                    if (IsDomesticActivityRouteMakingProgress(remaining, managed.domesticActivityLastRemainingDistance))
+                    {
+                        managed.domesticActivityLastRemainingDistance = remaining;
+                        if (!double.IsNaN(now) && !double.IsInfinity(now))
+                            managed.domesticActivityLastProgressGameSeconds = now;
+                    }
+                    return DomesticActivityMovementResult.Traveling;
+                }
+
+                reason = $"The resident is already following another physical route ({managed.routeMode}); domestic activity '{activityLocationId}' was deferred without taking over that route.";
+                return DomesticActivityMovementResult.Unsupported;
+            }
 
             if (activity.RequiresWalkableInterior)
             {
@@ -1597,7 +1657,7 @@ namespace LandLedgers.FirstLedger
                     managed.person.scheduleState = PopulationScheduleState.AtHome;
                     managed.person.currentDestinationBuildingId = home.id;
                     managed.routeMode = AgentRouteMode.TaskDirected;
-                    return DomesticActivityMovementResult.Traveling;
+                    return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
                 }
                 if (!authority.TryGetEntrancePair("main-entrance", out BuildingEntrancePairAuthoring entrance, out reason))
                     return DomesticActivityMovementResult.Unsupported;
@@ -1616,7 +1676,7 @@ namespace LandLedgers.FirstLedger
                             return DomesticActivityMovementResult.Unsupported;
                         }
                         managed.routeMode = AgentRouteMode.TaskDirected;
-                        return DomesticActivityMovementResult.Traveling;
+                        return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
                     }
                     if (!TrySendAgent(managed, home.id, PopulationScheduleState.ReturningHome, out _))
                     {
@@ -1624,7 +1684,7 @@ namespace LandLedgers.FirstLedger
                         return DomesticActivityMovementResult.Unsupported;
                     }
                     managed.routeMode = AgentRouteMode.TaskDirected;
-                    return DomesticActivityMovementResult.Traveling;
+                    return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
                 }
 
                 if (!managed.mover.BeginBuildingActivityRoute(authority, "main-entrance", activityLocationId))
@@ -1635,7 +1695,7 @@ namespace LandLedgers.FirstLedger
                 managed.person.scheduleState = PopulationScheduleState.AtHome;
                 managed.person.currentDestinationBuildingId = home.id;
                 managed.routeMode = AgentRouteMode.TaskDirected;
-                return DomesticActivityMovementResult.Traveling;
+                return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
             }
 
             GridCoord exteriorStart = pathingManager.Grid.WorldToCoord(managed.mover.transform.position);
@@ -1744,7 +1804,7 @@ namespace LandLedgers.FirstLedger
 
                 managed.routeMode = AgentRouteMode.TaskDirected;
                 managed.person.currentDestinationBuildingId = home.id;
-                return DomesticActivityMovementResult.Traveling;
+                return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
             }
 
             // A resident may be physically inside the house even when the
@@ -1794,7 +1854,7 @@ namespace LandLedgers.FirstLedger
                 }
                 managed.routeMode = AgentRouteMode.TaskDirected;
                 managed.person.currentDestinationBuildingId = home.id;
-                return DomesticActivityMovementResult.Traveling;
+                return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
             }
             if (!managed.mover.BeginGridRoute(exteriorStart, target, false))
             {
@@ -1803,7 +1863,105 @@ namespace LandLedgers.FirstLedger
             }
             managed.person.currentDestinationBuildingId = home.id;
             managed.routeMode = AgentRouteMode.TaskDirected;
+            return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
+        }
+
+        private DomesticActivityMovementResult TrackDomesticActivityRoute(
+            ManagedPersonAgent managed, DomesticLaborDriver.InFlightDomesticTask flight, string activityLocationId,
+            double currentGameSeconds)
+        {
+            bool continuation = ShouldPreserveDomesticActivityRouteDeadline(
+                managed.domesticActivityTaskId, managed.domesticActivityLocationId,
+                managed.domesticActivityRouteStartedGameSeconds, flight.TaskIdString, activityLocationId);
+            managed.domesticActivityTaskId = flight.TaskIdString;
+            managed.domesticActivityLocationId = activityLocationId;
+            managed.domesticActivityRouteGeneration = managed.mover.RouteGeneration;
+            managed.domesticActivityLastRemainingDistance = managed.mover.RemainingWorldRouteDistance;
+            double now = currentGameSeconds;
+            managed.domesticActivityLastProgressGameSeconds = now;
+            float expected = managed.mover.EstimatedRemainingRouteSeconds ?? 0f;
+            managed.domesticActivityNoProgressTimeoutGameSeconds = Mathf.Clamp(expected * 3f + 120f, 600f, 3600f);
+            if (!continuation)
+            {
+                managed.domesticActivityRouteStartedGameSeconds = now;
+                managed.domesticActivityRouteTimeoutGameSeconds = Mathf.Clamp(expected * 4f + 600f, 1800f, 21600f);
+            }
             return DomesticActivityMovementResult.Traveling;
+        }
+
+        internal static bool ShouldPreserveDomesticActivityRouteDeadline(string previousTaskId,
+            string previousActivityLocationId, double previousStartedGameSeconds,
+            string requestedTaskId, string requestedActivityLocationId)
+        {
+            return !string.IsNullOrWhiteSpace(previousTaskId)
+                && string.Equals(previousTaskId, requestedTaskId, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(previousActivityLocationId)
+                && string.Equals(previousActivityLocationId, requestedActivityLocationId, StringComparison.Ordinal)
+                && !double.IsNaN(previousStartedGameSeconds)
+                && !double.IsInfinity(previousStartedGameSeconds);
+        }
+
+        private double CurrentSimulationGameSeconds()
+        {
+            TimeManager clock = timeManager;
+            if (clock == null)
+            {
+                clock = TimeManager.Instance;
+                if (clock == null) clock = FindAnyObjectByType<TimeManager>();
+                if (clock != null) timeManager = clock;
+            }
+            return clock != null ? clock.PreciseAbsoluteGameSeconds : double.NaN;
+        }
+
+        internal static double ResolveDomesticActivityRouteClock(double suppliedGameSeconds,
+            Func<double> fallbackGameSeconds)
+        {
+            if (!double.IsNaN(suppliedGameSeconds) && !double.IsInfinity(suppliedGameSeconds))
+                return suppliedGameSeconds;
+            return fallbackGameSeconds != null ? fallbackGameSeconds() : double.NaN;
+        }
+
+        internal static bool IsDomesticActivityRouteMakingProgress(float remainingDistance, float previousRemainingDistance)
+        {
+            return previousRemainingDistance - remainingDistance > 0.05f;
+        }
+
+        internal static bool ShouldAbortStalledDomesticActivityRoute(double nowGameSeconds,
+            double routeStartedGameSeconds, double lastProgressGameSeconds, float noProgressTimeoutGameSeconds,
+            float totalRouteTimeoutGameSeconds, float remainingDistance, float previousRemainingDistance)
+        {
+            if (double.IsNaN(nowGameSeconds) || double.IsInfinity(nowGameSeconds)
+                || double.IsNaN(routeStartedGameSeconds) || double.IsInfinity(routeStartedGameSeconds)
+                || double.IsNaN(lastProgressGameSeconds) || double.IsInfinity(lastProgressGameSeconds)
+                || noProgressTimeoutGameSeconds <= 0f || totalRouteTimeoutGameSeconds <= 0f)
+                return false;
+            return nowGameSeconds - routeStartedGameSeconds >= totalRouteTimeoutGameSeconds
+                || (!IsDomesticActivityRouteMakingProgress(remainingDistance, previousRemainingDistance)
+                    && nowGameSeconds - lastProgressGameSeconds >= noProgressTimeoutGameSeconds);
+        }
+
+        private static void ClearDomesticActivityRoute(ManagedPersonAgent managed)
+        {
+            if (managed == null) return;
+            managed.domesticActivityTaskId = null;
+            managed.domesticActivityLocationId = null;
+            managed.domesticActivityRouteGeneration = -1;
+            managed.domesticActivityRouteStartedGameSeconds = double.NaN;
+            managed.domesticActivityLastProgressGameSeconds = double.NaN;
+            managed.domesticActivityRouteTimeoutGameSeconds = 0f;
+            managed.domesticActivityNoProgressTimeoutGameSeconds = 0f;
+            managed.domesticActivityLastRemainingDistance = 0f;
+        }
+
+        internal static bool ShouldContinueOwnedDomesticActivityRoute(
+            string ownedTaskId, int ownedRouteGeneration, string ownedActivityLocationId,
+            string requestedTaskId, string requestedActivityLocationId, int activeRouteGeneration)
+        {
+            return !string.IsNullOrWhiteSpace(ownedTaskId)
+                && string.Equals(ownedTaskId, requestedTaskId, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(ownedActivityLocationId)
+                && string.Equals(ownedActivityLocationId, requestedActivityLocationId, StringComparison.Ordinal)
+                && ownedRouteGeneration == activeRouteGeneration;
         }
 
         /// <summary>
@@ -2935,6 +3093,14 @@ namespace LandLedgers.FirstLedger
             public Vector3 transportStagingSeatPosition;
             public int ambientOriginBuildingId;
             public int ambientTargetBuildingId;
+            public string domesticActivityTaskId;
+            public string domesticActivityLocationId;
+            public int domesticActivityRouteGeneration = -1;
+            public double domesticActivityRouteStartedGameSeconds = double.NaN;
+            public double domesticActivityLastProgressGameSeconds = double.NaN;
+            public float domesticActivityRouteTimeoutGameSeconds;
+            public float domesticActivityNoProgressTimeoutGameSeconds;
+            public float domesticActivityLastRemainingDistance;
         }
     }
 }

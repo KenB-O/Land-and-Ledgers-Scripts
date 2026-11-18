@@ -12,7 +12,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public string SupplierId = string.Empty;
         public string SkuId = string.Empty;
         public int UnitPriceCents;
-        /// <summary>Whole sacks per standing lot. Production uses the authored opening lot size.</summary>
+        /// <summary>Target sack coverage that the standing reorder should restore.</summary>
         public int LotSacks;
         /// <summary>Retail sacks physically on the store shelf right now (not in-transit lots).</summary>
         public int StoreSacksOnHand;
@@ -43,11 +43,13 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     ///
     /// This planner closes that loop on the opening order's own terms,
     /// nothing new invented: same supplier, same SKU, same 15c/sack,
-    /// same 20-sack lot, same cash-on-arrival payment, same 1-day
+    /// up to the 20-sack coverage target, same cash-on-arrival payment, same 1-day
     /// transit. Each day it counts what the store already covers —
     /// shelf sacks + sellable procurement lots + unreceived orders for
-    /// the SKU — and orders one fresh lot only when coverage is below
-    /// one full lot and no feed order is already outstanding. The
+    /// the SKU — and orders only the deficit to the 20-sack target when
+    /// coverage is below target and no feed order is already outstanding.
+    /// This prevents a near-full shelf from accepting an oversized order
+    /// that its real category capacity will refuse. The
     /// market supply for the lot is restocked first, as the modeled
     /// event ExternalMarketAuthority.RestockCounterpartySupply, with
     /// the reason naming this standing reorder; the restock creates no
@@ -173,8 +175,12 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 return result;
             }
 
-            string restockReason = $"standing horse-feed reorder (opening terms: {inputs.LotSacks} sacks at {inputs.UnitPriceCents}c/sack from {inputs.SupplierId})";
-            if (!inputs.Service.RestockSupplierSupply(inputs.SupplierId, inputs.SkuId, inputs.LotSacks, restockReason))
+            int orderSacks = inputs.LotSacks - covered;
+            if (orderSacks <= 0)
+                return result;
+
+            string restockReason = $"standing horse-feed reorder (opening terms: up to {inputs.LotSacks} sacks at {inputs.UnitPriceCents}c/sack from {inputs.SupplierId}; covered {covered}, deficit {orderSacks})";
+            if (!inputs.Service.RestockSupplierSupply(inputs.SupplierId, inputs.SkuId, orderSacks, restockReason))
             {
                 result.Refusal = $"StoreHorseFeedReorder: feed supply could not be restocked from '{inputs.SupplierId}' for '{inputs.SkuId}' — no order placed; see diagnostics.";
                 diag.Add(result.Refusal);
@@ -182,7 +188,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             }
 
             NamedSkuOrder order = inputs.Service.PlaceOrder(
-                inputs.SkuId, inputs.LotSacks, inputs.UnitPriceCents, 0,
+                inputs.SkuId, orderSacks, inputs.UnitPriceCents, 0,
                 inputs.SupplierId, Math.Max(0, inputs.DayIndex),
                 NamedSkuPaymentMode.CashOnArrival, null);
             if (order == null)
@@ -194,7 +200,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
             result.Ordered = true;
             result.Order = order;
-            diag.Add($"StoreHorseFeedReorder: reordered {order.UnitsOrdered} sack(s) of '{inputs.SkuId}' from {inputs.SupplierId} at {inputs.UnitPriceCents}c/sack, total {order.TotalCostCents}c, arrives day {order.ExpectedArrivalDayIndex}; store held {inputs.StoreSacksOnHand} sack(s).");
+            diag.Add($"StoreHorseFeedReorder: reordered {order.UnitsOrdered} sack(s) of '{inputs.SkuId}' from {inputs.SupplierId} at {inputs.UnitPriceCents}c/sack, total {order.TotalCostCents}c, arrives day {order.ExpectedArrivalDayIndex}; target coverage {inputs.LotSacks}, already covered {covered} sack(s).");
             return result;
         }
 

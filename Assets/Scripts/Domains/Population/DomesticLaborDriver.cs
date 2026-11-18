@@ -955,12 +955,13 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
-        /// Orphaned-assignment fix: domestic-definition tasks sitting Assigned with
-        /// no open DomesticAssignment are start-failures the service already
-        /// released (reservation + budget) but left in the task queue. Requeue
-        /// them (InterruptTask: release + back to Queued) so the next DriveDay
-        /// re-drives the work instead of losing it silently. When the task is
-        /// not interruptible, cancel it loudly.
+        /// Reconciles domestic tasks that have entered an active state without
+        /// a live driver flight. A started domestic task must have an in-flight
+        /// record that owns its arrival/completion path; otherwise it can hold
+        /// a person forever while no movement or work can advance. Requeue the
+        /// same task through TaskAuthority (no work credit) and release any
+        /// matching domestic schedule reservation. When interruption is not
+        /// permitted, cancel it loudly rather than retain a dead reservation.
         /// </summary>
         public void ReconcileStalled(
             int householdId,
@@ -980,7 +981,8 @@ namespace LandLedgers.Population
             List<WorkTask> open = tasks.GetOpenTasks(owner);
             foreach (WorkTask task in open)
             {
-                if (task == null || task.Status != TaskStatus.Assigned)
+                if (task == null || (task.Status != TaskStatus.Assigned
+                    && task.Status != TaskStatus.InProgress))
                 {
                     continue;
                 }
@@ -990,7 +992,7 @@ namespace LandLedgers.Population
                     continue;
                 }
 
-                if (HasOpenAssignment(domestic, task.TaskId))
+                if (HasInFlightTask(task.TaskId.ToString()))
                 {
                     continue;
                 }
@@ -998,14 +1000,17 @@ namespace LandLedgers.Population
                 string rejection;
                 if (tasks.InterruptTask(task.TaskId, budgets, out rejection))
                 {
+                    ReleaseOrphanedAssignmentReservation(domestic, schedules, task.TaskId);
                     diag.Add("DomesticLaborDriver: requeued orphaned domestic task " + task.TaskId +
-                        " ('" + task.DefinitionId + "') — start-failure no longer leaves it Assigned forever.");
+                        " ('" + task.DefinitionId + "', previously " + task.Status +
+                        ") — no in-flight arrival/completion owner; no work was credited.");
                 }
                 else
                 {
                     // Not interruptible: cancel loudly rather than leak.
                     if (tasks.CancelTask(task.TaskId, budgets))
                     {
+                        ReleaseOrphanedAssignmentReservation(domestic, schedules, task.TaskId);
                         diag.Add("DomesticLaborDriver: cancelled non-interruptible orphaned domestic task " +
                             task.TaskId + " (" + rejection + ").");
                     }
@@ -1015,6 +1020,19 @@ namespace LandLedgers.Population
                             ": " + rejection);
                     }
                 }
+            }
+        }
+
+        private static void ReleaseOrphanedAssignmentReservation(DomesticLaborService domestic,
+            PersonScheduleTracker schedules, EntityId taskId)
+        {
+            if (domestic == null || schedules == null) return;
+            foreach (DomesticAssignment assignment in domestic.Assignments)
+            {
+                if (assignment == null || assignment.Completed || assignment.TaskId != taskId) continue;
+                schedules.Release(assignment.ReservationId);
+                assignment.Completed = true;
+                return;
             }
         }
 

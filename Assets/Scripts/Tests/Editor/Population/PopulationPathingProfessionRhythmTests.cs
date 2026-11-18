@@ -11,6 +11,89 @@ namespace LandLedgers.EditorTests.Population
 {
     public sealed class PopulationPathingProfessionRhythmTests
     {
+        [TestCase("task-1", 4, "stove", "task-1", "stove", 4, true)]
+        [TestCase("task-1", 4, "stove", "task-2", "stove", 4, false)]
+        [TestCase("task-1", 4, "stove", "task-1", "stove", 5, false)]
+        [TestCase("task-1", 4, "stove", "task-1", "cleaning", 4, false)]
+        [TestCase(null, -1, null, "task-1", "stove", 4, false)]
+        public void DomesticActivityWaitsOnlyForItsOwnStillActiveRoute(string ownerTaskId,
+            int ownerRouteGeneration, string ownerActivityId, string requestedTaskId,
+            string requestedActivityId, int currentRouteGeneration, bool expected)
+        {
+            Assert.AreEqual(expected, PopulationPathingDirector.ShouldContinueOwnedDomesticActivityRoute(
+                ownerTaskId, ownerRouteGeneration, ownerActivityId, requestedTaskId,
+                requestedActivityId, currentRouteGeneration));
+        }
+
+        [TestCase(600.0, 0.0, 0.0, 600f, 3600f, 20f, 20f, true)]
+        [TestCase(599.9, 0.0, 0.0, 600f, 3600f, 20f, 20f, false)]
+        [TestCase(700.0, 0.0, 0.0, 600f, 3600f, 19f, 20f, false)]
+        [TestCase(400.0, 0.0, 0.0, 600f, 3600f, 20f, 20f, false)]
+        [TestCase(double.NaN, 0.0, 0.0, 600f, 3600f, 20f, 20f, false)]
+        public void DomesticActivityRouteWatchdogOnlyAbortsAfterNoProgressAllowance(
+            double now, double started, double lastProgress, float noProgressTimeout, float routeTimeout,
+            float remaining, float previousRemaining,
+            bool expectedAbort)
+        {
+            Assert.AreEqual(expectedAbort,
+                PopulationPathingDirector.ShouldAbortStalledDomesticActivityRoute(
+                    now, started, lastProgress, noProgressTimeout, routeTimeout, remaining, previousRemaining));
+        }
+
+        [Test]
+        public void DomesticActivityRouteWatchdogStopsEvenWhenRouteKeepsMakingUnfinishedProgress()
+        {
+            Assert.IsTrue(PopulationPathingDirector.ShouldAbortStalledDomesticActivityRoute(
+                3600.0, 0.0, 3500.0, 600f, 3600f, 19.0f, 20.0f),
+                "The hard route bound must release a task whose physical route makes progress but never arrives.");
+        }
+
+        [Test]
+        public void DomesticActivityRouteClockUsesDriverSampleBeforeDirectorFallback()
+        {
+            bool fallbackRead = false;
+            double value = PopulationPathingDirector.ResolveDomesticActivityRouteClock(
+                1440.0, () => { fallbackRead = true; return 12.0; });
+
+            Assert.AreEqual(1440.0, value);
+            Assert.IsFalse(fallbackRead,
+                "The domestic driver's authoritative clock sample must be used without a second clock lookup.");
+        }
+
+        [TestCase(double.NaN, 3600.0, 3600.0)]
+        [TestCase(double.PositiveInfinity, 7200.0, 7200.0)]
+        public void DomesticActivityRouteClockFallsBackOnlyWhenDriverSampleIsInvalid(
+            double supplied, double fallback, double expected)
+        {
+            Assert.AreEqual(expected,
+                PopulationPathingDirector.ResolveDomesticActivityRouteClock(supplied, () => fallback));
+        }
+
+        [TestCase(20f, 20f, false)]
+        [TestCase(19.96f, 20f, false)]
+        [TestCase(19.9f, 20f, true)]
+        [TestCase(19.94f, 20f, true)]
+        [TestCase(19.94f, 20.1f, true)]
+        public void DomesticActivityRouteProgressUsesAuthoritativeDistance(float remaining,
+            float previousRemaining, bool expectedProgress)
+        {
+            Assert.AreEqual(expectedProgress,
+                PopulationPathingDirector.IsDomesticActivityRouteMakingProgress(remaining, previousRemaining));
+        }
+
+        [TestCase("task-1", "stove", 120.0, "task-1", "stove", true)]
+        [TestCase("task-1", "stove", 120.0, "task-2", "stove", false)]
+        [TestCase("task-1", "stove", 120.0, "task-1", "table", false)]
+        [TestCase("task-1", "stove", double.NaN, "task-1", "stove", false)]
+        [TestCase("task-1", "stove", double.PositiveInfinity, "task-1", "stove", false)]
+        public void DomesticActivityRouteContinuationPreservesDeadlineOnlyForSameValidTaskAndDestination(
+            string previousTaskId, string previousActivityId, double previousStarted,
+            string requestedTaskId, string requestedActivityId, bool expected)
+        {
+            Assert.AreEqual(expected, PopulationPathingDirector.ShouldPreserveDomesticActivityRouteDeadline(
+                previousTaskId, previousActivityId, previousStarted, requestedTaskId, requestedActivityId));
+        }
+
         [Test]
         public void ShoppingOwnershipProtectsArrivalUntilTheTripReleasesThePerson()
         {

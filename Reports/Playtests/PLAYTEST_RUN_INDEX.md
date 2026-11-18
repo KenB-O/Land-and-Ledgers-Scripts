@@ -12,3 +12,12 @@ Two earlier runner attempts are retained locally but excluded from this index's 
 The second completed run has 3,040 logs, 1,223 warnings, zero errors and zero exceptions. It verifies the sawmill workstation key lookup progresses to the next labor gate, where the assigned task is refused because worker P11 has no scheduled minutes available. It does not verify lumber production.
 
 The owner's supplied short-playtest evidence was summarized from the request; no raw export from that run was available, so it is not represented as a captured artifact.
+| 20261118T134545Z-19cb1de9 | INVALID | 0/60 | `codex/player-economic-participation-2026-11-18` | `52584eb559a41bf9ddd20c4bd3249fe9b67c448d` | `F:\Land & Ledgers\Reports/Playtests/Runs\20261118T134545Z-19cb1de9` |
+| 20261118T140203Z-002f010d | PASS | 60/60 | `codex/player-economic-participation-2026-11-18` | `52584eb559a41bf9ddd20c4bd3249fe9b67c448d` | `F:\Land & Ledgers\Reports/Playtests/Runs\20261118T140203Z-002f010d` |
+| 20261118T143139Z-1e177b1b | PASS | 60/60 | `codex/player-economic-participation-2026-11-18` | `52584eb559a41bf9ddd20c4bd3249fe9b67c448d` | `F:\Land & Ledgers\Reports/Playtests/Runs\20261118T143139Z-1e177b1b` |
+| 20261118T150308Z-24fdc55d | PASS | 60/60 | `codex/player-economic-participation-2026-11-18` | `52584eb559a41bf9ddd20c4bd3249fe9b67c448d` | `F:\Land & Ledgers\Reports/Playtests/Runs\20261118T150308Z-24fdc55d` |
+| 20261118T152127Z-a364bc75 | PASS | 60/60 | `codex/player-economic-participation-2026-11-18` | `52584eb559a41bf9ddd20c4bd3249fe9b67c448d` | `F:\Land & Ledgers\Reports/Playtests/Runs\20261118T152127Z-a364bc75` |
+| 20261118T153611Z-9ce9a0ce | PASS | 60/60 | `codex/player-economic-participation-2026-11-18` | `52584eb559a41bf9ddd20c4bd3249fe9b67c448d` | `F:\Land & Ledgers\Reports/Playtests/Runs\20261118T153611Z-9ce9a0ce` |
+| 20261118T160808Z-fc53cfb5 | PASS | 60/60 | `codex/player-economic-participation-2026-11-18` | `52584eb559a41bf9ddd20c4bd3249fe9b67c448d` | `F:\Land & Ledgers\Reports/Playtests/Runs\20261118T160808Z-fc53cfb5` |
+| 20261118T162831Z-e58da6e5 | PASS | 3/3 | `codex/player-economic-participation-2026-11-18` | `52584eb559a41bf9ddd20c4bd3249fe9b67c448d` | `F:\Land & Ledgers\Reports/Playtests/Runs\20261118T162831Z-e58da6e5` |
+| 20261118T164247Z-63bb4526 | INVALID | 0/60 | `codex/player-economic-participation-2026-11-18` | `52584eb559a41bf9ddd20c4bd3249fe9b67c448d` | `F:\Land & Ledgers\Reports/Playtests/Runs\20261118T164247Z-63bb4526` |

@@ -6066,7 +6066,7 @@ namespace LandLedgers.Orchestration.Systems
                 FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
             if (director == null) return DomesticActivityMovementResult.Unsupported;
             DomesticActivityMovementResult result = director.TryReachDomesticActivity(
-                flight, activityLocationId, out string reason);
+                flight, activityLocationId, currentGameSeconds, out string reason);
             if (result == DomesticActivityMovementResult.Unsupported && !string.IsNullOrWhiteSpace(reason))
                 flight.ActivityLocationId = activityLocationId + ": " + reason;
             return result;

@@ -349,6 +349,26 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void FeedReorderRequestsOnlyTheDeficitToItsShelfTarget()
+        {
+            var market = FeedMarket(0);
+            var storeCash = new FakeBusinessCashPort(5000);
+            var service = FeedService(market, storeCash);
+            var diag = new List<string>();
+
+            StoreHorseFeedReorderResult result =
+                StoreHorseFeedReorder.RunDay(ReorderInputs(service, 13, 5), diag);
+
+            Assert.IsTrue(result.Ordered);
+            Assert.AreEqual(7, result.Order.UnitsOrdered,
+                "13 physical sacks against the 20-sack target require only seven new sacks.");
+            Assert.AreEqual(105, result.Order.TotalCostCents, "only the seven ordered sacks settle at 15c each.");
+            Assert.AreEqual(0, market.GetCounterparty(FeedSupplierId).SupplyUnits[FeedSku],
+                "the supplier's added stock is consumed only by this priced order.");
+            StringAssert.Contains("deficit 7", string.Join("\n", diag));
+        }
+
+        [Test]
         public void FeedReorderEndToEndPaysOnArrivalAndReordersAgainWhenStockRunsOut()
         {
             var market = FeedMarket(20);

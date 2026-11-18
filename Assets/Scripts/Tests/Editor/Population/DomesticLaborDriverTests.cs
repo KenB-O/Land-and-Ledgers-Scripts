@@ -387,6 +387,56 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void OrphanedInProgressDomesticTask_IsRequeuedAndReleasesItsReservationWithoutCredit()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            Assert.IsNull(f.Domestic.ScheduleDomesticWork(7, 3, DomesticTaskCatalog.MealPrepId,
+                100, 990, f.Tasks, f.Budgets, f.Schedules, diag));
+            WorkTask task = f.Domestic.Assignments[0] != null
+                ? f.Tasks.FindTask(f.Domestic.Assignments[0].TaskId) : null;
+            Assert.NotNull(task);
+            Assert.AreEqual(TaskStatus.InProgress, task.Status);
+            Assert.IsTrue(f.Schedules.ActiveFor(3, 100).Exists(r => r.Activity == PersonActivityKind.Cooking));
+            Assert.AreEqual(0, f.Driver.InFlight.Count, "simulate a lost driver flight, not a completed task");
+
+            f.Driver.ReconcileStalled(7, f.Tasks, f.Budgets, f.Schedules, f.Domestic, diag);
+
+            Assert.AreEqual(TaskStatus.Queued, task.Status);
+            Assert.IsTrue(f.Domestic.Assignments[0].Completed,
+                "the orphaned assignment is retired so adoption can create a fresh physical flight");
+            Assert.IsFalse(f.Schedules.ActiveFor(3, 100).Exists(r => r.Activity == PersonActivityKind.Cooking),
+                "the abandoned domestic reservation must not keep occupying the person");
+            Assert.AreEqual(0, f.FamilyLabor.ContributionCount,
+                "reconciliation cannot fabricate worked domestic minutes");
+            StringAssert.Contains("no in-flight arrival/completion owner", string.Join("\n", diag));
+        }
+
+        [Test]
+        public void ReconcileStalled_PreservesInProgressDomesticTaskWithLiveFlight()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3);
+            inputs.CleaningNeeded = false;
+            f.Driver.DriveDay(inputs, 100, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
+            f.Driver.AdvanceTick(100 * 86400f + 990 * 60f, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag,
+                (_, __) => DomesticActivityMovementResult.Traveling);
+            WorkTask task = f.Tasks.GetOpenTasks(EntityId.For(EntityKind.Household, 7))
+                .Find(t => t.DefinitionId == DomesticTaskCatalog.MealPrepId);
+            Assert.NotNull(task);
+            Assert.AreEqual(TaskStatus.InProgress, task.Status);
+            Assert.AreEqual(1, f.Driver.InFlight.Count);
+
+            f.Driver.ReconcileStalled(7, f.Tasks, f.Budgets, f.Schedules, f.Domestic, diag);
+
+            Assert.AreEqual(TaskStatus.InProgress, task.Status,
+                "a matching live flight remains responsible for physical arrival and completion");
+            Assert.AreEqual(1, f.Driver.InFlight.Count);
+        }
+
+        [Test]
         public void Driver_RefusedStart_IsQueuedImmediately_AndReadoptedNextDay()
         {
             var f = new Fixture();

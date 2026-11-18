@@ -14,6 +14,7 @@ Regression coverage was added to `TownWorldStartupGenerationGateTests` for stand
 - The first recompile reported a missing namespace import in `SimulationDrivers.cs`; that import was added.
 - Unity then wrote `Assembly-CSharp.dll` and `Assembly-CSharp-Editor.dll` after the edited source timestamps. The Editor log contains no compiler errors after that correction. The pipeline did not return a terminal `completed` status before the Editor entered a long asset refresh/domain reload, so the compile is recorded as **assembly output observed; terminal status unavailable**.
 - The focused startup-gate test command did not produce a fresh result. Its command timed out and Unity logged `PipelineTestRunner.InvalidatePreviousRun`; the Editor became unresponsive during the resulting reload/test-runner activity. No test pass is claimed for the new regression.
+- A command-line fallback using Unity's generated `Assembly-CSharp.csproj` was also unavailable: MSBuild rejects the generated XML at line 62 because the absolute project path contains an unescaped `&` (`F:\Land & Ledgers`). No project or generated file was edited to work around this path issue.
 - The Editor was not restarted, no scene was saved, and no PlayMode session was started in this pass.
 
 ## Furniture freight follow-up

@@ -235,6 +235,52 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void MissedWorkWindow_DefersPastSleepWithoutRepeatedRefusalAndStartsOnSchedule()
+        {
+            const int day = 1;
+            const string workId = "ordinary-work";
+            var authority = new TaskAuthority();
+            Assert.IsTrue(authority.RegisterDefinition(
+                new TaskDefinition(workId, "Ordinary work", 60), out string reason), reason);
+            WorkTask task = authority.CreateTaskWithPlannedMinutes(workId, Owner, day, 60);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(day);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Worker, budgets, day, out reason), reason);
+
+            var schedules = new PersonScheduleTracker();
+            Assert.IsNull(schedules.TryReserve(Worker.Id, PersonActivityKind.Sleeping,
+                day, 0, 420, "daily sleep"));
+            var diagnostics = new List<string>();
+
+            int startedDuringSleep = ManagerWorkSchedulerDrive.StartReservedTasksInTickWindow(
+                new List<WorkTask> { task }, authority, schedules, budgets,
+                day, 15, 30, diagnostics, null);
+
+            Assert.AreEqual(0, startedDuringSleep);
+            Assert.AreEqual(TaskStatus.Assigned, task.Status);
+            Assert.AreEqual(0, task.MinutesWorked, "Deferral must not credit work before the person starts.");
+            Assert.AreEqual(0, diagnostics.Count,
+                "A valid sleep conflict should defer once into a future window, not warn on every tick.");
+            Assert.IsTrue(schedules.ActiveFor(Worker.Id, day).Exists(r =>
+                r.Activity == PersonActivityKind.Work && r.StartMinuteOfDay == 420
+                && r.EndMinuteOfDay == 480));
+
+            int startedBeforeWindow = ManagerWorkSchedulerDrive.StartReservedTasksInTickWindow(
+                new List<WorkTask> { task }, authority, schedules, budgets,
+                day, 405, 420, diagnostics, null);
+            Assert.AreEqual(0, startedBeforeWindow);
+            Assert.AreEqual(TaskStatus.Assigned, task.Status);
+
+            int startedAfterSleep = ManagerWorkSchedulerDrive.StartReservedTasksInTickWindow(
+                new List<WorkTask> { task }, authority, schedules, budgets,
+                day, 420, 435, diagnostics, null);
+            Assert.AreEqual(1, startedAfterSleep);
+            Assert.AreEqual(TaskStatus.InProgress, task.Status);
+            Assert.AreEqual(0, task.MinutesWorked, "Starting at the wake boundary still earns no past work.");
+            Assert.AreEqual(0, diagnostics.Count);
+        }
+
+        [Test]
         public void ReservedTravelMinutesAdvanceRouteTimeTaskAndReleaseWorkerOnCompletion()
         {
             var started = StartTask(JourneyTravel.TravelTaskId, 3);

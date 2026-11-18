@@ -1699,6 +1699,22 @@ namespace LandLedgers.Economy.Labor
                         continue;
 
                     int duration = Math.Min(Math.Max(1, task.MinutesRemaining), remainingDay);
+                    bool deferredUntilSleepEnds = TryGetSleepDeferralMinute(
+                        schedules.ActiveFor(task.AssigneeId.Id, dayIndex),
+                        task.AssigneeId.Id, dayIndex, startMinute, startMinute + duration,
+                        out int sleepEndMinute);
+                    if (deferredUntilSleepEnds)
+                    {
+                        // Keep the assigned task and its committed budget, but
+                        // reserve its work after sleep instead of trying the
+                        // same impossible catch-up window every ShortTick.
+                        startMinute = sleepEndMinute;
+                        remainingDay = 1440 - startMinute;
+                        if (remainingDay <= 0)
+                            continue;
+                        duration = Math.Min(Math.Max(1, task.MinutesRemaining), remainingDay);
+                    }
+
                     string refusal = schedules.TryReservePreemptingRest(
                         task.AssigneeId.Id, activity, dayIndex, startMinute, duration,
                         label, out string releasedRest);
@@ -1728,6 +1744,9 @@ namespace LandLedgers.Economy.Labor
                         diagnostics.Add($"task {task.TaskId}: missed-window reservation was not materialized");
                         continue;
                     }
+
+                    if (deferredUntilSleepEnds)
+                        continue;
                 }
 
                 if (!tasks.StartTask(task.TaskId, dayIndex, out string startReason))
@@ -1742,6 +1761,41 @@ namespace LandLedgers.Economy.Labor
             }
 
             return started;
+        }
+
+        private static bool TryGetSleepDeferralMinute(
+            List<PersonActivityReservation> reservations,
+            int personId,
+            int dayIndex,
+            int startMinute,
+            int endMinute,
+            out int sleepEndMinute)
+        {
+            sleepEndMinute = startMinute;
+            if (reservations == null || endMinute <= startMinute)
+                return false;
+
+            bool foundSleepingBlocker = false;
+            foreach (PersonActivityReservation existing in reservations)
+            {
+                if (existing == null || existing.Released || existing.PersonId != personId
+                    || existing.DayIndex != dayIndex
+                    || startMinute >= existing.EndMinuteOfDay
+                    || existing.StartMinuteOfDay >= endMinute)
+                {
+                    continue;
+                }
+
+                // Other occupied time is a meaningful scheduling conflict;
+                // only the ordinary, protected sleep window is deferred.
+                if (existing.Activity != PersonActivityKind.Sleeping)
+                    return false;
+
+                foundSleepingBlocker = true;
+                sleepEndMinute = Math.Max(sleepEndMinute, existing.EndMinuteOfDay);
+            }
+
+            return foundSleepingBlocker && sleepEndMinute > startMinute;
         }
     }
 }

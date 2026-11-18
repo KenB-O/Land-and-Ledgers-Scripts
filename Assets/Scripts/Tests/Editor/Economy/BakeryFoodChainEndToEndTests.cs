@@ -583,6 +583,93 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void EmptyGeneralStore_HouseholdBuysFreshBreadFromBakery()
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 24, 2, 2);
+            Assert.IsNotNull(s.ProductionDriver.PlanBatches(
+                BakeryBreadCatalog.BreadLoafId, 1, 2, s.Diag));
+            Assert.AreEqual(1, s.ProductionDriver.RunScheduledDay(
+                2, true, WorkstationCatalog.BakeOven, OvenFinder(), null, s.Diag, s.Ids),
+                "the bakery must make the genuine bread stock sold below; " + string.Join(" | ", s.Diag));
+            Assert.AreEqual(24, s.Bakery.BreadShelf[0].UnitCount);
+            Assert.AreEqual(0, s.StorePort.CategoryStockUnits("staple_food"),
+                "the store is intentionally out of bread; no stock is seeded there");
+
+            var bakerySupplier = new Series2BakerySupplierAdapter(
+                s.Bakery,
+                new Series2BusinessRuntimeCashPort(s.BakeryRuntime),
+                BakeryInstanceId,
+                "Glenn's Bakery",
+                "bakery")
+            {
+                DayIndex = 2,
+            };
+            Series2BakerySupplierAdapter.RegisterIn(s.Directory, bakerySupplier);
+            s.Journeys.RegisterLocation(new JourneyLocation(
+                "bakery", JourneyLocationKind.Store, "Glenn's Bakery", 3f, 0f));
+            Assert.IsNull(s.Journeys.AddEdge("home", "bakery", 3f, "bakery road"));
+            s.Knowledge.LearnSupplier(ShopperPersonId, BakeryInstanceId,
+                "local bakery", 0);
+            FundHousehold(s, 1000);
+
+            ShoppingTripResult trip = BuyBread(s, 6, 2);
+
+            Assert.IsTrue(trip.Success, trip.FailureReason + "; " + string.Join(" | ", s.Diag));
+            Assert.AreEqual("Glenn's Bakery", trip.Counterparty,
+                "with no General Store bread, the known stocked bakery is the actual seller");
+            Assert.AreEqual(6, trip.UnitsAcquired);
+            Assert.AreEqual(48, trip.BuyerOutflowCents,
+                "six fresh loaves settle at the bakery's actual fresh price");
+            Assert.AreEqual(trip.BuyerOutflowCents, trip.StoreCashInCents);
+            Assert.AreEqual(1952, s.Ledgers.GetOrCreate(HouseholdId).GetBalanceCents());
+            Assert.AreEqual(2048, s.BakeryRuntime.CurrentCashCents);
+            Assert.AreEqual(18, s.Bakery.BreadShelf[0].UnitCount,
+                "only sold bakery stock is removed");
+            Assert.AreEqual(0, s.StorePort.CategoryStockUnits("staple_food"),
+                "the empty store remains empty");
+            Assert.AreEqual(6, s.Inventories.GetOrCreate(HouseholdId)
+                .GetAvailableUnits(HouseholdItemCatalog.BreadId),
+                "the household receives goods through the shopping loop");
+        }
+
+        [Test]
+        public void NoBreadAtEitherKnownSeller_FailsWithoutStockOrCashMovement()
+        {
+            Slice s = NewSlice();
+            var emptyBakery = new Series2BakerySupplierAdapter(
+                s.Bakery,
+                new Series2BusinessRuntimeCashPort(s.BakeryRuntime),
+                BakeryInstanceId,
+                "Glenn's Bakery",
+                "bakery")
+            {
+                DayIndex = 2,
+            };
+            Series2BakerySupplierAdapter.RegisterIn(s.Directory, emptyBakery);
+            s.Journeys.RegisterLocation(new JourneyLocation(
+                "bakery", JourneyLocationKind.Store, "Glenn's Bakery", 3f, 0f));
+            Assert.IsNull(s.Journeys.AddEdge("home", "bakery", 3f, "bakery road"));
+            s.Knowledge.LearnSupplier(ShopperPersonId, BakeryInstanceId,
+                "local bakery", 0);
+            FundHousehold(s, 1000);
+
+            ShoppingTripResult trip = BuyBread(s, 1, 2);
+
+            Assert.IsFalse(trip.Success, "neither known seller has saleable bread");
+            Assert.AreEqual(0, trip.UnitsAcquired);
+            Assert.AreEqual(1000, s.Ledgers.GetOrCreate(HouseholdId).GetBalanceCents());
+            Assert.AreEqual(2000, s.BakeryRuntime.CurrentCashCents);
+            Assert.AreEqual(5000, s.StoreRuntime.CurrentCashCents);
+            Assert.AreEqual(0, s.Bakery.BreadShelf.Count,
+                "a failed shopping attempt must not manufacture bakery stock");
+            Assert.AreEqual(0, s.StorePort.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(0, s.Inventories.GetOrCreate(HouseholdId)
+                .GetAvailableUnits(HouseholdItemCatalog.BreadId));
+        }
+
+        [Test]
         public void SameDaySecondRunDay_TransfersNothingTwice_NoDuplicateDelivery()
         {
             // Negative leg, fixture-adjusted (see

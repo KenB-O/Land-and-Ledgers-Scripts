@@ -369,6 +369,31 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void PartialFeedReorderWaitsForFundsAtArrivalWithoutCreatingAFreeLot()
+        {
+            var market = FeedMarket(0);
+            var storeCash = new FakeBusinessCashPort(100);
+            var service = FeedService(market, storeCash);
+
+            StoreHorseFeedReorderResult result = StoreHorseFeedReorder.RunDay(
+                ReorderInputs(service, storeSacksOnHand: 13, dayIndex: 5), new List<string>());
+            Assert.IsTrue(result.Ordered, result.Refusal);
+            Assert.AreEqual(7, result.Order.UnitsOrdered);
+            Assert.AreEqual(105, result.Order.TotalCostCents);
+
+            List<NamedSkuLot> arrivals = service.ReceiveArrivals(6, null);
+
+            Assert.AreEqual(0, arrivals.Count,
+                "the seven-sack purchase cannot become stock when the store cannot pay its 105c invoice");
+            Assert.AreEqual(NamedSkuOrderStage.WaitingPayment, result.Order.Stage);
+            Assert.AreEqual(100, storeCash.BalanceCents, "the refused debit moves no cash");
+            Assert.AreEqual(0, service.Lots.Count, "no unpaid feed lot is created");
+            Assert.AreEqual(0, market.GetCounterparty(FeedSupplierId)
+                .SupplyUnits[FeedSku],
+                "the seven finite sacks are committed to the placed trade; payment failure creates no local lot or refund of reserved supplier stock");
+        }
+
+        [Test]
         public void FeedReorderEndToEndPaysOnArrivalAndReordersAgainWhenStockRunsOut()
         {
             var market = FeedMarket(20);

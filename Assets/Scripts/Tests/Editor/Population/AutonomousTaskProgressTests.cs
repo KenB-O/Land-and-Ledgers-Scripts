@@ -281,6 +281,58 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void SleepDeferralThatReachesDayEndWaitsQuietlyAndStartsNextValidDay()
+        {
+            const int firstDay = 1;
+            const int nextDay = 2;
+            const string workId = "ordinary-work";
+            var authority = new TaskAuthority();
+            Assert.IsTrue(authority.RegisterDefinition(
+                new TaskDefinition(workId, "Ordinary work", 60), out string reason), reason);
+            WorkTask task = authority.CreateTaskWithPlannedMinutes(workId, Owner, firstDay, 60);
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(firstDay);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, Worker, budgets, firstDay, out reason), reason);
+
+            var schedules = new PersonScheduleTracker();
+            Assert.IsNull(schedules.TryReserve(Worker.Id, PersonActivityKind.Sleeping,
+                firstDay, 1380, 60, "late sleep"));
+            var diagnostics = new List<string>();
+
+            int startedAtDayEnd = ManagerWorkSchedulerDrive.StartReservedTasksInTickWindow(
+                new List<WorkTask> { task }, authority, schedules, budgets,
+                firstDay, 1380, 1395, diagnostics, null);
+            Assert.AreEqual(0, startedAtDayEnd,
+                "work cannot start inside protected sleep when no valid minutes remain afterward");
+            Assert.AreEqual(TaskStatus.Assigned, task.Status,
+                "the not-yet-performed task remains eligible for a later valid window");
+            Assert.AreEqual(0, task.MinutesWorked,
+                "deferral must not award work before the task starts");
+            Assert.AreEqual(0, diagnostics.Count,
+                "an expected end-of-day sleep deferral must not emit a repeated refusal warning");
+            Assert.IsFalse(schedules.ActiveFor(Worker.Id, firstDay).Exists(r =>
+                r.Activity == PersonActivityKind.Work && r.Label == ReservationLabel(task)),
+                "no impossible same-day work reservation may be left holding the worker");
+
+            Assert.IsNull(schedules.TryReserve(Worker.Id, PersonActivityKind.Sleeping,
+                nextDay, 0, 420, "next-day sleep"));
+            budgets.EnsureDay(nextDay);
+            int startedAtNextWindow = ManagerWorkSchedulerDrive.StartReservedTasksInTickWindow(
+                new List<WorkTask> { task }, authority, schedules, budgets,
+                nextDay, 420, 435, diagnostics, null);
+
+            Assert.AreEqual(1, startedAtNextWindow,
+                "the deferred task starts once a real next-day work window exists");
+            Assert.AreEqual(TaskStatus.InProgress, task.Status);
+            Assert.AreEqual(0, task.MinutesWorked,
+                "starting next day still earns no credit for the prior day");
+            Assert.AreEqual(0, diagnostics.Count);
+            Assert.AreEqual(1, schedules.ActiveFor(Worker.Id, nextDay).FindAll(r =>
+                r.Activity == PersonActivityKind.Work && r.Label == ReservationLabel(task)).Count,
+                "exactly one valid work reservation owns the worker");
+        }
+
+        [Test]
         public void ReservedTravelMinutesAdvanceRouteTimeTaskAndReleaseWorkerOnCompletion()
         {
             var started = StartTask(JourneyTravel.TravelTaskId, 3);

@@ -219,6 +219,65 @@ public sealed class PurchasedRetailLotReceiptTests
     }
 
     [Test]
+    public void PartialOffMapFeedReceipt_RestoresSourceWhenCapacityIsShort_ThenRetriesSameLot()
+    {
+        BusinessRuntimeState store = FeedDestination("general_store_partial_feed_capacity");
+        store.SetCurrentCashCents(5000);
+        store.EnsureCategoryStorageCapacity("animal_feed", 19);
+        Assert.AreEqual(13, store.AddCategoryStockUnits("animal_feed", 13),
+            "the store starts with the 13 sacks already counted by the partial-order planner");
+
+        var supplier = new ExternalCounterparty
+        {
+            CounterpartyId = "millbrook-partial-feed-capacity",
+            DisplayName = "Millbrook Grain Co.",
+            InitialBudgetCents = 0,
+            TransitDays = 0,
+        };
+        supplier.SupplyUnits["store_horse_feed_sack"] = 7;
+        var market = new ExternalMarketAuthority();
+        Assert.IsNull(market.RegisterCounterparty(supplier));
+        var service = new OffMapNamedSkuProcurementService(
+            store.BusinessId, market, new Series2BusinessRuntimeCashPort(store));
+        NamedSkuOrder order = service.PlaceOrder(
+            "store_horse_feed_sack", 7, 15, 0, supplier.CounterpartyId, 0,
+            NamedSkuPaymentMode.CashOnArrival, null);
+        Assert.IsNotNull(order);
+        Assert.AreEqual(1, service.ReceiveArrivals(0, null).Count);
+        NamedSkuLot sourceLot = service.Lots[0];
+        Assert.AreEqual(4895, store.CurrentCashCents,
+            "the 105c supplier payment occurs once before retail-shelf receiving");
+
+        PurchasedRetailLotReceipt.Result refused = PurchasedRetailLotReceipt.Transfer(
+            service, store, sourceLot, "animal_feed", "sack", 0);
+
+        Assert.IsFalse(refused.Received);
+        Assert.IsTrue(refused.SourceRestored, refused.Refusal);
+        Assert.AreEqual(7, sourceLot.RemainingUnits,
+            "a seven-sack deficit lot remains in paid source custody when only five shelf spaces remain");
+        Assert.AreEqual(13, store.GetCategoryStock("animal_feed").CurrentStockUnits,
+            "refusal leaves the original 13 store units untouched");
+        Assert.AreEqual(0, store.GetRetailItemStockUnits("store_horse_feed_sack", "animal_feed"));
+        Assert.AreEqual(0, store.RetailItemLots.Count);
+        Assert.AreEqual(4895, store.CurrentCashCents,
+            "a custody retry never charges the supplier a second time");
+
+        store.EnsureCategoryStorageCapacity("animal_feed", 20);
+        PurchasedRetailLotReceipt.Result retry = PurchasedRetailLotReceipt.Transfer(
+            service, store, sourceLot, "animal_feed", "sack", 1);
+
+        Assert.IsTrue(retry.Received, retry.Refusal);
+        Assert.AreEqual(7, retry.Units);
+        Assert.AreEqual(0, sourceLot.RemainingUnits);
+        Assert.AreEqual(20, store.GetCategoryStock("animal_feed").CurrentStockUnits,
+            "the seven delivered units fill the 13-to-20 coverage target exactly");
+        Assert.AreEqual(7, store.GetRetailItemStockUnits("store_horse_feed_sack", "animal_feed"));
+        Assert.AreEqual(1, store.RetailItemLots.Count);
+        Assert.AreEqual(4895, store.CurrentCashCents,
+            "receiving transfers custody only; no second payment occurs");
+    }
+
+    [Test]
     public void BusinessHorseFeedAdapter_UsesTwoFeedUnitsPerSackAndCarriesRemainder()
     {
         // Harness note: see test 1 — no AssetDatabase in the harness.

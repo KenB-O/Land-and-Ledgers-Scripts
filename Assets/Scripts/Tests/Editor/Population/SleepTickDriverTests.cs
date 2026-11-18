@@ -19,8 +19,8 @@ namespace LandLedgers.Editor.Population
     /// driver. Proves the driver moves a sleeper to their reserved place
     /// at 22:00, holds them through the night, releases on waking at
     /// 07:00 with rest quality recorded, closes a missed wake so the bed
-    /// can be re-reserved, sleeps in place (loudly) when the arrival
-    /// path fails, the authority is missing, or movement is unsupported,
+    /// can be re-reserved, and cancels unreached reservations without
+    /// awarding rest or bed-use credit,
     /// and threads LastRestQuality01 into the WorkCapacityFactor call
     /// sites through DailyNeedsService.RestQualityForPerson (both the
     /// reserve and the lot meal paths). The production movement resolver
@@ -206,10 +206,15 @@ namespace LandLedgers.Editor.Population
                 foreach (DomesticActivityMovementResult result in results) answers.Enqueue(result);
             }
 
-            public DomesticActivityMovementResult Move(int personId, SleepingPlace place, BuildingFootprintAuthority authority)
+            public DomesticActivityMovementResult Move(int personId, SleepingPlace place,
+                BuildingFootprintAuthority authority, out string failureReason)
             {
                 Calls.Add("P" + personId + ":" + place.PlaceId);
                 Kinds.Add(place.Kind);
+                failureReason = answers.Count > 0
+                    && answers.Peek() == DomesticActivityMovementResult.Unsupported
+                    ? "No physical route reaches the reserved activity location."
+                    : string.Empty;
                 return answers.Count > 0 ? answers.Dequeue() : DomesticActivityMovementResult.Arrived;
             }
         }
@@ -252,10 +257,10 @@ namespace LandLedgers.Editor.Population
                 Assert.AreEqual(0, movement.Calls.Count, "No movement before 22:00.");
                 Assert.AreEqual(1, fixture.Registry.LiveReservations.Count);
 
-                // 22:00: arrival validated once, movement requested, travelling.
+                // 22:00: arrival validated and movement requested, travelling.
                 driver.AdvanceTick(Day, 1320, registries, _ => fixture.Authority, arrival.Check, movement.Move, diag);
                 Assert.AreEqual(1, movement.Calls.Count);
-                Assert.AreEqual(1, arrival.Calls.Count, "Arrival is validated once per night, not every tick.");
+                Assert.AreEqual(1, arrival.Calls.Count, "Arrival is checked when movement is requested.");
                 Assert.AreEqual("P1:bed:bed-1", movement.Calls[0]);
                 Assert.AreEqual(1, fixture.Registry.LiveReservations.Count);
 
@@ -264,7 +269,7 @@ namespace LandLedgers.Editor.Population
                 Assert.AreEqual(2, movement.Calls.Count);
                 driver.AdvanceTick(Day, 1380, registries, _ => fixture.Authority, arrival.Check, movement.Move, diag);
                 Assert.AreEqual(2, movement.Calls.Count, "No movement re-request once asleep.");
-                Assert.AreEqual(1, arrival.Calls.Count);
+                Assert.AreEqual(2, arrival.Calls.Count, "A still-travelling route is validated before movement is retried.");
 
                 // 03:00 the next morning: still asleep, reservation live.
                 driver.AdvanceTick(Day + 1, 180, registries, _ => fixture.Authority, arrival.Check, movement.Move, diag);
@@ -311,7 +316,7 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
-        public void Driver_SleepsInPlaceWhenArrivalFails()
+        public void Driver_RetriesArrivalFailure_AndDoesNotCreditUnreachedBed()
         {
             BedFixture fixture = null;
             try
@@ -329,15 +334,18 @@ namespace LandLedgers.Editor.Population
                 Assert.AreEqual(1, diag.Count);
                 Assert.IsTrue(diag[0].Contains("Arrival"), diag[0]);
 
-                // Later ticks do not retry movement or re-log.
+                // A later reachable route is retried during the same sleep window.
+                arrival.Failure = null;
+                movement.Answer(DomesticActivityMovementResult.Arrived);
                 driver.AdvanceTick(Day, 1400, registries, _ => fixture.Authority, arrival.Check, movement.Move, diag);
-                Assert.AreEqual(0, movement.Calls.Count);
+                Assert.AreEqual(1, movement.Calls.Count);
+                Assert.AreEqual(2, arrival.Calls.Count);
                 Assert.AreEqual(1, diag.Count);
 
-                // The night still ends: the reservation releases at waking with rest quality recorded.
                 driver.AdvanceTick(Day + 1, 420, registries, _ => fixture.Authority, arrival.Check, movement.Move, diag);
                 Assert.AreEqual(0, fixture.Registry.LiveReservations.Count);
                 Assert.AreEqual(1.0f, fixture.Registry.LastRestQuality01(1));
+                Assert.AreEqual(Day, fixture.Registry.LastBedNightDayIndex(1));
             }
             finally
             {
@@ -346,7 +354,7 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
-        public void Driver_SleepsInPlaceWhenNoAuthority()
+        public void Driver_NoAuthorityDoesNotAwardRestOrBedUse()
         {
             BedFixture fixture = null;
             try
@@ -367,7 +375,9 @@ namespace LandLedgers.Editor.Population
 
                 driver.AdvanceTick(Day + 1, 420, registries, _ => null, arrival.Check, movement.Move, diag);
                 Assert.AreEqual(0, fixture.Registry.LiveReservations.Count);
-                Assert.AreEqual(1.0f, fixture.Registry.LastRestQuality01(1));
+                Assert.AreEqual(-1, fixture.Registry.LastBedNightDayIndex(1));
+                Assert.IsTrue(diag.Exists(line => line.Contains("without bed-use or rest-quality credit")),
+                    string.Join(" | ", diag));
             }
             finally
             {
@@ -452,7 +462,7 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
-        public void Driver_UnsupportedMovementSleepsInPlaceWithoutRetrying()
+        public void Driver_UnsupportedMovementRetries_AndRecordsOnlyAfterArrival()
         {
             BedFixture fixture = null;
             try
@@ -471,14 +481,49 @@ namespace LandLedgers.Editor.Population
                 Assert.AreEqual(1, diag.Count);
                 Assert.IsTrue(diag[0].Contains("unsupported"), diag[0]);
 
-                // No retry on later ticks: the sleeper is asleep in place.
+                // A route may become available later in the same sleep window.
+                movement.Answer(DomesticActivityMovementResult.Arrived);
                 driver.AdvanceTick(Day, 1400, registries, _ => fixture.Authority, arrival.Check, movement.Move, diag);
-                Assert.AreEqual(1, movement.Calls.Count);
+                Assert.AreEqual(2, movement.Calls.Count);
                 Assert.AreEqual(1, diag.Count);
 
                 driver.AdvanceTick(Day + 1, 420, registries, _ => fixture.Authority, arrival.Check, movement.Move, diag);
                 Assert.AreEqual(0, fixture.Registry.LiveReservations.Count);
                 Assert.AreEqual(1.0f, fixture.Registry.LastRestQuality01(1));
+                Assert.AreEqual(Day, fixture.Registry.LastBedNightDayIndex(1));
+            }
+            finally
+            {
+                DestroyFixture(fixture);
+            }
+        }
+
+        [Test]
+        public void Driver_UnreachedBedIsReleasedAtWakeWithoutRestOrBedNightCredit()
+        {
+            BedFixture fixture = null;
+            try
+            {
+                fixture = MakeBedFixture();
+                Reserve(fixture, 1, Day);
+                var driver = new SleepTickDriver();
+                var movement = new FakeMovement();
+                movement.Answer(DomesticActivityMovementResult.Unsupported,
+                    DomesticActivityMovementResult.Unsupported);
+                var arrival = new FakeArrivalCheck();
+                var diag = new List<string>();
+                var registries = new List<SleepingPlaceRegistry> { fixture.Registry };
+
+                driver.AdvanceTick(Day, 1320, registries, _ => fixture.Authority, arrival.Check, movement.Move, diag);
+                driver.AdvanceTick(Day, 1400, registries, _ => fixture.Authority, arrival.Check, movement.Move, diag);
+                Assert.AreEqual(1, fixture.Registry.LiveReservations.Count, "Hold remains available for retries during the sleep window.");
+
+                driver.AdvanceTick(Day + 1, 420, registries, _ => fixture.Authority, arrival.Check, movement.Move, diag);
+                Assert.AreEqual(0, fixture.Registry.LiveReservations.Count, "Failed sleeper must not monopolize the bed after wake.");
+                Assert.AreEqual(-1, fixture.Registry.LastBedNightDayIndex(1));
+                Assert.AreEqual(1.0f, fixture.Registry.LastRestQuality01(1), "Unreached reservation leaves rest history unchanged.");
+                Assert.IsTrue(diag.Exists(line => line.Contains("without bed-use or rest-quality credit")),
+                    string.Join(" | ", diag));
             }
             finally
             {

@@ -10,6 +10,14 @@ namespace LandLedgers.EditorTests.Pathing
 {
     public sealed class AgentMoverTests
     {
+        [TestCase(0f, 1.25f)]
+        [TestCase(1.1f, 1.65f)]
+        [TestCase(2f, 3f)]
+        public void BuildingActivityStagingRadiusIsOneSharedDoorwayThreshold(float clearWidth, float expected)
+        {
+            Assert.AreEqual(expected, AgentMover.BuildingActivityStagingRadius(clearWidth), 0.001f);
+        }
+
         [Test]
         public void MissingActiveRouteDataFailsWithoutEmittingArrival()
         {

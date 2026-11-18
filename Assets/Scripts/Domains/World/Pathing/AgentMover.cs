@@ -9,6 +9,16 @@ namespace LandLedgers.Pathing
     [DisallowMultipleComponent]
     public sealed class AgentMover : MonoBehaviour
     {
+        /// <summary>
+        /// Physical radius in which the short doorway-to-interior route can
+        /// safely begin. PopulationPathingDirector uses the same threshold
+        /// before deciding to start an outdoor return route to the entrance.
+        /// Keeping both decisions on one value avoids a dead band where the
+        /// director requests a doorway route that this mover must refuse.
+        /// </summary>
+        public static float BuildingActivityStagingRadius(float clearWidthMeters) =>
+            Mathf.Max(1.25f, Mathf.Max(0f, clearWidthMeters) * 1.5f);
+
         private enum AgentMoveState
         {
             Hidden = 0,
@@ -535,7 +545,7 @@ namespace LandLedgers.Pathing
             if (!authority.TryGetEntrancePair(entranceId, out BuildingEntrancePairAuthoring entrance, out _)
                 || !authority.TryBuildInteriorActivityRoute(entranceId, activityId, out List<Vector3> interiorPath, out _)) return false;
             Vector3 outdoor = authority.transform.TransformPoint(entrance.outdoorApproachLocal);
-            float stagingRadius = Mathf.Max(1.25f, entrance.clearWidthMeters * 1.5f);
+            float stagingRadius = BuildingActivityStagingRadius(entrance.clearWidthMeters);
             if (Vector3.Distance(transform.position, outdoor) > stagingRadius) return false;
             List<Vector3> route = new() { outdoor };
             route.AddRange(interiorPath);

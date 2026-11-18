@@ -23,9 +23,9 @@ namespace LandLedgers.Population
     /// in per tick by the owner (SimulationDrivers), exactly as
     /// DomesticLaborDriver takes its movement callback. Null for any of
     /// them means unavailable: the driver logs loudly once per night and
-    /// the sleeper sleeps in place — sleep is time-reserved, never
-    /// blocked by a missing authority, and the reservation still releases
-    /// at waking.
+    /// retries while the sleep window remains open. A reservation only
+    /// counts as sleep after movement confirms arrival; an unreached
+    /// reservation is cancelled at waking without rest or bed-use credit.
     ///
     /// Phase is transient and re-derived from the clock, the live
     /// reservation and the movement result, never persisted: after a
@@ -50,7 +50,8 @@ namespace LandLedgers.Population
         /// sleeper is at the place, Unsupported when no route exists.
         /// </summary>
         public delegate DomesticActivityMovementResult SleepMovement(
-            int personId, SleepingPlace place, BuildingFootprintAuthority authority);
+            int personId, SleepingPlace place, BuildingFootprintAuthority authority,
+            out string failureReason);
 
         /// <summary>
         /// Validate the arrival path to a reserved place. Returns null
@@ -70,7 +71,7 @@ namespace LandLedgers.Population
         private sealed class SleepNightState
         {
             public SleepNightPhase Phase = SleepNightPhase.Travelling;
-            public bool ArrivalChecked;
+            public string LastFailure;
         }
 
         private readonly Dictionary<string, SleepNightState> nights =
@@ -139,10 +140,27 @@ namespace LandLedgers.Population
             bool stale = dayIndex > reservation.DayIndex + 1;
             if (!stale && minuteOfDay < reservation.SleepEndMinute) return;
 
-            bool released = registry.ReleaseSleepingPlace(
-                reservation.PersonId, reservation.DayIndex, out float restQuality01);
-            nights.Remove(NightKey(registry.HouseholdId, reservation.PersonId, reservation.DayIndex));
+            string key = NightKey(registry.HouseholdId, reservation.PersonId, reservation.DayIndex);
+            bool reachedPlace = nights.TryGetValue(key, out SleepNightState state)
+                && state != null && state.Phase == SleepNightPhase.Sleeping;
+            float restQuality01 = 0f;
+            bool released = reachedPlace
+                ? registry.ReleaseSleepingPlace(reservation.PersonId, reservation.DayIndex, out restQuality01)
+                : registry.CancelSleepingPlace(reservation.PersonId, reservation.DayIndex);
+            nights.Remove(key);
             if (!released) return;
+
+            if (!reachedPlace)
+            {
+                string reason = state?.LastFailure;
+                string detail = string.IsNullOrWhiteSpace(reason)
+                    ? "no confirmed arrival at the reserved sleeping place"
+                    : reason;
+                LogOnce(diag, "unreached-wake:" + key,
+                    $"[Sleep] Reserved sleep was not completed for P{reservation.PersonId} (household {registry.HouseholdId}, night day {reservation.DayIndex}, woken day {dayIndex}): " +
+                    $"the place '{reservation.PlaceId}' could not be reached ({detail}); the reservation was cancelled without bed-use or rest-quality credit.");
+                return;
+            }
 
             // A routine wake is a regular event, recorded in the
             // registry's rest-quality history — no log line. A stale
@@ -178,54 +196,54 @@ namespace LandLedgers.Population
             BuildingFootprintAuthority authority =
                 authorityForPerson != null ? authorityForPerson(reservation.PersonId) : null;
 
-            if (!state.ArrivalChecked)
+            if (authority == null)
             {
-                state.ArrivalChecked = true;
-                if (authority == null)
-                {
-                    LogOnce(diag, "no-authority:" + key,
-                        $"[Sleep] No building authority for P{reservation.PersonId} (household {registry.HouseholdId}, night day {reservation.DayIndex}): " +
-                        $"the arrival path to '{place.PlaceId}' cannot be validated and no movement can be requested — the sleeper sleeps in place and the reservation still releases at waking.");
-                    state.Phase = SleepNightPhase.Sleeping;
-                    return;
-                }
+                state.LastFailure = "building authority unavailable";
+                LogOnce(diag, "no-authority:" + key,
+                    $"[Sleep] No building authority for P{reservation.PersonId} (household {registry.HouseholdId}, night day {reservation.DayIndex}): " +
+                    $"the arrival path to '{place.PlaceId}' cannot be validated; the reservation will not count unless arrival is later confirmed.");
+                return;
+            }
 
-                string failure = arrivalCheck != null
-                    ? arrivalCheck(place, authority)
-                    : SleepingPlaceArrival.TryValidateArrivalPath(place, authority);
-                if (failure != null)
-                {
-                    LogOnce(diag, "arrival-failed:" + key,
-                        $"[Sleep] Arrival to '{place.PlaceId}' failed for P{reservation.PersonId} (household {registry.HouseholdId}, night day {reservation.DayIndex}): {failure} — the sleeper sleeps in place and the reservation still releases at waking.");
-                    state.Phase = SleepNightPhase.Sleeping;
-                    return;
-                }
+            string arrivalFailure = arrivalCheck != null
+                ? arrivalCheck(place, authority)
+                : SleepingPlaceArrival.TryValidateArrivalPath(place, authority);
+            if (arrivalFailure != null)
+            {
+                state.LastFailure = arrivalFailure;
+                LogOnce(diag, "arrival-failed:" + key,
+                    $"[Sleep] Arrival to '{place.PlaceId}' failed for P{reservation.PersonId} (household {registry.HouseholdId}, night day {reservation.DayIndex}): {arrivalFailure}; route may be retried during this sleep window.");
+                return;
             }
 
             if (moveToPlace == null)
             {
+                state.LastFailure = "movement resolver unavailable";
                 LogOnce(diag, "no-movement:" + key,
                     $"[Sleep] No movement resolver for P{reservation.PersonId} (household {registry.HouseholdId}, night day {reservation.DayIndex}): " +
-                    $"the sleeper cannot be moved to '{place.PlaceId}' — sleeping in place and the reservation still releases at waking.");
-                state.Phase = SleepNightPhase.Sleeping;
+                    $"the sleeper cannot be moved to '{place.PlaceId}'; the reservation will not count unless arrival is later confirmed.");
                 return;
             }
 
-            DomesticActivityMovementResult result = moveToPlace(reservation.PersonId, place, authority);
+            DomesticActivityMovementResult result = moveToPlace(
+                reservation.PersonId, place, authority, out string movementFailure);
             switch (result)
             {
                 case DomesticActivityMovementResult.Arrived:
                     state.Phase = SleepNightPhase.Sleeping;
                     break;
                 case DomesticActivityMovementResult.Unsupported:
+                    state.LastFailure = string.IsNullOrWhiteSpace(movementFailure)
+                        ? "movement route unsupported"
+                        : movementFailure;
                     LogOnce(diag, "movement-unsupported:" + key,
                         $"[Sleep] Movement to '{place.PlaceId}' is unsupported for P{reservation.PersonId} (household {registry.HouseholdId}, night day {reservation.DayIndex}): " +
-                        $"no route reaches the place — the sleeper sleeps in place and the reservation still releases at waking.");
-                    state.Phase = SleepNightPhase.Sleeping;
+                        $"{state.LastFailure}; route may be retried during this sleep window.");
                     break;
                 default:
                     // Travelling: keep requesting each tick until the
                     // resolver reports Arrived (or Unsupported).
+                    state.LastFailure = null;
                     break;
             }
         }
@@ -270,7 +288,7 @@ namespace LandLedgers.Population
                 int marker = entry.Key.LastIndexOf(":D", StringComparison.Ordinal);
                 if (marker < 0) continue;
                 if (int.TryParse(entry.Key.Substring(marker + 2), out int nightDay)
-                    && nightDay < dayIndex - 1)
+                    && nightDay < dayIndex - 2)
                     stale.Add(entry.Key);
             }
             foreach (string key in stale) nights.Remove(key);

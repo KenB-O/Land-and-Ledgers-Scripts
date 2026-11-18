@@ -1602,7 +1602,7 @@ namespace LandLedgers.FirstLedger
                 if (!authority.TryGetEntrancePair("main-entrance", out BuildingEntrancePairAuthoring entrance, out reason))
                     return DomesticActivityMovementResult.Unsupported;
                 Vector3 outdoor = authority.transform.TransformPoint(entrance.outdoorApproachLocal);
-                float stagingRadius = Mathf.Max(2.5f, entrance.clearWidthMeters * 1.5f);
+                float stagingRadius = AgentMover.BuildingActivityStagingRadius(entrance.clearWidthMeters);
                 if (Vector3.Distance(managed.mover.transform.position, outdoor) > stagingRadius)
                 {
                     GridCoord actualStart = pathingManager.Grid.WorldToCoord(managed.mover.transform.position);

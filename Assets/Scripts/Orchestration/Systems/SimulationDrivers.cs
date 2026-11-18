@@ -5997,27 +5997,45 @@ namespace LandLedgers.Orchestration.Systems
         /// is at the place, Unsupported when no route exists.
         /// </summary>
         private DomesticActivityMovementResult ResolveSleepMovement(
-            int personId, SleepingPlace place, BuildingFootprintAuthority authority)
+            int personId, SleepingPlace place, BuildingFootprintAuthority authority,
+            out string failureReason)
         {
+            failureReason = string.Empty;
             if (place == null || authority == null || populationManager?.State == null)
+            {
+                failureReason = "Sleep place, building authority, or population state is unavailable.";
                 return DomesticActivityMovementResult.Unsupported;
+            }
             PersonState person = populationManager.State.GetPerson(personId);
             if (person == null || person.homeBuildingId < 0)
+            {
+                failureReason = "Resident or assigned home is unavailable.";
                 return DomesticActivityMovementResult.Unsupported;
+            }
             LandLedgers.FirstLedger.PopulationPathingDirector director =
                 FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
-            if (director == null) return DomesticActivityMovementResult.Unsupported;
+            if (director == null)
+            {
+                failureReason = "Population pathing director is unavailable.";
+                return DomesticActivityMovementResult.Unsupported;
+            }
             if (place.Kind == SleepingPlaceKind.Bed
                 && !string.IsNullOrWhiteSpace(place.ActivityLocationId))
             {
                 var flight = new DomesticLaborDriver.InFlightDomesticTask { PersonId = personId };
-                return director.TryReachDomesticActivity(flight, place.ActivityLocationId, out _);
+                DomesticActivityMovementResult result = director.TryReachDomesticActivity(
+                    flight, place.ActivityLocationId, out failureReason);
+                if (result == DomesticActivityMovementResult.Unsupported
+                    && string.IsNullOrWhiteSpace(failureReason))
+                    failureReason = $"No physical route reaches activity '{place.ActivityLocationId}'.";
+                return result;
             }
             if (director.IsPersonPhysicallyAtBuilding(personId, person.homeBuildingId))
                 return DomesticActivityMovementResult.Arrived;
-            return director.TryStartExplicitRoute(personId, person.homeBuildingId, PopulationScheduleState.AtHome)
-                ? DomesticActivityMovementResult.Traveling
-                : DomesticActivityMovementResult.Unsupported;
+            if (director.TryStartExplicitRoute(personId, person.homeBuildingId, PopulationScheduleState.AtHome))
+                return DomesticActivityMovementResult.Traveling;
+            failureReason = "No physical route to the resident's home is available.";
+            return DomesticActivityMovementResult.Unsupported;
         }
 
         /// <summary>

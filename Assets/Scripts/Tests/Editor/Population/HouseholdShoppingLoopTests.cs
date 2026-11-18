@@ -62,6 +62,31 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsNull(reason);
         }
 
+        [Test]
+        public void PlanTrip_SkipsMemberOccupiedByBusinessTaskAndUsesOtherAdult()
+        {
+            Fixture f = Fixture.Create();
+            f.Population.GetPerson(2).ageBand = AgeBand.Adult18Plus;
+            f.Population.GetPerson(2).age = 30;
+            f.Fund(1000);
+
+            const string blockerDefinition = "test.business-task-blocker";
+            Assert.IsTrue(f.Tasks.RegisterDefinition(new TaskDefinition(blockerDefinition, "Business work", 30), out string registerError), registerError);
+            f.Budgets.EnsureDay(f.Day);
+            WorkTask blocker = f.Tasks.CreateTask(blockerDefinition, EntityId.For(EntityKind.Business, 99), f.Day);
+            Assert.IsTrue(f.Tasks.AssignTask(blocker.TaskId, EntityId.For(EntityKind.Person, 1), f.Budgets, out string assignError), assignError);
+            Assert.IsTrue(f.Tasks.StartTask(blocker.TaskId, f.Day, out string startError), startError);
+
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 1);
+            PlannedShoppingTrip trip = f.Loop.PlanTrip(need, f.Day, f.Options());
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Planned, trip.State, trip.FailureReason);
+            Assert.AreEqual(2, trip.ShopperPersonId,
+                "A member occupied by a real task from a separate business authority cannot be selected when another adult is available.");
+            Assert.AreEqual(TaskStatus.InProgress, blocker.Status,
+                "Selecting the alternate shopper must not cancel or interrupt the original work.");
+        }
+
         private sealed class FakeStorePort : IGeneralStoreTradingPort, IPaidStoreReceivingPort
         {
             public string StoreBusinessId { get; set; } = "store-1";

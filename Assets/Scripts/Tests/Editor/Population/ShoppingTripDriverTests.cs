@@ -249,6 +249,63 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void DepartureTaskConflict_ReplansOnceToAnotherAvailableAdultWithoutSettlement()
+        {
+            var f = new Fixture();
+            Assert.IsNull(f.Membership.Register(new HouseholdMembership
+            {
+                MembershipId = 3, PersonId = 3, HouseholdId = Fixture.HouseholdId, StartDayIndex = 0,
+            }));
+            f.Population.people.Add(new PersonState
+            {
+                id = 3, firstName = "Mara", lastName = "Morrow", age = 30, ageBand = AgeBand.Adult18Plus,
+            });
+            f.Locations[3] = "home";
+            f.Knowledge.LearnSupplier(3, "store-1", "lives in the same town", 0);
+
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
+            PlannedShoppingTrip planned = f.Driver.ActiveTrips[0];
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Planned, planned.State, planned.FailureReason);
+            Assert.AreEqual(Fixture.ShopperId, planned.ShopperPersonId,
+                "The first adult is selected before the competing work task begins.");
+
+            const string blockerDefinition = "test.business-work-after-shopping-plan";
+            Assert.IsTrue(f.Tasks.RegisterDefinition(new TaskDefinition(blockerDefinition, "Business work", 30), out string registerError), registerError);
+            WorkTask blocker = f.Tasks.CreateTask(
+                blockerDefinition, EntityId.For(EntityKind.Business, 88), Fixture.Day);
+            Assert.IsTrue(f.Tasks.AssignTask(blocker.TaskId,
+                EntityId.For(EntityKind.Person, Fixture.ShopperId), f.Budgets, out string assignError), assignError);
+            Assert.IsTrue(f.Tasks.StartTask(blocker.TaskId, Fixture.Day, out string startError), startError);
+
+            float departure = Fixture.Day * 86400f + planned.DepartureMinuteOfDay * 60f;
+            f.Driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Failed, planned.State);
+            Assert.AreEqual(0, planned.WindowReservationIds.Count,
+                "The failed unstarted trip releases its time reservations before replanning.");
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count,
+                "Only the single replacement trip remains active for the need.");
+            PlannedShoppingTrip replacement = f.Driver.ActiveTrips[0];
+            Assert.AreEqual(3, replacement.ShopperPersonId,
+                "A same-day replacement uses another eligible adult while preserving the business task.");
+            Assert.AreEqual(TaskStatus.InProgress, blocker.Status);
+            Assert.AreEqual(100, f.Store.Stock[HouseholdItemCatalog.FlourId]);
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(0, f.Inventories.GetOrCreate(Fixture.HouseholdId)
+                .GetAvailableUnits(HouseholdItemCatalog.FlourId));
+
+            f.Driver.AdvanceTick(departure + 60f, Fixture.Day, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Outbound, replacement.State,
+                "The replacement starts only through the normal task authority.");
+            Assert.AreEqual(100, f.Store.Stock[HouseholdItemCatalog.FlourId]);
+            Assert.AreEqual(0, f.Store.CashReceived,
+                "No purchase settles before physical travel reaches the counter.");
+        }
+
+        [Test]
         public void PlanTrip_SearchesLaterFreeWindowInsteadOfRejectingTheNeed()
         {
             var f = new Fixture();

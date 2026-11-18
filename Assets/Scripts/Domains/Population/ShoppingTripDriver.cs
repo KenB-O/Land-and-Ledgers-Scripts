@@ -202,6 +202,9 @@ namespace LandLedgers.Population
         private readonly List<PlannedShoppingTrip> returnRecoveries = new List<PlannedShoppingTrip>();
         private readonly Dictionary<string, InFlightLeg> legsByTaskIdString =
             new Dictionary<string, InFlightLeg>(StringComparer.Ordinal);
+        private int occupancyReplanDayIndex = -1;
+        private readonly HashSet<string> occupancyReplannedNeedsToday =
+            new HashSet<string>(StringComparer.Ordinal);
 
         /// <summary>Plan 16: TendCustomer service tasks awaiting their
         /// completion due event, task-id string to trip id. Separate from
@@ -407,6 +410,12 @@ namespace LandLedgers.Population
                 return;
             }
 
+            if (occupancyReplanDayIndex != dayIndex)
+            {
+                occupancyReplanDayIndex = dayIndex;
+                occupancyReplannedNeedsToday.Clear();
+            }
+
             int minuteOfDay = MinuteOfDay(currentGameSeconds);
             // Snapshot: HandleDueEvent is not called here, but trips may abort.
             var snapshot = new List<PlannedShoppingTrip>(activeTrips);
@@ -458,6 +467,32 @@ namespace LandLedgers.Population
                     error = $"No physical route reaches seller location '{storeLocation}'.";
                 if (error != null)
                 {
+                    string needKey = trip.HouseholdId + ":" + trip.Need?.NeedSequence;
+                    if (trip.State == PlannedShoppingTrip.TripState.Planned
+                        && IsConcurrentTaskStartRefusal(error)
+                        && occupancyReplannedNeedsToday.Add(needKey))
+                    {
+                        // A task may begin after the trip was planned. If the
+                        // actual TaskAuthority refuses the departure, cancel
+                        // only these unstarted legs and make one same-day plan
+                        // against the live occupancy state. No work, purchase,
+                        // or need fulfillment is awarded here.
+                        loop.AbortTrip(trip, error, dayIndex, diag);
+                        activeTrips.Remove(trip);
+                        PlannedShoppingTrip replacement = loop.PlanTrip(
+                            trip.Need, dayIndex, trip.Options ?? new ShoppingLoopOptions());
+                        if (replacement.State == PlannedShoppingTrip.TripState.Planned)
+                        {
+                            activeTrips.Add(replacement);
+                            diag.Add($"ShoppingTripDriver: need {needKey} was replanned once after a concurrent task occupied P{trip.ShopperPersonId}; P{replacement.ShopperPersonId} is now responsible.");
+                        }
+                        else
+                        {
+                            diag.Add($"ShoppingTripDriver: need {needKey} remains open after its one same-day occupancy replan failed: {replacement.FailureReason}");
+                        }
+                        continue;
+                    }
+
                     loop.AbortTrip(trip, error, dayIndex, diag);
                     activeTrips.Remove(trip);
                     continue;
@@ -928,6 +963,10 @@ namespace LandLedgers.Population
             serviceTaskIdStringToTripId.Remove(trip.ServiceTaskId.ToString());
             ReturnEmpty(trip, $"Balked: patience exhausted after waiting {waited} min.", "balked", dayIndex, currentGameSeconds, dueEvents, diag);
         }
+
+        private static bool IsConcurrentTaskStartRefusal(string error) =>
+            !string.IsNullOrWhiteSpace(error)
+            && error.IndexOf("already occupied by task", StringComparison.Ordinal) >= 0;
 
         /// <summary>Slice 18b: finds the active trip for a queue customer
         /// ref, beside FindTrip (by TripId). The release needs a by-ref

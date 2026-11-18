@@ -653,6 +653,27 @@ namespace LandLedgers.Tasks
             return open;
         }
 
+        /// <summary>
+        /// Finds an already-started task that prevents a worker from starting
+        /// another task, regardless of which business or household owns it.
+        /// PersonScheduleTracker reservations cover planned time windows; this
+        /// query covers actual task occupancy that may not yet have a matching
+        /// reservation.
+        /// </summary>
+        public WorkTask FindBlockingTaskForAssignee(EntityId workerId)
+        {
+            if (!workerId.IsValid) return null;
+            foreach (WorkTask task in tasks)
+            {
+                if (task == null || !task.HasAssignee || task.AssigneeId != workerId
+                    || !TaskLifecyclePolicy.BlocksConcurrentTaskStart(task.Status))
+                    continue;
+                return task;
+            }
+
+            return null;
+        }
+
         public WorkTask FindTask(EntityId taskId)
         {
             RebuildLookupsIfNeeded();

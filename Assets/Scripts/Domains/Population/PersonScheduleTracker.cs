@@ -542,7 +542,8 @@ namespace LandLedgers.Population
             Func<int, LandLedgers.Primitives.EntityId> personEntityId,
             out string reason,
             OffMapJourneyAuthority offMapJourneys = null,
-            Func<int, int> oneWayMinutesFor = null)
+            Func<int, int> oneWayMinutesFor = null,
+            Func<int, string> blockingTaskReason = null)
         {
             reason = null;
             if (population == null || memberIds == null || memberIds.Count == 0)
@@ -593,6 +594,13 @@ namespace LandLedgers.Population
                     !scheduleTracker.IsFree(personId, dayIndex, tripStartMinute, tripDurationMinutes))
                 {
                     rejections.Add($"P{personId}: schedule conflict during the trip window.");
+                    continue;
+                }
+
+                string activeTaskReason = blockingTaskReason?.Invoke(personId);
+                if (!string.IsNullOrWhiteSpace(activeTaskReason))
+                {
+                    rejections.Add($"P{personId}: {activeTaskReason}");
                     continue;
                 }
 

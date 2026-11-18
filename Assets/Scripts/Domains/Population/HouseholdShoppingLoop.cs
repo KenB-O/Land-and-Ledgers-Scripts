@@ -2204,7 +2204,15 @@ namespace LandLedgers.Population
                 int candidateShopper = ShopperAssignmentPolicy.ChooseShopper(
                     population, memberIds, dayIndex, departure, estimateMinutes,
                     scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys,
-                    OneWayMinutesToNearestSupplier(knownOffering, options));
+                    OneWayMinutesToNearestSupplier(knownOffering, options),
+                    personId =>
+                    {
+                        EntityId person = personEntityId != null ? personEntityId(personId) : default(EntityId);
+                        WorkTask activeTask = person.IsValid ? tasks.FindBlockingTaskForAssignee(person) : null;
+                        return activeTask == null
+                            ? null
+                            : $"already occupied by task {activeTask.TaskId} ({activeTask.Status})";
+                    });
                 if (candidateShopper < 0)
                 {
                     continue;

@@ -29,6 +29,7 @@ using LandLedgers.Economy.Trade;
 using LandLedgers.Economy.Creation;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Recruitment;
+using LandLedgers.FirstLedger;
 using LandLedgers.Orchestration.Bootstrap;
 using LandLedgers.Orchestration.Player;
 using LandLedgers.Orchestration.Scenarios;
@@ -131,6 +132,8 @@ namespace LandLedgers.Orchestration.Systems
         private string lastPhysicalShoppingRouteRefusal = string.Empty;
         private int detailedShoppingTraceDay = -1;
         private int detailedShoppingTraceLogsToday;
+        private FirstLedgerSliceBootstrapper startupBootstrapper;
+        private bool startupFailureDriverGateLogged;
         private sealed class HouseholdSupplyIncident
         {
             public string IncidentId;
@@ -4296,6 +4299,7 @@ namespace LandLedgers.Orchestration.Systems
 
             hub ??= FindAnyObjectByType<SimulationSystemsHub>();
             timeManager ??= TimeManager.Instance != null ? TimeManager.Instance : FindAnyObjectByType<TimeManager>();
+            startupBootstrapper ??= FindAnyObjectByType<FirstLedgerSliceBootstrapper>();
             scenarioDirector ??= FindAnyObjectByType<ScenarioDirector>();
             sharedBusinessRuntime ??= FindAnyObjectByType<SharedBusinessRuntimeManager>();
             populationManager ??= FindAnyObjectByType<PopulationManager>();
@@ -4577,6 +4581,7 @@ namespace LandLedgers.Orchestration.Systems
 
             hub ??= FindAnyObjectByType<SimulationSystemsHub>();
             timeManager ??= TimeManager.Instance != null ? TimeManager.Instance : FindAnyObjectByType<TimeManager>();
+            startupBootstrapper ??= FindAnyObjectByType<FirstLedgerSliceBootstrapper>();
             scenarioDirector ??= FindAnyObjectByType<ScenarioDirector>();
             // PlayerDirector is a plain C# authority, not a UnityEngine.Object; scene
             // auto-discovery is not available here. Bootstrap code may assign it.
@@ -4960,8 +4965,38 @@ namespace LandLedgers.Orchestration.Systems
             };
         }
 
+        /// <summary>
+        /// A configured startup is the authority for whether runtime simulation
+        /// may advance. Scenes without a bootstrapper retain their established
+        /// standalone behavior; when one is present, no weekly, daily, or
+        /// short-tick work runs until it has completed successfully.
+        /// </summary>
+        public static bool ShouldAdvanceSimulation(bool hasBootstrapper, bool initialized, bool startupFailed)
+        {
+            return !hasBootstrapper || (initialized && !startupFailed);
+        }
+
+        private bool CanAdvanceSimulationDrivers()
+        {
+            if (startupBootstrapper == null)
+                startupBootstrapper = FindAnyObjectByType<FirstLedgerSliceBootstrapper>();
+            if (startupBootstrapper == null)
+                return true;
+            if (ShouldAdvanceSimulation(true, startupBootstrapper.IsInitialized, startupBootstrapper.HasStartupFailed))
+                return true;
+
+            if (startupBootstrapper.HasStartupFailed && !startupFailureDriverGateLogged)
+            {
+                startupFailureDriverGateLogged = true;
+                Debug.LogError("[SimulationDrivers] Runtime simulation drivers remain paused because world startup failed: "
+                    + startupBootstrapper.BootstrapStatus, this);
+            }
+            return false;
+        }
+
         private void OnWeekChanged(SimulationDateChangedContext context)
         {
+            if (!CanAdvanceSimulationDrivers()) return;
             if (hub == null)
             {
                 return;
@@ -5443,6 +5478,7 @@ namespace LandLedgers.Orchestration.Systems
 
         private void OnDayChanged(SimulationDateChangedContext context)
         {
+            if (!CanAdvanceSimulationDrivers()) return;
             if (hub == null || timeManager == null)
             {
                 return;
@@ -14550,6 +14586,7 @@ namespace LandLedgers.Orchestration.Systems
 
         private void OnShortTick(SimulationTickContext context)
         {
+            if (!CanAdvanceSimulationDrivers()) return;
             if (hub == null)
             {
                 return;

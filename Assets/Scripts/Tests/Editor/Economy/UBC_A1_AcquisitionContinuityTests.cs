@@ -12,6 +12,7 @@ using LandLedgers.World;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace LandLedgers.Editor.Economy
 {
@@ -55,6 +56,8 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void AcquiredGeneralStoreInventoryIsNotDuplicated()
         {
+            LogAssert.Expect(LogType.Error,
+                "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.");
             using TestWorld context = TestWorld.Create();
             BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
 
@@ -167,19 +170,20 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void AcquiredStoreBindingRefusalIsSurfacedWhenRuntimeIsBusy()
+        public void AcquiredStoreTransferIsRefusedWhenRuntimeIsBusy()
         {
             using TestWorld context = TestWorld.Create();
             context.CreatePlayerStoreForAccounting();
             BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+            BusinessInstanceState existingStore = context.StoreRuntime.CurrentBusiness;
 
-            Assert.IsTrue(
+            Assert.IsFalse(
                 context.SharedBusinessRuntime.TryTransferBusinessToPlayer(store.AssignedBuildingId, out _, out string message),
-                message);
+                "The shared single-store runtime must refuse an acquisition it cannot operate.");
 
-            Assert.AreEqual(BusinessOwnerKind.Player, store.Owner.OwnerKind, "The sale itself still completes.");
-            Assert.AreNotSame(store, context.StoreRuntime.CurrentBusiness, "The runtime keeps the store it already manages.");
-            StringAssert.Contains("could not take over", message, "A refused binding must be visible in the transfer message, never silent.");
+            Assert.AreEqual(BusinessOwnerKind.Npc, store.Owner.OwnerKind, "A refused transfer must leave the seller's business ownership unchanged.");
+            Assert.AreSame(existingStore, context.StoreRuntime.CurrentBusiness, "The runtime keeps the store it already manages.");
+            StringAssert.Contains("already managing", message, "A refused binding must be visible before ownership or payment moves.");
         }
 
         [Test]
@@ -232,10 +236,11 @@ namespace LandLedgers.Editor.Economy
         {
             using TestWorld context = TestWorld.Create();
             BusinessInstanceState store = context.GetBusiness(BusinessType.GeneralStore);
+            context.ExposeAllBusinessListingsForFocusedAssertion();
 
             AcquisitionListing listing = context.AcquisitionMarket.BusinessListings
                 .FirstOrDefault(candidate => candidate != null && candidate.businessInstanceId == store.InstanceId);
-            Assert.NotNull(listing, "The store must be listed for sale.");
+            Assert.NotNull(listing, BuildStoreListingDiagnostic(context, store));
             Assert.GreaterOrEqual(store.Owner.PersonId, 0, "The NPC store owner must have a person id.");
             Assert.AreEqual(store.Owner.PersonId, listing.sellerPersonId, "The listing must name the seller's person id.");
             Assert.AreEqual(store.Owner.DisplayName, listing.ownerDisplayName);
@@ -254,10 +259,12 @@ namespace LandLedgers.Editor.Economy
             context.SetBusinessCash(store, 100000);
             HouseholdLedgerRegistry ledgers = context.RegisterSellerWithHousehold(store, 100);
             context.PlayerPortfolio.AddOwnerCash(10_000_000, "UBC A2 test working capital");
+            context.ExposeAllBusinessListingsForFocusedAssertion();
 
             AcquisitionListing listing = context.AcquisitionMarket.BusinessListings
                 .FirstOrDefault(candidate => candidate != null && candidate.businessInstanceId == store.InstanceId);
-            Assert.NotNull(listing, "The store must be listed for sale.");
+            Assert.NotNull(listing, BuildStoreListingDiagnostic(context, store));
+            int sellerPersonId = listing.sellerPersonId;
             int askingPrice = listing.askingPriceCents;
             Assert.Greater(askingPrice, 0, "The store must have a positive asking price.");
             int listingIndex = context.AcquisitionMarket.BusinessListings.ToList().IndexOf(listing);
@@ -278,7 +285,7 @@ namespace LandLedgers.Editor.Economy
                 "Seller proceeds are the price plus the pre-close cash withdrawal; neither may vanish.");
 
             Assert.AreEqual(BusinessOwnerKind.Player, store.Owner.OwnerKind);
-            Assert.AreEqual(store.Owner.PersonId, store.SaleTerms.SellerPersonId);
+            Assert.AreEqual(sellerPersonId, store.SaleTerms.SellerPersonId);
             Assert.AreEqual(askingPrice, store.SaleTerms.PurchasePriceCents);
             Assert.AreEqual(withdrawal, store.SaleTerms.SellerCashWithdrawalCents);
             Assert.AreEqual(askingPrice + withdrawal, store.SaleTerms.SellerProceedsCents);
@@ -290,7 +297,23 @@ namespace LandLedgers.Editor.Economy
             Assert.NotNull(restored);
             Assert.AreEqual(askingPrice, restored.SaleTerms.PurchasePriceCents);
             Assert.AreEqual(withdrawal, restored.SaleTerms.SellerCashWithdrawalCents);
-            Assert.AreEqual(store.Owner.PersonId, restored.SaleTerms.SellerPersonId);
+            Assert.AreEqual(sellerPersonId, restored.SaleTerms.SellerPersonId);
+        }
+
+        [Test]
+        public void GeneralStoreIsNotOfferedWhenTheSingleRetailRuntimeIsAlreadyOccupied()
+        {
+            using TestWorld context = TestWorld.Create();
+            BusinessInstanceState npcStore = context.GetBusiness(BusinessType.GeneralStore);
+            context.CreatePlayerStoreForAccounting();
+
+            context.AcquisitionMarket.RebuildMarket();
+
+            Assert.IsFalse(context.AcquisitionMarket.BusinessListings.Any(
+                    candidate => candidate != null && candidate.businessInstanceId == npcStore.InstanceId),
+                "A second General Store must not be offered while the shared retail runtime cannot bind it.");
+            Assert.AreEqual(BusinessOwnerKind.Npc, npcStore.Owner.OwnerKind,
+                "Listing eligibility must not transfer business ownership.");
         }
 
         // UBC A2 item 1 (fallback): when the seller has no household to
@@ -323,6 +346,9 @@ namespace LandLedgers.Editor.Economy
         public void SellerProceedsFailLoudWhenNoHouseholdAndNoAuthority()
         {
             using TestWorld context = TestWorld.Create();
+
+            LogAssert.Expect(LogType.Error,
+                "[Acquisitions] SELLER PROCEEDS UNDELIVERED: $500.00 owed to Seller NineNineNine could not be credited (no seller household and no debt authority).");
 
             int delivered = context.AcquisitionMarket.CreditSellerProceeds(
                 999, "Seller NineNineNine", 50000, "test_business", out string note);
@@ -397,6 +423,18 @@ namespace LandLedgers.Editor.Economy
             }
 
             return snapshot;
+        }
+
+        private static string BuildStoreListingDiagnostic(TestWorld context, BusinessInstanceState store)
+        {
+            context.TownWorld.TryGetBuildingById(store.AssignedBuildingId, out PlacedBuilding building);
+            return $"The store must be listed when the retail runtime is available. " +
+                $"Owner={store.Owner?.OwnerKind}; businessBuilding={store.AssignedBuildingId}; " +
+                $"buildingFound={building != null}; buildingPlayerOwned={building?.playerOwned}; " +
+                $"storeBuildingId={context.StoreRuntime.StoreBuildingId}; " +
+                $"runtimeCurrent={context.StoreRuntime.CurrentBusiness?.InstanceId ?? "<none>"}; " +
+                $"assignmentValid={context.SharedBusinessRuntime.IsBusinessAssignmentValid(store)}; " +
+                $"listings={context.AcquisitionMarket.BusinessListings.Count}.";
         }
 
         private static void SetAccruedLiability(BusinessInstanceState business, int cents)
@@ -485,6 +523,14 @@ namespace LandLedgers.Editor.Economy
                         out string formationMessage),
                     formationMessage);
                 Assert.IsTrue(StoreRuntime.TryBindFormedPlayerBusiness(business, out string bindMessage), bindMessage);
+            }
+
+            public void ExposeAllBusinessListingsForFocusedAssertion()
+            {
+                FieldInfo field = typeof(AcquisitionMarketManager).GetField("maxBusinessListings", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.NotNull(field, "The market listing cap should remain configurable for deterministic focused tests.");
+                field.SetValue(AcquisitionMarket, 100);
+                AcquisitionMarket.RebuildMarket();
             }
 
             public void Dispose()

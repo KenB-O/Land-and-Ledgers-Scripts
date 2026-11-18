@@ -124,7 +124,10 @@ namespace LandLedgers.FirstLedger
         [SerializeField, Tooltip("Enables the small three-business roster for focused Main Scene playtesting; canonical opening defaults remain unchanged.")]
         private bool useCompactPlaytestOpeningRoster;
 
-        [SerializeField, Tooltip("Playtest only: treat the player as a regular NPC. Forwards to SimulationDrivers.TreatPlayerAsNpc on startup and on Continue. OR logic: true forces NPC mode on, false leaves a restored save value untouched and never clears a saved true. Codex must set this in Main Scene Inspector; it is code only here.")]
+        [SerializeField, Tooltip("Development override: when enabled, apply the player/NPC control choice below on New Game and Continue. When disabled, preserve the restored save's mode.")]
+        private bool overrideSavedPlayerNpcMode;
+
+        [SerializeField, Tooltip("Development control choice used only when Override Saved Player/NPC Mode is enabled. Checked treats Kennedy as an autonomous NPC; unchecked enables player-directed control through the same simulation authorities.")]
         private bool treatPlayerAsNpcPlaytest;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -1572,13 +1575,10 @@ namespace LandLedgers.FirstLedger
         }
 
         /// <summary>
-        /// Phase 2: forwards the playtest bool to SimulationDrivers.
-        /// OR logic only (see PlayerNpcPlaytestForwarding): true forces
-        /// NPC mode on, false leaves the drivers value untouched. Called
-        /// on New Game after ConfigureScenarioAuthorities and on
-        /// Continue after LoadDefaultSlot + ConfigureScenarioAuthorities.
-        /// Codex must set treatPlayerAsNpcPlaytest in Main Scene
-        /// Inspector; this method alone does not wire a scene.
+        /// Applies the opt-in development control-mode choice to the existing
+        /// player identity. With override disabled, Continue retains its saved
+        /// mode. With override enabled, either mode can be selected without
+        /// replacing or cloning Kennedy.
         /// </summary>
         private void ForwardPlayerNpcPlaytestFlag()
         {
@@ -1588,8 +1588,8 @@ namespace LandLedgers.FirstLedger
                 return;
             }
 
-            bool npcMode = LandLedgers.Orchestration.Player.PlayerNpcPlaytestForwarding.ApplyBootstrapperFlag(
-                drivers, treatPlayerAsNpcPlaytest);
+            bool npcMode = LandLedgers.Orchestration.Player.PlayerNpcPlaytestForwarding.ApplyModeOverride(
+                drivers, overrideSavedPlayerNpcMode, treatPlayerAsNpcPlaytest);
             if (npcMode)
             {
                 Debug.Log("[WorldStartup] Player-as-NPC playtest mode is on (bootstrapper or restored save).", this);

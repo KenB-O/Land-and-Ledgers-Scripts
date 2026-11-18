@@ -24,6 +24,29 @@ namespace LandLedgers.Orchestration.Player
     /// </summary>
     public static class PlayerNpcPlaytestForwarding
     {
+        /// <summary>
+        /// Optional development override. When disabled, preserve the restored
+        /// save value; when enabled, the bootstrapper's explicit Player/NPC
+        /// choice replaces it on both New Game and Continue.
+        /// </summary>
+        public static bool ApplyModeOverride(
+            IPassXlPlayerFlagHolder drivers,
+            bool overrideSavedMode,
+            bool treatPlayerAsNpc)
+        {
+            if (drivers == null)
+            {
+                return false;
+            }
+
+            if (overrideSavedMode)
+            {
+                drivers.TreatPlayerAsNpc = treatPlayerAsNpc;
+            }
+
+            return drivers.TreatPlayerAsNpc;
+        }
+
         public static bool ApplyBootstrapperFlag(
             IPassXlPlayerFlagHolder drivers, bool bootstrapperTreatPlayerAsNpc)
         {

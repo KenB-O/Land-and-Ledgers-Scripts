@@ -8102,7 +8102,7 @@ namespace LandLedgers.Economy
 
         private bool CanListBusinessInstance(BusinessInstanceState business)
         {
-            if (business == null || business.BusinessType == BusinessType.GeneralStore)
+            if (business == null)
             {
                 return false;
             }
@@ -8123,7 +8123,35 @@ namespace LandLedgers.Economy
                 return false;
             }
 
-            return sharedBusinessRuntime == null || sharedBusinessRuntime.IsBusinessAssignmentValid(business);
+            if (sharedBusinessRuntime != null && !sharedBusinessRuntime.IsBusinessAssignmentValid(business))
+            {
+                return false;
+            }
+
+            return CanTransferListedBusiness(business, out _);
+        }
+
+        private bool CanTransferListedBusiness(BusinessInstanceState business, out string message)
+        {
+            message = string.Empty;
+            if (business == null)
+            {
+                return true;
+            }
+
+            if (business.BusinessType != BusinessType.GeneralStore && business.BusinessType != BusinessType.Generic)
+            {
+                return true;
+            }
+
+            GeneralStoreRuntimeManager storeManager = playerCashSource ?? FindAnyObjectByType<GeneralStoreRuntimeManager>();
+            if (storeManager == null)
+            {
+                message = "No retail management runtime is available to operate this acquired merchant.";
+                return false;
+            }
+
+            return storeManager.CanBindAcquiredPlayerBusiness(business, out message);
         }
 
         private AcquisitionListing CreateLandListing(TownPlot plot)
@@ -8793,6 +8821,24 @@ namespace LandLedgers.Economy
             int finalPrice = Mathf.Max(1, deal.tentativePriceCents > 0 ? deal.tentativePriceCents : listing.askingPriceCents);
             int finalDueCents = Mathf.Max(0, finalPrice - Mathf.Max(0, deal.earnestMoneyCents)
                 - Mathf.Clamp(deal.sellerFinancedPrincipalCents, 0, finalPrice));
+
+            if (listing.kind == AcquisitionListingKind.Business
+                && !string.IsNullOrWhiteSpace(listing.businessInstanceId))
+            {
+                BusinessInstanceState business = sharedBusinessRuntime?.FindByBuildingId(listing.buildingId);
+                string transferReadiness = string.Empty;
+                if (business == null || !CanTransferListedBusiness(business, out transferReadiness))
+                {
+                    message = business == null
+                        ? "Closing blocked: the listed business is no longer present in the shared runtime. No closing balance was charged."
+                        : $"Closing blocked: {transferReadiness} No closing balance was charged.";
+                    deal.statusText = message;
+                    marketStatus = message;
+                    RefreshDealWorkflowReadouts(listing, deal);
+                    return false;
+                }
+            }
+
             if (TryResolveClosingFailure(listing, deal, out AcquisitionClosingFailureCause failureCause, out string failureSummary))
             {
                 deal.closingFailureCause = failureCause;
@@ -9525,6 +9571,15 @@ namespace LandLedgers.Economy
                     ? "That business is already owned by the player."
                     : "That business listing is no longer available.";
                 RebuildMarket();
+                return false;
+            }
+
+            BusinessInstanceState listedBusiness = !string.IsNullOrWhiteSpace(listing.businessInstanceId)
+                ? sharedBusinessRuntime?.FindByBuildingId(building.id)
+                : null;
+            if (listedBusiness != null && !CanTransferListedBusiness(listedBusiness, out message))
+            {
+                message = $"Purchase blocked before payment: {message}";
                 return false;
             }
 

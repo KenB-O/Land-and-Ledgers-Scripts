@@ -1,4 +1,6 @@
 using LandLedgers.Orchestration.Systems;
+using LandLedgers.Orchestration.Player;
+using LandLedgers.Persistence;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -17,6 +19,11 @@ using UnityEngine;
 [TestFixture]
 public sealed class PassXlPlayerAsNpcTests
 {
+    private sealed class FlagHolder : IPassXlPlayerFlagHolder
+    {
+        public bool TreatPlayerAsNpc { get; set; }
+    }
+
     [Test]
     public void SimulationDrivers_TreatPlayerAsNpc_DefaultOff_AdvancesPlayerWork()
     {
@@ -37,5 +44,18 @@ public sealed class PassXlPlayerAsNpcTests
         drivers.TreatPlayerAsNpc = false;
         Assert.IsTrue(drivers.ShouldAdvancePlayerWork());
         Object.DestroyImmediate(go);
+    }
+
+    [Test]
+    public void PlayerNpcModeOverride_CanSwitchBothDirections_WithoutReplacingIdentity()
+    {
+        var drivers = new FlagHolder { TreatPlayerAsNpc = true };
+
+        Assert.IsFalse(PlayerNpcPlaytestForwarding.ApplyModeOverride(drivers, true, false),
+            "An explicit Player selection must clear a previously restored NPC mode.");
+        Assert.IsTrue(PlayerNpcPlaytestForwarding.ApplyModeOverride(drivers, true, true),
+            "An explicit NPC selection must be reversible on the same authority.");
+        Assert.IsTrue(PlayerNpcPlaytestForwarding.ApplyModeOverride(drivers, false, false),
+            "Without override, a restored mode remains authoritative.");
     }
 }

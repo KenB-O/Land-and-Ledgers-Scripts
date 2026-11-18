@@ -2755,8 +2755,37 @@ namespace LandLedgers.Economy
                 return false;
             }
 
+            GeneralStoreRuntimeManager storeRuntime = null;
+            if (business.BusinessType == BusinessType.GeneralStore || business.BusinessType == BusinessType.Generic)
+            {
+                storeRuntime = generalStoreRuntime ?? FindAnyObjectByType<GeneralStoreRuntimeManager>();
+                if (storeRuntime == null)
+                {
+                    message = $"{business.RuntimeDisplayName} cannot be acquired because no retail management runtime is available.";
+                    return false;
+                }
+
+                if (!storeRuntime.CanBindAcquiredPlayerBusiness(business, out string bindPreflightMessage))
+                {
+                    message = $"{business.RuntimeDisplayName} cannot be acquired yet: {bindPreflightMessage}";
+                    return false;
+                }
+            }
+
             BusinessOwnerIdentity formerOwner = business.Owner;
             business.TransferToPlayerOwnership();
+
+            // Bind immediately after the ownership change, before changing
+            // staffing, cash defaults or throughput. If the runtime refuses
+            // unexpectedly, this makes the rollback complete and observable.
+            if (storeRuntime != null
+                && !storeRuntime.TryBindFormedPlayerBusiness(business, out string bindMessage))
+            {
+                business.SetOwner(formerOwner);
+                message = $"{business.RuntimeDisplayName} ownership transfer was rolled back because the store runtime refused binding: {bindMessage}";
+                status = message;
+                return false;
+            }
 
             // UBC A2: the former owner is NOT silently kept on as an
             // employee. Employment requires an agreement, and the sale terms
@@ -2784,28 +2813,11 @@ namespace LandLedgers.Economy
                 playerPortfolio?.RegisterCurrentBusinessCashCheckpoint(business, weekKey, true);
             }
 
-            // UBC A1: a player-owned General Store must be managed by the store
-            // runtime from the moment of acquisition. Without this the acquired
-            // store receives no weekly payroll, no weekly reorder, no owner
-            // distribution and no daily-sales resolution (the shared weekly pass
-            // deliberately excludes GeneralStore), while the NPC restock driver
-            // keeps spending its cash. Bind here so both acquisition closes (and
-            // any future caller of this choke point) keep the store operational.
-            // A refusal is surfaced in the message, never silent: the runtime
-            // manages exactly one store, so a second store stays unbound until
-            // a multi-store runtime exists.
-            string storeBindingNote = string.Empty;
-            if (business.BusinessType == BusinessType.GeneralStore
-                || business.BusinessType == BusinessType.Generic)
-            {
-                GeneralStoreRuntimeManager storeRuntime = generalStoreRuntime ?? FindAnyObjectByType<GeneralStoreRuntimeManager>();
-                if (storeRuntime != null && !storeRuntime.TryBindFormedPlayerBusiness(business, out string bindMessage))
-                {
-                    storeBindingNote = $" Note: the store runtime could not take over this business ({bindMessage}); weekly payroll and reorder will not run until it is bound.";
-                }
-            }
-
-            message = $"{business.RuntimeDisplayName} is now player-owned.{storeBindingNote}";
+            // UBC A1: merchant binding above ensures a player-owned General Store
+            // receives payroll, reorder, owner distribution and daily-sales
+            // resolution through the established retail authority. The NPC
+            // restock driver then stops for this same business identity.
+            message = $"{business.RuntimeDisplayName} is now player-owned.";
             status = message;
             return true;
         }

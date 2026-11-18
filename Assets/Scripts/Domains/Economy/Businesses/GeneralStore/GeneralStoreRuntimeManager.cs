@@ -1383,9 +1383,8 @@ namespace LandLedgers.FirstLedger
                 return false;
             }
 
-            if (runtimeState != null && currentBusiness != business)
+            if (!CanBindAcquiredPlayerBusiness(business, out message))
             {
-                message = $"The General Store runtime is already managing {currentBusiness?.RuntimeDisplayName ?? "another store"}.";
                 return false;
             }
 
@@ -1401,6 +1400,32 @@ namespace LandLedgers.FirstLedger
             PushCashToHud();
             message = $"{business.RuntimeDisplayName} is ready for operating setup. Configure premises, funding, labor, and stock before opening.";
             status = message;
+            return true;
+        }
+
+        /// <summary>
+        /// Side-effect-free preflight for an acquired merchant. It deliberately
+        /// accepts an NPC-owned business because acquisition calls it before
+        /// the ownership transfer. The single-store runtime must be available
+        /// before a sale closes; otherwise the buyer could pay for a business
+        /// that this runtime cannot operate.
+        /// </summary>
+        public bool CanBindAcquiredPlayerBusiness(BusinessInstanceState business, out string message)
+        {
+            AutoWire();
+            if (business == null
+                || (business.BusinessType != BusinessType.GeneralStore && business.BusinessType != BusinessType.Generic))
+            {
+                message = "Only a formed merchant-capable Business can be bound to the retail management runtime.";
+                return false;
+            }
+
+            if (runtimeState != null && currentBusiness != business)
+            {
+                message = $"The General Store runtime is already managing {currentBusiness?.RuntimeDisplayName ?? "another store"}.";
+                return false;
+            }
+            message = string.Empty;
             return true;
         }
 

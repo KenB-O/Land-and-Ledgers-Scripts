@@ -84,6 +84,22 @@ namespace LandLedgers.Orchestration
             return null;
         }
 
+        /// <summary>
+        /// Development configuration uses readable hyphenated operation IDs,
+        /// while some existing runtime profiles use underscores. Those are
+        /// formatting variants of the same stable business operation key.
+        /// </summary>
+        public static bool OperationMatchesRuntimeProfile(string operationId, string profileId)
+        {
+            return NormalizeOperationId(operationId) == NormalizeOperationId(profileId);
+        }
+
+        private static string NormalizeOperationId(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+            return new string(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+        }
+
         private static Result Apply(
             DevelopmentTownConfiguration configuration,
             SharedBusinessRuntimeManager businessRuntime,
@@ -207,7 +223,7 @@ namespace LandLedgers.Orchestration
             else
             {
                 List<BusinessInstanceState> candidates = businesses.Where(candidate => candidate != null
-                    && string.Equals(candidate.ProfileId, definition.operationId, StringComparison.OrdinalIgnoreCase)).ToList();
+                    && OperationMatchesRuntimeProfile(definition.operationId, candidate.ProfileId)).ToList();
                 if (candidates.Count == 1) match = candidates[0];
                 else if (candidates.Count > 1 && configuration != null
                     && configuration.ResolveRuntimePersonId(definition.ownerPersonKey) > 0)

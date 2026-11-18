@@ -31,6 +31,7 @@ Buildings 0–3 share the authored White Wood storefront shell and geometry-deri
 - `BusinessInteriorFixturePresentation` stores presentation identity and unregisters only its own optional runtime approach point on destruction.
 - `FirstLedgerSliceBootstrapper` invokes the initializer for New Game and rebuilds presentations from existing equipment identities on Continue. Continue does not mint a missing asset.
 - The code does not add merchandise stock, business cash, workstation capability, storage capacity or a service transaction. An approach marker only creates a discoverable physical activity location; the existing work/service authorities still have to bind and authorize the activity.
+- The live survey found that configured `general-store`, `fuel-dealer` and `lumber-yard` operation IDs did not resolve runtime profiles named `general_store`, `fuel_dealer` and `lumber_yard`. The resolver now treats punctuation differences as equivalent while retaining exact normalized identity matching and ambiguity refusal. The Bakery already matched and is the only business for which this run created presentations.
 
 ## Local authoring performed
 
@@ -45,13 +46,15 @@ The local fixture positions and approach points have **not** been visually inspe
 - `DevelopmentTownConfigurationTests`: 6 passed, 0 failed.
 - Unity Editor PlayMode status before test: stopped (Edit Mode).
 - A bounded New Game PlayMode attempt was started after authoring. The Editor then became unresponsive during domain reload/asset scan; the Unity Pipeline connection stopped. `Editor.log` ended in the asset import/revision phase and reported `Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.` No recovery restart was attempted.
-- Therefore no three-interior screenshots, customer/worker approach test or runtime fixture-registration result was obtained. A pre-change distant town view is not acceptance evidence.
+- The Editor recovered without a restart and the actual PlayMode survey confirmed `manager=True`, `hub=True`, `world=True`, 14 buildings and all seven configured runtime business identities. Before the resolver correction, only the Bakery's two new fixture presentations appeared (its pre-existing oven asset plus the configured work surface/crate produced six registered equipment assets total). General Store, Fuel Dealer and Lumberyard registers remained empty, confirming the separator-mismatch defect. The sawmill had no assigned building, and the carpentry business was assigned to the owner's home (Building 13); neither received furnishings. Freight had no building, as expected.
+- After fixing profile matching, Unity compiled the new code successfully (`Tundra build success`, 56.48 seconds, `compilationFailed=false`, zero errors). The Editor then began an assembly reload and the Pipeline disconnected again. The five new profile-normalization regression cases could not be rerun after the fix. No second PlayMode was launched.
+- No three-interior screenshots or customer/worker approach test were obtained. The pre-change distant town view is not acceptance evidence. The last confirmed Editor state before the final code reload was Edit Mode; the Editor later became nonresponsive during reload, so its final mode could not be queried.
 - `git diff --check` passed for the reviewed source changes.
 
 ## Follow-up requirements
 
-1. When Unity is responsive, check the specific `.anim` asset and import log before retrying PlayMode; do not overwrite the owner asset or restart blindly.
-2. Inspect the four authored premises and all 13 fixture transforms in Scene/Game views; adjust only through the authoring data, preserving the owner's building/prefab changes.
+1. When Unity is responsive, re-run `DevelopmentBusinessInteriorInitializerTests`, confirm all four configured businesses now resolve, and inspect the `.anim` import warning before any restart; do not overwrite the owner asset.
+2. Inspect the four authored premises and all 13 fixture transforms in Scene/Game views; adjust only through authoring data, preserving the owner's building/prefab changes.
 3. Verify physical path reachability to the service counter and relevant work points, then connect those points only to existing service/workstation authorities.
 4. Assign a legitimate commercial workshop premise before placing carpentry equipment. Resolve sawmill premises separately; do not use a residential home or an unassigned shell as if it were authorized.
 5. Add approved physical models for dedicated bakery and sawmill/woodworking machinery if the owner wants those operations visibly represented; current runtime equipment records do not make the available household props equivalent machinery.

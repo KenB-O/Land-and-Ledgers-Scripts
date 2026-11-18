@@ -54,5 +54,20 @@ namespace LandLedgers.EditorTests.Economy
             StringAssert.Contains("kind", DevelopmentBusinessInteriorInitializer.ValidateRegisteredOwner(asset, "bakery-instance", "shelf"));
             Assert.IsNotNull(DevelopmentBusinessInteriorInitializer.ValidateRegisteredOwner(null, "bakery-instance", "bake-oven"));
         }
+
+        [TestCase("general-store", "general_store")]
+        [TestCase("fuel-dealer", "fuel_dealer")]
+        [TestCase("lumber-yard", "lumber_yard")]
+        [TestCase("bakery", "bakery")]
+        public void ConfiguredOperationIdResolvesFormattingVariantOfRuntimeProfile(string operation, string profile)
+        {
+            Assert.IsTrue(DevelopmentBusinessInteriorInitializer.OperationMatchesRuntimeProfile(operation, profile));
+        }
+
+        [Test]
+        public void ConfiguredOperationIdDoesNotResolveDifferentRuntimeProfile()
+        {
+            Assert.IsFalse(DevelopmentBusinessInteriorInitializer.OperationMatchesRuntimeProfile("general-store", "bakery"));
+        }
     }
 }

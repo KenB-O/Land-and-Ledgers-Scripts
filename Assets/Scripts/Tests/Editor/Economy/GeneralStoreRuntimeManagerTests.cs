@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Storage;
 using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
 using NUnit.Framework;
@@ -129,6 +130,49 @@ namespace LandLedgers.EditorTests.Economy
                 SetSlots(manager,
                     ClerkSlot("owner:Emma", paidActive: true, suspended: false));
                 Assert.IsFalse(manager.TryGetServiceClerkPersonId(out _));
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void AuthoredFurniturePricesAndTargetsCreateNamedProcurementOffers_WithoutSeedingStock()
+        {
+            GeneralStoreBusinessDefinition definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(DefinitionPath);
+            Assert.NotNull(definition, "Authored General Store definition missing");
+            GameObject root = new("GeneralStoreRuntimeManager_FurnitureProcurementOffers");
+            try
+            {
+                GeneralStoreRuntimeManager manager = NewManager(root);
+                FieldInfo definitionField = typeof(GeneralStoreRuntimeManager).GetField(
+                    "storeDefinition", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.NotNull(definitionField, "GeneralStoreRuntimeManager.storeDefinition field missing");
+                definitionField.SetValue(manager, definition);
+
+                var port = manager.BuildHouseholdTradingPort();
+                var offered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var offer in port.CategoryOffers)
+                {
+                    if (offer == null || !offer.UsesItemLevelInventory
+                        || !string.Equals(offer.CategoryId, "furniture", StringComparison.OrdinalIgnoreCase)
+                        || offer.OfferedItemIds == null) continue;
+                    foreach (string itemId in offer.OfferedItemIds) offered.Add(itemId);
+                }
+
+                foreach (string itemId in FurnitureItemSpecs.AllIds)
+                {
+                    ItemDefinition item = definition.FindItem(itemId);
+                    Assert.NotNull(item, $"Expected authored retail item '{itemId}'.");
+                    if (item.ReorderTargetUnits <= 0 || manager.GetItemSellingPriceCents(itemId) <= 0) continue;
+                    Assert.IsTrue(offered.Contains(itemId),
+                        $"'{itemId}' has an authored retail price and reorder target, so the store must be able to procure it by named SKU.");
+                }
+
+                Assert.AreEqual(0, manager.RuntimeState != null
+                    ? manager.RuntimeState.RetailItemLots.Count
+                    : 0, "Offer construction must not create free retail inventory.");
             }
             finally
             {

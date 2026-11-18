@@ -5,6 +5,8 @@ using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Economy.Labor;
+using LandLedgers.Economy.GenericBusiness;
+using LandLedgers.Economy.Storage;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Persistence;
 using LandLedgers.Population;
@@ -604,6 +606,8 @@ namespace LandLedgers.FirstLedger
                 }
             }
 
+            AddProcurementOffersForAuthorizedFurniture(offers);
+
             if (droppedReasons.Count > 0)
             {
                 Debug.LogWarning("General Store fallback trading port omits item offer(s): " +
@@ -714,6 +718,8 @@ namespace LandLedgers.FirstLedger
                 }
             }
 
+            AddProcurementOffersForAuthorizedFurniture(offers);
+
             Review2StoreFeedItem runtimeFeed = runtimeFeedRegistry?.Find(npcBusiness.InstanceId);
             if (runtimeFeed != null)
             {
@@ -790,6 +796,55 @@ namespace LandLedgers.FirstLedger
 
             var capability = new StoreTradingCapability { Staffed = npcBusiness.RuntimeState.FilledWorkerCount > 0 };
             return new GeneralStoreTradingPort(this, npcBusiness, offers, capability);
+        }
+
+        /// <summary>
+        /// The furniture assortment is not part of the household staple-item
+        /// catalog, so the normal household-offer builder correctly refuses
+        /// to pretend a bed or cabinet is a food/reserve SKU. It is still a
+        /// legitimate identified retail product: the authored store definition
+        /// supplies its selling price and reorder target, while the regional
+        /// supplier registry supplies finite wholesale stock and cost. Keep
+        /// these offers item-level so store procurement creates named lots;
+        /// never seed furniture stock here.
+        /// </summary>
+        private void AddProcurementOffersForAuthorizedFurniture(List<GeneralStoreCategoryOffer> offers)
+        {
+            if (offers == null || storeDefinition == null) return;
+            foreach (string itemId in FurnitureItemSpecs.AllIds)
+            {
+                if (string.IsNullOrWhiteSpace(itemId)
+                    || !string.Equals(RegionalItemCategories.CategoryForItem(itemId),
+                        FurnitureStorePurchase.FurnitureCategoryId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                ItemDefinition item = storeDefinition.FindItem(itemId);
+                if (item == null || item.ReorderTargetUnits <= 0 || GetItemSellingPriceCents(itemId) <= 0)
+                    continue;
+
+                bool alreadyOffered = false;
+                foreach (GeneralStoreCategoryOffer existing in offers)
+                {
+                    if (existing?.OfferedItemIds == null) continue;
+                    foreach (string existingItemId in existing.OfferedItemIds)
+                    {
+                        if (!string.Equals(existingItemId, itemId, StringComparison.OrdinalIgnoreCase)) continue;
+                        alreadyOffered = true;
+                        break;
+                    }
+                    if (alreadyOffered) break;
+                }
+                if (alreadyOffered) continue;
+
+                offers.Add(new GeneralStoreCategoryOffer
+                {
+                    CategoryId = FurnitureStorePurchase.FurnitureCategoryId,
+                    OfferedItemIds = new List<string> { itemId },
+                    StoreUnitsPerItemUnit = 1,
+                    HouseholdUnitsPerStoreUnit = 1,
+                    UsesItemLevelInventory = true,
+                });
+            }
         }
 
         private void LogRuntimeFeedOfferWarning(string businessId, string itemId, string reason)

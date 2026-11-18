@@ -119,6 +119,7 @@ namespace LandLedgers.Pathing
         private readonly List<GridCoord> currentPath = new();
         private readonly List<Vector3> currentWorldPath = new();
         private Vector3 routeDestinationWorld;
+        private Vector3 desiredPresentationForward;
         private double lastAuthoritativeRouteTimeSeconds;
         private bool hasAuthoritativeRouteTimeSample;
         private BuildingAnchor currentTargetAnchor;
@@ -232,7 +233,7 @@ namespace LandLedgers.Pathing
             if (legacyCrateVisual != null) legacyCrateVisual.gameObject.SetActive(false);
             if (freightPackageVisual != null) freightPackageVisual.gameObject.SetActive(false);
         }
-        public int RemainingPathWaypointCount => Math.Max(0, currentPath.Count - waypointIndex);
+        public int RemainingPathWaypointCount => Math.Max(0, currentWorldPath.Count - waypointIndex);
         public event Action<AgentMover> ArrivedAtDestination;
 
         public bool HasPresentationAnimation => presentationAnimationStateId != 0;
@@ -619,6 +620,7 @@ namespace LandLedgers.Pathing
             if (pathingManager?.Grid != null)
                 foreach (Vector3 point in currentWorldPath) currentPath.Add(pathingManager.Grid.WorldToCoord(point));
             routeDestinationWorld = currentWorldPath[^1];
+            SetInitialPresentationForward(currentWorldPath);
             waypointIndex = 0;
             doorPauseTimer = 0f;
             ResetAuthoritativeRouteClock();
@@ -649,8 +651,16 @@ namespace LandLedgers.Pathing
 
             currentWorldPath.Clear();
             if (path != null)
-                foreach (GridCoord coord in path) currentWorldPath.Add(pathingManager.CoordToPathWorld(coord));
+            {
+                List<Vector3> gridRoute = new(path.Count);
+                foreach (GridCoord coord in path) gridRoute.Add(pathingManager.CoordToPathWorld(coord));
+                float cornerCutMeters = pathingManager.Grid != null && pathingManager.Settings != null
+                    ? pathingManager.Grid.CellSizeMeters * pathingManager.Settings.pedestrianCornerRoundingCellFraction
+                    : 0f;
+                currentWorldPath.AddRange(BuildCornerRoundedPath(gridRoute, cornerCutMeters));
+            }
             routeDestinationWorld = currentWorldPath.Count > 0 ? currentWorldPath[^1] : transform.position;
+            SetInitialPresentationForward(currentWorldPath);
 
             waypointIndex = 0;
             doorPauseTimer = 0f;
@@ -675,6 +685,102 @@ namespace LandLedgers.Pathing
             AdvanceAuthoritativeRouteTo(timeManager != null
                 ? timeManager.PreciseAbsoluteGameSeconds
                 : double.NaN);
+            ApplyPresentationRotation(UnityEngine.Time.unscaledDeltaTime);
+        }
+
+        private void SetInitialPresentationForward(IReadOnlyList<Vector3> worldPath)
+        {
+            desiredPresentationForward = Vector3.zero;
+            if (worldPath == null) return;
+            for (int i = 0; i < worldPath.Count; i++)
+            {
+                Vector3 direction = worldPath[i] - transform.position;
+                direction.y = 0f;
+                if (direction.sqrMagnitude <= 0.0001f) continue;
+                desiredPresentationForward = direction.normalized;
+                return;
+            }
+        }
+
+        private void ApplyPresentationRotation(float realDeltaSeconds)
+        {
+            if (state != AgentMoveState.Moving || desiredPresentationForward.sqrMagnitude <= 0.0001f
+                || pathingManager == null || pathingManager.Settings == null || realDeltaSeconds <= 0f) return;
+            Quaternion target = Quaternion.LookRotation(desiredPresentationForward, Vector3.up);
+            float degrees = pathingManager.Settings.turnSpeedDegreesPerSecond * realDeltaSeconds;
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, target, degrees);
+        }
+
+        internal static List<Vector3> BuildCornerRoundedPath(IReadOnlyList<Vector3> points, float maximumCutDistance)
+        {
+            List<Vector3> result = new(points?.Count ?? 0);
+            if (points == null || points.Count == 0) return result;
+            result.Add(points[0]);
+            if (points.Count < 3 || maximumCutDistance <= 0.001f)
+            {
+                for (int i = 1; i < points.Count; i++) result.Add(points[i]);
+                return result;
+            }
+
+            for (int i = 1; i < points.Count - 1; i++)
+            {
+                Vector3 previous = points[i - 1];
+                Vector3 corner = points[i];
+                Vector3 next = points[i + 1];
+                Vector3 incoming = corner - previous;
+                Vector3 outgoing = next - corner;
+                float incomingLength = new Vector2(incoming.x, incoming.z).magnitude;
+                float outgoingLength = new Vector2(outgoing.x, outgoing.z).magnitude;
+                if (incomingLength <= 0.001f || outgoingLength <= 0.001f)
+                {
+                    result.Add(corner);
+                    continue;
+                }
+
+                Vector3 incomingDirection = new(incoming.x / incomingLength, 0f, incoming.z / incomingLength);
+                Vector3 outgoingDirection = new(outgoing.x / outgoingLength, 0f, outgoing.z / outgoingLength);
+                float dot = Mathf.Clamp(Vector3.Dot(incomingDirection, outgoingDirection), -1f, 1f);
+                float turnRadians = Mathf.Acos(dot);
+                if (turnRadians < Mathf.Deg2Rad * 20f || turnRadians > Mathf.Deg2Rad * 150f)
+                {
+                    result.Add(corner);
+                    continue;
+                }
+
+                float cut = Mathf.Min(maximumCutDistance, Mathf.Min(incomingLength, outgoingLength) * 0.35f);
+                float tangentHalf = Mathf.Tan(turnRadians * 0.5f);
+                float tangentQuarter = Mathf.Tan(turnRadians * 0.25f);
+                if (cut <= 0.001f || tangentHalf <= 0.001f)
+                {
+                    result.Add(corner);
+                    continue;
+                }
+
+                Vector3 entry = corner - incomingDirection * cut;
+                Vector3 exit = corner + outgoingDirection * cut;
+                entry.y = Mathf.Lerp(previous.y, corner.y, (incomingLength - cut) / incomingLength);
+                exit.y = Mathf.Lerp(corner.y, next.y, cut / outgoingLength);
+                float handle = (4f / 3f) * cut * tangentQuarter / tangentHalf;
+                Vector3 controlA = entry + incomingDirection * handle;
+                Vector3 controlB = exit - outgoingDirection * handle;
+                controlA.y = entry.y + (corner.y - previous.y) / incomingLength * handle;
+                controlB.y = exit.y - (next.y - corner.y) / outgoingLength * handle;
+
+                result.Add(entry);
+                for (int sample = 1; sample <= 4; sample++)
+                {
+                    float t = sample * 0.25f;
+                    float oneMinusT = 1f - t;
+                    Vector3 point = oneMinusT * oneMinusT * oneMinusT * entry
+                        + 3f * oneMinusT * oneMinusT * t * controlA
+                        + 3f * oneMinusT * t * t * controlB
+                        + t * t * t * exit;
+                    result.Add(point);
+                }
+            }
+
+            result.Add(points[^1]);
+            return result;
         }
 
         /// <summary>Advances the route against the existing authoritative game clock.</summary>
@@ -796,9 +902,7 @@ namespace LandLedgers.Pathing
                     continue;
                 }
 
-                Quaternion targetRotation = Quaternion.LookRotation(toTarget.normalized, Vector3.up);
-                float turnDegrees = settings.turnSpeedDegreesPerSecond * simulationDeltaSeconds;
-                transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRotation, turnDegrees);
+                desiredPresentationForward = toTarget.normalized;
                 if (remainingDistance >= distance)
                 {
                     Vector3 segmentStart = transform.position;
@@ -871,7 +975,7 @@ namespace LandLedgers.Pathing
                 state = AgentMoveState.ArrivedVisible;
             }
 
-            waypointIndex = currentPath.Count;
+            waypointIndex = currentWorldPath.Count;
             doorPauseTimer = 0f;
             currentStartDoorAnimator = null;
             currentTargetDoorAnimator = null;
@@ -1498,10 +1602,10 @@ namespace LandLedgers.Pathing
 
             PathingSettings settings = pathingManager.Settings;
             Gizmos.color = settings.selectedAgentPathColor;
-            for (int i = 1; i < currentPath.Count; i++)
+            for (int i = 1; i < currentWorldPath.Count; i++)
             {
-                Vector3 a = pathingManager.CoordToPathWorld(currentPath[i - 1]) + Vector3.up * settings.debugLineHeight;
-                Vector3 b = pathingManager.CoordToPathWorld(currentPath[i]) + Vector3.up * settings.debugLineHeight;
+                Vector3 a = currentWorldPath[i - 1] + Vector3.up * settings.debugLineHeight;
+                Vector3 b = currentWorldPath[i] + Vector3.up * settings.debugLineHeight;
                 Gizmos.DrawLine(a, b);
             }
         }

@@ -19,12 +19,25 @@ MonoBehaviour:
   roughWalkableCost: 18
   allowRoughTerrain: 0
   allowDiagonalMovement: 0
+  preventDiagonalCornerCutting: 1
   maxVisitedCells: 12000
+  maximumTraversableStepHeightMeters: 1.25
   pedestrianSpeedMetersPerSecond: 3.2
-  turnSpeedDegreesPerSecond: 720
+  turnSpeedDegreesPerSecond: 240
+  pedestrianCornerRoundingCellFraction: 0.18
   waypointArrivalDistance: 0.18
   agentGroundOffsetMeters: 0.08
   doorArrivalPauseSeconds: 1.1
+  logisticsLoadedWagonSpeedMetersPerSecond: 2.2
+  logisticsOffMapRoadSpeedMetersPerSecond: 3.6
+  logisticsEdgeRoadCandidateLimit: 8
+  logisticsRoadLinkedPenaltyThreshold: 1.08
+  logisticsMixedSurfacePenaltyThreshold: 1.35
+  logisticsWagonRoadCostMultiplier: 0.85
+  logisticsWagonAnchorCostMultiplier: 1.05
+  logisticsWagonYardCostMultiplier: 1.45
+  logisticsWagonGeneralWalkableCostMultiplier: 1.7
+  logisticsWagonRoughWalkableCostMultiplier: 2.25
   drawManagerLastPath: 1
   drawSelectedAgentPath: 1
   logFailedRequests: 1

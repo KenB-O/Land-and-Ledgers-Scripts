@@ -32,6 +32,59 @@ namespace LandLedgers.EditorTests.Pathing
             finally { Object.DestroyImmediate(actor); }
         }
 
+        [Test]
+        public void GridRouteRoundingSoftensRightAngleWithoutChangingEndpointsOrLeavingCornerCell()
+        {
+            List<Vector3> route = new()
+            {
+                new Vector3(0f, 0f, 0f),
+                new Vector3(1f, 0f, 0f),
+                new Vector3(1f, 0f, 1f)
+            };
+            MethodInfo builder = typeof(AgentMover).GetMethod("BuildCornerRoundedPath",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.NotNull(builder);
+
+            List<Vector3> rounded = (List<Vector3>)builder.Invoke(null, new object[] { route, 0.2f });
+
+            Assert.AreEqual(route[0], rounded[0]);
+            Assert.AreEqual(route[^1], rounded[^1]);
+            Assert.Greater(rounded.Count, route.Count);
+            Assert.AreEqual(0.8f, rounded[1].x, 0.001f);
+            Assert.AreEqual(0f, rounded[1].z, 0.001f);
+            Assert.AreEqual(1f, rounded[^2].x, 0.001f);
+            Assert.AreEqual(0.2f, rounded[^2].z, 0.001f);
+            for (int i = 2; i < rounded.Count - 2; i++)
+                Assert.LessOrEqual(Vector3.Distance(rounded[i], route[1]), 0.201f,
+                    "The rounded turn must remain in the already validated corner cell.");
+        }
+
+        [Test]
+        public void GridRouteRoundingLeavesStraightAndReversingPathsUnchanged()
+        {
+            MethodInfo builder = typeof(AgentMover).GetMethod("BuildCornerRoundedPath",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.NotNull(builder);
+            List<Vector3> straight = new()
+            {
+                Vector3.zero,
+                Vector3.right,
+                Vector3.right * 2f
+            };
+            List<Vector3> reversal = new()
+            {
+                Vector3.zero,
+                Vector3.right,
+                Vector3.zero
+            };
+
+            List<Vector3> straightResult = (List<Vector3>)builder.Invoke(null, new object[] { straight, 0.2f });
+            List<Vector3> reversalResult = (List<Vector3>)builder.Invoke(null, new object[] { reversal, 0.2f });
+
+            CollectionAssert.AreEqual(straight, straightResult);
+            CollectionAssert.AreEqual(reversal, reversalResult);
+        }
+
         [TestCase(0f, 1.5f, false, 0f)]
         [TestCase(1f, 1.5f, false, 1f)]
         [TestCase(10f, 1.5f, false, 1.5f)]

@@ -52,9 +52,13 @@ namespace LandLedgers.Pathing
         [Min(0.1f)]
         public float pedestrianSpeedMetersPerSecond = 3.2f;
 
-        [Tooltip("How quickly agents turn toward their next waypoint.")]
+        [Tooltip("Maximum visible model yaw rate in degrees per real second. Position and travel remain driven by simulation time.")]
         [Min(1f)]
-        public float turnSpeedDegreesPerSecond = 720f;
+        public float turnSpeedDegreesPerSecond = 240f;
+
+        [Tooltip("Maximum pedestrian corner cut as a fraction of one grid cell. Rounding stays inside the already validated corner cell; set to 0 to retain square turns.")]
+        [Range(0f, 0.45f)]
+        public float pedestrianCornerRoundingCellFraction = 0.18f;
 
         [Tooltip("How close an agent must be to a cell center before advancing to the next waypoint.")]
         [Range(0.01f, 1f)]
@@ -131,6 +135,7 @@ namespace LandLedgers.Pathing
             maximumTraversableStepHeightMeters = Mathf.Max(0.05f, maximumTraversableStepHeightMeters);
             pedestrianSpeedMetersPerSecond = Mathf.Max(0.1f, pedestrianSpeedMetersPerSecond);
             turnSpeedDegreesPerSecond = Mathf.Max(1f, turnSpeedDegreesPerSecond);
+            pedestrianCornerRoundingCellFraction = Mathf.Clamp(pedestrianCornerRoundingCellFraction, 0f, 0.45f);
             waypointArrivalDistance = Mathf.Clamp(waypointArrivalDistance, 0.01f, 1f);
             agentGroundOffsetMeters = Mathf.Clamp(agentGroundOffsetMeters, 0f, 1f);
             doorArrivalPauseSeconds = Mathf.Max(0f, doorArrivalPauseSeconds);

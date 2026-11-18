@@ -2754,6 +2754,24 @@ namespace LandLedgers.Orchestration.Systems
             if (driver == null || mill == null || job == null) return false;
             if (!driver.RunProduction(job.JobId, dayIndex, out string refusal))
             {
+                // The dedicated sawmill driver historically pinned every job
+                // to the business owner. In the authored development town that
+                // owner also works the logging camp and can legitimately have
+                // no time left, while the mill has employed sawyers available.
+                // Retry only this pre-work budget refusal, and let TaskAuthority
+                // enforce each candidate's real remaining minutes. No logs,
+                // outputs, or labour are credited by a rejected attempt.
+                string replacementRefusal = null;
+                if (IsSawmillWorkBudgetRefusal(refusal)
+                    && TryRunWithAvailableSawmillWorker(driver, mill, job, dayIndex, refusal, diag, out replacementRefusal))
+                {
+                    return true;
+                }
+                else if (!string.IsNullOrWhiteSpace(replacementRefusal))
+                {
+                    refusal = replacementRefusal;
+                }
+
                 diag.Add($"[SawmillProduction] Day {dayIndex}: job '{job.JobId}' refused — {refusal}");
                 // Filer loop: the filer is the job's stored sawyer. The loop
                 // runs whenever the blade gates a run, whether or not the
@@ -2776,6 +2794,75 @@ namespace LandLedgers.Orchestration.Systems
                 return false;
             }
             return true;
+        }
+
+        private static bool IsSawmillWorkBudgetRefusal(string refusal)
+        {
+            return !string.IsNullOrWhiteSpace(refusal)
+                && refusal.IndexOf("run task assignment refused", StringComparison.OrdinalIgnoreCase) >= 0
+                && refusal.IndexOf("daily work minutes remaining", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private bool TryRunWithAvailableSawmillWorker(
+            SawmillProductionDriver driver,
+            SawmillShopRuntime mill,
+            SawmillProductionJob job,
+            int dayIndex,
+            string initialRefusal,
+            List<string> diagnostics,
+            out string finalRefusal)
+        {
+            finalRefusal = initialRefusal;
+            if (sharedBusinessRuntime == null
+                || !sharedBusinessRuntime.TryFindByInstanceId(mill.BusinessInstanceId, out BusinessInstanceState business)
+                || business == null)
+            {
+                return false;
+            }
+
+            var candidates = new List<EntityId>();
+            var seen = new HashSet<EntityId>();
+            if (business.Owner != null && business.Owner.PersonId >= 0)
+            {
+                EntityId owner = EntityId.For(EntityKind.Person, business.Owner.PersonId);
+                if (seen.Add(owner)) candidates.Add(owner);
+            }
+            if (business.RuntimeState?.EmploymentRegistry != null)
+            {
+                foreach (EmploymentRelationship relationship in business.RuntimeState.EmploymentRegistry.GetActiveByEmployer(business.InstanceId))
+                {
+                    if (relationship == null || relationship.EmployeePersonId < 0) continue;
+                    EntityId employee = EntityId.For(EntityKind.Person, relationship.EmployeePersonId);
+                    if (seen.Add(employee)) candidates.Add(employee);
+                }
+            }
+
+            EntityId currentSawyer = new EntityId { Kind = (EntityKind)job.SawyerKind, Id = job.SawyerNumber };
+            foreach (EntityId candidate in candidates)
+            {
+                if (candidate == currentSawyer) continue;
+                WorkTimeBudget budget = hub?.WorkTimeBudgets?.GetOrCreate(candidate);
+                if (budget == null || budget.MinutesRemaining <= 0)
+                {
+                    diagnostics?.Add($"[SawmillProduction] Day {dayIndex}: alternate sawyer {candidate} skipped with {budget?.MinutesRemaining ?? 0} work minutes remaining.");
+                    continue;
+                }
+                if (!driver.TryReassignSawyerAfterUnstartedRefusal(job.JobId, candidate, out string reassignRefusal))
+                {
+                    diagnostics?.Add($"[SawmillProduction] Day {dayIndex}: alternate sawyer {candidate} could not take job '{job.JobId}' — {reassignRefusal}");
+                    break;
+                }
+
+                if (driver.RunProduction(job.JobId, dayIndex, out string alternateRefusal))
+                {
+                    diagnostics?.Add($"[SawmillProduction] Day {dayIndex}: owner/previous sawyer {currentSawyer} could not reserve task time; active mill worker {candidate} completed job '{job.JobId}'.");
+                    return true;
+                }
+
+                finalRefusal = alternateRefusal;
+                if (!IsSawmillWorkBudgetRefusal(alternateRefusal)) break;
+            }
+            return false;
         }
 
         /// <summary>

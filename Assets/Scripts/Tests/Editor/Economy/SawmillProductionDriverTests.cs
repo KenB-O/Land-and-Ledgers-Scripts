@@ -636,6 +636,48 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(60, world.Counters.TotalSawMinutes);
         }
 
+        [Test]
+        public void P12_ExhaustedOwnerCanYieldUnstartedJobToEmployedSawyer_WithoutDuplicatingLogsOrOutput()
+        {
+            World world = NewWorld(MillWithLogs(2));
+            EntityId owner = EntityId.For(EntityKind.Person, 5002);
+            EntityId employee = EntityId.For(EntityKind.Person, 5003);
+            // Opening-day shape: the owner has a legitimate 60-minute
+            // management reservation and the felling drive reserves the
+            // remaining 540 minutes for six 90-minute logs.
+            Assert.IsTrue(world.Budgets.TryCommitTask(owner, 60, out string managementReason), managementReason);
+            Assert.IsTrue(world.Budgets.TryCommitTask(owner,
+                WorkTimeBudget.DefaultDailyWorkMinutes - 60, out string fellingReason), fellingReason);
+            SawmillProductionJob job = world.Driver.BeginProduction(LotId(9101), owner, 2, Day, out string beginRefusal);
+            Assert.IsNotNull(job, beginRefusal);
+
+            Assert.IsFalse(world.Driver.RunProduction(job.JobId, Day, out string refusal));
+            Assert.That(refusal, Does.Contain("daily work minutes remaining"));
+            Assert.AreEqual(SawmillProductionJobState.Planned, job.State);
+            Assert.AreEqual(2, world.Mill.LogStock.TotalLogUnits, "A refused assignment must not consume the physical log lot.");
+            WorkTask refusedTask = world.Tasks.FindTask(job.TaskId);
+            Assert.IsNotNull(refusedTask);
+            Assert.AreEqual(TaskStatus.Cancelled, refusedTask.Status);
+
+            Assert.IsTrue(world.Driver.TryReassignSawyerAfterUnstartedRefusal(job.JobId, employee, out string reassignRefusal), reassignRefusal);
+            Assert.IsTrue(world.Driver.RunProduction(job.JobId, Day, out string retryRefusal), retryRefusal);
+
+            Assert.AreEqual(SawmillProductionJobState.Complete, job.State);
+            Assert.AreEqual(0, world.Mill.LogStock.TotalLogUnits);
+            Assert.AreEqual(8, world.Mill.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(60, world.Budgets.GetOrCreate(employee).MinutesCommitted,
+                "The successful sawyer pays the task's actual labour commitment.");
+            Assert.AreEqual(WorkTimeBudget.DefaultDailyWorkMinutes,
+                world.Budgets.GetOrCreate(owner).MinutesCommitted,
+                "The exhausted owner's unrelated daily reservation remains intact.");
+            Assert.AreEqual(60, world.Counters.TotalSawMinutes,
+                "One successful physical run credits one production task.");
+
+            Assert.IsFalse(world.Driver.TryReassignSawyerAfterUnstartedRefusal(job.JobId,
+                EntityId.For(EntityKind.Person, 5004), out string completedRefusal));
+            Assert.That(completedRefusal, Does.Contain("only an unstarted planned job"));
+        }
+
         // ---- FailProduction (1) ----
 
         [Test]

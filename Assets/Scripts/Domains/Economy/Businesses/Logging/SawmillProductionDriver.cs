@@ -299,6 +299,52 @@ namespace LandLedgers.Economy.Businesses.Logging
         }
 
         /// <summary>
+        /// Changes the worker on a planned job only after the previous task
+        /// attempt was cancelled before work began. This supports a real
+        /// alternate employed sawyer when the first worker has no remaining
+        /// daily time, without changing the lot, job identity, or custody.
+        /// </summary>
+        public bool TryReassignSawyerAfterUnstartedRefusal(string jobId, EntityId replacement, out string refusal)
+        {
+            refusal = null;
+            if (string.IsNullOrWhiteSpace(jobId) || !jobs.TryGetValue(jobId, out SawmillProductionJob job))
+            {
+                refusal = "SawmillProductionDriver: unknown job — sawyer was not changed.";
+                return false;
+            }
+            if (job.State != SawmillProductionJobState.Planned)
+            {
+                refusal = $"SawmillProductionDriver: job '{jobId}' is {job.State}; only an unstarted planned job can change sawyers.";
+                return false;
+            }
+            if (!replacement.IsValid || replacement.Kind != EntityKind.Person)
+            {
+                refusal = $"SawmillProductionDriver: replacement '{replacement}' is not a valid Person.";
+                return false;
+            }
+            if (replacement.Id == job.SawyerNumber && (int)replacement.Kind == job.SawyerKind)
+            {
+                refusal = $"SawmillProductionDriver: replacement '{replacement}' is already the job's sawyer.";
+                return false;
+            }
+            if (job.TaskId.IsValid)
+            {
+                WorkTask previousTask = taskAuthority != null ? taskAuthority.FindTask(job.TaskId) : null;
+                if (previousTask != null && previousTask.Status != TaskStatus.Cancelled)
+                {
+                    refusal = $"SawmillProductionDriver: job '{jobId}' still has task '{job.TaskId}' in state {previousTask.Status}; reassignment refused.";
+                    return false;
+                }
+            }
+
+            string previousSawyer = new EntityId { Kind = (EntityKind)job.SawyerKind, Id = job.SawyerNumber }.ToString();
+            job.SawyerKind = (int)replacement.Kind;
+            job.SawyerNumber = replacement.Id;
+            diagnostics.Add($"SawmillProductionDriver: job '{jobId}' retained its lot and changed sawyer from {previousSawyer} to {replacement} after an unstarted task refusal.");
+            return true;
+        }
+
+        /// <summary>
         /// Records a fully consumed lot as Processed in the custody ledger.
         /// The original lot id is derived from the job id ("sawmill:" plus
         /// the original lot id, built once in BeginProduction and never

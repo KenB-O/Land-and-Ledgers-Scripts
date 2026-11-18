@@ -136,6 +136,8 @@ namespace LandLedgers.Population
             [Header("Inventory and equipment")]
             public OpeningInventoryItem[] inventory = Array.Empty<OpeningInventoryItem>();
             public BusinessOpeningEquipment equipment = new();
+            [Tooltip("Finite, scenario-authored business fixtures. Each entry is an owned opening equipment asset with a separate visual and physical placement. This never creates merchandise stock or workstation capability by itself.")]
+            public BusinessInteriorFixture[] interiorFixtures = Array.Empty<BusinessInteriorFixture>();
             [Header("Employees and production supplies")]
             public BusinessEmployeeDefinition[] employees = Array.Empty<BusinessEmployeeDefinition>();
             public BusinessSpareBladeDefinition[] spareBlades = Array.Empty<BusinessSpareBladeDefinition>();
@@ -149,6 +151,39 @@ namespace LandLedgers.Population
             public string openingHorseId = string.Empty;
             public string openingWagonId = string.Empty;
             public BakeryWholesaleAccountDefinition[] wholesaleAgreements = Array.Empty<BakeryWholesaleAccountDefinition>();
+        }
+
+        /// <summary>
+        /// One finite opening fixture owned by a business and presented inside
+        /// that business's assigned building. The EquipmentAsset is the
+        /// ownership authority; this record only supplies its approved visual,
+        /// placement, and optional reachable activity point.
+        /// </summary>
+        [Serializable]
+        public sealed class BusinessInteriorFixture
+        {
+            [Tooltip("Stable EquipmentAsset identity. Must be unique across businesses.")]
+            public string assetId = string.Empty;
+            public string kind = string.Empty;
+            public string displayName = string.Empty;
+            [Tooltip("Existing approved prefab. Decorative stock props do not create inventory.")]
+            public GameObject prefab;
+            [Tooltip("Building-local floor placement; prefab-authored root scale is preserved unless a deliberate multiplier is entered.")]
+            public Vector3 localPosition;
+            public Vector3 localEulerAngles;
+            public Vector3 visualScaleMultiplier = Vector3.one;
+            public Vector3 pivotOffsetLocal;
+            public int floorIndex;
+            [Tooltip("Optional explicit rendered obstruction footprint in prefab-local X/Z metres.")]
+            public bool useCollisionFootprintOverride;
+            public Vector2 collisionFootprintCenterLocal;
+            public Vector2 collisionFootprintSizeMeters;
+            [Tooltip("Optional reachable approach point. Registering it makes a physical location discoverable, but does not grant a job, workstation, storage, or service authority.")]
+            public string activityLocationId = string.Empty;
+            public Vector3 activityPositionLocal;
+            public Vector3 activityForwardLocal = Vector3.forward;
+            public BuildingActivityLocationType activityType = BuildingActivityLocationType.Workshop;
+            public string functionalSpaceId = string.Empty;
         }
 
         [Serializable]
@@ -492,6 +527,7 @@ namespace LandLedgers.Population
         {
             error = string.Empty;
             if (string.IsNullOrWhiteSpace(ConfigurationId)) { error = "Development town configuration needs a stable ID."; return false; }
+            if (!ValidateBusinessInteriorFixtures(out error)) return false;
             if (GeneratePopulationFromSettings)
             {
                 if (GeneratedPopulationSettings == null)
@@ -775,6 +811,42 @@ namespace LandLedgers.Population
                 if (stand == null || string.IsNullOrWhiteSpace(stand.standId) || string.IsNullOrWhiteSpace(stand.locationId)
                     || stand.kilogramsPerLog < 0f || stand.standingTimberUnits < 0 || !standIds.Add(stand.standId))
                 { error = "Timber stand entries need unique non-blank ids, a location, and non-negative kilograms per log and standing units."; return false; }
+            return true;
+        }
+
+        private bool ValidateBusinessInteriorFixtures(out string error)
+        {
+            error = string.Empty;
+            var assetIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (BusinessDefinition business in Businesses)
+            {
+                if (business?.opening?.interiorFixtures == null) continue;
+                var activityIds = new HashSet<string>(StringComparer.Ordinal);
+                foreach (BusinessInteriorFixture fixture in business.opening.interiorFixtures)
+                {
+                    if (fixture == null || string.IsNullOrWhiteSpace(fixture.assetId) || string.IsNullOrWhiteSpace(fixture.kind)
+                        || fixture.prefab == null || fixture.prefab.GetComponentsInChildren<Renderer>(true).Length == 0
+                        || !assetIds.Add(fixture.assetId.Trim()) || fixture.floorIndex < 0
+                        || !IsFinite(fixture.localPosition) || !IsFinite(fixture.localEulerAngles)
+                        || !IsFinite(fixture.pivotOffsetLocal) || !IsFinite(fixture.visualScaleMultiplier)
+                        || fixture.visualScaleMultiplier.x <= 0f || fixture.visualScaleMultiplier.y <= 0f || fixture.visualScaleMultiplier.z <= 0f
+                        || (fixture.useCollisionFootprintOverride && (!IsFinite(fixture.collisionFootprintCenterLocal)
+                            || !IsFinite(fixture.collisionFootprintSizeMeters)
+                            || fixture.collisionFootprintSizeMeters.x <= 0f || fixture.collisionFootprintSizeMeters.y <= 0f)))
+                    {
+                        error = $"Development business '{business?.key}' contains an invalid or duplicate interior equipment fixture.";
+                        return false;
+                    }
+                    if (!string.IsNullOrWhiteSpace(fixture.activityLocationId)
+                        && (!IsFinite(fixture.activityPositionLocal) || !IsFinite(fixture.activityForwardLocal)
+                            || fixture.activityForwardLocal.sqrMagnitude < 0.0001f
+                            || !activityIds.Add(fixture.activityLocationId.Trim())))
+                    {
+                        error = $"Development business '{business.key}' fixture '{fixture.assetId}' has an invalid or duplicate activity location.";
+                        return false;
+                    }
+                }
+            }
             return true;
         }
 

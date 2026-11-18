@@ -726,6 +726,15 @@ namespace LandLedgers.FirstLedger
                     $"assets installed={furnishingResult.AssetsInstalled}, seed={ResolveDevelopmentTownConfiguration()?.SeedOffset ?? 0}.", this);
                 foreach (string diagnostic in furnishingResult.Diagnostics)
                     Debug.LogError("[WorldStartup] Household furnishing: " + diagnostic, this);
+
+                DevelopmentBusinessInteriorInitializer.Result businessInteriorResult =
+                    DevelopmentBusinessInteriorInitializer.SeedNewGame(
+                        ResolveDevelopmentTownConfiguration(), sharedBusinessRuntime, townWorld, systemsHub,
+                        timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0);
+                Debug.Log($"[WorldStartup] Business opening interiors: businesses={businessInteriorResult.BusinessesProcessed}, " +
+                    $"equipment assets registered={businessInteriorResult.EquipmentAssetsRegistered}, presentations={businessInteriorResult.PresentationsCreated}.", this);
+                foreach (string diagnostic in businessInteriorResult.Diagnostics)
+                    Debug.LogError("[WorldStartup] Business interior: " + diagnostic, this);
             }
 #endif
             RunOpeningSettlementReconciliation();
@@ -991,6 +1000,14 @@ namespace LandLedgers.FirstLedger
                 Debug.Log($"[WorldStartup] Rebuilt {furnishingRestore.PresentationsRebuilt} household furnishing presentation(s) from saved ownership bindings.", this);
             foreach (string diagnostic in furnishingRestore.Diagnostics)
                 Debug.LogError("[WorldStartup] Household furnishing restore: " + diagnostic, this);
+
+            DevelopmentBusinessInteriorInitializer.Result businessInteriorRestore =
+                DevelopmentBusinessInteriorInitializer.RestorePresentations(
+                    ResolveDevelopmentTownConfiguration(), sharedBusinessRuntime, townWorld, systemsHub);
+            if (businessInteriorRestore.PresentationsCreated > 0)
+                Debug.Log($"[WorldStartup] Rebuilt {businessInteriorRestore.PresentationsCreated} business fixture presentation(s) from equipment register identities.", this);
+            foreach (string diagnostic in businessInteriorRestore.Diagnostics)
+                Debug.LogError("[WorldStartup] Business interior restore: " + diagnostic, this);
 #endif
             RefreshRestoreDiagnostics();
             if (logBootstrapSummary)

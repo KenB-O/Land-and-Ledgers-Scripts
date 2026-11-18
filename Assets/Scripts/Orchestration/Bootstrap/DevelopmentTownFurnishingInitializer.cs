@@ -9,6 +9,29 @@ using UnityEngine;
 
 namespace LandLedgers.Orchestration
 {
+    /// <summary>Small, explicit transform calibrations for installed furnishing presentations.</summary>
+    public static class FurnishingPresentationCalibration
+    {
+        public static Vector3 ApplyScale(Vector3 prefabAuthoredScale, Vector3 multiplier) =>
+            Vector3.Scale(prefabAuthoredScale, multiplier);
+
+        public static Vector3 AlignToFloor(Vector3 authoredPosition, float floorHeightLocal, bool alignRootToFloor)
+        {
+            if (alignRootToFloor) authoredPosition.y = floorHeightLocal;
+            return authoredPosition;
+        }
+
+        public static Quaternion FaceDirection(Vector3 prefabForwardLocal, Vector3 desiredDirectionLocal, Quaternion fallback)
+        {
+            prefabForwardLocal.y = 0f;
+            desiredDirectionLocal.y = 0f;
+            if (prefabForwardLocal.sqrMagnitude < 0.0001f || desiredDirectionLocal.sqrMagnitude < 0.0001f)
+                return fallback;
+            float angle = Vector3.SignedAngle(prefabForwardLocal.normalized, desiredDirectionLocal.normalized, Vector3.up);
+            return Quaternion.AngleAxis(angle, Vector3.up);
+        }
+    }
+
     /// <summary>
     /// Applies the finite household furniture endowments authored on the
     /// development-town configuration. The furnishing register is ownership;
@@ -68,7 +91,7 @@ namespace LandLedgers.Orchestration
                 HouseholdFurnishingRegister register = systemsHub.FurnishingRegisterFor(household.id);
                 foreach (DevelopmentTownConfiguration.HouseholdFurnishingItem item in variant.items ?? Array.Empty<DevelopmentTownConfiguration.HouseholdFurnishingItem>())
                 {
-                    string error = EnsureInstalled(configuration, household, home, register, item, variant.variantId, out bool installed);
+                    string error = EnsureInstalled(configuration, household, home, register, item, variant.items, variant.variantId, out bool installed);
                     if (error != null) result.Diagnostics.Add(error);
                     if (installed) result.AssetsInstalled++;
                 }
@@ -120,7 +143,7 @@ namespace LandLedgers.Orchestration
                     if (HasPresentation(home.runtimeFootprintAuthority, binding.AssetId)) continue;
                     string error = CreatePresentation(home.runtimeFootprintAuthority, binding.LocalPosition,
                         binding.LocalRotation, item, binding.AssetId, binding.DefinitionId,
-                        binding.CapabilityReferenceId, out BuildingEquipmentPlacement placement);
+                        binding.CapabilityReferenceId, false, out BuildingEquipmentPlacement placement);
                     if (error != null) result.Diagnostics.Add(error);
                     else
                     {
@@ -152,6 +175,7 @@ namespace LandLedgers.Orchestration
             PlacedBuilding home,
             HouseholdFurnishingRegister register,
             DevelopmentTownConfiguration.HouseholdFurnishingItem item,
+            DevelopmentTownConfiguration.HouseholdFurnishingItem[] variantItems,
             string variantId,
             out bool installed)
         {
@@ -170,7 +194,7 @@ namespace LandLedgers.Orchestration
                         FurnishingPlacementBinding binding = register.LiveBindingFor(item.assetId);
                         string restoreError = CreatePresentation(home.runtimeFootprintAuthority, binding.LocalPosition,
                             binding.LocalRotation, item, item.assetId, binding.DefinitionId,
-                            binding.CapabilityReferenceId, out _);
+                            binding.CapabilityReferenceId, false, out _);
                         if (restoreError != null) return restoreError;
                     }
                     return null;
@@ -185,8 +209,9 @@ namespace LandLedgers.Orchestration
                 return $"Opening furnishing {item.assetId} has no resolved prefab in the development-town configuration.";
             if (item.prefab.GetComponentsInChildren<Renderer>(true).Length == 0)
                 return $"Opening furnishing {item.assetId} prefab '{item.prefab.name}' has no rendered geometry.";
-            Vector3 floorPoint = item.localPosition;
-            floorPoint.y = FloorHeight(authority, item.floorIndex, item.localPosition.y);
+            Vector3 localPosition = FurnishingPresentationCalibration.AlignToFloor(
+                item.localPosition, FloorHeight(authority, item.floorIndex, item.localPosition.y), item.alignRootToFloor);
+            Vector3 floorPoint = localPosition;
             if (!authority.TryEvaluateInteriorLocalPoint(floorPoint, item.floorIndex, null, out string blocked))
                 return $"Opening furnishing {item.assetId} floor position is not walkable in building {home.id}: {blocked}";
             if (item.registerRuntimeActivityLocation
@@ -219,9 +244,10 @@ namespace LandLedgers.Orchestration
             }
 
             string installId = ConfigurationId(configuration, household.id, variantId, item.assetId);
-            string presentationError = CreatePresentation(authority, item.localPosition,
-                Quaternion.Euler(item.localEulerAngles), item, item.assetId, item.kind,
-                item.activityLocationId, out BuildingEquipmentPlacement placement);
+            Quaternion localRotation = ResolvePlacementRotation(item, variantItems);
+            string presentationError = CreatePresentation(authority, localPosition,
+                localRotation, item, item.assetId, item.kind,
+                item.activityLocationId, true, out BuildingEquipmentPlacement placement);
             if (presentationError != null)
             {
                 if (addedAsset) register.TryDeregisterAsset(item.assetId);
@@ -257,6 +283,7 @@ namespace LandLedgers.Orchestration
             string assetId,
             string definitionId,
             string activityLocationId,
+            bool applyPivotOffset,
             out BuildingEquipmentPlacement placement)
         {
             placement = null;
@@ -264,13 +291,16 @@ namespace LandLedgers.Orchestration
             GameObject instance = UnityEngine.Object.Instantiate(item.prefab, authority.transform, false);
             if (instance == null) return $"Furnishing {assetId} prefab instantiation returned no object.";
             instance.name = $"{item.displayName} [{assetId}]";
-            instance.transform.localPosition = localPosition;
+            instance.transform.localPosition = localPosition + (applyPivotOffset ? item.pivotOffsetLocal : Vector3.zero);
             instance.transform.localRotation = localRotation;
-            instance.transform.localScale = item.localScale;
+            instance.transform.localScale = FurnishingPresentationCalibration.ApplyScale(
+                instance.transform.localScale, item.visualScaleMultiplier);
 
             placement = instance.GetComponent<BuildingEquipmentPlacement>();
             if (placement == null) placement = instance.AddComponent<BuildingEquipmentPlacement>();
             placement.Configure(assetId, definitionId, item.displayName, item.floorIndex);
+            placement.ConfigureNavigationFootprint(item.useCollisionFootprintOverride,
+                item.collisionFootprintCenterLocal, item.collisionFootprintSizeMeters);
             placement.AssociateWithBuilding(authority);
             if (item.registerRuntimeActivityLocation)
             {
@@ -285,6 +315,25 @@ namespace LandLedgers.Orchestration
                 }
             }
             return null;
+        }
+
+        private static Quaternion ResolvePlacementRotation(
+            DevelopmentTownConfiguration.HouseholdFurnishingItem item,
+            DevelopmentTownConfiguration.HouseholdFurnishingItem[] variantItems)
+        {
+            Quaternion authored = Quaternion.Euler(item.localEulerAngles);
+            if (item.capability != FurnishingCapabilityKind.DiningSeat || item.visualForwardAxisLocal.sqrMagnitude < 0.0001f)
+                return authored;
+
+            DevelopmentTownConfiguration.HouseholdFurnishingItem table = (variantItems ?? Array.Empty<DevelopmentTownConfiguration.HouseholdFurnishingItem>())
+                .Where(candidate => candidate != null && candidate.capability == FurnishingCapabilityKind.DiningTable)
+                .OrderBy(candidate => (candidate.localPosition - item.localPosition).sqrMagnitude)
+                .FirstOrDefault();
+            if (table == null) return authored;
+            Vector3 toTable = table.localPosition - item.localPosition;
+            toTable.y = 0f;
+            if (toTable.sqrMagnitude < 0.0001f) return authored;
+            return FurnishingPresentationCalibration.FaceDirection(item.visualForwardAxisLocal, toTable.normalized, authored);
         }
 
         private static bool IsSameRuntimeLocation(BuildingFootprintAuthority authority, string id, Vector3 position)

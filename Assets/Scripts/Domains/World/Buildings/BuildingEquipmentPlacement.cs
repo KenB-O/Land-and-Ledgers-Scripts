@@ -18,6 +18,10 @@ namespace LandLedgers.World
         [SerializeField] private string displayName = "Placed Equipment";
         [SerializeField] private int floorIndex;
         [SerializeField, Min(0f)] private float navigationClearanceMeters = 0.2f;
+        [SerializeField, Tooltip("Optional local X/Z bounds override for irregular or pivot-offset furnishings. Disabled placements use rendered mesh bounds.")]
+        private bool useNavigationFootprintOverride;
+        [SerializeField] private Vector2 navigationFootprintCenterLocal;
+        [SerializeField, Min(0f)] private Vector2 navigationFootprintSizeLocal;
         [SerializeField, Tooltip("Optional explicit scene-instance association for equipment that is not parented under its building. This is a physical placement link only; it grants no ownership.")]
         private BuildingFootprintAuthority buildingAuthority;
         [SerializeField, Tooltip("Optional external authority references. Blank values do not imply free or business-owned equipment.")]
@@ -124,6 +128,15 @@ namespace LandLedgers.World
             CaptureWorldMatrix();
         }
 
+        /// <summary>Sets optional local X/Z obstruction bounds; this is physical placement data only.</summary>
+        public void ConfigureNavigationFootprint(bool enabled, Vector2 centerLocal, Vector2 sizeLocal)
+        {
+            useNavigationFootprintOverride = enabled;
+            navigationFootprintCenterLocal = centerLocal;
+            navigationFootprintSizeLocal = new Vector2(Mathf.Max(0f, sizeLocal.x), Mathf.Max(0f, sizeLocal.y));
+            if (cachedBuilding != null) cachedBuilding.InvalidateEquipmentPlacementCache();
+        }
+
         /// <summary>
         /// B0 (Agent B): records the economic owner and acquisition source from
         /// the furnishing binding at install time. Physical association alone
@@ -170,13 +183,19 @@ namespace LandLedgers.World
 
             Vector3 worldPoint = building.transform.TransformPoint(buildingLocalPoint);
             Vector3 placementPoint = transform.InverseTransformPoint(worldPoint);
-            Renderer[] renderers = GetComponentsInChildren<Renderer>(false);
-            if (renderers.Length == 0) return false;
-
             float scaleX = transform.TransformVector(Vector3.right).magnitude;
             float scaleZ = transform.TransformVector(Vector3.forward).magnitude;
             float clearanceX = scaleX > 0.0001f ? NavigationClearanceMeters / scaleX : 0f;
             float clearanceZ = scaleZ > 0.0001f ? NavigationClearanceMeters / scaleZ : 0f;
+            if (useNavigationFootprintOverride)
+            {
+                float halfX = navigationFootprintSizeLocal.x * 0.5f + clearanceX;
+                float halfZ = navigationFootprintSizeLocal.y * 0.5f + clearanceZ;
+                return Mathf.Abs(placementPoint.x - navigationFootprintCenterLocal.x) <= halfX
+                    && Mathf.Abs(placementPoint.z - navigationFootprintCenterLocal.y) <= halfZ;
+            }
+            Renderer[] renderers = GetComponentsInChildren<Renderer>(false);
+            if (renderers.Length == 0) return false;
 
             foreach (Renderer renderer in renderers)
             {

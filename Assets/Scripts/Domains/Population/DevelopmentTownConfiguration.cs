@@ -6,6 +6,7 @@ using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.World;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace LandLedgers.Population
 {
@@ -63,7 +64,18 @@ namespace LandLedgers.Population
             public GameObject prefab;
             public Vector3 localPosition;
             public Vector3 localEulerAngles;
-            public Vector3 localScale = Vector3.one;
+            [FormerlySerializedAs("localScale"), Tooltip("Per-instance multiplier applied once to the prefab's authored root scale. Leave at one to preserve manually calibrated prefab dimensions.")]
+            public Vector3 visualScaleMultiplier = Vector3.one;
+            [Tooltip("Prefab-local direction that visually points toward the front of this furnishing. Used to face dining seats toward their table.")]
+            public Vector3 visualForwardAxisLocal = Vector3.forward;
+            [Tooltip("Small building-local pivot correction applied to the presentation root only.")]
+            public Vector3 pivotOffsetLocal;
+            [Tooltip("Place the furnishing root at the selected floor's authored elevation. Disable for wall-mounted or elevated fixtures.")]
+            public bool alignRootToFloor = true;
+            [Tooltip("Optional navigation footprint override in prefab-local X/Z units. Leave disabled to use rendered geometry.")]
+            public bool useCollisionFootprintOverride;
+            public Vector2 collisionFootprintCenterLocal;
+            public Vector2 collisionFootprintSizeMeters;
             public int floorIndex;
             public FurnishingCapabilityKind capability;
             [Tooltip("Existing or runtime-registered reachable activity point associated with this furnishing.")]
@@ -564,7 +576,9 @@ namespace LandLedgers.Population
                             || !FurnishingClassification.IsKnownKind(item.kind)
                             || !scenarioFurnitureAssetIds.Add(item.assetId.Trim())
                             || !IsFinite(item.localPosition) || !IsFinite(item.localEulerAngles)
-                            || !IsFinite(item.localScale) || item.localScale.x <= 0f || item.localScale.y <= 0f || item.localScale.z <= 0f
+                            || !IsFinite(item.visualScaleMultiplier) || item.visualScaleMultiplier.x <= 0f || item.visualScaleMultiplier.y <= 0f || item.visualScaleMultiplier.z <= 0f
+                            || (item.useCollisionFootprintOverride && (!IsFinite(item.collisionFootprintCenterLocal)
+                                || !IsFinite(item.collisionFootprintSizeMeters) || item.collisionFootprintSizeMeters.x <= 0f || item.collisionFootprintSizeMeters.y <= 0f))
                             || item.floorIndex < 0)
                         { error = $"Development household '{household.key}' variant '{variant.variantId}' contains an invalid, duplicate, or unresolved furnishing item."; return false; }
                         if ((item.capability == FurnishingCapabilityKind.SleepingPlace
@@ -768,6 +782,10 @@ namespace LandLedgers.Population
             !float.IsNaN(value.x) && !float.IsInfinity(value.x)
             && !float.IsNaN(value.y) && !float.IsInfinity(value.y)
             && !float.IsNaN(value.z) && !float.IsInfinity(value.z);
+
+        private static bool IsFinite(Vector2 value) =>
+            !float.IsNaN(value.x) && !float.IsInfinity(value.x)
+            && !float.IsNaN(value.y) && !float.IsInfinity(value.y);
 
     }
 }

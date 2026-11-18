@@ -20,6 +20,7 @@ using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Transport;
 using LandLedgers.Economy.Storage;
 using LandLedgers.Orchestration.Bootstrap;
+using LandLedgers.Orchestration;
 using LandLedgers.Orchestration.Scenarios;
 using LandLedgers.Orchestration.Scenarios.Development;
 using LandLedgers.Orchestration.Player;
@@ -490,7 +491,8 @@ namespace LandLedgers.FirstLedger
             // no-op — InitializeSlice's already-initialized guard plus the seam's
             // per-plot link guard. Runs in every build, like the notions
             // registration below.
-            if (startupIntent == WorldStartupIntent.NewGame)
+            if (startupIntent == WorldStartupIntent.NewGame && enableDevelopmentTownConfiguration
+                && ResolveDevelopmentTownConfiguration() != null)
             {
                 systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
                 if (systemsHub != null && townWorld != null)
@@ -714,6 +716,16 @@ namespace LandLedgers.FirstLedger
                     sharedBusinessRuntime != null ? sharedBusinessRuntime.Businesses : null,
                     townWorld,
                     populationManager != null ? populationManager.State : null);
+            }
+            if (startupIntent == WorldStartupIntent.NewGame)
+            {
+                DevelopmentTownFurnishingInitializer.Result furnishingResult =
+                    DevelopmentTownFurnishingInitializer.SeedNewGame(
+                        ResolveDevelopmentTownConfiguration(), populationManager, townWorld, systemsHub);
+                Debug.Log($"[WorldStartup] Household opening furnishings: households={furnishingResult.HouseholdsProcessed}, " +
+                    $"assets installed={furnishingResult.AssetsInstalled}, seed={ResolveDevelopmentTownConfiguration()?.SeedOffset ?? 0}.", this);
+                foreach (string diagnostic in furnishingResult.Diagnostics)
+                    Debug.LogError("[WorldStartup] Household furnishing: " + diagnostic, this);
             }
 #endif
             RunOpeningSettlementReconciliation();
@@ -971,6 +983,15 @@ namespace LandLedgers.FirstLedger
                         }
                     }
                 }
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            DevelopmentTownFurnishingInitializer.Result furnishingRestore =
+                DevelopmentTownFurnishingInitializer.RestorePresentations(
+                    ResolveDevelopmentTownConfiguration(), populationManager, townWorld, systemsHub);
+            if (furnishingRestore.PresentationsRebuilt > 0)
+                Debug.Log($"[WorldStartup] Rebuilt {furnishingRestore.PresentationsRebuilt} household furnishing presentation(s) from saved ownership bindings.", this);
+            foreach (string diagnostic in furnishingRestore.Diagnostics)
+                Debug.LogError("[WorldStartup] Household furnishing restore: " + diagnostic, this);
+#endif
             RefreshRestoreDiagnostics();
             if (logBootstrapSummary)
             {

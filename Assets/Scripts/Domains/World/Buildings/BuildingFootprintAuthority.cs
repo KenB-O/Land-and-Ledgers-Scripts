@@ -214,6 +214,13 @@ namespace LandLedgers.World
         [NonSerialized]
         private Dictionary<int, InteriorGeometryCache> interiorGeometryCache;
 
+        // Runtime furniture (for example a household bed or dining chair)
+        // can contribute a reachable activity location without editing the
+        // reusable structural prefab. Persisted furnishing bindings recreate
+        // these points when the owning scene instance is restored.
+        [NonSerialized]
+        private Dictionary<string, BuildingActivityLocationAuthoring> runtimeActivityLocations;
+
         private readonly struct WalkableFloorTriangle
         {
             public readonly Vector3 A;
@@ -475,9 +482,8 @@ namespace LandLedgers.World
             location = default;
             worldWaypoints = null;
             reason = $"No reachable {type} activity is authored on '{name}'.";
-            if (activityLocations == null) return false;
             if (!TryGetEntrancePair(entranceId, out var entrance, out reason)) return false;
-            foreach (BuildingActivityLocationAuthoring candidate in activityLocations)
+            foreach (BuildingActivityLocationAuthoring candidate in AllActivityLocations())
             {
                 if (candidate == null || candidate.type != type) continue;
                 if (!TryGetActivityLocation(candidate.id, buildingInstanceId, out var resolved, out string invalid))
@@ -508,14 +514,14 @@ namespace LandLedgers.World
         {
             location = default;
             reason = string.Empty;
-            if (activityLocations == null || string.IsNullOrWhiteSpace(id))
+            if (string.IsNullOrWhiteSpace(id))
             {
-                reason = "Activity location id is empty or no locations are authored.";
+                reason = "Activity location id is empty.";
                 return false;
             }
 
             BuildingActivityLocationAuthoring match = null;
-            foreach (BuildingActivityLocationAuthoring candidate in activityLocations)
+            foreach (BuildingActivityLocationAuthoring candidate in activityLocations ?? new List<BuildingActivityLocationAuthoring>())
             {
                 if (candidate == null || !string.Equals(candidate.id, id, System.StringComparison.Ordinal)) continue;
                 if (match != null)
@@ -525,6 +531,9 @@ namespace LandLedgers.World
                 }
                 match = candidate;
             }
+
+            if (match == null && runtimeActivityLocations != null)
+                runtimeActivityLocations.TryGetValue(id, out match);
 
             if (match == null)
             {
@@ -566,6 +575,83 @@ namespace LandLedgers.World
                 match.requiresWalkableInterior,
                 match.optionalRequirements);
             return true;
+        }
+
+        /// <summary>
+        /// Adds a nonserialized, instance-specific approach point for installed
+        /// furniture. It does not edit the reusable prefab. The caller must
+        /// rebuild the point from the authoritative furnishing binding after
+        /// Continue. Returns null when the point is valid and walkable.
+        /// </summary>
+        public string RegisterRuntimeActivityLocation(
+            string id,
+            string displayName,
+            BuildingActivityLocationType type,
+            Vector3 positionLocal,
+            Vector3 forwardLocal,
+            int floorIndex,
+            string functionalSpaceId = "")
+        {
+            if (string.IsNullOrWhiteSpace(id)) return "Runtime activity location requires an ID.";
+            if (!IsFinite(positionLocal) || !IsFinite(forwardLocal) || forwardLocal.sqrMagnitude < 0.0001f)
+                return $"Runtime activity location '{id}' has a non-finite position or invalid facing.";
+            if (floorIndex < 0 || FindInteriorFloor(floorIndex) == null)
+                return $"Runtime activity location '{id}' references missing floor {floorIndex}.";
+            if (activityLocations != null && activityLocations.Any(location => location != null
+                    && string.Equals(location.id, id, StringComparison.Ordinal)))
+                return $"Runtime activity location '{id}' conflicts with an authored location on '{name}'.";
+
+            runtimeActivityLocations ??= new Dictionary<string, BuildingActivityLocationAuthoring>(StringComparer.Ordinal);
+            if (runtimeActivityLocations.ContainsKey(id))
+                return $"Runtime activity location '{id}' is already registered on '{name}'.";
+            var location = new BuildingActivityLocationAuthoring
+            {
+                id = id,
+                displayName = string.IsNullOrWhiteSpace(displayName) ? id : displayName,
+                type = type,
+                floorIndex = floorIndex,
+                positionLocal = positionLocal,
+                forwardLocal = forwardLocal,
+                functionalSpaceId = functionalSpaceId ?? string.Empty,
+                requiresWalkableInterior = true,
+            };
+            runtimeActivityLocations.Add(id, location);
+            if (!TryEvaluateInteriorLocalPoint(positionLocal, floorIndex, location.functionalSpaceId, out string reason))
+            {
+                runtimeActivityLocations.Remove(id);
+                return $"Runtime activity location '{id}' is not reachable on '{name}': {reason}";
+            }
+            return null;
+        }
+
+        public bool UnregisterRuntimeActivityLocation(string id)
+        {
+            return !string.IsNullOrWhiteSpace(id) && runtimeActivityLocations != null
+                && runtimeActivityLocations.Remove(id);
+        }
+
+        public string UpdateRuntimeActivityLocation(string id, Vector3 positionLocal, Vector3 forwardLocal)
+        {
+            if (runtimeActivityLocations == null || !runtimeActivityLocations.TryGetValue(id ?? string.Empty, out BuildingActivityLocationAuthoring location))
+                return $"Runtime activity location '{id}' is not registered on '{name}'.";
+            if (!IsFinite(positionLocal) || !IsFinite(forwardLocal) || forwardLocal.sqrMagnitude < 0.0001f)
+                return $"Runtime activity location '{id}' received a non-finite position or invalid facing.";
+            if (!TryEvaluateInteriorLocalPoint(positionLocal, location.floorIndex, location.functionalSpaceId, out string reason))
+                return $"Runtime activity location '{id}' moved to a blocked point on '{name}': {reason}";
+            location.positionLocal = positionLocal;
+            location.forwardLocal = forwardLocal;
+            InvalidateEquipmentPlacementCache();
+            return null;
+        }
+
+        private IEnumerable<BuildingActivityLocationAuthoring> AllActivityLocations()
+        {
+            if (activityLocations != null)
+                foreach (BuildingActivityLocationAuthoring location in activityLocations)
+                    if (location != null) yield return location;
+            if (runtimeActivityLocations != null)
+                foreach (BuildingActivityLocationAuthoring location in runtimeActivityLocations.Values)
+                    if (location != null) yield return location;
         }
 
         public bool TryGetEntrancePair(string id, out BuildingEntrancePairAuthoring pair, out string reason)

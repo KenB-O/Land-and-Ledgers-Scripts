@@ -366,16 +366,26 @@ namespace LandLedgers.Population
 
         public string BuildHeatingSummary()
         {
+            return BuildHeatingSummary(null);
+        }
+
+        /// <summary>Builds the inspection text with actual physical stove availability when its registry is supplied.</summary>
+        public string BuildHeatingSummary(HouseholdStoveRegistry physicalStoves)
+        {
             EnsureHouseholdReservesInitialized(
                 migrateLegacyFoodReserve: reserves == null || reserves.Count == 0);
 
             string fuel = BuildFriendlyFuelName(preferredFuel);
             string shell = BuildFriendlyHeatRetentionName(heatRetentionTier);
-            string stove = BuildFriendlyStoveName(stoveTier);
+            string stove = physicalStoves == null
+                ? BuildFriendlyStoveName(stoveTier) + " stove (physical availability not resolved)"
+                : physicalStoves.Stoves == null || physicalStoves.Stoves.Count == 0
+                    ? "no installed cooking stove"
+                    : BuildFriendlyStoveName(physicalStoves.DeriveStoveTier(this)) + " cooking stove";
 
             if (!HasHeatingPressure)
             {
-                return $"Heating stable | {fuel} | {shell} shell | {stove} stove";
+                return $"Heating stable | {fuel} | {shell} shell | {stove}";
             }
 
             StringBuilder builder = new();
@@ -387,7 +397,6 @@ namespace LandLedgers.Population
             builder.Append(shell);
             builder.Append(" shell | ");
             builder.Append(stove);
-            builder.Append(" stove");
 
             if (lastHeatingFuelShortfallUnits > 0)
             {
@@ -413,6 +422,11 @@ namespace LandLedgers.Population
 
         public string BuildInspectionSummary()
         {
+            return BuildInspectionSummary(null);
+        }
+
+        public string BuildInspectionSummary(HouseholdStoveRegistry physicalStoves)
+        {
             EnsureHouseholdReservesInitialized(
                 migrateLegacyFoodReserve: reserves == null || reserves.Count == 0);
 
@@ -421,7 +435,7 @@ namespace LandLedgers.Population
                 + Math.Max(0, demandSnapshot.generalGoodsNeed)
                 + Math.Max(0, demandSnapshot.medicineNeed)
                 + Math.Max(0, demandSnapshot.heatingNeed);
-            return $"{homeRead} | Spend {spendingMoneyCents}c | Demand {totalDemandUnits}u | {BuildReserveSummary()} | {BuildHeatingSummary()} | {BuildSettlementSummaryLine()}";
+            return $"{homeRead} | Spend {spendingMoneyCents}c | Demand {totalDemandUnits}u | {BuildReserveSummary()} | {BuildHeatingSummary(physicalStoves)} | {BuildSettlementSummaryLine()}";
         }
 
         public string BuildUpgradeSummary()

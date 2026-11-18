@@ -4,6 +4,7 @@ using System.Linq;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
+using LandLedgers.World;
 using UnityEngine;
 
 namespace LandLedgers.Population
@@ -40,6 +41,38 @@ namespace LandLedgers.Population
             [Tooltip("Ordinal of a real residential building sorted by TownWorld building ID.")]
             public int homeBuildingOrdinal;
             [Min(0)] public int openingCashCents;
+            [Tooltip("Finite New Game furniture owned by this household. The weighted variant is selected deterministically from the scenario seed and household key. Empty profiles intentionally remain unfurnished.")]
+            public HouseholdFurnishingVariant[] openingFurnishingVariants = Array.Empty<HouseholdFurnishingVariant>();
+        }
+
+        [Serializable]
+        public sealed class HouseholdFurnishingVariant
+        {
+            public string variantId = string.Empty;
+            [Min(1)] public int weight = 1;
+            public HouseholdFurnishingItem[] items = Array.Empty<HouseholdFurnishingItem>();
+        }
+
+        [Serializable]
+        public sealed class HouseholdFurnishingItem
+        {
+            [Tooltip("Stable EquipmentAsset identity. Each possible item has a unique ID; only the selected finite variant is endowed.")]
+            public string assetId = string.Empty;
+            public string kind = string.Empty;
+            public string displayName = string.Empty;
+            public GameObject prefab;
+            public Vector3 localPosition;
+            public Vector3 localEulerAngles;
+            public Vector3 localScale = Vector3.one;
+            public int floorIndex;
+            public FurnishingCapabilityKind capability;
+            [Tooltip("Existing or runtime-registered reachable activity point associated with this furnishing.")]
+            public string activityLocationId = string.Empty;
+            [Tooltip("For runtime points such as a second bed or dining seat: clear approach point in building-local coordinates.")]
+            public Vector3 activityPositionLocal;
+            public Vector3 activityForwardLocal = Vector3.forward;
+            public BuildingActivityLocationType activityType;
+            public bool registerRuntimeActivityLocation;
         }
 
         public enum RelationshipKind { Spouse, Sibling }
@@ -366,6 +399,31 @@ namespace LandLedgers.Population
             return false;
         }
 
+        /// <summary>Chooses one authored household furniture variant deterministically for this scenario seed.</summary>
+        public HouseholdFurnishingVariant SelectOpeningFurnishingVariant(HouseholdDefinition household, int scenarioSeed)
+        {
+            if (household == null || household.openingFurnishingVariants == null || household.openingFurnishingVariants.Length == 0)
+                return null;
+
+            int totalWeight = 0;
+            foreach (HouseholdFurnishingVariant candidate in household.openingFurnishingVariants)
+                if (candidate != null) totalWeight += Mathf.Max(0, candidate.weight);
+            if (totalWeight <= 0) return null;
+
+            uint hash = 2166136261u ^ unchecked((uint)scenarioSeed);
+            string key = ConfigurationId + ":" + household.key.Trim().ToLowerInvariant();
+            for (int i = 0; i < key.Length; i++) { hash ^= key[i]; hash *= 16777619u; }
+            hash ^= hash >> 16; hash *= 0x7feb352du; hash ^= hash >> 15;
+            int selection = (int)(hash % (uint)totalWeight);
+            foreach (HouseholdFurnishingVariant candidate in household.openingFurnishingVariants)
+            {
+                if (candidate == null) continue;
+                selection -= Mathf.Max(0, candidate.weight);
+                if (selection < 0) return candidate;
+            }
+            return null;
+        }
+
         public int ResolveRuntimePersonId(string personKey)
         {
             if (string.IsNullOrWhiteSpace(personKey)) return -1;
@@ -479,6 +537,7 @@ namespace LandLedgers.Population
             var householdKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var homeOrdinals = new HashSet<int>();
             var runtimeHouseholdIds = new HashSet<int>();
+            var scenarioFurnitureAssetIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             bool hasStableHouseholdIds = Households.Any(household => household != null && household.runtimeHouseholdId > 0);
             foreach (HouseholdDefinition household in Households)
             {
@@ -489,8 +548,61 @@ namespace LandLedgers.Population
                 { error = "Development households need unique keys, distinct home ordinals, non-negative opening cash, and members."; return false; }
                 foreach (string memberKey in household.memberPersonKeys)
                     if (!personKeys.Contains(memberKey) || !assigned.Add(memberKey)) { error = "Each development resident must reference exactly one configured household."; return false; }
+
+                var variantIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (HouseholdFurnishingVariant variant in household.openingFurnishingVariants ?? Array.Empty<HouseholdFurnishingVariant>())
+                {
+                    if (variant == null || string.IsNullOrWhiteSpace(variant.variantId) || variant.weight <= 0
+                        || !variantIds.Add(variant.variantId.Trim()))
+                    { error = $"Development household '{household.key}' has an invalid or duplicate opening-furnishing variant."; return false; }
+
+                    var activityIds = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (HouseholdFurnishingItem item in variant.items ?? Array.Empty<HouseholdFurnishingItem>())
+                    {
+                        if (item == null || string.IsNullOrWhiteSpace(item.assetId) || string.IsNullOrWhiteSpace(item.kind)
+                            || string.IsNullOrWhiteSpace(item.displayName)
+                            || !FurnishingClassification.IsKnownKind(item.kind)
+                            || !scenarioFurnitureAssetIds.Add(item.assetId.Trim())
+                            || !IsFinite(item.localPosition) || !IsFinite(item.localEulerAngles)
+                            || !IsFinite(item.localScale) || item.localScale.x <= 0f || item.localScale.y <= 0f || item.localScale.z <= 0f
+                            || item.floorIndex < 0)
+                        { error = $"Development household '{household.key}' variant '{variant.variantId}' contains an invalid, duplicate, or unresolved furnishing item."; return false; }
+                        if ((item.capability == FurnishingCapabilityKind.SleepingPlace
+                                || item.capability == FurnishingCapabilityKind.StoveWorkstation
+                                || item.capability == FurnishingCapabilityKind.DiningSeat)
+                            && string.IsNullOrWhiteSpace(item.activityLocationId))
+                        { error = $"Development household '{household.key}' item '{item.assetId}' grants {item.capability} without an activity-location ID."; return false; }
+                        if (item.registerRuntimeActivityLocation
+                            && (string.IsNullOrWhiteSpace(item.activityLocationId) || !IsFinite(item.activityPositionLocal)
+                                || !IsFinite(item.activityForwardLocal) || item.activityForwardLocal.sqrMagnitude < 0.0001f
+                                || !activityIds.Add(item.activityLocationId)))
+                        { error = $"Development household '{household.key}' item '{item.assetId}' has an invalid runtime activity-location definition."; return false; }
+                    }
+                }
             }
             if (assigned.Count != personKeys.Count) { error = "Every configured resident must belong to a household."; return false; }
+            if (Households.Any(household => household?.openingFurnishingVariants != null
+                    && household.openingFurnishingVariants.Length > 0))
+            {
+                int configuredHouseholds = 0;
+                int withFurniture = 0;
+                int withoutStove = 0;
+                int sparseHomes = 0;
+                int scenarioSeed = SeedOffset;
+                foreach (HouseholdDefinition household in Households)
+                {
+                    if (household?.openingFurnishingVariants == null || household.openingFurnishingVariants.Length == 0) continue;
+                    HouseholdFurnishingVariant variant = SelectOpeningFurnishingVariant(household, scenarioSeed);
+                    if (variant == null) continue;
+                    configuredHouseholds++;
+                    HouseholdFurnishingItem[] items = variant.items ?? Array.Empty<HouseholdFurnishingItem>();
+                    if (items.Length > 0) withFurniture++;
+                    if (items.Length <= 1) sparseHomes++;
+                    if (!items.Any(item => item != null && item.capability == FurnishingCapabilityKind.StoveWorkstation)) withoutStove++;
+                }
+                if (configuredHouseholds != 0 && (withFurniture * 2 < configuredHouseholds || withoutStove == 0 || sparseHomes == 0))
+                { error = "Opening furnishings must leave at least half of configured homes furnished, include one no-stove household, and include one substantially sparse home for the selected scenario seed."; return false; }
+            }
             foreach (RelationshipDefinition relation in Relationships)
                 if (relation == null || !personKeys.Contains(relation.firstPersonKey) || !personKeys.Contains(relation.secondPersonKey)
                     || string.Equals(relation.firstPersonKey, relation.secondPersonKey, StringComparison.OrdinalIgnoreCase))
@@ -651,6 +763,11 @@ namespace LandLedgers.Population
                 { error = "Timber stand entries need unique non-blank ids, a location, and non-negative kilograms per log and standing units."; return false; }
             return true;
         }
+
+        private static bool IsFinite(Vector3 value) =>
+            !float.IsNaN(value.x) && !float.IsInfinity(value.x)
+            && !float.IsNaN(value.y) && !float.IsInfinity(value.y)
+            && !float.IsNaN(value.z) && !float.IsInfinity(value.z);
 
     }
 }

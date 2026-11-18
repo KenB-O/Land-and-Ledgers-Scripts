@@ -838,7 +838,7 @@ namespace LandLedgers.Population
                 return "Household records unavailable.";
             }
 
-            string baseSummary = household.BuildInspectionSummary();
+            string baseSummary = household.BuildInspectionSummary(ResolvePhysicalStoveRegistry(household.id));
             string healthSummary = BuildHouseholdHealthInspectionSegment(household);
             string nutritionSummary = BuildHouseholdNutritionInspectionSegment(household);
             string combined = baseSummary;
@@ -860,7 +860,7 @@ namespace LandLedgers.Population
                 return "Household records unavailable.";
             }
 
-            string baseSummary = household.BuildInspectionSummary();
+            string baseSummary = household.BuildInspectionSummary(ResolvePhysicalStoveRegistry(household.id));
             string healthSummary = BuildHouseholdHealthInspectionSegment(household);
             string nutritionSummary = BuildHouseholdNutritionInspectionSegment(household);
             string combined = baseSummary;
@@ -2644,7 +2644,7 @@ namespace LandLedgers.Population
                 builder.Append("   Reserves: ");
                 builder.AppendLine(household.BuildReserveSummary());
                 builder.Append("   Heat: ");
-                builder.AppendLine(household.BuildHeatingSummary());
+                builder.AppendLine(household.BuildHeatingSummary(ResolvePhysicalStoveRegistry(household.id)));
                 builder.Append("   Settlement: ");
                 builder.AppendLine(household.BuildSettlementSummaryLine());
                 builder.Append("   Upgrades: ");
@@ -2652,6 +2652,12 @@ namespace LandLedgers.Population
             }
 
             return builder.ToString();
+        }
+
+        private HouseholdStoveRegistry ResolvePhysicalStoveRegistry(int householdId)
+        {
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            return hub != null ? hub.HouseholdStoveRegistryFor(householdId) : null;
         }
 
         private string BuildHouseholdHealthInspectionSegment(HouseholdState household)

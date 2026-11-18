@@ -3,6 +3,7 @@ using LandLedgers.Economy;
 using LandLedgers.Population;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEngine;
 
 namespace LandLedgers.EditorTests.Population
 {
@@ -138,6 +139,50 @@ namespace LandLedgers.EditorTests.Population
             {
                 Assert.IsNotNull(store.FindItem(id), $"General Store SKU '{id}' should be authored.");
                 Assert.IsNotNull(HouseholdItemCatalog.Get(id), $"Household shopping should recognize exact SKU '{id}'.");
+            }
+        }
+
+        [Test]
+        public void OpeningFurnishingVariantSelection_IsRepeatableForScenarioAndHouseholdIdentity()
+        {
+            DevelopmentTownConfiguration configuration = ScriptableObject.CreateInstance<DevelopmentTownConfiguration>();
+            configuration.Settings.configurationId = "furnishing-selection-test";
+            try
+            {
+                var household = new DevelopmentTownConfiguration.HouseholdDefinition
+                {
+                    key = "pierce",
+                    openingFurnishingVariants = new[]
+                    {
+                        new DevelopmentTownConfiguration.HouseholdFurnishingVariant { variantId = "modest", weight = 1 },
+                        new DevelopmentTownConfiguration.HouseholdFurnishingVariant { variantId = "settled", weight = 2 },
+                    }
+                };
+
+                DevelopmentTownConfiguration.HouseholdFurnishingVariant first =
+                    configuration.SelectOpeningFurnishingVariant(household, 1897);
+                DevelopmentTownConfiguration.HouseholdFurnishingVariant repeat =
+                    configuration.SelectOpeningFurnishingVariant(household, 1897);
+                Assert.AreSame(first, repeat);
+                Assert.IsNotNull(first);
+                Assert.Contains(first.variantId, new[] { "modest", "settled" });
+
+                household.key = "boniecki";
+                DevelopmentTownConfiguration.HouseholdFurnishingVariant otherHousehold =
+                    configuration.SelectOpeningFurnishingVariant(household, 1897);
+                Assert.IsNotNull(otherHousehold);
+                Assert.Contains(otherHousehold.variantId, new[] { "modest", "settled" });
+                Assert.AreSame(otherHousehold, configuration.SelectOpeningFurnishingVariant(household, 1897));
+                Assert.AreSame(first, configuration.SelectOpeningFurnishingVariant(
+                    new DevelopmentTownConfiguration.HouseholdDefinition
+                    {
+                        key = "pierce",
+                        openingFurnishingVariants = household.openingFurnishingVariants,
+                    }, 1897));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(configuration);
             }
         }
     }

@@ -154,6 +154,41 @@ namespace LandLedgers.Editor.World
         }
 
         [Test]
+        public void RuntimeActivityLocation_CanBeRegisteredUpdatedAndRemovedWithItsFurniture()
+        {
+            GameObject building = new("Runtime furnishing activity test");
+            try
+            {
+                BuildingFootprintAuthority authority = building.AddComponent<BuildingFootprintAuthority>();
+                InteriorFloorAuthoring floor = new() { floorIndex = 0, floorHeightLocal = 0f };
+                floor.walkableAreas.Add(Rectangle("Floor", -2f, -2f, 2f, 2f));
+                GetInteriorFloors(authority).Add(floor);
+
+                Assert.IsNull(authority.RegisterRuntimeActivityLocation("runtime-bed", "Bed approach",
+                    BuildingActivityLocationType.Bed, new Vector3(-1f, 0f, 0f), Vector3.forward, 0));
+                Assert.IsTrue(authority.TryGetActivityLocation("runtime-bed", 17,
+                    out ResolvedBuildingActivityLocation initial, out string initialError), initialError);
+                Assert.AreEqual(17, initial.BuildingInstanceId);
+                Assert.That(Vector3.Distance(building.transform.TransformPoint(new Vector3(-1f, 0f, 0f)),
+                    initial.WorldPosition), Is.LessThan(0.001f));
+
+                Assert.IsNull(authority.UpdateRuntimeActivityLocation("runtime-bed",
+                    new Vector3(1f, 0f, 0f), Vector3.left));
+                Assert.IsTrue(authority.TryGetActivityLocation("runtime-bed", 17,
+                    out ResolvedBuildingActivityLocation moved, out string movedError), movedError);
+                Assert.That(Vector3.Distance(building.transform.TransformPoint(new Vector3(1f, 0f, 0f)),
+                    moved.WorldPosition), Is.LessThan(0.001f));
+
+                Assert.IsTrue(authority.UnregisterRuntimeActivityLocation("runtime-bed"));
+                Assert.IsFalse(authority.TryGetActivityLocation("runtime-bed", 17, out _, out _));
+            }
+            finally
+            {
+                Object.DestroyImmediate(building);
+            }
+        }
+
+        [Test]
         public void AuthoredEntrancePairGatesBuildingBoundaryAndAllowsDoorwayRouteBothWays()
         {
             GameObject worldObject = new("Entrance route world");

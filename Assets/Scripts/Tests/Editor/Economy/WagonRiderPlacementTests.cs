@@ -102,6 +102,55 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void ApproachSelection_UsesShortestReachablePathWithinBoardingRange()
+        {
+            Vector3 seat = new(10f, 1.25f, 10f);
+            var candidates = new List<WagonRiderPlacement.ApproachCandidate>
+            {
+                new(new GridCoord(1, 1), new Vector3(13f, 0.08f, 10f), routeCost: 35),
+                new(new GridCoord(2, 1), new Vector3(11f, 0.08f, 10f), routeCost: 20),
+                new(new GridCoord(3, 1), new Vector3(10.5f, 0.08f, 10f), routeCost: 20),
+                new(new GridCoord(4, 1), new Vector3(10.1f, 0.08f, 10f), routeCost: 21)
+            };
+
+            Assert.IsTrue(WagonRiderPlacement.TrySelectApproachCandidate(candidates, seat,
+                WagonRiderPlacement.BoardToleranceMetres, out WagonRiderPlacement.ApproachCandidate selected));
+            Assert.AreEqual(new GridCoord(3, 1), selected.Coord,
+                "the shortest route wins; equal-cost routes choose the closest physically clear candidate");
+        }
+
+        [Test]
+        public void ApproachSelection_RejectsCandidateOutsideBoardingRange()
+        {
+            var candidates = new List<WagonRiderPlacement.ApproachCandidate>
+            {
+                new(new GridCoord(1, 1), new Vector3(15.01f, 0.08f, 0f), routeCost: 1)
+            };
+            Assert.IsFalse(WagonRiderPlacement.TrySelectApproachCandidate(candidates, Vector3.zero,
+                WagonRiderPlacement.BoardToleranceMetres, out _));
+        }
+
+        [Test]
+        public void StagingOwnership_OnlyRecognizesRouteEndingAtAssignedApproachCell()
+        {
+            GridCoord approach = new(16, 46);
+            var matching = new List<GridCoord> { new(15, 46), approach };
+            var diverted = new List<GridCoord> { new(15, 46), new(15, 45) };
+
+            Assert.IsTrue(WagonRiderPlacement.IsActiveApproachRoute(true, true, approach, matching));
+            Assert.IsFalse(WagonRiderPlacement.IsActiveApproachRoute(true, true, approach, diverted),
+                "a seat claim must not make an unrelated active route appear to approach the wagon");
+            Assert.IsFalse(WagonRiderPlacement.IsActiveApproachRoute(true, false, approach, matching));
+        }
+
+        [Test]
+        public void StagingOwnership_DefersCompetingRoutesUntilReleased()
+        {
+            Assert.IsTrue(WagonRiderPlacement.ShouldDeferCompetingRoute(hasSeatClaim: true));
+            Assert.IsFalse(WagonRiderPlacement.ShouldDeferCompetingRoute(hasSeatClaim: false));
+        }
+
+        [Test]
         public void CellCenter_MatchesPathEndSample()
         {
             // Fixture path mirrors CoupledTransportProgressTests

@@ -990,7 +990,8 @@ namespace LandLedgers.FirstLedger
                 if (managed.freightReceivingTargetBuildingId >= 0)
                     managed.freightReceivingTargetBuildingId = -1;
 
-                if ((managed.routeMode == AgentRouteMode.TaskDirected && managed.mover != null && managed.mover.IsRouteActive)
+                if (WagonRiderPlacement.ShouldDeferCompetingRoute(managed.transportStagingSeat != null)
+                    || (managed.routeMode == AgentRouteMode.TaskDirected && managed.mover != null && managed.mover.IsRouteActive)
                     || (ShoppingTripOwnsPerson != null && ShoppingTripOwnsPerson(managed.person.id)))
                     continue;
 
@@ -1039,6 +1040,11 @@ namespace LandLedgers.FirstLedger
                 if (managed.isRiding)
                 {
                     refusal = "Resident is currently aboard a wagon.";
+                    return false;
+                }
+                if (WagonRiderPlacement.ShouldDeferCompetingRoute(managed.transportStagingSeat != null))
+                {
+                    refusal = "Resident is physically approaching an assigned freight wagon; the boarding route must complete or be released before another task can claim movement.";
                     return false;
                 }
                 // A route already owned by another task is not ours to
@@ -1091,6 +1097,28 @@ namespace LandLedgers.FirstLedger
             bool routeActive, bool arrivedVisible)
         {
             return claimedBuildingId >= 0 && (routeActive || arrivedVisible);
+        }
+
+        internal static bool ShouldDeferRouteForFreightReceiving(int claimedBuildingId,
+            int requestedDestinationBuildingId)
+        {
+            return claimedBuildingId >= 0 && requestedDestinationBuildingId != claimedBuildingId;
+        }
+
+        internal static bool ShouldDeferRouteForFreightMovement(bool hasStagingClaim,
+            int receivingBuildingId, int requestedDestinationBuildingId)
+        {
+            return WagonRiderPlacement.ShouldDeferCompetingRoute(hasStagingClaim)
+                || ShouldDeferRouteForFreightReceiving(receivingBuildingId, requestedDestinationBuildingId);
+        }
+
+        internal static bool ShouldDeferDomesticActivityForFreightMovement(bool hasStagingClaim,
+            int receivingBuildingId)
+        {
+            // Domestic activity routes start directly from TryReachDomesticActivity
+            // and bypass TrySendAgent. Freight owns the person's physical route until
+            // its carrier authority completes or releases that movement.
+            return hasStagingClaim || receivingBuildingId >= 0;
         }
 
         /// <summary>Confirms the visible actor has completed its route to the requested building.</summary>
@@ -1515,6 +1543,15 @@ namespace LandLedgers.FirstLedger
                 reason = "The resident has no usable physical presentation or is aboard a wagon.";
                 return DomesticActivityMovementResult.Unsupported;
             }
+            if (ShouldDeferDomesticActivityForFreightMovement(
+                    managed.transportStagingSeat != null,
+                    managed.freightReceivingTargetBuildingId))
+            {
+                reason = managed.transportStagingSeat != null
+                    ? "Domestic activity is deferred while the resident physically approaches an assigned freight wagon."
+                    : $"Domestic activity is deferred while the resident carries freight to receiving building {managed.freightReceivingTargetBuildingId}.";
+                return DomesticActivityMovementResult.Unsupported;
+            }
             if (managed.person.homeBuildingId < 0
                 || !townWorld.TryGetBuildingById(managed.person.homeBuildingId, out PlacedBuilding home)
                 || home?.runtimeFootprintAuthority == null)
@@ -1871,6 +1908,7 @@ namespace LandLedgers.FirstLedger
                 }
                 managed.isRiding = true;
                 managed.transportStagingCoord = null;
+                managed.transportStagingSeat = null;
                 // Sitting application, step 5 (R2): cross-fade to the
                 // DrivingWagon state; a false return means the degrade
                 // path ran (no Animator / no state) and the rider rides
@@ -1884,9 +1922,18 @@ namespace LandLedgers.FirstLedger
 
         /// <summary>Starts a real pedestrian route to the wagon staging cell when the driver is outside boarding range.</summary>
         public bool TryApproachTransportSeat(int personId, Transform seat, float boardingToleranceMetres, out bool readyToBoard)
+            => TryApproachTransportSeat(personId, seat, boardingToleranceMetres, out readyToBoard, out _);
+
+        public bool TryApproachTransportSeat(int personId, Transform seat, float boardingToleranceMetres,
+            out bool readyToBoard, out string reason)
         {
             readyToBoard = false;
-            if (personId < 0 || seat == null || townWorld?.Grid == null || pathingManager == null) return false;
+            reason = string.Empty;
+            if (personId < 0 || seat == null || townWorld?.Grid == null || pathingManager == null)
+            {
+                reason = "person, seat, town grid, or pathing authority is unresolved";
+                return false;
+            }
             for (int i = 0; i < agents.Count; i++)
             {
                 ManagedPersonAgent managed = agents[i];
@@ -1894,6 +1941,7 @@ namespace LandLedgers.FirstLedger
                 if (managed.isRiding)
                 {
                     readyToBoard = managed.mover.transform.parent == seat;
+                    if (!readyToBoard) reason = "person is riding a different seat";
                     return readyToBoard;
                 }
                 Vector3 actorPosition = managed.mover.transform.position;
@@ -1903,36 +1951,108 @@ namespace LandLedgers.FirstLedger
                 if (!managed.mover.IsRouteActive && !managed.mover.IsHidden
                     && Vector2.Distance(actor, target) <= Mathf.Max(0.1f, boardingToleranceMetres))
                 {
-                    managed.transportStagingCoord = targetCoord;
+                    managed.transportStagingCoord = townWorld.Grid.WorldToCoord(actorPosition);
+                    managed.transportStagingSeat = seat;
+                    managed.transportStagingSeatPosition = seat.position;
                     readyToBoard = true;
                     return true;
                 }
 
-                if (managed.transportStagingCoord.HasValue && managed.transportStagingCoord.Value.Equals(targetCoord)
-                    && managed.mover.IsRouteActive)
+                if (managed.transportStagingSeat == seat
+                    && Vector3.SqrMagnitude(managed.transportStagingSeatPosition - seat.position) <= 0.01f
+                    && WagonRiderPlacement.IsActiveApproachRoute(true, managed.mover.IsRouteActive,
+                        managed.transportStagingCoord, managed.mover.CurrentPath))
                     return !managed.mover.IsHidden;
+                if (managed.mover.IsRouteActive)
+                {
+                    reason = "operator is completing another physical route before approaching the assigned wagon";
+                    return false;
+                }
                 managed.transportStagingCoord = null;
-                if (managed.mover.IsRouteActive || managed.mover.IsHidden) return false;
+                managed.transportStagingSeat = null;
+                if (managed.mover.IsHidden)
+                {
+                    reason = "operator is hidden";
+                    return false;
+                }
 
                 GridCoord startCoord = townWorld.Grid.WorldToCoord(actorPosition);
-                if (!managed.mover.BeginGridRoute(startCoord, targetCoord, false)) return false;
-                managed.transportStagingCoord = targetCoord;
+                int searchRadius = Mathf.CeilToInt(Mathf.Max(0.1f, boardingToleranceMetres)
+                    / townWorld.Grid.CellSizeMeters) + 1;
+                var candidates = new List<WagonRiderPlacement.ApproachCandidate>();
+                for (int dz = -searchRadius; dz <= searchRadius; dz++)
+                for (int dx = -searchRadius; dx <= searchRadius; dx++)
+                {
+                    GridCoord candidateCoord = new(targetCoord.x + dx, targetCoord.z + dz);
+                    if (!townWorld.Grid.IsInBounds(candidateCoord)
+                        || townWorld.Grid.GetCell(candidateCoord).HasBuilding
+                        || !pathingManager.TryGetMovementCost(candidateCoord, out _)) continue;
+                    Vector3 candidatePosition = pathingManager.CoordToPathWorld(candidateCoord);
+                    if (Vector2.Distance(new Vector2(candidatePosition.x, candidatePosition.z), target)
+                        > Mathf.Max(0.1f, boardingToleranceMetres)) continue;
+                    PathingRequest probe = PathingRequest.CreateProbe(startCoord, candidateCoord,
+                        this, $"P{personId} wagon boarding approach");
+                    if (!pathingManager.TryFindPath(probe, out PathingResult path) || path == null || !path.Success) continue;
+                    candidates.Add(new WagonRiderPlacement.ApproachCandidate(candidateCoord, candidatePosition, path.TotalCost));
+                }
+
+                if (!WagonRiderPlacement.TrySelectApproachCandidate(candidates, seat.position,
+                        boardingToleranceMetres, out WagonRiderPlacement.ApproachCandidate approach))
+                {
+                    reason = $"no walkable, reachable approach cell is within {Mathf.Max(0.1f, boardingToleranceMetres):F1} m of the DriverSeat (seat cell {targetCoord}, operator cell {startCoord})";
+                    return false;
+                }
+
+                if (!managed.mover.BeginGridRouteWithFinalWaypoints(startCoord, approach.Coord,
+                        new[] { approach.WorldPosition }))
+                {
+                    reason = $"the custom mover refused the route from {startCoord} to boarding cell {approach.Coord}";
+                    return false;
+                }
+                managed.transportStagingCoord = approach.Coord;
+                managed.transportStagingSeat = seat;
+                managed.transportStagingSeatPosition = seat.position;
                 managed.routeMode = AgentRouteMode.TaskDirected;
                 managed.ambientOriginBuildingId = -1;
                 managed.ambientTargetBuildingId = -1;
                 return true;
             }
+            reason = $"operator P{personId} has no managed visible movement agent";
             return false;
         }
 
         public bool IsPersonApproachingTransportSeat(int personId, Transform seat)
         {
             if (personId < 0 || seat == null || townWorld?.Grid == null) return false;
-            GridCoord targetCoord = townWorld.Grid.WorldToCoord(seat.position);
             foreach (ManagedPersonAgent managed in agents)
                 if (managed?.person != null && managed.person.id == personId && managed.mover != null
-                    && managed.transportStagingCoord.HasValue && managed.transportStagingCoord.Value.Equals(targetCoord))
-                    return !managed.mover.IsHidden;
+                    && managed.transportStagingSeat == seat && managed.transportStagingCoord.HasValue
+                    && !managed.mover.IsHidden
+                    && (WagonRiderPlacement.IsActiveApproachRoute(true, managed.mover.IsRouteActive,
+                            managed.transportStagingCoord, managed.mover.CurrentPath)
+                        || Vector2.Distance(
+                        new Vector2(managed.mover.transform.position.x, managed.mover.transform.position.z),
+                        new Vector2(seat.position.x, seat.position.z)) <= WagonRiderPlacement.BoardToleranceMetres))
+                    return true;
+            return false;
+        }
+
+        /// <summary>Releases a freight seat approach after its owning operation terminates.</summary>
+        public bool ReleaseTransportSeatApproach(int personId, Transform seat)
+        {
+            if (personId < 0 || seat == null) return false;
+            foreach (ManagedPersonAgent managed in agents)
+            {
+                if (managed?.person == null || managed.person.id != personId || managed.mover == null
+                    || managed.transportStagingSeat != seat) continue;
+                if (WagonRiderPlacement.IsActiveApproachRoute(true, managed.mover.IsRouteActive,
+                        managed.transportStagingCoord, managed.mover.CurrentPath))
+                    managed.mover.CancelActiveRoute();
+                managed.transportStagingCoord = null;
+                managed.transportStagingSeat = null;
+                managed.routeMode = AgentRouteMode.None;
+                return true;
+            }
             return false;
         }
 
@@ -2087,6 +2207,15 @@ namespace LandLedgers.FirstLedger
             if (managed == null || managed.person == null || managed.mover == null)
             {
                 refusal = "Managed resident or AgentMover is unavailable.";
+                return false;
+            }
+
+            if (ShouldDeferRouteForFreightMovement(managed.transportStagingSeat != null,
+                    managed.freightReceivingTargetBuildingId, targetBuildingId))
+            {
+                refusal = managed.transportStagingSeat != null
+                    ? "Resident is approaching an assigned freight wagon; the boarding route must arrive or be released before another task can claim movement."
+                    : $"Resident is carrying freight to receiving building {managed.freightReceivingTargetBuildingId}; the receiving route must arrive or be released before another destination can claim movement.";
                 return false;
             }
 
@@ -2802,6 +2931,8 @@ namespace LandLedgers.FirstLedger
             // boarding is re-derived at leg start (§8 of the plan).
             public bool isRiding;
             public GridCoord? transportStagingCoord;
+            public Transform transportStagingSeat;
+            public Vector3 transportStagingSeatPosition;
             public int ambientOriginBuildingId;
             public int ambientTargetBuildingId;
         }

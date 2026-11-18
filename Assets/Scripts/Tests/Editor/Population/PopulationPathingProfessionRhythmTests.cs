@@ -152,6 +152,24 @@ namespace LandLedgers.EditorTests.Population
                 Assert.IsTrue(PopulationPathingDirector.ShouldPreserveFreightReceivingRoute(7, true, false));
                 Assert.IsFalse(PopulationPathingDirector.ShouldPreserveFreightReceivingRoute(7, false, false),
                     "An ended failed route must not keep a carrier permanently reserved.");
+                Assert.IsTrue(PopulationPathingDirector.ShouldDeferRouteForFreightReceiving(7, 3),
+                    "Any direct route request must respect a live receiving claim, even when it bypasses the scheduled-route selector.");
+                Assert.IsFalse(PopulationPathingDirector.ShouldDeferRouteForFreightReceiving(7, 7),
+                    "The receiving owner may continue or resume its own route.");
+                Assert.IsFalse(PopulationPathingDirector.ShouldDeferRouteForFreightReceiving(-1, 3),
+                    "A released receiving claim must not block ordinary routing.");
+                Assert.IsTrue(PopulationPathingDirector.ShouldDeferRouteForFreightMovement(true, -1, 3),
+                    "Direct task and shopping routes must honor an assigned wagon-approach owner.");
+                Assert.IsTrue(PopulationPathingDirector.ShouldDeferRouteForFreightMovement(false, 7, 3),
+                    "Direct routes must honor an active physical receiving owner.");
+                Assert.IsFalse(PopulationPathingDirector.ShouldDeferRouteForFreightMovement(false, 7, 7),
+                    "The freight receiver may continue routing within its claimed destination.");
+                Assert.IsTrue(PopulationPathingDirector.ShouldDeferDomesticActivityForFreightMovement(true, -1),
+                    "Domestic activity starts routes directly and must respect an assigned wagon approach.");
+                Assert.IsTrue(PopulationPathingDirector.ShouldDeferDomesticActivityForFreightMovement(false, 7),
+                    "Domestic activity must not replace a physical cargo receiving route.");
+                Assert.IsFalse(PopulationPathingDirector.ShouldDeferDomesticActivityForFreightMovement(false, -1),
+                    "Ordinary domestic activity remains available after freight movement releases the person.");
                 LogAssert.Expect(LogType.Warning,
                     new System.Text.RegularExpressions.Regex("PopulationPathingDirector blocked a scheduled population route"));
                 send.Invoke(director, new object[] { PopulationScheduleState.ReturningHome, null,

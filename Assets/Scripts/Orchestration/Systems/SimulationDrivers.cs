@@ -6687,11 +6687,12 @@ namespace LandLedgers.Orchestration.Systems
             // agreement and shipment pending until the assigned operator is
             // physically close enough to board; no journey or delivery is
             // created by an unsuccessful approach.
-            if (!transportPresentation.TryPrepareDriverAtStaging(operatorId, out bool driverReadyToDepart)
+            if (!transportPresentation.TryPrepareDriverAtStaging(operatorId, out bool driverReadyToDepart, out string stagingReason)
                 || !driverReadyToDepart)
             {
                 LogRefusalDayKeyed("departure-driver-staging:" + shipment.ShipmentId, dayIndex,
-                    $"[OffMapJourney] Shipment '{shipment.ShipmentId}' remains pending while its assigned driver walks to the wagon staging point.");
+                    $"[OffMapJourney] Shipment '{shipment.ShipmentId}' remains pending at physical driver staging: " +
+                    (string.IsNullOrWhiteSpace(stagingReason) ? "operator is still walking to the boarding point" : stagingReason) + ".");
                 return false;
             }
 
@@ -10830,7 +10831,16 @@ namespace LandLedgers.Orchestration.Systems
                     continue;
 
                 WorkTask task = hub.Tasks.FindTaskByIdString(agreement.DispatchTaskId);
-                if (task == null || (task.Status != TaskStatus.Queued && task.Status != TaskStatus.Assigned))
+                if (task == null)
+                    continue;
+                if (task.Status == TaskStatus.Failed || task.Status == TaskStatus.Cancelled
+                    || task.Status == TaskStatus.Interrupted)
+                {
+                    FindAnyObjectByType<OpeningTransportPresentationController>()
+                        ?.ReleaseDriverStagingApproach(agreement.AcceptingOperatorPersonId);
+                    continue;
+                }
+                if (task.Status != TaskStatus.Queued && task.Status != TaskStatus.Assigned)
                     continue;
 
                 LogisticsShipmentState shipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null

@@ -613,14 +613,33 @@ namespace LandLedgers.Economy.Transport
         }
 
         public bool TryPrepareDriverAtStaging(int personId, out bool readyToDepart)
+            => TryPrepareDriverAtStaging(personId, out readyToDepart, out _);
+
+        public bool TryPrepareDriverAtStaging(int personId, out bool readyToDepart, out string reason)
         {
             readyToDepart = false;
+            reason = string.Empty;
             PopulationPathingDirector director = FindAnyObjectByType<PopulationPathingDirector>();
             Transform seat = activeWagonView != null ? activeWagonView.DriverSeat : null;
-            if (director == null || seat == null) return false;
-            if (!director.TryApproachTransportSeat(personId, seat, WagonRiderPlacement.BoardToleranceMetres, out readyToDepart))
+            if (director == null || seat == null)
+            {
+                reason = director == null ? "population movement authority is unavailable" : "wagon DriverSeat is unresolved";
+                return false;
+            }
+            if (!director.TryApproachTransportSeat(personId, seat,
+                    WagonRiderPlacement.BoardToleranceMetres, out readyToDepart, out reason))
                 return false;
             return true;
+        }
+
+        public bool ReleaseDriverStagingApproach(int personId)
+        {
+            PopulationPathingDirector director = populationPathingDirector != null
+                ? populationPathingDirector
+                : FindAnyObjectByType<PopulationPathingDirector>();
+            Transform seat = activeWagonView != null ? activeWagonView.DriverSeat : null;
+            return director != null && seat != null
+                && director.ReleaseTransportSeatApproach(personId, seat);
         }
 
         private CoupledTransportMovementController ResolveMovementController()

@@ -21,6 +21,7 @@
 // arrival radius (that stays 1.5 m); it only gates whether the rider
 // is close enough to the seat to board. The tolerance is inclusive:
 // a rider exactly 5 m away boards.
+using System.Collections.Generic;
 using LandLedgers.World;
 using UnityEngine;
 
@@ -28,12 +29,68 @@ namespace LandLedgers.Economy.Transport
 {
     public static class WagonRiderPlacement
     {
+        public readonly struct ApproachCandidate
+        {
+            public ApproachCandidate(GridCoord coord, Vector3 worldPosition, int routeCost)
+            {
+                Coord = coord;
+                WorldPosition = worldPosition;
+                RouteCost = routeCost;
+            }
+
+            public GridCoord Coord { get; }
+            public Vector3 WorldPosition { get; }
+            public int RouteCost { get; }
+        }
+
         /// <summary>
         /// The single home of the approved 5 m boarding acceptance
         /// threshold. Passed in by callers, never a literal at a call
         /// site.
         /// </summary>
         public const float BoardToleranceMetres = 5f;
+
+        public static bool TrySelectApproachCandidate(IReadOnlyList<ApproachCandidate> candidates,
+            Vector3 seatWorldPosition, float boardToleranceMetres, out ApproachCandidate selected)
+        {
+            selected = default;
+            if (candidates == null || candidates.Count == 0) return false;
+            float tolerance = Mathf.Max(0.1f, boardToleranceMetres);
+            float bestDistance = float.PositiveInfinity;
+            int bestRouteCost = int.MaxValue;
+            bool found = false;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                ApproachCandidate candidate = candidates[i];
+                float distance = Vector2.Distance(
+                    new Vector2(candidate.WorldPosition.x, candidate.WorldPosition.z),
+                    new Vector2(seatWorldPosition.x, seatWorldPosition.z));
+                if (distance > tolerance) continue;
+                if (found && (candidate.RouteCost > bestRouteCost
+                    || candidate.RouteCost == bestRouteCost && distance >= bestDistance)) continue;
+                selected = candidate;
+                bestRouteCost = candidate.RouteCost;
+                bestDistance = distance;
+                found = true;
+            }
+            return found;
+        }
+
+        /// <summary>
+        /// A transport approach owns the person's movement until the rider
+        /// boards or the owning freight operation explicitly releases it.
+        /// An unrelated route must not be mistaken for progress toward the
+        /// staging cell merely because the seat claim is still present.
+        /// </summary>
+        public static bool IsActiveApproachRoute(bool hasSeatClaim, bool routeActive,
+            GridCoord? approachCoord, IReadOnlyList<GridCoord> activePath)
+        {
+            return hasSeatClaim && routeActive && approachCoord.HasValue
+                && activePath != null && activePath.Count > 0
+                && activePath[activePath.Count - 1].Equals(approachCoord.Value);
+        }
+
+        public static bool ShouldDeferCompetingRoute(bool hasSeatClaim) => hasSeatClaim;
 
         /// <summary>
         /// The board gate, pure: refuses when a route is active (never

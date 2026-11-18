@@ -120,9 +120,19 @@ namespace LandLedgers.Orchestration
                     if (HasPresentation(home.runtimeFootprintAuthority, binding.AssetId)) continue;
                     string error = CreatePresentation(home.runtimeFootprintAuthority, binding.LocalPosition,
                         binding.LocalRotation, item, binding.AssetId, binding.DefinitionId,
-                        binding.CapabilityReferenceId, out _);
+                        binding.CapabilityReferenceId, out BuildingEquipmentPlacement placement);
                     if (error != null) result.Diagnostics.Add(error);
-                    else result.PresentationsRebuilt++;
+                    else
+                    {
+                        if (item.registerRuntimeActivityLocation && placement != null)
+                        {
+                            HouseholdFurnishingRuntimePresentation marker = placement.GetComponent<HouseholdFurnishingRuntimePresentation>();
+                            if (marker == null) marker = placement.gameObject.AddComponent<HouseholdFurnishingRuntimePresentation>();
+                            marker.Configure(binding.AssetId, home.runtimeFootprintAuthority, item.activityLocationId,
+                                item.activityPositionLocal, item.activityForwardLocal);
+                        }
+                        result.PresentationsRebuilt++;
+                    }
                 }
                 RebuildDerivedRegistries(household, systemsHub);
                 ValidateFunctionalActivityRoutes(home.runtimeFootprintAuthority, register, result.Diagnostics);
@@ -183,7 +193,8 @@ namespace LandLedgers.Orchestration
                 && !authority.ActivityLocations.Any(location => location != null && location.id == item.activityLocationId)
                 && !authority.TryEvaluateInteriorLocalPoint(item.activityPositionLocal, item.floorIndex, null, out blocked))
                 return $"Opening furnishing {item.assetId} interaction approach is not walkable in building {home.id}: {blocked}";
-            if (!item.registerRuntimeActivityLocation && !string.IsNullOrWhiteSpace(item.activityLocationId)
+            if (!item.registerRuntimeActivityLocation && item.capability != FurnishingCapabilityKind.DiningTable
+                && !string.IsNullOrWhiteSpace(item.activityLocationId)
                 && !authority.TryGetActivityLocation(item.activityLocationId, home.id, out _, out string activityError))
                 return $"Opening furnishing {item.assetId} references unavailable activity location '{item.activityLocationId}' in building {home.id}: {activityError}";
 
@@ -265,7 +276,7 @@ namespace LandLedgers.Orchestration
             {
                 string runtimeError = authority.RegisterRuntimeActivityLocation(activityLocationId,
                     item.displayName + " approach", item.activityType, item.activityPositionLocal,
-                    item.activityForwardLocal, item.floorIndex);
+                    item.activityForwardLocal, item.floorIndex, string.Empty, placement);
                 if (runtimeError != null && !IsSameRuntimeLocation(authority, activityLocationId, item.activityPositionLocal))
                 {
                     UnityEngine.Object.Destroy(instance);

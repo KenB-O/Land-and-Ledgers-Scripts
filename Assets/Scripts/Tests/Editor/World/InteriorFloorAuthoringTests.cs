@@ -189,6 +189,40 @@ namespace LandLedgers.Editor.World
         }
 
         [Test]
+        public void RuntimeActivityLocation_IgnoresOnlyItsOwningFurnitureObstruction()
+        {
+            GameObject building = new("Runtime furnishing approach exclusion test");
+            try
+            {
+                BuildingFootprintAuthority authority = building.AddComponent<BuildingFootprintAuthority>();
+                InteriorFloorAuthoring floor = new() { floorIndex = 0, floorHeightLocal = 0f };
+                floor.walkableAreas.Add(Rectangle("Floor", -2f, -2f, 2f, 2f));
+                GetInteriorFloors(authority).Add(floor);
+
+                GameObject furniture = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                furniture.name = "Dining chair";
+                furniture.transform.SetParent(building.transform, false);
+                BuildingEquipmentPlacement placement = furniture.AddComponent<BuildingEquipmentPlacement>();
+                placement.Configure("chair-asset", "furniture.chair", "Dining chair", 0);
+                placement.AssociateWithBuilding(authority);
+
+                string blocked = authority.RegisterRuntimeActivityLocation("chair-approach-blocked", "Chair approach",
+                    BuildingActivityLocationType.Dining, Vector3.zero, Vector3.forward, 0);
+                StringAssert.Contains("Dining chair", blocked);
+
+                Assert.IsNull(authority.RegisterRuntimeActivityLocation("chair-approach", "Chair approach",
+                    BuildingActivityLocationType.Dining, Vector3.zero, Vector3.forward, 0, string.Empty, placement));
+                Assert.IsNull(authority.UpdateRuntimeActivityLocation("chair-approach",
+                    Vector3.zero, Vector3.forward));
+                Assert.IsTrue(authority.UnregisterRuntimeActivityLocation("chair-approach"));
+            }
+            finally
+            {
+                Object.DestroyImmediate(building);
+            }
+        }
+
+        [Test]
         public void AuthoredEntrancePairGatesBuildingBoundaryAndAllowsDoorwayRouteBothWays()
         {
             GameObject worldObject = new("Entrance route world");

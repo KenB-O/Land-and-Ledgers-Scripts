@@ -12,7 +12,7 @@ Base checkpoint: `94d1e3365455c6f9c582761acab93af705706d37`
 
 ## Result
 
-The source path for finite, household-owned opening furnishings is implemented and compiled. The local development-town configuration has deterministic furnishing variants for its eight configured homes, using real bed, stove, table and chair prefabs. The configuration read-back and the focused functional-authority regressions passed. The required live interior inspection, screenshots and proof of actual NPC use remain **not verified**: the existing Unity Editor became unresponsive while refreshing the large local asset collection as Play Mode was requested. It was not restarted.
+The finite furnishing plan compiles and initializes in the live development town. A later PlayMode check completed after an earlier attempt had stalled: the game slice initialized with 8 households, and the furnishing initializer reported 34 assets installed (seed 9217). Runtime authorities showed one furnishing binding per asset, six usable stoves, six dining tables, and two deliberately sparse/stove-free homes. A screenshot confirms an actual furnished interior (table and chairs), but three-house visual comparison and real NPC sleeping/cooking/dining use remain **unverified**. The editor has been returned to Edit Mode.
 
 ## Implementation
 
@@ -43,23 +43,42 @@ Focused Unity EditMode results:
 |---|---:|---:|---:|
 | `DevelopmentTownConfigurationTests` | 6 | 0 | 0 |
 | `HouseholdFurnishingRegisterTests` | 25 | 0 | 0 |
-| `InteriorFloorAuthoringTests` | 18 | 0 | 0 |
+| `InteriorFloorAuthoringTests` | 19 | 0 | 0 |
 | `SleepingPlaceRegistryTests` | 19 | 0 | 0 |
 | `HouseholdStoveRegistryTests` | 22 | 0 | 0 |
 | `DiningPlaceRegistryTests` | 20 | 0 | 0 |
-| **Total** | **110** | **0** | **0** |
+| **Total** | **111** | **0** | **0** |
 
-The added regressions cover repeatable scenario/household variant selection and runtime activity-point registration, movement and removal. Existing suites cover installation ownership, duplicate/refused installs, persistence/idempotence, physical placement and navigation obstructions, sleep capability, stove removal/fuel and dining seating/fallbacks.
+The added regressions cover repeatable scenario/household variant selection and runtime activity-point registration, movement and removal. The final regression also confirms an activity point may ignore its own furniture obstruction while still respecting other obstacles. Existing suites cover installation ownership, duplicate/refused installs, persistence/idempotence, physical placement and navigation obstructions, sleep capability, stove removal/fuel and dining seating/fallbacks.
 
-### PlayMode and visuals
+### PlayMode startup and runtime registrations
 
-**Not verified.** The open scene was `Assets/Main Scene.unity`; it was not dirty in the Editor at the pre-test query. The `editor.playmode start` request was accepted, but the Editor then became unresponsive during the asset refresh/import path. Unity's window stopped responding and the pipeline was unavailable intermittently; the process remained alive. The Editor log showed asset categorization/import and post-processing, including an `Untracked` scan, before the stall. I did not force-restart, save, or close the project. No screenshots or claims of furniture visible in PlayMode, successful startup seeding, physical NPC access or actual use are provided.
+**Verified:** A subsequent New Game ran in the actual `Assets/Main Scene.unity` project in Unity `6000.4.2f1`. Runtime reported `initialized=true`, `failed=false`, `Game slice ready`, 98 people, 8 households and 14 buildings. The opening-furnishing log reported `households=8, assets installed=34, seed=9217`.
 
-Return the existing Editor to Edit Mode only after it responds; if Unity eventually entered Play Mode despite the stalled response, stop Play Mode from that existing Editor before resuming authoring. Do not discard or save the owner scene as part of recovery.
+Household furnishing register and derived capability counts from the live runtime:
+
+| Household | Home ID | Assets / bindings | Stoves | Tables | Seats |
+|---|---:|---:|---:|---:|---:|
+| H1 | 6 | 6 / 6 | 1 | 1 | 2 |
+| H2 | 7 | 5 / 5 | 1 | 1 | 2 |
+| H3 | 8 | 5 / 5 | 1 | 1 | 2 |
+| H4 | 9 | 6 / 6 | 1 | 1 | 2 |
+| H5 | 10 | 1 / 1 | 0 | 0 | 0 |
+| H6 | 11 | 4 / 4 | 1 | 1 | 1 |
+| H7 | 12 | 6 / 6 | 1 | 1 | 2 |
+| H8 | 13 | 1 / 1 | 0 | 0 | 0 |
+
+The earlier failed attempt had found a genuine interaction-point issue: dining tables referenced a legacy `dining` location that was absent, and stove interaction points collided with their own furniture obstruction. The configuration was corrected locally using Unity serialization; runtime activity points now ignore only their owning furniture placement. The final startup log had no household furnishing installation errors. An unrelated WorldGenesis reconciliation warning remained.
+
+**Visual evidence:** [household-1-settled.png](../Playtests/Runs/20261118-house-interiors-furniture/household-1-settled.png) shows an actual table-and-chair interior in PlayMode. This is one house only; its dark lighting limits presentation quality. The requested three distinct interior screenshots were not completed.
+
+**Not verified:** NPC physical traversal into the furnished rooms and actual sleeping, cooking, heating, or seated dining. Registry counts prove capability registration, not actual use. No character-use success is claimed.
+
+The Editor was responsive and explicitly stopped from Play Mode. Final status: ready, not compiling, `playMode=stopped`, Unity `6000.4.2f1`. It was left in Edit Mode. The Main Scene and structural house prefab were not saved by this pass.
 
 ## Remaining limitations
 
-1. Live visual differences among three houses and real sleep, cooking and dining use still need PlayMode verification.
+1. Live visual comparison among three houses and real NPC sleep, cooking and dining use still need PlayMode verification.
 2. Cabinet/shelf storage capability and real storage binding are not created here; visible assets alone would not establish capacity or inventory ownership.
 3. Purchased/manufactured furnishing delivery-to-install presentation reconstruction is not part of this opening-endowment initializer.
 4. Local-only model dependencies prevent the eight-house visual plans from being a portable Git-only scene until approved assets are available to the receiving checkout.
@@ -78,3 +97,7 @@ Return the existing Editor to Edit Mode only after it responds; if Unity eventua
 - `Assets/Scripts/Tests/Editor/World/InteriorFloorAuthoringTests.cs`
 
 Excluded from publication: local `DevelopmentTownConfiguration.asset` authoring due its references to local-only furniture prefabs; owner-modified `House Natural Wood.prefab`, Main Scene, terrain metadata and fonts; all local asset packs and generated/unrelated untracked diagnostics.
+
+## Final source checkpoint
+
+The follow-up interaction-point fix and its regression are included in the second checkpoint on `codex/house-interiors-functional-furniture-2026-11-17`. See the final handoff for the exact pushed SHA. The local configuration authoring remains excluded for the portability reason above.

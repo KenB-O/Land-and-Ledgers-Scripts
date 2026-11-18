@@ -221,6 +221,9 @@ namespace LandLedgers.World
         [NonSerialized]
         private Dictionary<string, BuildingActivityLocationAuthoring> runtimeActivityLocations;
 
+        [NonSerialized]
+        private Dictionary<string, BuildingEquipmentPlacement> runtimeActivityIgnoredEquipment;
+
         private readonly struct WalkableFloorTriangle
         {
             public readonly Vector3 A;
@@ -590,7 +593,8 @@ namespace LandLedgers.World
             Vector3 positionLocal,
             Vector3 forwardLocal,
             int floorIndex,
-            string functionalSpaceId = "")
+            string functionalSpaceId = "",
+            BuildingEquipmentPlacement ignoredEquipment = null)
         {
             if (string.IsNullOrWhiteSpace(id)) return "Runtime activity location requires an ID.";
             if (!IsFinite(positionLocal) || !IsFinite(forwardLocal) || forwardLocal.sqrMagnitude < 0.0001f)
@@ -600,6 +604,8 @@ namespace LandLedgers.World
             if (activityLocations != null && activityLocations.Any(location => location != null
                     && string.Equals(location.id, id, StringComparison.Ordinal)))
                 return $"Runtime activity location '{id}' conflicts with an authored location on '{name}'.";
+            if (ignoredEquipment != null && ignoredEquipment.BuildingAuthority != this)
+                return $"Runtime activity location '{id}' cannot ignore equipment associated with another building.";
 
             runtimeActivityLocations ??= new Dictionary<string, BuildingActivityLocationAuthoring>(StringComparer.Ordinal);
             if (runtimeActivityLocations.ContainsKey(id))
@@ -616,16 +622,23 @@ namespace LandLedgers.World
                 requiresWalkableInterior = true,
             };
             runtimeActivityLocations.Add(id, location);
-            if (!TryEvaluateInteriorLocalPoint(positionLocal, floorIndex, location.functionalSpaceId, out string reason))
+            if (!TryEvaluateInteriorLocalPointIgnoringEquipment(positionLocal, floorIndex,
+                    location.functionalSpaceId, ignoredEquipment, out string reason))
             {
                 runtimeActivityLocations.Remove(id);
                 return $"Runtime activity location '{id}' is not reachable on '{name}': {reason}";
+            }
+            if (ignoredEquipment != null)
+            {
+                runtimeActivityIgnoredEquipment ??= new Dictionary<string, BuildingEquipmentPlacement>(StringComparer.Ordinal);
+                runtimeActivityIgnoredEquipment[id] = ignoredEquipment;
             }
             return null;
         }
 
         public bool UnregisterRuntimeActivityLocation(string id)
         {
+            if (!string.IsNullOrWhiteSpace(id)) runtimeActivityIgnoredEquipment?.Remove(id);
             return !string.IsNullOrWhiteSpace(id) && runtimeActivityLocations != null
                 && runtimeActivityLocations.Remove(id);
         }
@@ -636,7 +649,11 @@ namespace LandLedgers.World
                 return $"Runtime activity location '{id}' is not registered on '{name}'.";
             if (!IsFinite(positionLocal) || !IsFinite(forwardLocal) || forwardLocal.sqrMagnitude < 0.0001f)
                 return $"Runtime activity location '{id}' received a non-finite position or invalid facing.";
-            if (!TryEvaluateInteriorLocalPoint(positionLocal, location.floorIndex, location.functionalSpaceId, out string reason))
+            BuildingEquipmentPlacement ignoredEquipment = null;
+            if (runtimeActivityIgnoredEquipment != null)
+                runtimeActivityIgnoredEquipment.TryGetValue(id, out ignoredEquipment);
+            if (!TryEvaluateInteriorLocalPointIgnoringEquipment(positionLocal, location.floorIndex,
+                    location.functionalSpaceId, ignoredEquipment, out string reason))
                 return $"Runtime activity location '{id}' moved to a blocked point on '{name}': {reason}";
             location.positionLocal = positionLocal;
             location.forwardLocal = forwardLocal;
@@ -1015,6 +1032,17 @@ namespace LandLedgers.World
             string functionalSpaceId,
             out string reason)
         {
+            return TryEvaluateInteriorLocalPointIgnoringEquipment(localPoint, floorIndex,
+                functionalSpaceId, null, out reason);
+        }
+
+        private bool TryEvaluateInteriorLocalPointIgnoringEquipment(
+            Vector3 localPoint,
+            int floorIndex,
+            string functionalSpaceId,
+            BuildingEquipmentPlacement ignoredEquipment,
+            out string reason)
+        {
             reason = string.Empty;
             InteriorFloorAuthoring floor = FindInteriorFloor(floorIndex);
             if (floor == null)
@@ -1092,6 +1120,7 @@ namespace LandLedgers.World
 
             foreach (BuildingEquipmentPlacement placement in GetAssociatedEquipmentPlacements())
             {
+                if (placement == ignoredEquipment) continue;
                 if (placement == null || !placement.BlocksInteriorPoint(this, localPoint, floorIndex)) continue;
                 reason = $"Point is blocked by installed equipment '{placement.DisplayName}' ({placement.DefinitionId}).";
                 return false;

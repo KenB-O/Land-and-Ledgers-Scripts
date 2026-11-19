@@ -41,6 +41,8 @@ Compilation completed without compiler errors. Final focused results:
 | `AutonomousTaskProgressTests` | 24 | 0 | 0 |
 | `CampaignBReleaseFeedRegistrationTests` | 8 | 0 | 0 |
 
+Across the listed suite executions (sum of the per-suite results): **281 passed, 0 failed, 0 skipped**.
+
 These are Unity EditMode results. They are not evidence that physical activity occurred in PlayMode.
 
 ## PlayMode and Save/Continue

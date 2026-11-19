@@ -261,6 +261,42 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
+        /// Reattaches a recreated scene presentation to its existing
+        /// authoritative furnishing binding after a world visual rebuild or
+        /// Continue restore. This restores the existing placement identity,
+        /// ownership and acquisition provenance; it creates no asset or new
+        /// installation record.
+        /// </summary>
+        public string TryRebindPlacementForRestoration(
+            string assetId,
+            BuildingEquipmentPlacement placement,
+            BuildingFootprintAuthority building,
+            int buildingInstanceId)
+        {
+            FurnishingPlacementBinding binding = LiveBindingFor(assetId);
+            if (binding == null)
+                return $"HouseholdFurnishingRegister.TryRebindPlacementForRestoration: asset {assetId} has no installed binding.";
+            if (placement == null)
+                return "HouseholdFurnishingRegister.TryRebindPlacementForRestoration: placement is required.";
+            if (building == null)
+                return "HouseholdFurnishingRegister.TryRebindPlacementForRestoration: building authority is required.";
+            if (binding.BuildingInstanceId != buildingInstanceId)
+                return $"HouseholdFurnishingRegister.TryRebindPlacementForRestoration: binding {binding.BindingId} belongs to building {binding.BuildingInstanceId}, not {buildingInstanceId}.";
+
+            EquipmentAsset asset = FindAsset(binding.AssetId);
+            if (asset == null || asset.OwnerKind != OwnerKindHousehold
+                || asset.OwnerId != OwnerIdForHousehold(HouseholdId))
+                return $"HouseholdFurnishingRegister.TryRebindPlacementForRestoration: asset {binding.AssetId} is missing or is not owned by household {HouseholdId}.";
+
+            placement.Configure(binding.BindingId, binding.DefinitionId, asset.DisplayName, binding.FloorIndex);
+            placement.AssociateWithBuilding(building);
+            placement.SetEconomicRecord(asset.OwnerId, binding.AcquisitionSourceId);
+            binding.PlacementId = placement.PlacementId;
+            asset.LocationId = BuildingLocationId(binding.BuildingInstanceId);
+            return null;
+        }
+
+        /// <summary>
         /// Moves an installed asset: ends the old binding and creates a new
         /// one with the same asset id — no duplicate asset, no second
         /// ownership record. The acquisition source carries forward (a move

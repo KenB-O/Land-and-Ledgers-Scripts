@@ -158,6 +158,28 @@ namespace LandLedgers.Editor.World
         }
 
         [Test]
+        public void LandPurchaseExpansionNotifiesRuntimePresentationOwnersAfterWorldRebuild()
+        {
+            using TestTown town = TestTown.CreateFromDefaultSettings();
+            int purchasedPlotId = FindVacantLandPlot(town.Controller);
+            town.Controller.Plots[purchasedPlotId].playerOwned = true;
+            int notificationCount = 0;
+            TownWorldController notifiedWorld = null;
+            town.Controller.WorldVisualsRebuilt += rebuilt =>
+            {
+                notificationCount++;
+                notifiedWorld = rebuilt;
+            };
+
+            Assert.IsTrue(town.Controller.TrySurfaceExpansionPlotsAfterLandPurchase(purchasedPlotId, out int createdCount));
+
+            Assert.That(createdCount, Is.InRange(1, 2));
+            Assert.AreEqual(1, notificationCount,
+                "A full world rebuild must notify runtime owners so nonserialized activity points and fixtures can be restored.");
+            Assert.AreSame(town.Controller, notifiedWorld);
+        }
+
+        [Test]
         public void LandPurchaseExpansionPlotsSurviveWorldSaveLoad()
         {
             using TestTown source = TestTown.CreateFromDefaultSettings();

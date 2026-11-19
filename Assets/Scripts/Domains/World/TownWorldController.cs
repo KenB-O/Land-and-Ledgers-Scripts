@@ -400,6 +400,14 @@ namespace LandLedgers.World
         public string RegionalFoundationSummary => generatedRegionalFoundationSummary;
 
         /// <summary>
+        /// Raised after a full visual rebuild has recreated the building
+        /// instances. Runtime-owned presentations and nonserialized activity
+        /// points attached to the previous building instances must be restored
+        /// by their authoritative owners at this boundary.
+        /// </summary>
+        public event Action<TownWorldController> WorldVisualsRebuilt;
+
+        /// <summary>
         /// Applies an isolated fresh-world development override without mutating
         /// the authored TownGenerationSettings asset. The override is rejected
         /// after generation so saved/authored world state cannot be silently
@@ -6234,6 +6242,26 @@ namespace LandLedgers.World
             {
                 totalTimer.Stop();
                 Debug.Log($"[TownWorld] BuildVisuals timing total {totalTimer.ElapsedMilliseconds} ms ({timing}).", this);
+            }
+
+            NotifyWorldVisualsRebuilt();
+        }
+
+        private void NotifyWorldVisualsRebuilt()
+        {
+            Action<TownWorldController> handlers = WorldVisualsRebuilt;
+            if (handlers == null) return;
+
+            foreach (Action<TownWorldController> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogError($"[TownWorld] Runtime presentation recovery failed after visual rebuild: {exception}", this);
+                }
             }
         }
 

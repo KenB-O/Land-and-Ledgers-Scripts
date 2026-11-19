@@ -144,7 +144,16 @@ namespace LandLedgers.Orchestration
                     string error = CreatePresentation(home.runtimeFootprintAuthority, binding.LocalPosition,
                         binding.LocalRotation, item, binding.AssetId, binding.DefinitionId,
                         binding.CapabilityReferenceId, false, out BuildingEquipmentPlacement placement);
-                    if (error != null) result.Diagnostics.Add(error);
+                    if (error == null)
+                        error = register.TryRebindPlacementForRestoration(binding.AssetId, placement,
+                            home.runtimeFootprintAuthority, household.homeBuildingId);
+                    if (error != null)
+                    {
+                        if (item.registerRuntimeActivityLocation)
+                            home.runtimeFootprintAuthority.UnregisterRuntimeActivityLocation(item.activityLocationId);
+                        if (placement != null) UnityEngine.Object.Destroy(placement.gameObject);
+                        result.Diagnostics.Add(error);
+                    }
                     else
                     {
                         if (item.registerRuntimeActivityLocation && placement != null)

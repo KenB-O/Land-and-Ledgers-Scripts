@@ -175,6 +175,43 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void RebindPlacementAfterWorldRebuild_PreservesBindingIdentityOwnershipAndProvenance()
+        {
+            HouseholdFurnishingRegister register = MakeRegister();
+            EquipmentAsset stove = MakeStove("stove-restore");
+            Assert.IsNull(register.TryRegisterAsset(stove));
+            BuildingFootprintAuthority originalBuilding = MakeBuilding("B8 original presentation building");
+            BuildingEquipmentPlacement originalPlacement = MakePlacement("Original stove", Vector3.zero);
+            BuildingFootprintAuthority rebuiltBuilding = MakeBuilding("B8 rebuilt presentation building");
+            BuildingEquipmentPlacement restoredPlacement = MakePlacement("Restored stove", Vector3.zero);
+            try
+            {
+                FurnishingPlacementBinding binding = InstallStove(register, originalBuilding,
+                    originalPlacement, "stove-restore", "stove-h1");
+                string error = register.TryRebindPlacementForRestoration("stove-restore", restoredPlacement,
+                    rebuiltBuilding, BuildingInstanceId);
+
+                Assert.IsNull(error, error);
+                Assert.AreEqual(binding.BindingId, restoredPlacement.PlacementId,
+                    "The replacement scene component must remain attached to the existing economic placement identity.");
+                Assert.AreEqual(stove.OwnerId, restoredPlacement.EconomicOwnerId);
+                Assert.AreEqual(binding.AcquisitionSourceId, restoredPlacement.AcquisitionSourceId);
+                Assert.AreEqual(HouseholdFurnishingRegister.BuildingLocationId(BuildingInstanceId), stove.LocationId);
+                Assert.AreEqual(binding.BindingId, register.LiveBindingFor("stove-restore").BindingId,
+                    "Restoration must not create a second ownership or installation binding.");
+                Assert.IsEmpty(register.FindUnauthorisedPlacements(new[] { restoredPlacement }),
+                    "A restored physical placement must match the household's legitimate binding.");
+            }
+            finally
+            {
+                Object.DestroyImmediate(originalPlacement.gameObject);
+                Object.DestroyImmediate(originalBuilding.gameObject);
+                Object.DestroyImmediate(restoredPlacement.gameObject);
+                Object.DestroyImmediate(rebuiltBuilding.gameObject);
+            }
+        }
+
+        [Test]
         public void CreateDerived_OrphanedFuelSurvivesRebuild()
         {
             HouseholdFurnishingRegister register = MakeRegister();

@@ -57,6 +57,9 @@ namespace LandLedgers.FirstLedger
         [SerializeField]
         private TownWorldController townWorld;
 
+        [NonSerialized]
+        private TownWorldController worldVisualRecoverySubscription;
+
         [SerializeField]
         private PathingManager pathingManager;
 
@@ -225,9 +228,24 @@ namespace LandLedgers.FirstLedger
             AutoWire();
         }
 
+        private void OnEnable()
+        {
+            SubscribeToWorldVisualRebuilds();
+        }
+
+        private void OnDisable()
+        {
+            UnsubscribeFromWorldVisualRebuilds();
+        }
+
         private void Start()
         {
             InitializeSlice();
+        }
+
+        private void OnDestroy()
+        {
+            UnsubscribeFromWorldVisualRebuilds();
         }
 
         [ContextMenu("Initialize Game Slice")]
@@ -762,6 +780,7 @@ namespace LandLedgers.FirstLedger
                     Debug.LogError("[WorldStartup] Business interior: " + diagnostic, this);
             }
 #endif
+            SubscribeToWorldVisualRebuilds();
             RunOpeningSettlementReconciliation();
             ConfigurePopulationPathingDirector();
             // DEF-013 (Decision 9): a fresh New Game has no legacy business
@@ -1034,12 +1053,60 @@ namespace LandLedgers.FirstLedger
                 Debug.Log($"[WorldStartup] Rebuilt {businessInteriorRestore.PresentationsCreated} business fixture presentation(s) from equipment register identities.", this);
             foreach (string diagnostic in businessInteriorRestore.Diagnostics)
                 Debug.LogError("[WorldStartup] Business interior restore: " + diagnostic, this);
+            SubscribeToWorldVisualRebuilds();
 #endif
             RefreshRestoreDiagnostics();
             if (logBootstrapSummary)
             {
                 Debug.Log(BuildRestoreDiagnosticsSummary(), this);
             }
+        }
+
+        private void SubscribeToWorldVisualRebuilds()
+        {
+            if (townWorld == null) townWorld = FindAnyObjectByType<TownWorldController>();
+            if (ReferenceEquals(worldVisualRecoverySubscription, townWorld)) return;
+
+            UnsubscribeFromWorldVisualRebuilds();
+            if (townWorld == null) return;
+            worldVisualRecoverySubscription = townWorld;
+            worldVisualRecoverySubscription.WorldVisualsRebuilt += RestoreRuntimePresentationsAfterWorldRebuild;
+        }
+
+        private void UnsubscribeFromWorldVisualRebuilds()
+        {
+            if (worldVisualRecoverySubscription != null)
+                worldVisualRecoverySubscription.WorldVisualsRebuilt -= RestoreRuntimePresentationsAfterWorldRebuild;
+            worldVisualRecoverySubscription = null;
+        }
+
+        private void RestoreRuntimePresentationsAfterWorldRebuild(TownWorldController rebuiltWorld)
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (rebuiltWorld == null || rebuiltWorld != townWorld
+                || !enableDevelopmentTownConfiguration || systemsHub == null
+                || populationManager?.State?.households == null)
+                return;
+
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (configuration == null) return;
+
+            DevelopmentTownFurnishingInitializer.Result householdResult =
+                DevelopmentTownFurnishingInitializer.RestorePresentations(
+                    configuration, populationManager, rebuiltWorld, systemsHub);
+            if (householdResult.PresentationsRebuilt > 0)
+                Debug.Log($"[WorldStartup] Restored {householdResult.PresentationsRebuilt} household furnishing presentation(s) after the world visual rebuild.", this);
+            foreach (string diagnostic in householdResult.Diagnostics)
+                Debug.LogError("[WorldStartup] Household furnishing recovery: " + diagnostic, this);
+
+            DevelopmentBusinessInteriorInitializer.Result businessResult =
+                DevelopmentBusinessInteriorInitializer.RestorePresentations(
+                    configuration, sharedBusinessRuntime, rebuiltWorld, systemsHub);
+            if (businessResult.PresentationsCreated > 0)
+                Debug.Log($"[WorldStartup] Restored {businessResult.PresentationsCreated} business fixture presentation(s) after the world visual rebuild.", this);
+            foreach (string diagnostic in businessResult.Diagnostics)
+                Debug.LogError("[WorldStartup] Business fixture recovery: " + diagnostic, this);
+#endif
         }
 
         private bool TryConfigureTerrainStartup(out string error)

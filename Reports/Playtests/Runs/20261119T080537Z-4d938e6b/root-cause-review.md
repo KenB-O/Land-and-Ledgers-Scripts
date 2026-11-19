@@ -70,7 +70,7 @@
 ## Cycle work, verification, and limits
 
 - Actual Main Scene New Game and 250x runner: verified 30/30 clock days; full logs and snapshots saved.
-- Source compilation, EditMode tests, Save/Continue tests, code repairs and a post-repair playtest: not performed. No source changes were made. Unity had 2.16 GB free RAM after the run and the Editor process reported 3.81 GB working set / 27.34 GB private memory; the post-run UI showed an `Application.ExitPlayMode` “Hold on” dialog. No second compile/test was attempted against this resource state.
+- Source compilation, EditMode tests, Save/Continue tests, code repairs and a post-repair playtest: not performed. No source changes were made. Immediately after the run, free physical RAM was 2.16 GB; later measurement was 2.79 GB free RAM, 51.94 GB commit limit, and 2.63 GB free commit. The C:\pagefile.sys was using 11.99 GB (12.79 GB peak). Unity used 3.41 GB working set / 27.34 GB private memory and responded to process checks. The UI had shown an `Application.ExitPlayMode` “Hold on” dialog; Edit Mode was not visually confirmed. No compile/test was attempted with only 2.63 GB free commit.
 - No source commit or push made. Existing branch remains `codex/player-economic-participation-2026-11-18`, local HEAD `4e12150202cccbc332fe57151156531ad2fd007c`, one commit ahead of `origin` at observation. The 31 tracked modifications and large untracked owner-local asset set were preserved.
 - No claim that warnings have been repaired. This run re-demonstrates unchanged food access and route/task failures; actionable counts are awaiting implementation and fresh verification.
 

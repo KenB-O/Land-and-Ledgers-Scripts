@@ -142,6 +142,16 @@ namespace LandLedgers.EditorTests.Population
                 Assert.NotNull(reserve, "H7 must hold a fuel_wood reserve.");
                 return reserve;
             }
+
+            public HouseholdReserveState StapleFoodReserve()
+            {
+                HouseholdState household = Population.GetHousehold(HouseholdId);
+                Assert.NotNull(household, "H7 must exist in the fixture population.");
+                household.EnsureHouseholdReservesInitialized(migrateLegacyFoodReserve: true);
+                HouseholdReserveState reserve = household.GetReserve(HouseholdReserveCatalog.StapleFoodCategoryId);
+                Assert.NotNull(reserve, "H7 must hold a staple_food reserve.");
+                return reserve;
+            }
         }
 
         private static CarriedGoodsBatch MakeBatch(string batchId, string itemId, int units,
@@ -264,6 +274,57 @@ namespace LandLedgers.EditorTests.Population
                 "A non-fuel receipt must not touch the fuel reserve.");
             Assert.IsTrue(!DiagContains(f.Diagnostics, "Series2HouseholdFuelReserveLink: credited"),
                 "No reserve-credit diagnostic fires for a non-fuel receipt.");
+        }
+
+        [Test]
+        public void ReceiveAtHome_PhysicalBreadReceipt_UpdatesReserveOnceAndKeepsItemLots()
+        {
+            Fixture f = Fixture.Create();
+            HouseholdReserveState reserve = f.StapleFoodReserve();
+            reserve.currentUnits = 0;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 8);
+            CarriedGoodsBatch batch = MakeBatch("b-bread-home-1", HouseholdItemCatalog.BreadId, 4,
+                GoodsCustodyState.InHand, packageSize: 2);
+            PlannedShoppingTrip trip = MakeTrip(f, need, batch, "t-bread-home-1");
+
+            string error = f.Loop.ReceiveAtHome(trip, f.Day, f.Diagnostics);
+            Assert.IsNull(error, error);
+            Assert.AreEqual(8, f.Inventories.GetOrCreate(f.HouseholdId).GetAvailableUnits(HouseholdItemCatalog.BreadId),
+                "The genuine receipt creates the exact bread lot quantity.");
+            Assert.AreEqual(System.Math.Min(reserve.targetUnits, 8), reserve.currentUnits,
+                "The staple reserve mirrors household units received and clamps at its authored target.");
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
+
+            Assert.IsNull(f.Loop.ReceiveAtHome(trip, f.Day, f.Diagnostics));
+            Assert.AreEqual(8, f.Inventories.GetOrCreate(f.HouseholdId).GetAvailableUnits(HouseholdItemCatalog.BreadId),
+                "A repeated callback must not create another physical lot.");
+            Assert.AreEqual(System.Math.Min(reserve.targetUnits, 8), reserve.currentUnits,
+                "A repeated callback must not credit the reserve twice.");
+        }
+
+        [Test]
+        public void ReceiveDelivery_PhysicalBreadReceipt_UpdatesReserveOnceAndKeepsItemLots()
+        {
+            Fixture f = Fixture.Create();
+            HouseholdReserveState reserve = f.StapleFoodReserve();
+            reserve.currentUnits = 0;
+            reserve.targetUnits = 6;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 3);
+            CarriedGoodsBatch batch = MakeBatch("b-bread-delivery-1", HouseholdItemCatalog.BreadId, 3,
+                GoodsCustodyState.ArrangedDelivery);
+            PlannedShoppingTrip trip = MakeTrip(f, need, batch, "t-bread-delivery-1");
+
+            string error = f.Loop.ReceiveDelivery(trip, f.Day, f.Diagnostics);
+            Assert.IsNull(error, error);
+            Assert.AreEqual(3, f.Inventories.GetOrCreate(f.HouseholdId).GetAvailableUnits(HouseholdItemCatalog.BreadId),
+                "The genuine delivery creates the exact bread lot quantity.");
+            Assert.AreEqual(3, reserve.currentUnits, "The reserve mirrors the received household units.");
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
+
+            Assert.IsNull(f.Loop.ReceiveDelivery(trip, f.Day, f.Diagnostics));
+            Assert.AreEqual(3, f.Inventories.GetOrCreate(f.HouseholdId).GetAvailableUnits(HouseholdItemCatalog.BreadId),
+                "A repeated delivery callback must not create another lot.");
+            Assert.AreEqual(3, reserve.currentUnits, "A repeated delivery callback must not credit twice.");
         }
 
         [Test]

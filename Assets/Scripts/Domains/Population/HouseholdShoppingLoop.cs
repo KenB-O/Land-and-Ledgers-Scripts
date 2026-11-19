@@ -3010,6 +3010,16 @@ namespace LandLedgers.Population
                     Series2HouseholdFuelReserveLink.CreditReserve(
                         population.GetHousehold(need.HouseholdId), unitsReceived, 1, dayIndex, diag);
                 }
+                else
+                {
+                    // The live ShoppingTripDriver reaches this physical
+                    // receipt path after the shopper returns. Keep the
+                    // derived reserve view in step with the real lot, just
+                    // as ReceiveSettledGoods does in the synchronous path.
+                    // Fuel retains its dedicated one-to-one authority above.
+                    HouseholdInventoryReserveBridge.MirrorLotReceiptToReserve(
+                        population.GetHousehold(need.HouseholdId), need.ItemId, unitsReceived);
+                }
 
                 batch.Custody = GoodsCustodyState.ReceivedAtHousehold;
                 custodyBatches.Remove(batch);
@@ -3100,6 +3110,14 @@ namespace LandLedgers.Population
             {
                 Series2HouseholdFuelReserveLink.CreditReserve(
                     population.GetHousehold(need.HouseholdId), unitsReceived, 1, dayIndex, diag);
+            }
+            else
+            {
+                // Match the carried-home and synchronous receipt paths:
+                // delivery updates the real lot and its derived reserve
+                // exactly once when custody transfers at the door.
+                HouseholdInventoryReserveBridge.MirrorLotReceiptToReserve(
+                    population.GetHousehold(need.HouseholdId), need.ItemId, unitsReceived);
             }
 
             batch.Custody = GoodsCustodyState.ReceivedAtHousehold;

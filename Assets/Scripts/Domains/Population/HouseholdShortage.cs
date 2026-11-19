@@ -45,6 +45,76 @@ namespace LandLedgers.Population
     }
 
     /// <summary>
+    /// A non-binding, per-day allocation of known sellers' currently saleable
+    /// item stock for household shortage planning. This only prevents several
+    /// households from each counting the same finite shelf stock as their own
+    /// full reserve; it does not reserve inventory or guarantee a purchase.
+    /// </summary>
+    public sealed class HouseholdFoodSupplyBudget
+    {
+        private readonly SupplierDirectory suppliers;
+        private readonly ShopperSellerKnowledge knowledge;
+        private readonly Dictionary<string, int> remainingBySellerItem =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        public HouseholdFoodSupplyBudget(SupplierDirectory suppliers, ShopperSellerKnowledge knowledge)
+        {
+            this.suppliers = suppliers;
+            this.knowledge = knowledge;
+        }
+
+        public int AllocateKnownStock(string itemId, int requestedUnits, IEnumerable<int> memberIds)
+        {
+            if (string.IsNullOrWhiteSpace(itemId) || requestedUnits <= 0
+                || suppliers == null || knowledge == null || memberIds == null)
+            {
+                return 0;
+            }
+
+            var members = new HashSet<int>(memberIds);
+            if (members.Count == 0) return 0;
+
+            int allocated = 0;
+            foreach (IGoodsSupplier supplier in suppliers.All)
+            {
+                if (allocated >= requestedUnits || supplier == null
+                    || !(supplier is IItemResolvingSupplier resolving))
+                {
+                    continue;
+                }
+
+                bool recognized = supplier is IItemCatalogSupplier catalog
+                    ? catalog.RecognizesItem(itemId)
+                    : !string.IsNullOrWhiteSpace(resolving.CategoryForItem(itemId));
+                if (!recognized) continue;
+
+                bool known = false;
+                foreach (int memberId in members)
+                {
+                    if (!knowledge.Knows(memberId, supplier.SupplierBusinessId)) continue;
+                    known = true;
+                    break;
+                }
+                if (!known) continue;
+
+                string key = supplier.SupplierBusinessId + "\u001f" + itemId;
+                if (!remainingBySellerItem.TryGetValue(key, out int remaining))
+                {
+                    remaining = Math.Max(0, resolving.ItemStockUnits(itemId));
+                }
+
+                int take = Math.Min(requestedUnits - allocated, remaining);
+                if (take <= 0) continue;
+
+                remainingBySellerItem[key] = remaining - take;
+                allocated += take;
+            }
+
+            return allocated;
+        }
+    }
+
+    /// <summary>
     /// Phase B (Real People): shortage detection. Projects each household's
     /// needs from actual members, current inventory, expected consumption,
     /// income/resources, upcoming obligations, season, known supply access,
@@ -114,7 +184,9 @@ namespace LandLedgers.Population
             int dayIndex,
             Func<string, bool> isRecognizedByKnownSeller = null,
             IReadOnlyList<string> mealPriorityOrder = null,
-            Func<string, bool> isPurchasableNow = null)
+            Func<string, bool> isPurchasableNow = null,
+            Func<string, int, bool> canSupplyNeedNow = null,
+            Func<string, int, int> allocateSupplyUnitsNow = null)
         {
             if (household == null || inventory == null)
             {
@@ -171,7 +243,9 @@ namespace LandLedgers.Population
                         seen.Add(itemId);
                         EvaluateAllocatedItem(household, inventory, itemId, Mathf.Max(0, dailyUse),
                             isColdSeason, supplyAccess, upcomingObligationCents, expectedIncomeCents, day,
-                            isRecognizedByKnownSeller, isPurchasableNow, totalHeldDays, ref plannedDays);
+                            isRecognizedByKnownSeller, isPurchasableNow, canSupplyNeedNow,
+                            allocateSupplyUnitsNow,
+                            totalHeldDays, ref plannedDays);
                     }
 
                     foreach (KeyValuePair<string, int> use in expectedDailyUseByItem)
@@ -275,6 +349,22 @@ namespace LandLedgers.Population
             ShopperSellerKnowledge knowledge,
             IEnumerable<int> memberIds)
         {
+            Func<string, int, bool> canSupply = KnownSellerSupplyPredicate(
+                suppliers, knowledge, memberIds);
+            return itemId => canSupply(itemId, 1);
+        }
+
+        /// <summary>
+        /// Returns true only when a legitimately known, item-recognizing
+        /// seller has enough current physical stock to cover the requested
+        /// need. A small positive shelf balance must not count as full meal
+        /// cover and suppress fallback food needs.
+        /// </summary>
+        public static Func<string, int, bool> KnownSellerSupplyPredicate(
+            SupplierDirectory suppliers,
+            ShopperSellerKnowledge knowledge,
+            IEnumerable<int> memberIds)
+        {
             var members = new HashSet<int>();
             if (memberIds != null)
             {
@@ -284,9 +374,10 @@ namespace LandLedgers.Population
                 }
             }
 
-            return itemId =>
+            return (itemId, requestedUnits) =>
             {
-                if (string.IsNullOrWhiteSpace(itemId) || suppliers == null || knowledge == null || members.Count == 0)
+                if (string.IsNullOrWhiteSpace(itemId) || requestedUnits <= 0
+                    || suppliers == null || knowledge == null || members.Count == 0)
                 {
                     return false;
                 }
@@ -301,7 +392,7 @@ namespace LandLedgers.Population
                     bool recognized = supplier is IItemCatalogSupplier catalog
                         ? catalog.RecognizesItem(itemId)
                         : !string.IsNullOrWhiteSpace(resolving.CategoryForItem(itemId));
-                    if (!recognized || resolving.ItemStockUnits(itemId) <= 0)
+                    if (!recognized || resolving.ItemStockUnits(itemId) < requestedUnits)
                     {
                         continue;
                     }
@@ -329,9 +420,9 @@ namespace LandLedgers.Population
         /// when they are bought (<paramref name="plannedDays"/>), so the
         /// household demands the food it actually eats: the top food covers
         /// the shortfall first and lower foods open only for what remains.
-        /// A created need counts toward the cover only when the item is
-        /// purchasable today (null predicate counts as purchasable), so a
-        /// stockout falls back to the next food instead of blocking it.
+        /// A created need counts toward the cover only for seller stock
+        /// allocated to this household by the daily supply plan. Legacy
+        /// predicates retain their all-or-nothing behavior.
         /// Infinite cover (daily use at or below zero) fulfils the item,
         /// exactly as today's per-item evaluation does, and is never added
         /// to the planned total.
@@ -348,6 +439,8 @@ namespace LandLedgers.Population
             int dayIndex,
             Func<string, bool> isRecognizedByKnownSeller,
             Func<string, bool> isPurchasableNow,
+            Func<string, int, bool> canSupplyNeedNow,
+            Func<string, int, int> allocateSupplyUnitsNow,
             float totalHeldDays,
             ref float plannedDays)
         {
@@ -422,10 +515,12 @@ namespace LandLedgers.Population
             openNeed.SuggestedResponses = BuildSuggestedResponses(
                 itemId, supplyAccess, upcomingObligationCents, expectedIncomeCents, urgency);
 
-            if (isPurchasableNow == null || isPurchasableNow(itemId))
-            {
-                plannedDays += (float)openNeed.UnitsNeeded / Mathf.Max(1, dailyUseUnits);
-            }
+            int supplyUnits = allocateSupplyUnitsNow != null
+                ? Mathf.Clamp(allocateSupplyUnitsNow(itemId, openNeed.UnitsNeeded), 0, openNeed.UnitsNeeded)
+                : canSupplyNeedNow != null
+                    ? (canSupplyNeedNow(itemId, openNeed.UnitsNeeded) ? openNeed.UnitsNeeded : 0)
+                    : (isPurchasableNow == null || isPurchasableNow(itemId) ? openNeed.UnitsNeeded : 0);
+            plannedDays += (float)supplyUnits / Mathf.Max(1, dailyUseUnits);
         }
 
         private void EvaluateItem(

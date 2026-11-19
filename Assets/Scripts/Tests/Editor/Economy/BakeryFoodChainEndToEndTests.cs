@@ -623,7 +623,8 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(48, trip.BuyerOutflowCents,
                 "six fresh loaves settle at the bakery's actual fresh price");
             Assert.AreEqual(trip.BuyerOutflowCents, trip.StoreCashInCents);
-            Assert.AreEqual(1952, s.Ledgers.GetOrCreate(HouseholdId).GetBalanceCents());
+            Assert.AreEqual(952, s.Ledgers.GetOrCreate(HouseholdId).GetBalanceCents(),
+                "The household was funded once with 1000c and pays 48c for six loaves.");
             Assert.AreEqual(2048, s.BakeryRuntime.CurrentCashCents);
             Assert.AreEqual(18, s.Bakery.BreadShelf[0].UnitCount,
                 "only sold bakery stock is removed");

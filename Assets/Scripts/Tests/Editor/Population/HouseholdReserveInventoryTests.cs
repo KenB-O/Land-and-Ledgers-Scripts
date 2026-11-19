@@ -520,7 +520,11 @@ namespace LandLedgers.EditorTests.Population
                 reliableFavorite.RuntimeState.GetCategoryStock("meat").SetCurrentStockForTests(1);
                 weakerBackup.RuntimeState.GetCategoryStock("meat").SetCurrentStockForTests(2);
                 CategoryStockState storeMeat = storeRuntime.GetCategoryStock("meat");
-                storeMeat.SetCurrentStockForTests(3);
+                // Keep the store's live offer to one unit. The combined
+                // budget below is sized for one store unit and one shared
+                // unit; it must not accidentally fund the store's entire
+                // former three-unit lot at its lower dynamic shelf price.
+                storeMeat.SetCurrentStockForTests(1);
                 int sharedUnitPrice = GetSharedTransferUnitPrice(sharedManager, reliableFavorite, "meat");
                 int storeUnitPrice = GetStoreCategoryUnitPrice(storeManager, "meat");
                 int budget = sharedUnitPrice + storeUnitPrice;
@@ -528,7 +532,7 @@ namespace LandLedgers.EditorTests.Population
                 InvokeResolveHouseholdReserveNeeds(storeManager, household, budget);
 
                 Assert.AreEqual(0, reliableFavorite.RuntimeState.GetCategoryStock("meat").CurrentStockUnits);
-                Assert.AreEqual(2, storeMeat.CurrentStockUnits);
+                Assert.AreEqual(0, storeMeat.CurrentStockUnits);
                 Assert.AreEqual(2, weakerBackup.RuntimeState.GetCategoryStock("meat").CurrentStockUnits);
             }
             finally

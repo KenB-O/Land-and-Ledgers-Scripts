@@ -243,13 +243,15 @@ public sealed class PurchasedRetailLotReceiptTests
             "store_horse_feed_sack", 7, 15, 0, supplier.CounterpartyId, 0,
             NamedSkuPaymentMode.CashOnArrival, null);
         Assert.IsNotNull(order);
-        Assert.AreEqual(1, service.ReceiveArrivals(0, null).Count);
+        Assert.AreEqual(0, service.ReceiveArrivals(0, null).Count,
+            "External purchases retain at least one day of transit even when the test counterparty is configured with zero days.");
+        Assert.AreEqual(1, service.ReceiveArrivals(1, null).Count);
         NamedSkuLot sourceLot = service.Lots[0];
         Assert.AreEqual(4895, store.CurrentCashCents,
             "the 105c supplier payment occurs once before retail-shelf receiving");
 
         PurchasedRetailLotReceipt.Result refused = PurchasedRetailLotReceipt.Transfer(
-            service, store, sourceLot, "animal_feed", "sack", 0);
+            service, store, sourceLot, "animal_feed", "sack", 1);
 
         Assert.IsFalse(refused.Received);
         Assert.IsTrue(refused.SourceRestored, refused.Refusal);
@@ -264,7 +266,7 @@ public sealed class PurchasedRetailLotReceiptTests
 
         store.EnsureCategoryStorageCapacity("animal_feed", 20);
         PurchasedRetailLotReceipt.Result retry = PurchasedRetailLotReceipt.Transfer(
-            service, store, sourceLot, "animal_feed", "sack", 1);
+            service, store, sourceLot, "animal_feed", "sack", 2);
 
         Assert.IsTrue(retry.Received, retry.Refusal);
         Assert.AreEqual(7, retry.Units);

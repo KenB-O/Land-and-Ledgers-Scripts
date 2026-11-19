@@ -329,6 +329,128 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void ContactNote_IsPhysicalPendingRequestDataAndSurvivesSaveContinue()
+        {
+            var book = new FreightServiceAgreementBook();
+            const string requestId = "request-contact-note";
+            var request = NewMillbrookRequest(requestId, "lot-contact-note");
+            request.RequestingPersonId = 4;
+            request.CarrierOperatorPersonId = 7;
+            Assert.IsNull(book.CreateRequest(request, out _));
+
+            var note = NewContactNote(requestId);
+            Assert.IsNull(book.RecordContactNote(requestId, note));
+            Assert.AreEqual(FreightServiceRequestStatus.Open, request.Status);
+            Assert.IsNull(book.FindAgreementForRequest(requestId),
+                "A message is an inquiry only; it does not create a binding agreement.");
+            Assert.AreSame(note, book.FindPendingContactNote(requestId));
+            Assert.AreEqual(1, request.CompletedContactNoteAttempts);
+            Assert.AreEqual("ethan-residence", note.CustodyLocationId);
+            Assert.AreEqual(-1, note.CustodianPersonId,
+                "Leaving a note at the home does not mean Ethan has received or read it.");
+
+            FreightServiceAgreementBookSaveDto snapshot = book.CaptureSaveDto();
+            var restored = new FreightServiceAgreementBook();
+            restored.RestoreSaveDto(snapshot);
+
+            FreightServiceRequest savedRequest = restored.FindRequest(requestId);
+            FreightContactNote savedNote = restored.FindPendingContactNote(requestId);
+            Assert.NotNull(savedRequest);
+            Assert.NotNull(savedNote);
+            Assert.AreEqual(1, savedRequest.ContactNotes.Count);
+            Assert.AreEqual("note-request-contact-note-1", savedNote.NoteId);
+            Assert.AreEqual(4, savedNote.SenderPersonId);
+            Assert.AreEqual(7, savedNote.IntendedRecipientPersonId);
+            Assert.AreEqual("ethan-residence", savedNote.LeftLocationId);
+            Assert.AreEqual(12, savedNote.LeftBuildingId);
+            Assert.AreEqual(3, savedNote.CreatedDayIndex);
+            Assert.AreEqual(10, savedNote.ExpiresDayIndex);
+            Assert.AreEqual(FreightContactNoteStatus.LeftAtLocation, savedNote.Status);
+            Assert.AreEqual(-1, savedNote.DiscoveredByPersonId,
+                "Save/Continue must not make the intended recipient aware prematurely.");
+        }
+
+        [Test]
+        public void ContactNote_RejectsDuplicateOrOverlappingMessagesAndRequiresActualDiscovery()
+        {
+            var book = new FreightServiceAgreementBook();
+            const string requestId = "request-note-once";
+            var request = NewMillbrookRequest(requestId, "lot-note-once");
+            request.RequestingPersonId = 4;
+            request.CarrierOperatorPersonId = 7;
+            Assert.IsNull(book.CreateRequest(request, out _));
+
+            FreightContactNote note = NewContactNote(requestId);
+            Assert.IsNull(book.RecordContactNote(requestId, note));
+            Assert.That(book.RecordContactNote(requestId, NewContactNote(requestId)),
+                Does.Contain("already exists"));
+            FreightContactNote second = NewContactNote(requestId);
+            second.NoteId = "second-note";
+            Assert.That(book.RecordContactNote(requestId, second),
+                Does.Contain("already pending discovery"));
+            Assert.AreEqual(1, request.CompletedContactNoteAttempts);
+
+            Assert.That(book.SetContactNoteStatus(requestId, note.NoteId,
+                    FreightContactNoteStatus.DiscoveredByHouseholdMember, 8, 2),
+                Does.Contain("before it was created"));
+            Assert.AreEqual(FreightContactNoteStatus.LeftAtLocation, note.Status);
+            Assert.IsNull(book.SetContactNoteStatus(requestId, note.NoteId,
+                FreightContactNoteStatus.DiscoveredByHouseholdMember, 8, 4));
+            Assert.AreEqual(8, note.CustodianPersonId);
+            Assert.AreSame(note, book.FindPendingContactNote(requestId),
+                "A household member finding the note does not complete Ethan's awareness.");
+            Assert.IsNull(book.SetContactNoteStatus(requestId, note.NoteId,
+                FreightContactNoteStatus.RelayedToRecipient, 7, 5));
+            Assert.AreEqual(7, note.CustodianPersonId);
+            Assert.AreEqual(5, note.RelayedDayIndex);
+            Assert.IsNull(book.FindPendingContactNote(requestId));
+            Assert.IsNull(book.FindAgreementForRequest(requestId),
+                "Relaying the note changes awareness only; the parties still need their actual negotiation.");
+            Assert.That(book.SetContactNoteStatus(requestId, note.NoteId,
+                    FreightContactNoteStatus.RelayedToRecipient, 7, 6),
+                Does.Contain("already terminal"));
+        }
+
+        [Test]
+        public void ContactNote_ExpiresOnlyAtDeadlineAndDirectDiscoveryIsExactlyOnce()
+        {
+            var book = new FreightServiceAgreementBook();
+            const string requestId = "request-note-expiry";
+            var request = NewMillbrookRequest(requestId, "lot-note-expiry");
+            request.RequestingPersonId = 4;
+            request.CarrierOperatorPersonId = 7;
+            Assert.IsNull(book.CreateRequest(request, out _));
+
+            FreightContactNote note = NewContactNote(requestId);
+            Assert.IsNull(book.RecordContactNote(requestId, note));
+            Assert.That(book.SetContactNoteStatus(requestId, note.NoteId,
+                    FreightContactNoteStatus.Expired, -1, note.ExpiresDayIndex - 1),
+                Does.Contain("not supported"));
+            Assert.IsNull(book.SetContactNoteStatus(requestId, note.NoteId,
+                FreightContactNoteStatus.DiscoveredByRecipient, 7, 6));
+            Assert.AreEqual(7, note.CustodianPersonId);
+            Assert.AreEqual(6, note.DiscoveredDayIndex);
+            Assert.IsNull(book.FindPendingContactNote(requestId));
+            Assert.That(book.SetContactNoteStatus(requestId, note.NoteId,
+                    FreightContactNoteStatus.DiscoveredByRecipient, 7, 7),
+                Does.Contain("already terminal"));
+
+            var expiryBook = new FreightServiceAgreementBook();
+            var expiryRequest = NewMillbrookRequest("request-expire-once", "lot-expire-once");
+            expiryRequest.RequestingPersonId = 4;
+            expiryRequest.CarrierOperatorPersonId = 7;
+            Assert.IsNull(expiryBook.CreateRequest(expiryRequest, out _));
+            FreightContactNote expiring = NewContactNote("request-expire-once");
+            Assert.IsNull(expiryBook.RecordContactNote(expiryRequest.RequestId, expiring));
+            Assert.IsNull(expiryBook.SetContactNoteStatus(expiryRequest.RequestId, expiring.NoteId,
+                FreightContactNoteStatus.Expired, -1, expiring.ExpiresDayIndex));
+            Assert.IsNull(expiryBook.FindPendingContactNote(expiryRequest.RequestId));
+            Assert.That(expiryBook.SetContactNoteStatus(expiryRequest.RequestId, expiring.NoteId,
+                    FreightContactNoteStatus.Expired, -1, expiring.ExpiresDayIndex + 1),
+                Does.Contain("already terminal"));
+        }
+
+        [Test]
         public void ReopenedRequestSurvivesSaveLoad()
         {
             // Plan 07 Slice 2: a Refused request saved before the fix
@@ -485,6 +607,27 @@ namespace LandLedgers.EditorTests.Economy
             };
         }
 
+        private static FreightContactNote NewContactNote(string requestId)
+        {
+            return new FreightContactNote
+            {
+                NoteId = "note-" + requestId + "-1",
+                RequestId = requestId,
+                SenderPersonId = 4,
+                SenderName = "Glen",
+                IntendedRecipientPersonId = 7,
+                IntendedRecipientName = "Ethan",
+                Purpose = "Discuss a requested freight service.",
+                OrderReference = "lot-contact",
+                LeftLocationId = "ethan-residence",
+                LeftBuildingId = 12,
+                CreatedDayIndex = 3,
+                CreatedGameSeconds = 46800f,
+                ExpiresDayIndex = 10,
+                Status = FreightContactNoteStatus.LeftAtLocation,
+            };
+        }
+
         private static FreightServiceQuote New125Quote(string quoteId)
         {
             return new FreightServiceQuote
@@ -605,6 +748,51 @@ namespace LandLedgers.EditorTests.Economy
             Assert.AreEqual(3600f, restoredAgreement.PreparedGameSeconds);
             Assert.AreEqual("T20", restoredAgreement.DispatchTaskId);
             Assert.AreEqual("Dispatch assigned", restoredAgreement.FulfilmentStatus);
+        }
+
+        [Test]
+        public void FailedDispatchTask_CanBeRetriedTwiceWithoutReplacingAgreementOrCargoTerms()
+        {
+            FreightServiceAgreementBook book = CreateAcceptedBook(out FreightServiceAgreement agreement);
+            Assert.IsNull(book.LinkShipment(agreement.AgreementId, "freight-shipment:request-1"));
+            Assert.IsNull(book.MarkPreparedForDispatch(agreement.AgreementId, agreement.ShipmentId, 7200f));
+            Assert.IsNull(book.RegisterDispatchTask(agreement.AgreementId, agreement.ShipmentId, "T20"));
+
+            Assert.IsNull(book.RequeueDispatchAfterTaskFailure(agreement.AgreementId, "T20",
+                "TaskAuthority reported RecoverableFailure.", out bool limitReached));
+            Assert.IsFalse(limitReached);
+            Assert.AreEqual("freight-shipment:request-1", agreement.ShipmentId);
+            Assert.AreEqual("lot-1", agreement.CargoLotId);
+            Assert.AreEqual(125, agreement.AgreedPriceCents);
+            Assert.AreEqual(1, agreement.DispatchTaskRecoveryAttempts);
+            Assert.AreEqual("T20", agreement.SupersededDispatchTaskIds[0]);
+            Assert.AreEqual("Prepared for dispatch", agreement.FulfilmentStatus);
+            Assert.IsEmpty(agreement.DispatchTaskId);
+            Assert.That(book.RegisterDispatchTask(agreement.AgreementId, agreement.ShipmentId, "T20"),
+                Does.Contain("cannot be linked again"));
+
+            Assert.IsNull(book.RegisterDispatchTask(agreement.AgreementId, agreement.ShipmentId, "T21"));
+            Assert.IsNull(book.RequeueDispatchAfterTaskFailure(agreement.AgreementId, "T21",
+                "TaskAuthority reported Cancelled.", out limitReached));
+            Assert.IsFalse(limitReached);
+            Assert.AreEqual(2, agreement.DispatchTaskRecoveryAttempts);
+            Assert.IsNull(book.RegisterDispatchTask(agreement.AgreementId, agreement.ShipmentId, "T22"));
+
+            string refusal = book.RequeueDispatchAfterTaskFailure(agreement.AgreementId, "T22",
+                "TaskAuthority reported RecoverableFailure.", out limitReached);
+            Assert.That(refusal, Does.Contain("recovery limit"));
+            Assert.IsTrue(limitReached);
+            Assert.AreEqual("T22", agreement.DispatchTaskId,
+                "Exhaustion leaves the last task and original agreement available for explicit failure settlement.");
+            Assert.AreEqual(FreightServiceAgreementStatus.Accepted, agreement.Status);
+
+            FreightServiceAgreementBook restored = new FreightServiceAgreementBook();
+            restored.RestoreSaveDto(book.CaptureSaveDto());
+            FreightServiceAgreement saved = restored.FindAgreement(agreement.AgreementId);
+            Assert.AreEqual(2, saved.DispatchTaskRecoveryAttempts);
+            CollectionAssert.AreEqual(new[] { "T20", "T21" }, saved.SupersededDispatchTaskIds);
+            Assert.AreEqual("T22", saved.DispatchTaskId);
+            Assert.AreEqual(125, saved.AgreedPriceCents);
         }
 
         [Test]

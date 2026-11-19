@@ -365,7 +365,7 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(105, result.Order.TotalCostCents, "only the seven ordered sacks settle at 15c each.");
             Assert.AreEqual(0, market.GetCounterparty(FeedSupplierId).SupplyUnits[FeedSku],
                 "the supplier's added stock is consumed only by this priced order.");
-            StringAssert.Contains("deficit 7", string.Join("\n", diag));
+            StringAssert.Contains("target coverage 20, already covered 13 sack(s)", string.Join("\n", diag));
         }
 
         [Test]

@@ -96,6 +96,8 @@ namespace LandLedgers.Orchestration.Systems
         private const string DevelopmentHitchTaskPrefix = "development-hitch:";
         private const string FreightMeetingTaskPrefix = "freight-meeting:";
         private const string FreightMeetingTaskId = "freight-service-meeting";
+        private const int FreightContactNoteLifetimeDays = 7;
+        private const int FreightContactMaximumAttempts = 3;
         private const string FreightDispatchTaskPrefix = "freight-dispatch:";
         private const string FreightDispatchTaskId = "freight-dispatch-assignment";
         private const int HouseholdShoppingTraceLimit = 128;
@@ -192,6 +194,8 @@ namespace LandLedgers.Orchestration.Systems
             public int CarrierOperatorPersonId = -1;
             public int MeetingBuildingId = -1;
             public string MeetingLocationId = string.Empty;
+            public int RequestingHomeBuildingId = -1;
+            public bool IsReturnTrip;
         }
 
         [Serializable]
@@ -8336,7 +8340,9 @@ namespace LandLedgers.Orchestration.Systems
             {
                 if (agreement == null || agreement.Status != FreightServiceAgreementStatus.Accepted
                     || agreement.PreparedGameSeconds <= 0f
-                    || !string.Equals(agreement.FulfilmentStatus, "Prepared for dispatch", StringComparison.Ordinal)) continue;
+                    || (!string.Equals(agreement.FulfilmentStatus, "Prepared for dispatch", StringComparison.Ordinal)
+                        && !(string.Equals(agreement.FulfilmentStatus, "Dispatch assigned", StringComparison.Ordinal)
+                            && !string.IsNullOrWhiteSpace(agreement.DispatchTaskId)))) continue;
                 BusinessInstanceState freight = FindBusiness(agreement.CarrierBusinessId);
                 LogisticsShipmentState shipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null
                     && string.Equals(candidate.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal));
@@ -8467,6 +8473,7 @@ namespace LandLedgers.Orchestration.Systems
             // already returned this lot above; if it had not, the request
             // stays Refused and the drive returns as before.
             if (request.Status == FreightServiceRequestStatus.Refused
+                && request.CompletedContactNoteAttempts < FreightContactMaximumAttempts
                 && string.Equals(lot.LotId, request.CargoLotId, StringComparison.Ordinal))
             {
                 string reopenRefusal = book.ReopenRefusedRequest(request.RequestId,
@@ -8474,6 +8481,19 @@ namespace LandLedgers.Orchestration.Systems
                 if (reopenRefusal == null)
                     Debug.Log($"[FreightAgreement] Reopened refused request '{request.RequestId}' for lot '{lot.LotId}': the lot is still shippable, so the meeting will be retried.", this);
             }
+
+            if (request.Status == FreightServiceRequestStatus.AtMeeting)
+            {
+                TryScheduleFreightMeeting(request, dayIndex);
+                return;
+            }
+
+            if (request.Status == FreightServiceRequestStatus.Refused
+                && request.CompletedContactNoteAttempts >= FreightContactMaximumAttempts)
+                return;
+
+            if (ProgressFreightContactNote(request, dayIndex)) return;
+            if (dayIndex < request.NextContactAttemptDayIndex) return;
 
             if (request.Status == FreightServiceRequestStatus.Accepted || request.Status == FreightServiceRequestStatus.Refused
                 || request.Status == FreightServiceRequestStatus.MeetingScheduled) return;
@@ -8552,7 +8572,8 @@ namespace LandLedgers.Orchestration.Systems
                 RequestingPersonId = glen.id,
                 CarrierOperatorPersonId = ethan.id,
                 MeetingBuildingId = ethan.homeBuildingId,
-                MeetingLocationId = meetingLocation
+                MeetingLocationId = meetingLocation,
+                RequestingHomeBuildingId = glen.homeBuildingId
             };
             WorkTask travel = queuedContactTravel;
             if (travel == null)
@@ -9473,7 +9494,11 @@ namespace LandLedgers.Orchestration.Systems
                         ? PopulationScheduleState.ReturningHome : PopulationScheduleState.GoingShopping;
                 }
                 else if (task.CustomerRef.StartsWith(FreightMeetingTaskPrefix + "travel:", StringComparison.Ordinal))
-                    destinationState = PopulationScheduleState.GoingShopping;
+                {
+                    FreightMeetingTripTaskData trip = JsonUtility.FromJson<FreightMeetingTripTaskData>(task.TermsRef);
+                    destinationState = trip?.IsReturnTrip == true
+                        ? PopulationScheduleState.ReturningHome : PopulationScheduleState.GoingShopping;
+                }
                 if (presentation == null || !presentation.TryStartExplicitRoute(ethan.id, destinationBuildingId, destinationState))
                 {
                     ReleaseTaskPersonSchedule(task, dayIndex);
@@ -9585,7 +9610,7 @@ namespace LandLedgers.Orchestration.Systems
                 PersonState requester = trip != null ? populationManager.State.GetPerson(trip.RequestingPersonId) : null;
                 if (trip == null || requester == null) continue;
                 int target = task.CustomerRef.StartsWith(FreightMeetingTaskPrefix + "travel:", StringComparison.Ordinal)
-                    ? trip.MeetingBuildingId : -1;
+                    ? (trip.IsReturnTrip ? trip.RequestingHomeBuildingId : trip.MeetingBuildingId) : -1;
                 PersonActivityKind activity = target >= 0 ? PersonActivityKind.Travel : PersonActivityKind.Work;
                 if (!TryStartBusinessPersonTask(task, requester, dayIndex, activity, target, out string prepareRefusal))
                 {
@@ -9621,10 +9646,64 @@ namespace LandLedgers.Orchestration.Systems
             FreightMeetingTripTaskData trip = JsonUtility.FromJson<FreightMeetingTripTaskData>(task.TermsRef);
             FreightServiceRequest request = trip != null ? FreightProduction.ServiceAgreements.FindRequest(trip.RequestId) : null;
             PersonState glen = trip != null ? populationManager?.State?.GetPerson(trip.RequestingPersonId) : null;
-            if (trip == null || request == null || glen == null || request.Status != FreightServiceRequestStatus.Open) return;
+            if (trip == null || request == null || glen == null || request.Status != FreightServiceRequestStatus.Open
+                || !string.Equals(request.ContactTravelTaskId, task.TaskId.ToString(), StringComparison.Ordinal)) return;
+            if (trip.IsReturnTrip)
+            {
+                if (trip.RequestingHomeBuildingId < 0) return;
+                string homeLocation = TownJourneyNetworkBuilder.LocationIdForBuilding(trip.RequestingHomeBuildingId);
+                SetPersonJourneyLocation(glen.id, homeLocation);
+                glen.scheduleState = PopulationScheduleState.AtHome;
+                request.ContactTravelTaskId = string.Empty;
+                Debug.Log($"[FreightContactNote] Glen P{glen.id} physically returned home to building {trip.RequestingHomeBuildingId} "
+                    + $"after leaving a nonbinding note for request '{request.RequestId}'; task='{task.TaskId}'.", this);
+                return;
+            }
             SetPersonJourneyLocation(glen.id, trip.MeetingLocationId);
             glen.scheduleState = PopulationScheduleState.AtWork;
             request.ContactTravelTaskId = string.Empty;
+
+            if (!IsPersonVisuallyAtBuilding(request.CarrierOperatorPersonId, trip.MeetingBuildingId))
+            {
+                // Glenn is at Ethan's residence and away from his usual
+                // workplace. Keep the physical location authoritative until
+                // the explicit return task reaches his own home.
+                glen.scheduleState = PopulationScheduleState.ReturningHome;
+                var note = new FreightContactNote
+                {
+                    NoteId = "freight-note:" + request.RequestId + ":" + (request.CompletedContactNoteAttempts + 1),
+                    RequestId = request.RequestId,
+                    SenderPersonId = glen.id,
+                    SenderName = PersonDisplayName(glen),
+                    IntendedRecipientPersonId = request.CarrierOperatorPersonId,
+                    IntendedRecipientName = PersonDisplayName(populationManager?.State?.GetPerson(request.CarrierOperatorPersonId)),
+                    Purpose = "Discuss the requested freight service in person; this note does not accept a price or bind either party.",
+                    OrderReference = string.IsNullOrWhiteSpace(request.CargoLotId) ? request.RequestId : request.CargoLotId,
+                    LeftLocationId = trip.MeetingLocationId,
+                    CustodyLocationId = trip.MeetingLocationId,
+                    LeftBuildingId = trip.MeetingBuildingId,
+                    CreatedDayIndex = Math.Max(0, dayIndex),
+                    CreatedGameSeconds = timeManager != null ? (float)timeManager.PreciseAbsoluteGameSeconds : 0f,
+                    ExpiresDayIndex = Math.Max(0, dayIndex) + FreightContactNoteLifetimeDays,
+                    Status = FreightContactNoteStatus.LeftAtLocation
+                };
+                string noteRefusal = FreightProduction.ServiceAgreements.RecordContactNote(request.RequestId, note);
+                if (noteRefusal != null)
+                {
+                    LogRefusalDayKeyed("freight-contact-note:" + request.RequestId, dayIndex,
+                        $"[FreightAgreement] Glen reached Ethan's residence, but request '{request.RequestId}' could not leave its physical contact note: {noteRefusal}");
+                    QueueFreightContactReturnTrip(request, trip, dayIndex);
+                    return;
+                }
+
+                Debug.Log($"[FreightContactNote] Glen P{glen.id} physically left note '{note.NoteId}' for Ethan P{request.CarrierOperatorPersonId} " +
+                    $"at residence building {note.LeftBuildingId} (location '{note.LeftLocationId}') on day {note.CreatedDayIndex}; " +
+                    $"purpose='{note.Purpose}', reference='{note.OrderReference}', expires day {note.ExpiresDayIndex}. " +
+                    "Ethan has not read it; no quote or agreement was created.", this);
+                QueueFreightContactReturnTrip(request, trip, dayIndex);
+                return;
+            }
+
             string refusal = FreightProduction.ServiceAgreements.SetStatus(request.RequestId, FreightServiceRequestStatus.AtMeeting);
             if (refusal != null)
             {
@@ -9634,6 +9713,210 @@ namespace LandLedgers.Orchestration.Systems
             Debug.Log($"[FreightAgreement] Glen P{glen.id} physically arrived at Ethan's B3 meeting location: building {trip.MeetingBuildingId}, " +
                 $"location='{trip.MeetingLocationId}', task='{task.TaskId}'. No quote has been accepted yet.", this);
             TryScheduleFreightMeeting(request, dayIndex);
+        }
+
+        private bool ProgressFreightContactNote(FreightServiceRequest request, int dayIndex)
+        {
+            if (request == null || request.Status != FreightServiceRequestStatus.Open
+                || FreightProduction?.ServiceAgreements == null || populationManager?.State == null) return false;
+
+            FreightServiceAgreementBook book = FreightProduction.ServiceAgreements;
+            FreightContactNote note = book.FindPendingContactNote(request.RequestId);
+            if (note == null) return false;
+
+            if (dayIndex >= note.ExpiresDayIndex)
+            {
+                string expireRefusal = book.SetContactNoteStatus(request.RequestId, note.NoteId,
+                    FreightContactNoteStatus.Expired, -1, dayIndex);
+                if (expireRefusal != null)
+                {
+                    LogRefusalDayKeyed("freight-contact-note-expiry:" + note.NoteId, dayIndex,
+                        $"[FreightContactNote] Note '{note.NoteId}' could not be closed at its deadline: {expireRefusal}");
+                    return true;
+                }
+
+                request.NextContactAttemptDayIndex = Math.Max(request.NextContactAttemptDayIndex, dayIndex + 1);
+                if (request.CompletedContactNoteAttempts >= FreightContactMaximumAttempts)
+                {
+                    string reason = $"No reply after {request.CompletedContactNoteAttempts} expired physical contact notes; paid cargo '{request.CargoLotId}' remains unshipped and unchanged.";
+                    string statusRefusal = book.SetStatus(request.RequestId, FreightServiceRequestStatus.Refused, reason);
+                    if (statusRefusal == null)
+                        Debug.LogWarning($"[FreightContactNote] Request '{request.RequestId}' closed without an agreement: {reason}", this);
+                }
+                else
+                {
+                    request.RefusalReason = $"Contact note '{note.NoteId}' expired unread on day {dayIndex}; one later in-person attempt remains eligible.";
+                    Debug.Log($"[FreightContactNote] Note '{note.NoteId}' expired unread. Request '{request.RequestId}' remains open; " +
+                        $"the next physical contact attempt is no earlier than day {request.NextContactAttemptDayIndex}.", this);
+                }
+                return true;
+            }
+
+            // Message expiry is part of the physical note lifecycle and must
+            // still close the note if the optional knowledge authority is
+            // unavailable during partial initialization.
+            if (hub?.KnowledgeTransmissions == null) return true;
+
+            PersonState recipient = populationManager.State.GetPerson(note.IntendedRecipientPersonId);
+            if (note.Status == FreightContactNoteStatus.LeftAtLocation)
+            {
+                if (recipient != null && IsPersonAvailableAtBuildingForFreightNote(recipient.id, note.LeftBuildingId, dayIndex))
+                {
+                    if (TryRecordFreightContactKnowledge(note, note.SenderPersonId, recipient.id, dayIndex, false))
+                    {
+                        string transition = book.SetContactNoteStatus(request.RequestId, note.NoteId,
+                            FreightContactNoteStatus.DiscoveredByRecipient, recipient.id, dayIndex);
+                        if (transition == null)
+                        {
+                            hub.ContactGraph?.SeedCorrespondenceLink(note.SenderPersonId, recipient.id, note.NoteId);
+                            request.NextContactAttemptDayIndex = dayIndex + 1;
+                            Debug.Log($"[FreightContactNote] Ethan P{recipient.id} discovered and read '{note.NoteId}' at residence '{note.LeftLocationId}' " +
+                                $"on day {dayIndex}. Request knowledge is now available to Ethan; a later physical meeting is still required.", this);
+                        }
+                    }
+                    return true;
+                }
+
+                List<PersonState> people = populationManager.State.people;
+                if (people != null && recipient != null)
+                {
+                    foreach (PersonState member in people)
+                    {
+                        if (member == null || member.id == recipient.id || member.id == note.SenderPersonId
+                            || member.householdId != recipient.householdId
+                            || member.ageBand != AgeBand.Adult18Plus
+                            || !IsPersonAvailableAtBuildingForFreightNote(member.id, note.LeftBuildingId, dayIndex)) continue;
+                        if (!TryRecordFreightContactKnowledge(note, note.SenderPersonId, member.id, dayIndex, false)) continue;
+                        string transition = book.SetContactNoteStatus(request.RequestId, note.NoteId,
+                            FreightContactNoteStatus.DiscoveredByHouseholdMember, member.id, dayIndex);
+                        if (transition == null)
+                            Debug.Log($"[FreightContactNote] Household member P{member.id} discovered note '{note.NoteId}' at '{note.LeftLocationId}' " +
+                                $"on day {dayIndex}. Ethan P{recipient.id} has not received the message.", this);
+                        return true;
+                    }
+                }
+                return true;
+            }
+
+            if (note.Status == FreightContactNoteStatus.DiscoveredByHouseholdMember)
+            {
+                PersonState custodian = populationManager.State.GetPerson(note.CustodianPersonId);
+                if (custodian == null || recipient == null
+                    || !IsPersonAvailableAtBuildingForFreightNote(custodian.id, note.LeftBuildingId, dayIndex)
+                    || !IsPersonAvailableAtBuildingForFreightNote(recipient.id, note.LeftBuildingId, dayIndex)) return true;
+
+                if (TryRecordFreightContactKnowledge(note, custodian.id, recipient.id, dayIndex, true))
+                {
+                    string transition = book.SetContactNoteStatus(request.RequestId, note.NoteId,
+                        FreightContactNoteStatus.RelayedToRecipient, recipient.id, dayIndex);
+                    if (transition == null)
+                    {
+                        hub.ContactGraph?.SeedCorrespondenceLink(note.SenderPersonId, recipient.id, note.NoteId);
+                        request.NextContactAttemptDayIndex = dayIndex + 1;
+                        Debug.Log($"[FreightContactNote] Household member P{custodian.id} physically relayed note '{note.NoteId}' to Ethan P{recipient.id} " +
+                            $"at residence '{note.LeftLocationId}' on day {dayIndex}. The relay created no freight agreement.", this);
+                    }
+                }
+                return true;
+            }
+
+            return true;
+        }
+
+        private void QueueFreightContactReturnTrip(FreightServiceRequest request,
+            FreightMeetingTripTaskData outboundTrip, int dayIndex)
+        {
+            PersonState requester = outboundTrip != null
+                ? populationManager?.State?.GetPerson(outboundTrip.RequestingPersonId) : null;
+            if (request == null || outboundTrip == null || requester == null
+                || outboundTrip.RequestingHomeBuildingId < 0 || hub?.Tasks == null || hub.Journeys == null)
+            {
+                LogRefusalDayKeyed("freight-contact-return:" + request?.RequestId, dayIndex,
+                    $"[FreightContactNote] Request '{request?.RequestId}' left its note, but Glen's return trip could not be prepared because a required home, route, person or task authority is unresolved.");
+                return;
+            }
+
+            string homeLocation = TownJourneyNetworkBuilder.LocationIdForBuilding(outboundTrip.RequestingHomeBuildingId);
+            JourneyRoute route = !string.IsNullOrWhiteSpace(outboundTrip.MeetingLocationId)
+                && !string.IsNullOrWhiteSpace(homeLocation)
+                ? hub.Journeys.FindRoute(outboundTrip.MeetingLocationId, homeLocation, TravelMode.Foot) : null;
+            if (route == null || !route.Found)
+            {
+                string reason = route?.Diagnostic ?? "the residence route is unresolved";
+                LogRefusalDayKeyed("freight-contact-return:" + request.RequestId, dayIndex,
+                    $"[FreightContactNote] Glen left note for '{request.RequestId}' but no real return route to his home was available: {reason}");
+                return;
+            }
+
+            var returnTrip = new FreightMeetingTripTaskData
+            {
+                RequestId = outboundTrip.RequestId,
+                RequestingPersonId = outboundTrip.RequestingPersonId,
+                CarrierOperatorPersonId = outboundTrip.CarrierOperatorPersonId,
+                MeetingBuildingId = outboundTrip.MeetingBuildingId,
+                MeetingLocationId = outboundTrip.MeetingLocationId,
+                RequestingHomeBuildingId = outboundTrip.RequestingHomeBuildingId,
+                IsReturnTrip = true
+            };
+            WorkTask task = hub.Tasks.CreateTaskWithPlannedMinutes(JourneyTravel.TravelTaskId,
+                EntityId.For(EntityKind.Business, StableBusinessRuntimeId(request.RequestingBusinessId)), dayIndex,
+                Math.Max(1, route.TotalMinutes),
+                customerRef: FreightMeetingTaskPrefix + "travel:" + request.RequestId,
+                termsRef: JsonUtility.ToJson(returnTrip));
+            request.ContactTravelTaskId = task.TaskId.ToString();
+            Debug.Log($"[FreightContactNote] Glen P{requester.id} was assigned a real return route home after leaving note "
+                + $"for '{request.RequestId}': task='{task.TaskId}', route={route.TotalMiles:0.00} mi, estimate={route.TotalMinutes} in-game minutes. "
+                + "The task remains open until custom-navigation arrival.", this);
+        }
+
+        private bool IsPersonAvailableAtBuildingForFreightNote(int personId, int buildingId, int dayIndex)
+        {
+            if (personId < 0 || buildingId < 0 || hub?.Tasks == null || hub.PersonSchedules == null
+                || !IsPersonVisuallyAtBuilding(personId, buildingId)) return false;
+            EntityId worker = EntityId.For(EntityKind.Person, personId);
+            if (hub.Tasks.FindBlockingTaskForAssignee(worker) != null) return false;
+            int minute = timeManager != null ? Mathf.FloorToInt(timeManager.TimeOfDay01 * 1440f) : 480;
+            if (minute < 480) return false;
+            return PersonScheduleWindowFinder.IsAvailableAtMinute(hub.PersonSchedules, personId, dayIndex, minute);
+        }
+
+        private bool TryRecordFreightContactKnowledge(FreightContactNote note, int speakerPersonId,
+            int recipientPersonId, int dayIndex, bool relay)
+        {
+            if (note == null || hub?.KnowledgeTransmissions == null || speakerPersonId < 0 || recipientPersonId < 0)
+                return false;
+            string packetId = note.NoteId + (relay ? ":relay" : ":discovery:" + recipientPersonId);
+            if (hub.KnowledgeTransmissions.HasPacket(recipientPersonId, packetId)) return true;
+            string content = $"Freight request '{note.RequestId}' asks {note.IntendedRecipientName} to discuss a paid cargo movement " +
+                $"referenced by '{note.OrderReference}'. The note contains no price, acceptance, or binding contract.";
+            string chain = relay
+                ? note.SenderPersonId + "->" + note.CustodianPersonId
+                : note.SenderPersonId.ToString();
+            var packet = new InformationPacket
+            {
+                PacketId = packetId,
+                Subject = "freight-contact:" + note.RequestId,
+                ContentSummary = content,
+                SpeakerPersonId = speakerPersonId,
+                RecipientPersonId = recipientPersonId,
+                ObservedDayIndex = note.CreatedDayIndex,
+                TransmittedDayIndex = dayIndex,
+                Confidence01 = 1f,
+                SourceKind = relay ? "conversation" : "written-note",
+                TransmissionChain = chain,
+                IsRumor = false
+            };
+            string refusal = hub.KnowledgeTransmissions.RecordTransmission(packet, new List<string>());
+            if (refusal == null || hub.KnowledgeTransmissions.HasPacket(recipientPersonId, packetId)) return true;
+            LogRefusalDayKeyed("freight-contact-knowledge:" + packetId, dayIndex,
+                $"[FreightContactNote] Note '{note.NoteId}' remains physically present, but its knowledge transfer was refused: {refusal}");
+            return false;
+        }
+
+        private static string PersonDisplayName(PersonState person)
+        {
+            if (person == null) return string.Empty;
+            return (person.firstName ?? string.Empty).Trim() + " " + (person.lastName ?? string.Empty).Trim();
         }
 
         private void TryScheduleFreightMeeting(FreightServiceRequest request, int dayIndex)
@@ -10933,7 +11216,9 @@ namespace LandLedgers.Orchestration.Systems
             }
             if (agreement.Status != FreightServiceAgreementStatus.Accepted
                 || !string.Equals(agreement.ShipmentId, shipment.ShipmentId, StringComparison.Ordinal)
-                || !string.Equals(agreement.FulfilmentStatus, "Prepared for dispatch", StringComparison.Ordinal)
+                || (!string.Equals(agreement.FulfilmentStatus, "Prepared for dispatch", StringComparison.Ordinal)
+                    && !(string.Equals(agreement.FulfilmentStatus, "Dispatch assigned", StringComparison.Ordinal)
+                        && !string.IsNullOrWhiteSpace(agreement.DispatchTaskId)))
                 || shipment.Status != LogisticsShipmentStatus.Planned || !shipment.requiresDispatchAuthorization
                 || !string.Equals(shipment.freightServiceAgreementId, agreement.AgreementId, StringComparison.Ordinal)
                 || !string.Equals(shipment.physicalWagonAssetId, wagon.AssetId, StringComparison.Ordinal)
@@ -10958,42 +11243,69 @@ namespace LandLedgers.Orchestration.Systems
             if (!string.IsNullOrWhiteSpace(agreement.DispatchTaskId))
             {
                 WorkTask recorded = hub.Tasks.FindTaskByIdString(agreement.DispatchTaskId);
-                if (recorded != null && string.Equals(recorded.CustomerRef, taskRef, StringComparison.Ordinal))
+                if (recorded != null && !string.Equals(recorded.CustomerRef, taskRef, StringComparison.Ordinal))
                 {
-                    // Campaign C (DEF-050): a recorded task that is still
-                    // open is the live path — stay silent. A terminal
-                    // recorded task strands the hold: no handler re-creates
-                    // a dispatch task for an already-prepared shipment, so
-                    // name the strand once per day instead of returning
-                    // silently. Terminal day follows the prune's anchor
-                    // (CompletedDayIndex, else CreatedDayIndex).
-                    string strand = DispatchHoldStrandReason.Describe(
+                    string mismatch = DispatchHoldStrandReason.Describe(
                         new DispatchHoldStrandReason.DispatchHoldTaskState(
-                            shipment.ShipmentId, agreement.AgreementId,
-                            agreement.DispatchTaskId, true, recorded.CustomerRef, taskRef,
-                            recorded.IsOpen, recorded.Status.ToString(), recorded.Outcome.ToString(),
-                            recorded.CompletedDayIndex >= 0 ? recorded.CompletedDayIndex : recorded.CreatedDayIndex,
-                            agreement.AcceptedDayIndex),
-                        dayIndex);
-                    if (strand != null)
-                        LogRefusalDayKeyed("dispatch-hold-stranded:" + shipment.ShipmentId, dayIndex, strand);
+                            shipment.ShipmentId, agreement.AgreementId, agreement.DispatchTaskId,
+                            true, recorded.CustomerRef, taskRef, recorded.IsOpen, recorded.Status.ToString(),
+                            recorded.Outcome.ToString(), recorded.CompletedDayIndex >= 0
+                                ? recorded.CompletedDayIndex : recorded.CreatedDayIndex, agreement.AcceptedDayIndex), dayIndex);
+                    LogRefusalDayKeyed("dispatch-task-link-mismatch:" + shipment.ShipmentId, dayIndex, mismatch);
                     return;
                 }
-                // Campaign C (DEF-050): the recorded id resolves to a
-                // different task, or to no TaskAuthority record at all
-                // (pruned 7 days after terminalizing, or lost). Either way
-                // no replacement is created — log once per day instead of
-                // once per session so the stranded hold stays visible.
-                LogRefusalDayKeyed("dispatch-task-missing:" + agreement.AgreementId, dayIndex,
-                    DispatchHoldStrandReason.Describe(
-                        new DispatchHoldStrandReason.DispatchHoldTaskState(
-                            shipment.ShipmentId, agreement.AgreementId,
-                            agreement.DispatchTaskId, recorded != null,
-                            recorded != null ? recorded.CustomerRef : string.Empty, taskRef,
-                            false, string.Empty, string.Empty, dayIndex,
-                            agreement.AcceptedDayIndex),
-                        dayIndex));
-                return;
+                if (recorded != null && recorded.IsOpen) return;
+
+                string failureReason = recorded == null
+                    ? "linked dispatch task was missing from TaskAuthority (pruned or lost)"
+                    : "linked dispatch task ended " + recorded.Status + " (" + recorded.Outcome + ")";
+                string strand = DispatchHoldStrandReason.Describe(
+                    new DispatchHoldStrandReason.DispatchHoldTaskState(
+                        shipment.ShipmentId, agreement.AgreementId, agreement.DispatchTaskId,
+                        recorded != null, recorded != null ? recorded.CustomerRef : string.Empty,
+                        taskRef, false, recorded != null ? recorded.Status.ToString() : string.Empty,
+                        recorded != null ? recorded.Outcome.ToString() : string.Empty,
+                        recorded != null ? (recorded.CompletedDayIndex >= 0
+                            ? recorded.CompletedDayIndex : recorded.CreatedDayIndex) : dayIndex,
+                        agreement.AcceptedDayIndex), dayIndex);
+                if (strand != null)
+                    LogRefusalDayKeyed("dispatch-hold-stranded:" + shipment.ShipmentId, dayIndex, strand);
+
+                string recoveryRefusal = FreightProduction.ServiceAgreements.RequeueDispatchAfterTaskFailure(
+                    agreement.AgreementId, agreement.DispatchTaskId, failureReason, out bool recoveryLimitReached);
+                if (recoveryRefusal != null)
+                {
+                    if (recoveryLimitReached && shipment.Status == LogisticsShipmentStatus.Planned
+                        && shipment.requiresDispatchAuthorization && !shipment.loadApplied
+                        && !shipment.sourceCommittedAtSchedule && !shipment.physicalTransportBound)
+                    {
+                        string terminalReason = "Prepared freight dispatch failed after "
+                            + agreement.DispatchTaskRecoveryAttempts + " bounded re-preparation attempt(s): "
+                            + failureReason + ". The source lot was not loaded or debited and remains with its owner.";
+                        FreightProduction.Service.FailAbandonedShipment(shipment, terminalReason, latestFreightHooks);
+                        string cancellationRefusal = FreightProduction.ServiceAgreements.CancelAgreement(
+                            agreement.AgreementId, terminalReason);
+                        if (cancellationRefusal != null)
+                            LogRefusalDayKeyed("dispatch-recovery-cancel:" + shipment.ShipmentId, dayIndex,
+                                $"[FreightDispatch] Shipment '{shipment.ShipmentId}' is failed before load, but its accepted agreement could not be closed: {cancellationRefusal}");
+                        Debug.LogWarning($"[FreightDispatch] Shipment '{shipment.ShipmentId}' entered the existing pre-load failure path after bounded dispatch recovery; "
+                            + "the original agreement was cancelled through its existing authority and source cargo remains in its original inventory. "
+                            + terminalReason, this);
+                    }
+                    else
+                    {
+                        LogRefusalDayKeyed("dispatch-recovery:" + shipment.ShipmentId, dayIndex,
+                            $"[FreightDispatch] Shipment '{shipment.ShipmentId}' remains held; dispatch task recovery was not safe: {recoveryRefusal}");
+                    }
+                    return;
+                }
+
+                FindAnyObjectByType<OpeningTransportPresentationController>()
+                    ?.ReleaseDriverStagingApproach(agreement.AcceptingOperatorPersonId);
+                Debug.LogWarning($"[FreightDispatch] Shipment '{shipment.ShipmentId}' retained its original agreement and prepared team; "
+                    + $"terminal dispatch task '{agreement.SupersededDispatchTaskIds.LastOrDefault()}' was retired and a bounded re-preparation "
+                    + $"attempt ({agreement.DispatchTaskRecoveryAttempts}/{FreightServiceAgreement.MaximumDispatchTaskRecoveryAttempts}) is queued. "
+                    + "No cargo was loaded and no freight payment was settled.", this);
             }
 
             // Recover an already-created-but-not-linked task by its stable reference before creating anything.
@@ -13871,7 +14183,7 @@ namespace LandLedgers.Orchestration.Systems
             {
                 FreightMeetingTripTaskData trip = JsonUtility.FromJson<FreightMeetingTripTaskData>(task.TermsRef);
                 if (trip == null) return false;
-                targetBuildingId = trip.MeetingBuildingId;
+                targetBuildingId = trip.IsReturnTrip ? trip.RequestingHomeBuildingId : trip.MeetingBuildingId;
                 return targetBuildingId >= 0;
             }
             if (FreightDispatchStaging.IsDispatchTravelRef(task.CustomerRef))
@@ -14544,6 +14856,7 @@ namespace LandLedgers.Orchestration.Systems
                 FulfilledDaysThreshold = Mathf.Max(0f, householdFoodSatisfiedDays),
             };
             bool isColdSeason = IsColdSeasonMonth();
+            var foodSupplyBudget = new HouseholdFoodSupplyBudget(supplierDirectory, sellerKnowledge);
             foreach (HouseholdState household in populationManager.State.households)
             {
                 if (household == null)
@@ -14552,6 +14865,7 @@ namespace LandLedgers.Orchestration.Systems
                 }
 
                 HouseholdInventory inventory = hub.HouseholdInventories.GetOrCreate(household.id);
+                List<int> activeMemberIds = householdMemberships?.GetActiveMembers(household.id);
                 int members = Math.Max(1, household.ConsumptionMemberCount);
                 var expectedDailyUse = new Dictionary<string, int>();
                 foreach (string itemId in policy.MealItemPriority)
@@ -14592,18 +14906,15 @@ namespace LandLedgers.Orchestration.Systems
                     // Evaluated daily, so a seller learned or registered
                     // later lets the need open the next day.
                     isRecognizedByKnownSeller: HouseholdShortageMonitor.KnownSellerRecognitionPredicate(
-                        supplierDirectory, sellerKnowledge,
-                        householdMemberships?.GetActiveMembers(household.id)),
+                        supplierDirectory, sellerKnowledge, activeMemberIds),
                     // I1-M1: allocate food needs in meal-priority order against
-                    // one shared cover total, so the household demands the food
-                    // it actually eats instead of one full diet per item. A
-                    // higher-priority need counts toward the cover only when
-                    // the item is purchasable today (known seller, stocked),
-                    // so a stockout falls back to the next food.
+                    // one shared household cover total. The run-local budget
+                    // also allocates finite seller stock across households, so
+                    // several households cannot all count the same shelf units
+                    // as their own complete reserve.
                     mealPriorityOrder: policy.MealItemPriority,
-                    isPurchasableNow: HouseholdShortageMonitor.KnownSellerPurchasabilityPredicate(
-                        supplierDirectory, sellerKnowledge,
-                        householdMemberships?.GetActiveMembers(household.id)));
+                    allocateSupplyUnitsNow: (itemId, unitsNeeded) =>
+                        foodSupplyBudget.AllocateKnownStock(itemId, unitsNeeded, activeMemberIds));
             }
 
             foreach (string monitorDiagnostic in monitor.Diagnostics)

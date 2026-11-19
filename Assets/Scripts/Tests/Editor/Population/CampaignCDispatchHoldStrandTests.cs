@@ -1,82 +1,10 @@
-// Campaign C, package 10 — DEF-050 (freight dispatch hold has no
-// timeout), Nov 15, 2026.
-//
-// VERDICT (verify-then-fix): the hold is genuinely unbounded, and no
-// timeout is invented here. Verified, not assumed:
-//  * The hold releases ONLY through FreightProductionDriver.
-//    AuthorizeShipmentDispatch, called ONLY from
-//    SimulationDrivers.HandleCompletedFreightDispatchTask — the
-//    successful-completion path for a dispatch task.
-//    FreightProductionDriver.AdvanceTick skips held shipments entirely,
-//    so a held shipment never advances and never expires; there is no
-//    agreement expiry and no journey expiry (the journey is created at
-//    departure, which never happens while held).
-//  * A dispatch task CAN terminalize without authorizing: the 1-minute
-//    handshake completes through CompleteTaskWithCausalOutcome, whose
-//    causal outcome can be RecoverableFailure / SeriousFailure (real
-//    resolver paths), landing the task in Status Failed; any CancelTask
-//    path lands it in Cancelled. Neither status reaches the completion
-//    handler (Status != Complete) or the short-tick reconciler (Complete
-//    only), and no handler for a non-completed dispatch task exists.
-//  * agreement.DispatchTaskId is write-once (RegisterDispatchTask refuses
-//    a different id; nothing ever clears it), and
-//    CreatePreparedFreightDispatchTask is called from exactly three
-//    sites — all on the hitching/preparation path — none on a
-//    dispatch-failure path. A recorded task that still resolves with the
-//    matching stable reference returns silently with no new task; a
-//    recorded id that stops resolving returns with "no replacement was
-//    created" (logged once per session).
-//  * The DEF-049 prune converts the strand, it does not cause it: 7 days
-//    after terminalization the Failed / Cancelled / Complete task is
-//    pruned (the external-reference predicate protects shopping-trip
-//    tasks only), so the recorded id stops resolving. The hold is
-//    already unreleasable the moment the task terminalizes without
-//    authorization. The predicate is deliberately NOT extended to
-//    dispatch tasks — preserving a dead record forever would not fix
-//    the hold.
-//  * A completed-but-refused task is a third strand mode: the handler's
-//    identity checks refuse permanently (the identities and write-once
-//    flags never change after preparation), logged once, re-refused by
-//    the reconciler every short tick. The one transient sub-case — the
-//    operator not visually at staging — self-heals on arrival and is
-//    not a strand.
-//
-// What IS fixed here is diagnostic, in three layers, all
-// behaviour-neutral (no task created, no timeout, no expiry, no
-// cancellation policy):
-//  (1) A terminal recorded dispatch task now logs once per day
-//      (day-keyed, LogRefusalDayKeyed), naming the task, its terminal
-//      status and outcome, the day it terminalized, and the hold age.
-//  (2) A recorded dispatch task id that no longer resolves now logs
-//      once per day instead of once per session, naming the recorded
-//      id and the hold age since acceptance.
-//  (3) The prerequisite refusals on the same creation path (unresolved
-//      context, operator mismatch, state mismatch, team attachment,
-//      unlinked existing task, and the daily driver's
-//      missing-prerequisite line) now log once per day instead of once
-//      per session, so a held shipment whose task was never created
-//      stays visible too. They retry daily and can self-heal; only
-//      their logging cadence changes.
-//
-// The disposition — whether a hold should expire, and if a dispatch
-// task fails or is cancelled, whether a new dispatch task should be
-// created, the shipment should return to Planned for re-preparation,
-// or the agreement should be cancelled — is A-to-Z Check 10 question
-// 4, an owner decision (new question (m)), and is NOT invented here.
-//
-// Two test kinds, same file:
-//  (1) Real unit tests for the pure reason helper — every strand
-//      reason, the live-path nulls, first-failure ordering, and the
-//      day-count wording.
-//  (2) Structural tests pinning the Unity-bound wiring by reading the
-//      production files — SimulationDrivers is too large a closure for
-//      the focused harness, so the wiring itself (not Unity behaviour)
-//      is what is asserted here, exactly like the package-2/3/4/5/7/8/9
-//      tests.
-// The repo root comes from LAND_LEDGERS_REPO, then a walk up from the
-// current directory and the test assembly location (campaign layout:
-// <root>/work-c/Assets/...). A missing repo fails loudly, never silently
-// passes.
+// DEF-050 regression coverage for dispatch-task strands.
+// The live path retries the same prepared shipment at most twice after a
+// verified terminal or missing task. A mismatched id remains fail-closed;
+// after retry exhaustion only a never-loaded, never-debited shipment can
+// enter the existing failed-shipment settlement path. Unit tests cover the
+// pure diagnostic and agreement-book state; structural tests pin the Unity
+// driver wiring. These do not substitute for the required Main Scene test.
 using System;
 using System.IO;
 using System.Text;
@@ -150,8 +78,7 @@ namespace LandLedgers.Editor.Population
             Assert.IsTrue(reason.Contains("4 days ago"), "Reason was: " + reason);
             Assert.IsTrue(reason.Contains(ShipmentId), "Reason was: " + reason);
             Assert.IsTrue(reason.Contains(TaskId), "Reason was: " + reason);
-            Assert.IsTrue(reason.Contains("no dispatch task is re-created"), "Reason was: " + reason);
-            Assert.IsTrue(reason.Contains("Check 10 Q4"), "Reason was: " + reason);
+            Assert.IsTrue(reason.Contains("bounded dispatch-task re-preparation"), "Reason was: " + reason);
         }
 
         [Test]
@@ -209,7 +136,7 @@ namespace LandLedgers.Editor.Population
             string reason = DispatchHoldStrandReason.Describe(state, 45);
             Assert.IsTrue(reason.Contains(TaskId), "Reason was: " + reason);
             Assert.IsTrue(reason.Contains("no longer in TaskAuthority"), "Reason was: " + reason);
-            Assert.IsTrue(reason.Contains("no replacement was created"), "Reason was: " + reason);
+            Assert.IsTrue(reason.Contains("eligible for bounded task re-preparation"), "Reason was: " + reason);
             Assert.IsTrue(reason.Contains("day 12"), "Reason was: " + reason);
             Assert.IsTrue(reason.Contains("33 days ago"), "Reason was: " + reason);
         }
@@ -310,7 +237,7 @@ namespace LandLedgers.Editor.Population
             string method = MethodBody(code, "private void CreatePreparedFreightDispatchTask(");
             int describe = method.IndexOf("DispatchHoldStrandReason.Describe(", StringComparison.Ordinal);
             int nullCheck = method.IndexOf("if (strand != null)", describe);
-            int log = method.IndexOf("LogRefusalDayKeyed(", describe);
+            int log = method.IndexOf("LogRefusalDayKeyed(", nullCheck, StringComparison.Ordinal);
             Assert.IsTrue(describe >= 0 && nullCheck > describe,
                 "The strand reason must be null-checked before logging");
             Assert.IsTrue(log > nullCheck,
@@ -318,15 +245,17 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
-        public void MissingTaskBranch_LogsDayKeyedNotOnceOnly()
+        public void MissingTaskBranch_UsesBoundedRecoveryAndDayKeyedStrandDiagnostic()
         {
             string raw = ReadRepoFile(DriversPath);
             string code = StripNonCode(raw);
             string method = MethodBody(code, "private void CreatePreparedFreightDispatchTask(");
-            int methodStart = raw.IndexOf("private void CreatePreparedFreightDispatchTask(", StringComparison.Ordinal);
-            int missingCall = raw.IndexOf("LogRefusalDayKeyed(\"dispatch-task-missing:\"", methodStart, StringComparison.Ordinal);
-            Assert.IsTrue(missingCall > methodStart,
-                "The missing-task branch must call the day-keyed logger with the dispatch-task-missing key");
+            Assert.IsTrue(raw.Contains("linked dispatch task was missing from TaskAuthority (pruned or lost)"),
+                "A missing linked task must retain an explicit cause for recovery diagnostics.");
+            Assert.IsTrue(method.Contains("RequeueDispatchAfterTaskFailure("),
+                "A pruned task must go through the same bounded agreement recovery as a terminal task.");
+            Assert.IsTrue(raw.Contains("dispatch-hold-stranded:"),
+                "The unified terminal/missing-task branch must retain a day-keyed strand diagnostic.");
             Assert.IsTrue(method.Contains("LogRefusalDayKeyed("),
                 "CreatePreparedFreightDispatchTask must use the day-keyed logger");
             Assert.IsFalse(method.Contains("LogFreightAgreementBlockerOnce("),
@@ -371,10 +300,8 @@ namespace LandLedgers.Editor.Population
         [Test]
         public void NoTaskCreationInStrandBranches()
         {
-            // The fix is diagnostic only: the recorded/missing branches
-            // must not create a task. Exactly one creation site may exist
-            // in the method — the original creation at the end, after the
-            // recovery of an already-created-but-unlinked task.
+            // Recovery reuses the existing single task-creation site after
+            // the agreement authority retires a verified terminal task.
             string code = StripNonCode(ReadRepoFile(DriversPath));
             string method = MethodBody(code, "private void CreatePreparedFreightDispatchTask(");
             int first = method.IndexOf("CreateTaskWithPlannedMinutes(", StringComparison.Ordinal);
@@ -389,6 +316,42 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void TerminalOrPrunedDispatchTask_UsesBoundedSameAgreementRecoveryAndPreloadFailure()
+        {
+            string raw = ReadRepoFile(DriversPath);
+            string code = StripNonCode(raw);
+            string daily = MethodBody(code, "private void DrivePreparedFreightDispatchAssignments(int dayIndex)");
+            string create = MethodBody(code, "private void CreatePreparedFreightDispatchTask(");
+            int dailyStart = raw.IndexOf("private void DrivePreparedFreightDispatchAssignments(int dayIndex)", StringComparison.Ordinal);
+            int nextMethod = dailyStart >= 0
+                ? raw.IndexOf("private void DriveMillbrookFreightNegotiation(", dailyStart, StringComparison.Ordinal)
+                : -1;
+            Assert.IsTrue(daily.Contains("agreement.DispatchTaskId")
+                && dailyStart >= 0 && nextMethod > dailyStart
+                && raw.Substring(dailyStart, nextMethod - dailyStart).Contains("\"Dispatch assigned\""),
+                "The daily driver must revisit a terminal linked task, not only unassigned preparation.");
+            Assert.IsTrue(create.Contains("RequeueDispatchAfterTaskFailure("),
+                "Only a missing or matching terminal TaskAuthority record may retire the existing task link.");
+            string agreementSource = StripNonCode(ReadRepoFile(
+                "Assets/Scripts/Domains/Economy/Businesses/Freight/FreightServiceAgreements.cs"));
+            string recovery = MethodBody(agreementSource, "public string RequeueDispatchAfterTaskFailure(");
+            Assert.IsTrue(recovery.Contains("DispatchTaskRecoveryAttempts >= FreightServiceAgreement.MaximumDispatchTaskRecoveryAttempts"),
+                "The agreement authority must enforce its retry bound before retiring the active task link.");
+            Assert.IsTrue(create.Contains("RequeueDispatchAfterTaskFailure("),
+                "The driver must delegate retry policy to the agreement authority.");
+            Assert.IsTrue(create.Contains("shipment.Status == LogisticsShipmentStatus.Planned")
+                && create.Contains("!shipment.loadApplied")
+                && create.Contains("!shipment.sourceCommittedAtSchedule"),
+                "Automatic terminal disposition is allowed only before physical cargo loading/debit.");
+            Assert.IsTrue(create.Contains("Service.FailAbandonedShipment("),
+                "Retry exhaustion must use the existing freight failure and settlement authorities.");
+            Assert.IsTrue(raw.Contains("source lot was not loaded or debited"),
+                "The exhaustion report must make the retained source-cargo state explicit.");
+            Assert.IsTrue(create.Contains("CreateTaskWithPlannedMinutes("),
+                "A legitimate retry must use the existing TaskAuthority dispatch task.");
+        }
+
+        [Test]
         public void TerminalDayAnchorFollowsPrune()
         {
             // Cancelled tasks record no completion day; the driver must
@@ -396,7 +359,8 @@ namespace LandLedgers.Editor.Population
             // (CompletedDayIndex, else CreatedDayIndex), or a cancelled
             // task's strand age would read from day -1.
             string raw = ReadRepoFile(DriversPath);
-            Assert.IsTrue(raw.Contains("recorded.CompletedDayIndex >= 0 ? recorded.CompletedDayIndex : recorded.CreatedDayIndex"),
+            Assert.IsTrue(raw.Contains("recorded.CompletedDayIndex >= 0")
+                && raw.Contains("recorded.CreatedDayIndex"),
                 "The strand diagnostic must anchor the terminal day on CompletedDayIndex, falling back to CreatedDayIndex");
         }
 

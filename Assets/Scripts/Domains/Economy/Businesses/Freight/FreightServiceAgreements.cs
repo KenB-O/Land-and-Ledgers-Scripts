@@ -9,6 +9,45 @@ namespace LandLedgers.Economy.Freight
     public enum FreightServiceRequestStatus { Open = 0, MeetingScheduled = 1, Quoted = 2, Refused = 3, Accepted = 4, AtMeeting = 5 }
     public enum FreightServiceAgreementStatus { Accepted = 0, Fulfilled = 1, Cancelled = 2, Refused = 3 }
 
+    public enum FreightContactNoteStatus
+    {
+        LeftAtLocation = 0,
+        DiscoveredByHouseholdMember = 1,
+        RelayedToRecipient = 2,
+        DiscoveredByRecipient = 3,
+        Expired = 4,
+    }
+
+    /// <summary>
+    /// A request-specific physical note left after an unsuccessful in-person
+    /// freight contact. It is serialized with the existing request record, so
+    /// its identity, location, custody and discovery survive Continue without
+    /// creating a second correspondence database.
+    /// </summary>
+    [Serializable]
+    public sealed class FreightContactNote
+    {
+        public string NoteId = string.Empty;
+        public string RequestId = string.Empty;
+        public int SenderPersonId = -1;
+        public string SenderName = string.Empty;
+        public int IntendedRecipientPersonId = -1;
+        public string IntendedRecipientName = string.Empty;
+        public string Purpose = string.Empty;
+        public string OrderReference = string.Empty;
+        public string LeftLocationId = string.Empty;
+        public string CustodyLocationId = string.Empty;
+        public int LeftBuildingId = -1;
+        public int CreatedDayIndex = -1;
+        public float CreatedGameSeconds;
+        public int ExpiresDayIndex = -1;
+        public FreightContactNoteStatus Status = FreightContactNoteStatus.LeftAtLocation;
+        public int CustodianPersonId = -1;
+        public int DiscoveredByPersonId = -1;
+        public int DiscoveredDayIndex = -1;
+        public int RelayedDayIndex = -1;
+    }
+
     [Serializable]
     public sealed class FreightServiceQuote
     {
@@ -73,12 +112,16 @@ namespace LandLedgers.Economy.Freight
         public string ContactTravelTaskId = string.Empty;
         public string MeetingTaskId = string.Empty;
         public string MeetingOperatorReservationId = string.Empty;
+        public int CompletedContactNoteAttempts;
+        public int NextContactAttemptDayIndex;
+        public List<FreightContactNote> ContactNotes = new List<FreightContactNote>();
         public FreightServiceQuote Quote;
     }
 
     [Serializable]
     public sealed class FreightServiceAgreement
     {
+        public const int MaximumDispatchTaskRecoveryAttempts = 2;
         public string AgreementId = string.Empty;
         public string RequestId = string.Empty;
         public string CustomerBusinessId = string.Empty;
@@ -100,6 +143,9 @@ namespace LandLedgers.Economy.Freight
         public float AcceptedGameSeconds;
         public float PreparedGameSeconds;
         public string DispatchTaskId = string.Empty;
+        public int DispatchTaskRecoveryAttempts;
+        public string LastDispatchTaskFailureReason = string.Empty;
+        public List<string> SupersededDispatchTaskIds = new List<string>();
         public FreightServiceAgreementStatus Status = FreightServiceAgreementStatus.Accepted;
         public string FulfilmentStatus = "Pending pickup";
         public string ShipmentId = string.Empty;
@@ -125,6 +171,105 @@ namespace LandLedgers.Economy.Freight
 
         public FreightServiceRequest FindRequest(string requestId) => requests.Find(r =>
             r != null && string.Equals(r.RequestId, requestId, StringComparison.Ordinal));
+
+        public FreightContactNote FindPendingContactNote(string requestId)
+        {
+            FreightServiceRequest request = FindRequest(requestId);
+            if (request?.ContactNotes == null) return null;
+            for (int i = request.ContactNotes.Count - 1; i >= 0; i--)
+            {
+                FreightContactNote note = request.ContactNotes[i];
+                if (note != null && note.Status != FreightContactNoteStatus.RelayedToRecipient
+                    && note.Status != FreightContactNoteStatus.DiscoveredByRecipient
+                    && note.Status != FreightContactNoteStatus.Expired)
+                    return note;
+            }
+            return null;
+        }
+
+        public string RecordContactNote(string requestId, FreightContactNote note)
+        {
+            FreightServiceRequest request = FindRequest(requestId);
+            if (request == null || request.Status != FreightServiceRequestStatus.Open
+                || FindAgreementForRequest(requestId) != null
+                || note == null || string.IsNullOrWhiteSpace(note.NoteId)
+                || !string.Equals(note.RequestId, requestId, StringComparison.Ordinal)
+                || note.SenderPersonId != request.RequestingPersonId
+                || note.IntendedRecipientPersonId != request.CarrierOperatorPersonId
+                || string.IsNullOrWhiteSpace(note.SenderName)
+                || string.IsNullOrWhiteSpace(note.IntendedRecipientName)
+                || string.IsNullOrWhiteSpace(note.LeftLocationId)
+                || string.IsNullOrWhiteSpace(note.Purpose)
+                || string.IsNullOrWhiteSpace(note.OrderReference)
+                || note.LeftBuildingId < 0 || note.CreatedDayIndex < 0
+                || float.IsNaN(note.CreatedGameSeconds) || float.IsInfinity(note.CreatedGameSeconds)
+                || note.CreatedGameSeconds < 0f
+                || note.ExpiresDayIndex <= note.CreatedDayIndex
+                || (!string.IsNullOrWhiteSpace(note.CustodyLocationId)
+                    && !string.Equals(note.CustodyLocationId, note.LeftLocationId, StringComparison.Ordinal)))
+                return "Freight contact note is missing its real request participants, identity, residence, or valid creation and expiry times.";
+
+            request.ContactNotes ??= new List<FreightContactNote>();
+            foreach (FreightContactNote prior in request.ContactNotes)
+                if (prior != null && string.Equals(prior.NoteId, note.NoteId, StringComparison.Ordinal))
+                    return "Freight contact note identity already exists; duplicate note creation refused.";
+            if (FindPendingContactNote(requestId) != null)
+                return "A freight contact note is already pending discovery; duplicate notes are refused.";
+
+            note.Status = FreightContactNoteStatus.LeftAtLocation;
+            note.CustodyLocationId = string.IsNullOrWhiteSpace(note.CustodyLocationId)
+                ? note.LeftLocationId : note.CustodyLocationId;
+            request.ContactNotes.Add(note);
+            request.CompletedContactNoteAttempts = Math.Max(0, request.CompletedContactNoteAttempts) + 1;
+            request.NextContactAttemptDayIndex = Math.Max(request.NextContactAttemptDayIndex, note.ExpiresDayIndex);
+            return null;
+        }
+
+        public string SetContactNoteStatus(string requestId, string noteId,
+            FreightContactNoteStatus status, int personId, int dayIndex)
+        {
+            FreightServiceRequest request = FindRequest(requestId);
+            FreightContactNote note = request?.ContactNotes?.Find(candidate => candidate != null
+                && string.Equals(candidate.NoteId, noteId, StringComparison.Ordinal));
+            if (note == null) return "Unknown freight contact note.";
+            if (dayIndex < note.CreatedDayIndex) return "A freight contact note cannot be discovered before it was created.";
+            if (note.Status == FreightContactNoteStatus.RelayedToRecipient
+                || note.Status == FreightContactNoteStatus.DiscoveredByRecipient
+                || note.Status == FreightContactNoteStatus.Expired)
+                return "Freight contact note is already terminal.";
+
+            bool validTransition =
+                (status == FreightContactNoteStatus.DiscoveredByHouseholdMember
+                    && note.Status == FreightContactNoteStatus.LeftAtLocation
+                    && personId >= 0 && personId != note.IntendedRecipientPersonId)
+                || (status == FreightContactNoteStatus.DiscoveredByRecipient
+                    && (note.Status == FreightContactNoteStatus.LeftAtLocation
+                        || note.Status == FreightContactNoteStatus.DiscoveredByHouseholdMember)
+                    && personId == note.IntendedRecipientPersonId)
+                || (status == FreightContactNoteStatus.RelayedToRecipient
+                    && note.Status == FreightContactNoteStatus.DiscoveredByHouseholdMember
+                    && personId == note.IntendedRecipientPersonId)
+                || (status == FreightContactNoteStatus.Expired
+                    && dayIndex >= note.ExpiresDayIndex);
+            if (!validTransition) return "Freight contact note status transition is not supported.";
+
+            note.Status = status;
+            if (status == FreightContactNoteStatus.DiscoveredByHouseholdMember
+                || status == FreightContactNoteStatus.DiscoveredByRecipient)
+            {
+                note.DiscoveredByPersonId = personId;
+                note.DiscoveredDayIndex = dayIndex;
+                note.CustodianPersonId = personId;
+                note.CustodyLocationId = string.Empty;
+            }
+            if (status == FreightContactNoteStatus.RelayedToRecipient)
+            {
+                note.RelayedDayIndex = dayIndex;
+                note.CustodianPersonId = personId;
+                note.CustodyLocationId = string.Empty;
+            }
+            return null;
+        }
 
         public FreightServiceAgreement FindAgreement(string agreementId) => agreements.Find(a =>
             a != null && string.Equals(a.AgreementId, agreementId, StringComparison.Ordinal));
@@ -463,6 +608,9 @@ namespace LandLedgers.Economy.Freight
                 || agreement.PreparedGameSeconds <= 0f)
                 return "A dispatch task requires this agreement's accepted, registered, prepared shipment.";
             if (string.IsNullOrWhiteSpace(taskId)) return "A stable TaskAuthority task id is required.";
+            if (agreement.SupersededDispatchTaskIds != null
+                && agreement.SupersededDispatchTaskIds.Exists(value => string.Equals(value, taskId, StringComparison.Ordinal)))
+                return "A failed or cancelled dispatch task id cannot be linked again.";
             if (!string.IsNullOrWhiteSpace(agreement.DispatchTaskId))
                 return string.Equals(agreement.DispatchTaskId, taskId, StringComparison.Ordinal)
                     ? null : "Agreement already references a different dispatch task.";
@@ -470,6 +618,43 @@ namespace LandLedgers.Economy.Freight
                 return "A dispatch task can only be registered once the shipment is prepared for dispatch.";
             agreement.DispatchTaskId = taskId;
             agreement.FulfilmentStatus = "Dispatch assigned";
+            return null;
+        }
+
+        /// <summary>
+        /// Reopens the prepared stage after the caller has verified that its
+        /// linked TaskAuthority task failed, was cancelled/interrupted, or
+        /// was pruned. Keeps the accepted agreement and shipment identity;
+        /// only the terminal task link is retired. The retry bound prevents a
+        /// permanently impossible dispatch task from holding the shipment.
+        /// </summary>
+        public string RequeueDispatchAfterTaskFailure(string agreementId, string failedTaskId,
+            string failureReason, out bool recoveryLimitReached)
+        {
+            recoveryLimitReached = false;
+            FreightServiceAgreement agreement = FindAgreement(agreementId);
+            if (agreement == null || agreement.Status != FreightServiceAgreementStatus.Accepted
+                || string.IsNullOrWhiteSpace(agreement.ShipmentId)
+                || agreement.PreparedGameSeconds <= 0f
+                || !string.Equals(agreement.FulfilmentStatus, "Dispatch assigned", StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(failedTaskId)
+                || !string.Equals(agreement.DispatchTaskId, failedTaskId, StringComparison.Ordinal))
+                return "Only the accepted agreement's currently linked, prepared dispatch task can be recovered.";
+            if (string.IsNullOrWhiteSpace(failureReason))
+                return "Dispatch task recovery requires the observed terminal or missing-task reason.";
+            if (agreement.DispatchTaskRecoveryAttempts >= FreightServiceAgreement.MaximumDispatchTaskRecoveryAttempts)
+            {
+                recoveryLimitReached = true;
+                return "The bounded dispatch task recovery limit has been reached.";
+            }
+
+            agreement.SupersededDispatchTaskIds ??= new List<string>();
+            if (!agreement.SupersededDispatchTaskIds.Exists(value => string.Equals(value, failedTaskId, StringComparison.Ordinal)))
+                agreement.SupersededDispatchTaskIds.Add(failedTaskId);
+            agreement.DispatchTaskRecoveryAttempts++;
+            agreement.LastDispatchTaskFailureReason = failureReason.Trim();
+            agreement.DispatchTaskId = string.Empty;
+            agreement.FulfilmentStatus = "Prepared for dispatch";
             return null;
         }
 

@@ -12,6 +12,7 @@
 // block the fallback. Without a priority order, today's per-item behaviour
 // is preserved exactly (last test pins it).
 
+using System;
 using System.Collections.Generic;
 using LandLedgers.Population;
 using NUnit.Framework;
@@ -21,6 +22,27 @@ namespace LandLedgers.Editor.Population
     [TestFixture]
     public sealed class HouseholdShortageAllocationTests
     {
+        private sealed class TestFoodSupplier : IItemResolvingSupplier, IItemCatalogSupplier
+        {
+            public int Stock;
+            public string SupplierBusinessId => "test-store";
+            public string SupplierName => "Test Store";
+            public string LocationId => "test-store-location";
+            public bool HasCategory(string categoryId) => categoryId == "staple_food";
+            public int StockUnits(string categoryId) => Stock;
+            public int PricePerUnitCents(string categoryId) => 1;
+            public int Sell(string categoryId, int requestedUnits, int dayIndex, List<string> diagnostics) => 0;
+            public bool OffersItem(string itemId) => RecognizesItem(itemId);
+            public string CategoryForItem(string itemId) => RecognizesItem(itemId) ? "staple_food" : string.Empty;
+            public int ItemStockUnits(string itemId) => RecognizesItem(itemId) ? Stock : 0;
+            public int ItemPricePerUnitCents(string itemId) => 1;
+            public string CheckTradingCapability(int absoluteDayIndex, int minuteOfDay) => null;
+            public int SellItem(string itemId, int requestedUnits, int dayIndex,
+                ShoppingSettlement settlement, List<string> diagnostics) => 0;
+            public string LastReceiptId => string.Empty;
+            public bool RecognizesItem(string itemId) => itemId == HouseholdItemCatalog.BreadId;
+        }
+
         // Live serialized playtest policy (SimulationDrivers
         // householdFoodReorderDays 3f / householdFoodTargetDays 7f /
         // householdFoodSatisfiedDays 7f), as in FortyTwoLoafNeedTests.
@@ -113,6 +135,61 @@ namespace LandLedgers.Editor.Population
             HouseholdPurchasingNeed beefNeed = needs.GetOpenNeed(9202, "beef");
             Assert.IsTrue(beefNeed != null, "Unpurchasable bread must not block the beef fallback.");
             Assert.AreEqual(42, beefNeed.UnitsNeeded);
+        }
+
+        [Test]
+        public void PartialBreadStock_DoesNotCountAsFullCoverForFallbackFood()
+        {
+            HouseholdState household = TwoMemberHousehold(9210);
+            var needs = new HouseholdNeedRegistry();
+            var inventory = new HouseholdInventory(householdId: 9210);
+            int requestedBreadUnits = 0;
+
+            LivePolicyMonitor(needs).Evaluate(
+                household, inventory, FoodUse(household, HouseholdItemCatalog.BreadId, "beef"),
+                isColdSeason: false, SupplyAccess(),
+                upcomingObligationCents: 0, expectedIncomeCents: 0, dayIndex: 0,
+                isRecognizedByKnownSeller: null,
+                mealPriorityOrder: new List<string> { HouseholdItemCatalog.BreadId, "beef" },
+                isPurchasableNow: itemId => true,
+                allocateSupplyUnitsNow: (itemId, units) =>
+                {
+                    if (itemId == HouseholdItemCatalog.BreadId)
+                    {
+                        requestedBreadUnits = units;
+                        return Math.Min(12, units);
+                    }
+
+                    return 0;
+                });
+
+            Assert.AreEqual(42, requestedBreadUnits,
+                "The supplier check must be against the complete actual need, not any positive stock.");
+            Assert.IsTrue(needs.GetOpenNeed(9210, HouseholdItemCatalog.BreadId) != null,
+                "A partial bread need remains real and observable.");
+            Assert.AreEqual(30, needs.GetOpenNeed(9210, "beef").UnitsNeeded,
+                "Twelve available bread units cover two days; alternative food fills the remaining five days.");
+        }
+
+        [Test]
+        public void SharedKnownSellerStock_IsAllocatedAcrossHouseholdsOnlyOnce()
+        {
+            var supplier = new TestFoodSupplier { Stock = 51 };
+            var directory = new SupplierDirectory();
+            directory.Register(supplier);
+            var knowledge = new ShopperSellerKnowledge();
+            knowledge.LearnSupplier(101, supplier.SupplierBusinessId, "same town", 0);
+            knowledge.LearnSupplier(102, supplier.SupplierBusinessId, "same town", 0);
+            var budget = new HouseholdFoodSupplyBudget(directory, knowledge);
+
+            Assert.AreEqual(42, budget.AllocateKnownStock(
+                HouseholdItemCatalog.BreadId, 42, new[] { 101 }));
+            Assert.AreEqual(9, budget.AllocateKnownStock(
+                HouseholdItemCatalog.BreadId, 42, new[] { 102 }));
+            Assert.AreEqual(0, budget.AllocateKnownStock(
+                HouseholdItemCatalog.BreadId, 42, new[] { 101, 102 }));
+            Assert.AreEqual(51, supplier.Stock,
+                "Planning availability must not reserve or mutate the seller's actual stock.");
         }
 
         [Test]

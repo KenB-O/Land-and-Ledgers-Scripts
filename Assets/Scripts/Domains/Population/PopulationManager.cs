@@ -184,6 +184,8 @@ namespace LandLedgers.Population
         public PopulationState State => state;
         public int GeneratedHouseholdCount => generatedHouseholdCount;
         public int GeneratedPersonCount => generatedPersonCount;
+        /// <summary>Total stored person identities, including off-map kin and deceased records.</summary>
+        public int PersonRecordCount => state?.people?.Count ?? 0;
         public int AssignedWorkerCount => assignedWorkerCount;
         public int TotalWeeklyWages => totalWeeklyWages;
         public int LastHealthResolutionDayIndex => lastHealthResolutionDayIndex;
@@ -2565,7 +2567,7 @@ namespace LandLedgers.Population
         private void RefreshSummaryFields(string summary)
         {
             generatedHouseholdCount = state != null && state.households != null ? state.households.Count : 0;
-            generatedPersonCount = state != null && state.people != null ? state.people.Count : 0;
+            generatedPersonCount = state != null ? state.LivingResidentCount : 0;
             assignedWorkerCount = 0;
             totalWeeklyWages = 0;
 
@@ -2596,7 +2598,7 @@ namespace LandLedgers.Population
             }
 
             lastGenerationSummary = string.IsNullOrWhiteSpace(summary)
-                ? $"Households={generatedHouseholdCount}, People={generatedPersonCount}, Workers={assignedWorkerCount}, WeeklyWages=${totalWeeklyWages}"
+                ? $"Households={generatedHouseholdCount}, Residents={generatedPersonCount}, Person records={PersonRecordCount}, Workers={assignedWorkerCount}, WeeklyWages=${totalWeeklyWages}"
                 : summary;
         }
 

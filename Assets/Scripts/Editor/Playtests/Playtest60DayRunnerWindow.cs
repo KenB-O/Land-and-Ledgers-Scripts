@@ -131,6 +131,7 @@ namespace LandLedgers.Editor.Playtests
             public int expectedHouseholds;
             public int expectedBusinesses;
             public int actualResidents = -1;
+            public int actualPersonRecords = -1;
             public int actualHouseholds = -1;
             public int actualBusinesses = -1;
             public int logCount;
@@ -176,6 +177,9 @@ namespace LandLedgers.Editor.Playtests
             public string wallUtc;
             public string speed;
             public int residentCount = -1;
+            public int personRecordCount = -1;
+            public int activeShoppingTripCount = -1;
+            public string activeShoppingTrips = "NOT_CAPTURED";
             public int householdCount = -1;
             public int businessCount = -1;
             public long householdCashCents = -1;
@@ -290,7 +294,7 @@ namespace LandLedgers.Editor.Playtests
                 speedName = simulationSpeed.ToString(),
                 selectedMultiplier = time.Settings.GetMultiplier(simulationSpeed),
                 dayLengthSeconds = time.Settings.GameSecondsPerDay,
-                expectedResidents = configuration.People.Count,
+                expectedResidents = configuration.GeneratePopulationFromSettings ? -1 : configuration.People.Count,
                 expectedHouseholds = configuration.Households.Count,
                 expectedBusinesses = configuration.Businesses.Count
             };
@@ -299,7 +303,7 @@ namespace LandLedgers.Editor.Playtests
             File.WriteAllText(Path.Combine(output, "console-full.txt"), "# Complete Unity Console capture; raw messages and stack traces are preserved.\r\n");
             File.WriteAllText(Path.Combine(output, "console-events.jsonl"), string.Empty);
             File.WriteAllText(Path.Combine(output, "daily-summary.csv"),
-                "absoluteDayIndex,gameDate,wallUtc,speed,residents,households,businesses,householdCashCents,businessCashCents,householdLotUnits,retailLotUnits,mealTotals,taskCompletion,movementOutcomes,freightAndConstruction\r\n");
+                "absoluteDayIndex,gameDate,wallUtc,speed,residents,personRecords,households,businesses,householdCashCents,businessCashCents,householdLotUnits,retailLotUnits,mealTotals,taskCompletion,movementOutcomes,freightAndConstruction,activeShoppingTripCount,activeShoppingTrips\r\n");
             File.WriteAllText(Path.Combine(output, "entity-snapshots.jsonl"), string.Empty);
             WriteRunIndex(root, current);
             SaveSession();
@@ -467,9 +471,13 @@ namespace LandLedgers.Editor.Playtests
             if (hub == null || hub.Tasks == null) { blocker = "SimulationSystemsHub or TaskAuthority is missing."; return false; }
             if (drivers == null) { blocker = "SimulationDrivers is missing."; return false; }
             if (save?.Series2Pass9State == null) { blocker = "Series2Pass9 state is missing."; return false; }
-            current.actualResidents = population.State.people.Count;
-            if (current.actualResidents < current.expectedResidents)
-            { blocker = $"Population is {current.actualResidents}/{current.expectedResidents} residents."; return false; }
+            current.actualResidents = population.State.LivingResidentCount;
+            current.actualPersonRecords = population.PersonRecordCount;
+            if (current.actualResidents <= 0)
+            { blocker = $"Population has no living on-map residents; person records={current.actualPersonRecords}."; return false; }
+            if (current.expectedResidents >= 0
+                && !population.State.HasExactLivingResidentCount(current.expectedResidents))
+            { blocker = $"Population has {current.actualResidents}/{current.expectedResidents} configured living residents; person records={current.actualPersonRecords}."; return false; }
             current.actualHouseholds = population.State.households.Count;
             if (current.actualHouseholds < current.expectedHouseholds)
             { blocker = $"Population is {current.actualHouseholds}/{current.expectedHouseholds} households."; return false; }
@@ -528,10 +536,30 @@ namespace LandLedgers.Editor.Playtests
                 gameDate = date.ToString(),
                 wallUtc = DateTime.UtcNow.ToString("O"),
                 speed = UnityEngine.Object.FindFirstObjectByType<TimeManager>()?.CurrentSpeed.ToString() ?? "NOT_CAPTURED",
-                residentCount = population?.State?.people?.Count ?? -1,
+                residentCount = population?.State?.LivingResidentCount ?? -1,
+                personRecordCount = population?.PersonRecordCount ?? -1,
                 householdCount = population?.State?.households?.Count ?? -1,
                 businessCount = businesses?.Businesses?.Count ?? -1
             };
+            ShoppingTripDriver shopping = hub?.ShoppingTripDriver;
+            if (shopping != null)
+            {
+                var activeTrips = new List<string>();
+                foreach (PlannedShoppingTrip trip in shopping.ActiveTrips)
+                {
+                    if (trip == null || !trip.IsActive) continue;
+                    activeTrips.Add($"{trip.TripId}:H{trip.HouseholdId}/P{trip.ShopperPersonId}/{trip.State}/need={trip.Need?.ItemId ?? "unknown"}/failure={trip.FailureReason}");
+                }
+                day.activeShoppingTripCount = activeTrips.Count;
+                day.activeShoppingTrips = activeTrips.Count == 0 ? "none" : string.Join(" | ", activeTrips);
+                AppendEntitySnapshot(new EntitySnapshot
+                {
+                    entityType = "shopping-trip-liveness",
+                    id = "day-" + date.AbsoluteDayIndex,
+                    ownerOrName = "ShoppingTripDriver",
+                    detail = day.activeShoppingTrips
+                });
+            }
             long householdLotUnits = 0;
             long householdCash = 0;
             bool householdInventoryMissing = false;
@@ -625,17 +653,18 @@ namespace LandLedgers.Editor.Playtests
             string folder = current.outputDirectory;
             AppendLine(Path.Combine(folder, "daily-summary.csv"),
                 Csv(day.absoluteDayIndex.ToString()) + "," + Csv(day.gameDate) + "," + Csv(day.wallUtc) + "," + Csv(day.speed) + "," +
-                day.residentCount + "," + day.householdCount + "," + day.businessCount + "," + day.householdCashCents + "," +
+                day.residentCount + "," + day.personRecordCount + "," + day.householdCount + "," + day.businessCount + "," + day.householdCashCents + "," +
                 day.businessCashCents + "," + day.householdLotUnits + "," + day.retailLotUnits + "," + Csv(day.mealTotals) + "," +
-                Csv(day.taskCompletion) + "," + Csv(day.movementOutcomes) + "," + Csv(day.freightAndConstruction));
+                Csv(day.taskCompletion) + "," + Csv(day.movementOutcomes) + "," + Csv(day.freightAndConstruction) + "," +
+                day.activeShoppingTripCount + "," + Csv(day.activeShoppingTrips));
             AppendLine(Path.Combine(folder, "entity-snapshots.jsonl"), JsonUtility.ToJson(day));
         }
 
         private static void AppendMissingDay(int offset)
         {
             AppendLine(Path.Combine(current.outputDirectory, "daily-summary.csv"),
-                "NOT_CAPTURED,day-offset-" + offset + "," + Csv(DateTime.UtcNow.ToString("O")) + ",NOT_CAPTURED,-1,-1,-1,-1,-1,-1,-1," +
-                Csv("NOT_CAPTURED_EVENT_GAP") + "," + Csv("NOT_CAPTURED") + "," + Csv("NOT_CAPTURED") + "," + Csv("NOT_CAPTURED"));
+                "NOT_CAPTURED,day-offset-" + offset + "," + Csv(DateTime.UtcNow.ToString("O")) + ",NOT_CAPTURED,-1,-1,-1,-1,-1,-1,-1,-1," +
+                Csv("NOT_CAPTURED_EVENT_GAP") + "," + Csv("NOT_CAPTURED") + "," + Csv("NOT_CAPTURED") + "," + Csv("NOT_CAPTURED") + ",-1," + Csv("NOT_CAPTURED"));
         }
 
         private static void AppendEntitySnapshot(EntitySnapshot entity) =>

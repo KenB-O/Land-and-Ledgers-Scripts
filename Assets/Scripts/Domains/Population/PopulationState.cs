@@ -28,6 +28,31 @@ namespace LandLedgers.Population
 
         public List<PersonState> people = new();
         public List<HouseholdState> households = new();
+
+        /// <summary>
+        /// Counts living people represented in the settlement population.
+        /// The people list also stores off-map kinship records and deceased
+        /// identities, so its length is not a resident census.
+        /// </summary>
+        public int LivingResidentCount
+        {
+            get
+            {
+                int count = 0;
+                if (people == null) return count;
+                for (int i = 0; i < people.Count; i++)
+                {
+                    PersonState person = people[i];
+                    if (person != null && !person.isOffMap && person.deathDayIndex < 0)
+                        count++;
+                }
+                return count;
+            }
+        }
+
+        public bool HasExactLivingResidentCount(int expectedCount) =>
+            expectedCount >= 0 && LivingResidentCount == expectedCount;
+
         public List<string> validationMessages = new();
         public List<RentalPropertyState> rentalProperties = new();
         public List<RentalApplicantState> rentalApplicants = new();

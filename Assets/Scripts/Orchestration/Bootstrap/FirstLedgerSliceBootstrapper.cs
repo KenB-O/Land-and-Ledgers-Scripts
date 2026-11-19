@@ -546,6 +546,28 @@ namespace LandLedgers.FirstLedger
             }
             AppendStartupTiming(timing, stepTimer, "population generation");
 
+            // A fixed development roster is an exact startup contract. The
+            // shared people list later gains off-map genealogy records, so
+            // validate the on-map resident census before that expansion.
+            if (generatePopulationOnPlay && startupIntent == WorldStartupIntent.NewGame
+                && useDevelopmentTownProfile && townConfiguration != null
+                && !townConfiguration.GeneratePopulationFromSettings
+                && populationManager?.State != null)
+            {
+                int expectedResidents = townConfiguration.People.Count;
+                int actualResidents = populationManager.State.LivingResidentCount;
+                if (!populationManager.State.HasExactLivingResidentCount(expectedResidents))
+                {
+                    bootstrapStatus = $"Development startup stopped: living residents={actualResidents}/{expectedResidents}; " +
+                                      $"stored person records={populationManager.PersonRecordCount}.";
+                    startupFailed = true;
+                    Debug.LogError("[WorldStartup] " + bootstrapStatus, this);
+                    CompleteStartupTiming(totalTimer, timing, "development resident roster mismatch");
+                    initializing = false;
+                    return;
+                }
+            }
+
             // Plan 01 Slice 1a (P0-1): rebind after generation so
             // SimulationDrivers re-reads populationManager.Memberships from
             // the post-generation registry instead of keeping any
@@ -811,7 +833,8 @@ namespace LandLedgers.FirstLedger
                 }
             }
             bootstrapStatus = $"Game slice ready. Buildings={townWorld.Buildings.Count}, " +
-                $"Generated people={(populationManager != null ? populationManager.GeneratedPersonCount.ToString() : "unknown")}, " +
+                $"Residents={(populationManager != null ? populationManager.GeneratedPersonCount.ToString() : "unknown")}, " +
+                $"Person records={(populationManager != null ? populationManager.PersonRecordCount.ToString() : "unknown")}, " +
                 $"Player-owned General Store={(storeRuntime != null ? storeRuntime.Status : "not bound")}, " +
                 $"NPC-owned General Stores={(npcBusinessRosterKnown ? npcGeneralStoreCount.ToString() : "unknown")}.";
             if (logBootstrapSummary)

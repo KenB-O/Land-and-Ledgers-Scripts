@@ -49,7 +49,9 @@ The targeted Main Scene development-town PlayMode test did not reach its initial
 
 `Failed to load 'Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.`
 
-The Test Runner XML recorded 1 selected test, 0 passed, 1 failed. The Unity Editor subsequently recovered and is back in Edit Mode. Remaining system commit headroom was approximately 1.2 GB after the failed run, so no second PlayMode or save/load attempt was launched.
+The Test Runner XML recorded 1 selected test, 0 passed, 1 failed. The Test Runner then returned the Editor to Edit Mode. At that point, remaining system commit headroom was approximately 1.2 GB, so no further test was launched immediately.
+
+A later direct Main Scene PlayMode start reached the runtime bootstrap. `FirstLedgerSliceBootstrapper` completed its startup path; `WorldGenesis` reported 0 reconciliation errors and 1 warning; `ScenarioDirector` activated `open-frontier` with one diagnostic. This was a startup smoke only: no simulation day, household transaction, physical receipt, contact note, freight dispatch or Save/Continue cycle was observed. The Editor status command initially timed out while loading, but a subsequent stop command succeeded and a fresh status query confirmed `playMode=stopped`, `compiling=false`, and `domainReloadInProgress=false`. Main Scene was not saved.
 
 Save-related EditMode coverage passed for shopping-trip persistence, household reserve receipt idempotence, freight note/agreement DTO persistence, and dispatch retry history. A real Main Scene `SaveDefaultSlot`/`LoadDefaultSlot` cycle containing those active states was **not verified**.
 

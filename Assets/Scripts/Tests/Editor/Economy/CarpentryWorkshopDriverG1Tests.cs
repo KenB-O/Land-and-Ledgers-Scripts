@@ -337,6 +337,55 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void BeginDemandedFurniture_IdlesWhenNoHouseholdCanBuy()
+        {
+            var shop = NewEndowedWorkshop();
+            shop.Stock("nails_hardware_lot", 2f, 25, "g1-demand-nails");
+            shop.Stock("basic_cloth", 8f, 12, "g1-demand-cloth");
+
+            Assert.IsFalse(shop.Production.TryBeginDemandedFurniture(shop.NewRuntime(), new[] { Carpenter },
+                new List<CarpentryFurnitureSaleCandidate>(), DayIndex, out ProductionProcessState process, out string reason));
+            Assert.IsNull(process);
+            Assert.IsEmpty(reason, "No available household buyer is a normal no-production decision.");
+            Assert.AreEqual(0, shop.Business.GenericConfiguration.ActiveProcesses.Count,
+                "Demand gating must not create a work task or reserve inputs without a buyer.");
+            Assert.AreEqual(15f, shop.OnHand("lumber"), "No-demand planning consumes no lumber.");
+        }
+
+        [Test]
+        public void BeginDemandedFurniture_DoesNotTreatUnaffordableWantAsSaleDemand()
+        {
+            var shop = NewEndowedWorkshop();
+            shop.Stock("nails_hardware_lot", 2f, 25, "g1-unaffordable-nails");
+            var buyer = CandidateFor(1, FundedLedger(1, 1), new HouseholdFurnishingRegister { HouseholdId = 1 },
+                WantFor("furniture.table", 1, true));
+
+            Assert.IsFalse(shop.Production.TryBeginDemandedFurniture(shop.NewRuntime(), new[] { Carpenter },
+                new[] { buyer }, DayIndex, out ProductionProcessState process, out string reason));
+            Assert.IsNull(process);
+            Assert.IsEmpty(reason);
+            Assert.AreEqual(15f, shop.OnHand("lumber"), "An unaffordable want cannot consume material or create WIP.");
+            Assert.AreEqual(2f, shop.OnHand("nails_hardware_lot"));
+        }
+
+        [Test]
+        public void BeginDemandedFurniture_UsesAffordableHouseholdWantAndConfiguredRecipe()
+        {
+            var shop = NewEndowedWorkshop();
+            shop.Stock("nails_hardware_lot", 2f, 25, "g1-demand-nails");
+            shop.Stock("basic_cloth", 8f, 12, "g1-demand-cloth");
+            var buyer = CandidateFor(1, FundedLedger(1, 100000), new HouseholdFurnishingRegister { HouseholdId = 1 },
+                WantFor("furniture.table", 1, true));
+
+            Assert.IsTrue(shop.Production.TryBeginDemandedFurniture(shop.NewRuntime(), new[] { Carpenter },
+                new[] { buyer }, DayIndex, out ProductionProcessState process, out string reason), reason);
+            Assert.AreEqual("furniture.table", process.MethodId,
+                "The planner starts the policy-backed recipe matching a real buyer's affordable want.");
+            Assert.AreEqual(13f, shop.OnHand("lumber"), "The shared production authority consumes real lumber once.");
+            Assert.AreEqual(1f, shop.OnHand("nails_hardware_lot"), "The recipe consumes its actual nail input once.");
+        }
+
+        [Test]
         public void BeginEligible_FallsToNextMethodWhenAtTarget()
         {
             var shop = NewEndowedWorkshop();
@@ -351,6 +400,32 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void BeginEligible_CountsActiveFurnitureAsCommittedStock()
+        {
+            var shop = NewEndowedWorkshop();
+            foreach (GenericProductionPolicy policy in shop.Business.GenericConfiguration.ProductionPolicies)
+                if (policy != null) policy.Enabled = false;
+            GenericProductionPolicy shelfPolicy = shop.Business.GenericConfiguration.ProductionPolicies
+                .First(policy => policy != null && policy.MethodId == "furniture.shelf");
+            shelfPolicy.Enabled = true;
+            shop.Business.RegisterGenericProductionProcess(new ProductionProcessState
+            {
+                ProcessId = "g1-test-shelf-active-1",
+                MethodId = "furniture.shelf",
+                AssignedPersonId = Carpenter.ToString(),
+                Completed = false,
+            });
+
+            Assert.IsFalse(shop.Production.TryBeginEligibleFurniture(shop.NewRuntime(),
+                new[] { EntityId.For(EntityKind.Person, 912) }, DayIndex,
+                out ProductionProcessState process, out string reason));
+            Assert.IsNull(process, "The active one-shelf run already covers the one-piece target.");
+            Assert.IsEmpty(reason, "Covered make-to-stock policy is normal idle time, not a production refusal.");
+            Assert.AreEqual(1, shop.Business.GenericConfiguration.ActiveProcesses.Count(p => p != null && !p.Completed));
+            Assert.AreEqual(15f, shop.OnHand("lumber"), "Planning must not consume another run's inputs.");
+        }
+
+        [Test]
         public void BeginEligible_RefusesWhenNothingEligible()
         {
             var shop = NewEndowedWorkshop();
@@ -361,7 +436,24 @@ namespace LandLedgers.Editor.Economy
             Assert.IsFalse(shop.Production.TryBeginEligibleFurniture(runtime, new[] { Carpenter }, DayIndex,
                 out ProductionProcessState process, out string reason));
             Assert.IsNull(process);
-            Assert.IsTrue(reason.Contains("lumber") || reason.Contains("eligible"), reason);
+            StringAssert.Contains("lumber", reason);
+            StringAssert.Contains("deferred", reason);
+        }
+
+        [Test]
+        public void BeginEligible_SilentlyIdlesWhenAllFurniturePoliciesAreDisabled()
+        {
+            var shop = NewEndowedWorkshop();
+            foreach (GenericProductionPolicy policy in shop.Business.GenericConfiguration.ProductionPolicies)
+            {
+                if (policy != null) policy.Enabled = false;
+            }
+            GenericProductionRuntime runtime = shop.NewRuntime();
+
+            Assert.IsFalse(shop.Production.TryBeginEligibleFurniture(runtime, new[] { Carpenter }, DayIndex,
+                out ProductionProcessState process, out string reason));
+            Assert.IsNull(process);
+            Assert.IsEmpty(reason, "An intentionally disabled policy is an ordinary no-work day, not a refusal.");
         }
 
         // ---------- driver advance leg ----------
@@ -591,6 +683,57 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(5000 + (2 * 25 + 6 * 12), storeCash.BalanceCents);
         }
 
+        [Test]
+        public void SuppliesMaintain_BuysAvailablePartialRetailStockWithoutInventingRemainder()
+        {
+            var shop = NewEndowedWorkshop();
+            shop.Business.RuntimeState.AddCashCents(10000);
+            shop.Business.RuntimeState.BindBusinessIdentity(WorkshopInstanceId);
+            StoreSlice store = NewStoreWithSupplies(2, 3);
+            var diag = new List<string>();
+            var workshopCash = new Series2BusinessRuntimeCashPort(shop.Business.RuntimeState);
+            var storeCash = new Series2BusinessRuntimeCashPort(store.StoreRuntime);
+
+            Assert.IsTrue(CarpentrySuppliesPurchase.TryMaintainSupplies(
+                store.StoreRuntime, shop.Business, workshopCash, storeCash, StoreId,
+                itemId => string.Equals(itemId, CarpentrySuppliesPurchase.NailsItemId, StringComparison.Ordinal) ? 25 : 12,
+                DayIndex, diag, out string error), error);
+
+            Assert.AreEqual(2f, shop.OnHand("nails_hardware_lot"));
+            Assert.AreEqual(3f, shop.OnHand("basic_cloth"), "Only the store's three identified cloth yards are received.");
+            Assert.AreEqual(0, store.StoreRuntime.GetRetailItemStockUnits("nails_hardware_lot", "tools_hardware"));
+            Assert.AreEqual(0, store.StoreRuntime.GetRetailItemStockUnits("basic_cloth", "clothing"));
+            Assert.AreEqual(10000 - (2 * 25 + 3 * 12), workshopCash.BalanceCents);
+            Assert.AreEqual(5000 + (2 * 25 + 3 * 12), storeCash.BalanceCents);
+            Assert.IsTrue(diag.Any(line => line.Contains("remaining need is 5 unit(s)")
+                && line.Contains("no incoming stock assumed")), "The unmet target remains observable and no stock is implied.");
+        }
+
+        [Test]
+        public void SuppliesMaintain_BuysOnlyCashAffordableQuantity()
+        {
+            var shop = NewEndowedWorkshop();
+            shop.Business.RuntimeState.AddCashCents(25);
+            shop.Business.RuntimeState.BindBusinessIdentity(WorkshopInstanceId);
+            shop.Stock("basic_cloth", CarpentrySuppliesPurchase.ClothTargetYards, 12, "g1-fixture-cloth-at-target");
+            StoreSlice store = NewStoreWithSupplies(2, 0);
+            var diag = new List<string>();
+            var workshopCash = new Series2BusinessRuntimeCashPort(shop.Business.RuntimeState);
+            var storeCash = new Series2BusinessRuntimeCashPort(store.StoreRuntime);
+
+            Assert.IsTrue(CarpentrySuppliesPurchase.TryMaintainSupplies(
+                store.StoreRuntime, shop.Business, workshopCash, storeCash, StoreId,
+                itemId => string.Equals(itemId, CarpentrySuppliesPurchase.NailsItemId, StringComparison.Ordinal) ? 25 : 12,
+                DayIndex, diag, out string error), error);
+
+            Assert.AreEqual(1f, shop.OnHand("nails_hardware_lot"), "The workshop can afford one of the two requested lots.");
+            Assert.AreEqual(1, store.StoreRuntime.GetRetailItemStockUnits("nails_hardware_lot", "tools_hardware"));
+            Assert.AreEqual(0, workshopCash.BalanceCents);
+            Assert.AreEqual(5000 + 25, storeCash.BalanceCents);
+            Assert.IsTrue(diag.Any(line => line.Contains("affordable at 25c/unit=1")
+                && line.Contains("remaining need is 1 unit(s)")), "The unpaid remainder remains explicit.");
+        }
+
         // ---------- workshop-to-household sale ----------
 
         [Test]
@@ -689,6 +832,40 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1000, ledger.GetBalanceCents(), "No want for a table, no sale — no want is invented.");
             Assert.AreEqual(10000, workshopCash.BalanceCents);
             Assert.IsNotNull(shop.Register.Assets.FirstOrDefault(a => a.AssetId == "furn-table-1"));
+        }
+
+        [Test]
+        public void FurnitureSale_DoesNotRepurchaseKindWhileUsablePieceRemainsInHouseholdCustody()
+        {
+            var shop = NewEndowedWorkshop();
+            shop.Register.RegisterAsset(MakeWorkshopAsset("furn-table-new", "furniture.table"));
+            var workshopCash = new FakeCashPort { BalanceCents = 10000 };
+            HouseholdLedger ledger = FundedLedger(1, 1000);
+            var furnishings = new HouseholdFurnishingRegister { HouseholdId = 1 };
+            var pendingTable = new EquipmentAsset
+            {
+                AssetId = "furn-table-already-owned",
+                Kind = "furniture.table",
+                Condition01 = 1f,
+                OwnerKind = HouseholdFurnishingRegister.OwnerKindHousehold,
+                OwnerId = HouseholdFurnishingRegister.OwnerIdForHousehold(1),
+                LocationId = HouseholdFurnishingRegister.HouseholdCustodyLocationId(1),
+            };
+            Assert.IsNull(furnishings.TryRegisterAsset(pendingTable));
+            var candidates = new List<CarpentryFurnitureSaleCandidate>
+            {
+                CandidateFor(1, ledger, furnishings, WantFor("furniture.table", 3, true)),
+            };
+            var diag = new List<string>();
+
+            Assert.IsTrue(CarpentryFurnitureSale.TrySellFinishedPieces(
+                shop.Business, shop.Register, workshopCash, candidates, DayIndex, diag, out string error), error);
+
+            Assert.AreEqual(1000, ledger.GetBalanceCents(), "The household must not pay again while its first table is awaiting installation.");
+            Assert.AreEqual(10000, workshopCash.BalanceCents, "No duplicate sale proceeds are posted.");
+            Assert.AreEqual("household:1", pendingTable.LocationId, "The existing piece remains in household custody.");
+            Assert.IsNotNull(shop.Register.Assets.FirstOrDefault(a => a.AssetId == "furn-table-new"), "The unsold table remains workshop-owned.");
+            Assert.IsNull(furnishings.FindAsset("furn-table-new"), "No duplicate household asset is created.");
         }
 
         // ---------- business register deregistration ----------

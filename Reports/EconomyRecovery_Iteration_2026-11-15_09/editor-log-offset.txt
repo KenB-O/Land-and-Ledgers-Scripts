@@ -1,0 +1,3 @@
+Unity Editor log: C:\Users\kenne\AppData\Local\Temp\ll-rebuild-library-20261114.log
+Pre-PlayMode byte offset: 87789743
+Captured UTC: 2026-11-15T08:20:57.8569030Z

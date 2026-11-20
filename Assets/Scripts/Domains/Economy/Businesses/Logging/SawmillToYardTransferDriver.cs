@@ -210,6 +210,38 @@ namespace LandLedgers.Economy.Businesses.Logging
                 diagnostics.Add(refusal);
                 return null;
             }
+            if (YardCash == null || !string.Equals(YardCash.BusinessId, yard.BusinessInstanceId, StringComparison.Ordinal))
+            {
+                refusal = $"SawmillToYardTransferDriver.BeginTransfer: no correctly bound cash authority for yard '{yard.BusinessInstanceId}' — a purchase job cannot be created without its buyer's settlement authority.";
+                diagnostics.Add(refusal);
+                return null;
+            }
+            if (MillCash == null || !string.Equals(MillCash.BusinessId, mill.BusinessInstanceId, StringComparison.Ordinal))
+            {
+                refusal = $"SawmillToYardTransferDriver.BeginTransfer: no correctly bound cash authority for mill '{mill.BusinessInstanceId}' — a purchase job cannot be created without its seller's settlement authority.";
+                diagnostics.Add(refusal);
+                return null;
+            }
+            // A planned transfer is a purchase attempt, not a credit
+            // reservation. Do not leave a new open job for a buyer that
+            // cannot pay its full lot price; the source lot remains owned
+            // by the mill and can be offered again after the yard's cash
+            // position changes.
+            long quotedPrice = (long)lot.LumberUnits * unitCostCents;
+            if (quotedPrice > int.MaxValue)
+            {
+                refusal = $"SawmillToYardTransferDriver.BeginTransfer: lot '{millLotId}' price {quotedPrice}c exceeds supported settlement limits; no transfer job was created.";
+                diagnostics.Add(refusal);
+                return null;
+            }
+            if (YardCash != null
+                && string.Equals(YardCash.BusinessId, yard.BusinessInstanceId, StringComparison.Ordinal)
+                && YardCash.BalanceCents < quotedPrice)
+            {
+                refusal = $"SawmillToYardTransferDriver.BeginTransfer: yard '{yard.BusinessInstanceId}' has {YardCash.BalanceCents}c but needs {quotedPrice}c for lot '{millLotId}'; no job or payment obligation was created and the lot remains at the mill.";
+                diagnostics.Add(refusal);
+                return null;
+            }
             string jobId = "yard-transfer:" + millLotId;
             if (jobs.TryGetValue(jobId, out SawmillToYardTransferJob open)
                 && open.State == SawmillToYardTransferJobState.Planned)
@@ -303,16 +335,33 @@ namespace LandLedgers.Economy.Businesses.Logging
 
             // C-4 (OD-C5): the transfer is a wholesale PURCHASE. The
             // settlement gate runs BEFORE any custody moves: the ports
-            // must be bound to the right Businesses, and the yard must
-            // hold the price for the actual lot units. A refusal here
-            // leaves the job Planned and both stocks untouched, so the
-            // next day's drive re-attempts it. The yard debit is taken
+            // must remain bound to the right Businesses, and the yard
+            // must hold the price for the actual lot units. A transient
+            // intake/debit refusal leaves the job Planned and both stocks
+            // untouched, so the next day's drive may retry it. A missing
+            // authority or insufficient cash closes this purchase attempt.
+            // The yard debit is taken
             // now (atomic TryDebit) so an intake refusal can refund it
             // and leave nothing moved; the mill credit follows only
             // after the intake is verified.
-            string settlementRefusal = SettlementRefusal(job, units, out int priceCents);
+            string settlementRefusal = SettlementRefusal(job, units, out int priceCents, out bool purchaseAttemptMustClose);
             if (settlementRefusal != null)
             {
+                if (purchaseAttemptMustClose)
+                {
+                    // No agreement or custody transfer was accepted: this
+                    // was only a pending purchase attempt. A missing or
+                    // misbound settlement authority, invalid price or cash
+                    // rejection is terminal for this attempt, otherwise the
+                    // daily driver keeps an impossible Planned job forever.
+                    // The mill lot and both cash balances remain untouched;
+                    // a new purchase attempt is allowed after affordability
+                    // changes.
+                    job.State = SawmillToYardTransferJobState.Failed;
+                    refusal = $"SawmillToYardTransferDriver.RunTransfer: job '{jobId}' — {settlementRefusal} Purchase attempt closed as Failed; lumber remains mill-owned and no money moved.";
+                    diagnostics.Add(refusal);
+                    return false;
+                }
                 refusal = $"SawmillToYardTransferDriver.RunTransfer: job '{jobId}' — {settlementRefusal}";
                 diagnostics.Add(refusal);
                 return false;
@@ -405,39 +454,46 @@ namespace LandLedgers.Economy.Businesses.Logging
         /// <summary>
         /// C-4: the settlement gate. Null means the transfer may settle
         /// for <paramref name="priceCents"/>; a non-null string is the
-        /// refusal, and the job stays Planned with nothing moved. Ports
-        /// must be bound to the right Businesses (the wholesale
-        /// settlement pattern) and the yard must hold the price for the
-        /// actual lot units. The price is computed here, from the actual
-        /// units, so the payment always settles on the transferred
-        /// delta, never on an estimate.
+        /// refusal. Terminal authority, price and affordability failures
+        /// close the purchase attempt; transient atomic settlement failures
+        /// remain retryable. Ports must be bound to the right Businesses
+        /// and the yard must hold the price for the actual lot units. The
+        /// price is computed from actual units, never an estimate.
         /// </summary>
-        private string SettlementRefusal(SawmillToYardTransferJob job, int units, out int priceCents)
+        private string SettlementRefusal(SawmillToYardTransferJob job, int units, out int priceCents, out bool purchaseAttemptMustClose)
         {
             priceCents = 0;
+            purchaseAttemptMustClose = false;
             if (YardCash == null)
             {
+                purchaseAttemptMustClose = true;
                 return $"job '{job.JobId}': no yard cash port bound — the yard cannot pay for {units}u; no lumber moved unpaid.";
             }
             if (MillCash == null)
             {
+                purchaseAttemptMustClose = true;
                 return $"job '{job.JobId}': no mill cash port bound — the mill cannot be credited for {units}u; no lumber moved unpaid.";
             }
             if (!string.Equals(YardCash.BusinessId, yard.BusinessInstanceId, StringComparison.Ordinal))
             {
+                purchaseAttemptMustClose = true;
                 return $"job '{job.JobId}': the yard cash port belongs to '{YardCash.BusinessId}', not the yard '{yard.BusinessInstanceId}' — a miswired port never settles a sale.";
             }
             if (!string.Equals(MillCash.BusinessId, mill.BusinessInstanceId, StringComparison.Ordinal))
             {
+                purchaseAttemptMustClose = true;
                 return $"job '{job.JobId}': the mill cash port belongs to '{MillCash.BusinessId}', not the mill '{mill.BusinessInstanceId}' — a miswired port never settles a sale.";
             }
-            priceCents = units * job.UnitCostCents;
-            if (priceCents <= 0)
+            long totalPrice = (long)units * job.UnitCostCents;
+            if (totalPrice <= 0 || totalPrice > int.MaxValue)
             {
-                return $"job '{job.JobId}': the wholesale price for {units}u at {job.UnitCostCents}c is not positive — a transfer is a purchase at a real price.";
+                purchaseAttemptMustClose = true;
+                return $"job '{job.JobId}': the wholesale price for {units}u at {job.UnitCostCents}c is outside the supported positive settlement range — a transfer is a purchase at a real price.";
             }
+            priceCents = (int)totalPrice;
             if (YardCash.BalanceCents < priceCents)
             {
+                purchaseAttemptMustClose = true;
                 return $"job '{job.JobId}': the yard holds {YardCash.BalanceCents}c but owes {priceCents}c for {units}u at {job.UnitCostCents}c — the lumber stays at the mill until the yard can pay.";
             }
             return null;

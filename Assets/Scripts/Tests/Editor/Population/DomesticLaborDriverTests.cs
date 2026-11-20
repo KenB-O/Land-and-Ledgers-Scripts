@@ -102,6 +102,49 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void AdvanceTick_ReschedulesSameDomesticNeedWhenHardReservationAppearsAfterPlanning()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3);
+            inputs.MealsAtHomeCount = 0;
+            inputs.CleaningNeeded = false;
+            inputs.FuelHandlingNeeded = true;
+            inputs.IsWindowUnavailable = (personId, start, duration) => start < 600;
+
+            f.Driver.DriveDay(inputs, 100, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
+
+            Assert.AreEqual(1, f.Driver.Pending.Count);
+            DomesticLaborDriver.PendingDomesticTask pending = f.Driver.Pending[0];
+            Assert.AreEqual(DomesticTaskCatalog.FuelHandlingId, pending.DefinitionId);
+            Assert.AreEqual(600, pending.StartMinuteOfDay);
+            Assert.IsNull(f.Schedules.TryReserve(3, PersonActivityKind.Work, 100, 600, 5,
+                "late freight meeting reservation"));
+
+            float conflictStart = 100 * 86400f + 600 * 60f;
+            f.Driver.AdvanceTick(conflictStart, f.Tasks, f.Budgets, f.Schedules,
+                f.Domestic, f.DueEvents, diag);
+
+            Assert.AreEqual("Pending", pending.Status,
+                "a newly committed meeting must defer the same need instead of failing its only start attempt");
+            Assert.AreEqual(615, pending.StartMinuteOfDay,
+                "the existing deterministic 15-minute availability cadence is reused");
+            Assert.AreEqual(0, f.Driver.InFlight.Count);
+            Assert.AreEqual(0, f.Domestic.Assignments.Count);
+            StringAssert.Contains("rescheduled 'domestic.fuel-handling'", string.Join("\n", diag));
+            StringAssert.DoesNotContain("scheduling failed", string.Join("\n", diag));
+
+            float retryStart = 100 * 86400f + 615 * 60f;
+            f.Driver.AdvanceTick(retryStart, f.Tasks, f.Budgets, f.Schedules,
+                f.Domestic, f.DueEvents, diag);
+
+            Assert.AreEqual("Started", pending.Status);
+            Assert.AreEqual(1, f.Driver.InFlight.Count);
+            Assert.AreEqual(1, f.Domestic.Assignments.Count);
+            Assert.IsTrue(f.Driver.InFlight[0].TaskId.IsValid);
+        }
+
+        [Test]
         public void NecessaryDomesticWorkPreemptsRestButPreservesHardObligations()
         {
             var f = new Fixture();
@@ -507,6 +550,170 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(f.Driver.Pending.Count, restored.Pending.Count);
             Assert.AreEqual(f.Driver.InFlight.Count, restored.InFlight.Count);
             Assert.AreEqual(f.Driver.InFlight[0].TaskId, restored.InFlight[0].TaskId);
+        }
+
+        [Test]
+        public void UnsupportedPhysicalRoute_BackoffSurvivesSaveLoadAndRetriesSameTask()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            const int failedDay = 100;
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3, 4);
+            inputs.CleaningNeeded = false;
+
+            f.Driver.DriveDay(inputs, failedDay, f.Tasks, f.Budgets, f.Schedules,
+                f.Domestic, f.DueEvents, diag);
+            f.Driver.AdvanceTick(failedDay * 86400f + 990 * 60f, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag, (flight, _) =>
+                {
+                    flight.ActivityLocationId = "stove: blocked by installed equipment";
+                    return DomesticActivityMovementResult.Unsupported;
+                });
+
+            WorkTask task = f.Tasks.GetOpenTasks(EntityId.For(EntityKind.Household, 7))
+                .Find(candidate => candidate.DefinitionId == DomesticTaskCatalog.MealPrepId);
+            Assert.NotNull(task);
+            Assert.AreEqual(TaskStatus.Queued, task.Status,
+                "a failed physical route releases the worker and preserves the same task without completion");
+            Assert.AreEqual(0, f.Driver.InFlight.Count);
+            Assert.AreEqual(0, f.FamilyLabor.ContributionCount);
+            Assert.IsFalse(f.Schedules.ActiveFor(3, failedDay)
+                .Exists(reservation => reservation.Activity == PersonActivityKind.Cooking),
+                "a failed physical trip releases its domestic schedule reservation");
+            Assert.AreEqual(1, f.Driver.RouteRecoveries.Count);
+            Assert.AreEqual(task.TaskId, f.Driver.RouteRecoveries[0].TaskId);
+            Assert.AreEqual(failedDay + 2, f.Driver.RouteRecoveries[0].RetryAfterDay,
+                "the first retry is delayed instead of immediately reclaiming a worker tomorrow");
+
+            var restored = new DomesticLaborDriver();
+            restored.LoadFromSaveDto(f.Driver.CaptureSaveDto());
+            Assert.AreEqual(1, restored.RouteRecoveries.Count,
+                "the route-failure history and retry date survive Save/Continue");
+
+            restored.DriveDay(inputs, failedDay + 1, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(0, restored.Pending.Count,
+                "the same blocked route is not assigned again on the cooldown day");
+
+            restored.DriveDay(inputs, failedDay + 2, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(1, restored.Pending.Count);
+            Assert.AreEqual(task.TaskId, restored.Pending[0].ExistingTaskId,
+                "recovery retries the original open task; it does not duplicate the household need");
+
+            restored.AdvanceTick((failedDay + 2) * 86400f + 990 * 60f, f.Tasks,
+                f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag, (flight, _) =>
+                {
+                    flight.ActivityLocationId = "stove: still blocked";
+                    return DomesticActivityMovementResult.Unsupported;
+                });
+            Assert.AreEqual(2, restored.RouteRecoveries[0].FailureCount);
+            Assert.AreEqual(failedDay + 6, restored.RouteRecoveries[0].RetryAfterDay,
+                "a recurring blockage increases the cooldown instead of retrying daily");
+            restored.DriveDay(inputs, failedDay + 5, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(0, restored.Pending.Count);
+            restored.DriveDay(inputs, failedDay + 6, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(1, restored.Pending.Count);
+            Assert.AreEqual(task.TaskId, restored.Pending[0].ExistingTaskId);
+        }
+
+        [Test]
+        public void MissingFirewoodAnchor_WaitsForCapabilityChangeAcrossSaveLoadWithoutHoldingWorker()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            const int failedDay = 200;
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3, 4);
+            inputs.MealsAtHomeCount = 0;
+            inputs.CleaningNeeded = false;
+            inputs.FuelHandlingNeeded = true;
+            inputs.FirewoodActivityLocationAvailable = false;
+
+            f.Driver.DriveDay(inputs, failedDay, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(1, f.Driver.Pending.Count);
+            Assert.AreEqual(DomesticTaskCatalog.FuelHandlingId, f.Driver.Pending[0].DefinitionId);
+
+            f.Driver.AdvanceTick(failedDay * 86400f + 990 * 60f, f.Tasks,
+                f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag, (flight, _) =>
+                {
+                    flight.ActivityLocationId = DomesticLaborDriver.MissingFirewoodStorageLocationId;
+                    return DomesticActivityMovementResult.Unsupported;
+                });
+
+            WorkTask task = f.Tasks.GetOpenTasks(EntityId.For(EntityKind.Household, 7))
+                .Find(candidate => candidate.DefinitionId == DomesticTaskCatalog.FuelHandlingId);
+            Assert.NotNull(task);
+            Assert.AreEqual(TaskStatus.Queued, task.Status,
+                "the impossible route cannot leave the worker permanently occupied");
+            Assert.AreEqual(0, f.Driver.InFlight.Count);
+            int activeAssignments = 0;
+            foreach (DomesticAssignment assignment in f.Domestic.Assignments)
+                if (assignment != null && !assignment.Completed) activeAssignments++;
+            Assert.AreEqual(0, activeAssignments,
+                "failed movement releases the domestic assignment reservation without credit");
+            Assert.AreEqual(0, f.FamilyLabor.ContributionCount);
+            Assert.AreEqual(1, f.Driver.RouteRecoveries.Count);
+            Assert.IsTrue(f.Driver.RouteRecoveries[0].WaitForCapabilityChange,
+                "an absent authored pickup point must not be retried on a periodic timer");
+
+            var restored = new DomesticLaborDriver();
+            restored.LoadFromSaveDto(f.Driver.CaptureSaveDto());
+            Assert.IsTrue(restored.RouteRecoveries[0].WaitForCapabilityChange,
+                "the structural blocker survives Save/Continue");
+
+            restored.DriveDay(inputs, failedDay + 1, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(0, restored.Pending.Count,
+                "the same impossible task is not assigned to another worker while its anchor is absent");
+            Assert.AreEqual(1, f.Tasks.GetOpenTasks(EntityId.For(EntityKind.Household, 7))
+                .FindAll(candidate => candidate.DefinitionId == DomesticTaskCatalog.FuelHandlingId).Count,
+                "the household need remains represented by the original open task");
+
+            inputs.FirewoodActivityLocationAvailable = true;
+            restored.DriveDay(inputs, failedDay + 2, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(1, restored.Pending.Count,
+                "a real capability change resumes the same need");
+            Assert.AreEqual(task.TaskId, restored.Pending[0].ExistingTaskId,
+                "recovery reuses the original task identity");
+            Assert.IsFalse(restored.RouteRecoveries[0].WaitForCapabilityChange);
+        }
+
+        [Test]
+        public void RecoveredPhysicalRoute_ClearsFailureBackoffOnlyAfterArrival()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            const int day = 100;
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3);
+            inputs.CleaningNeeded = false;
+            f.Driver.DriveDay(inputs, day, f.Tasks, f.Budgets, f.Schedules,
+                f.Domestic, f.DueEvents, diag);
+            f.Driver.AdvanceTick(day * 86400f + 990 * 60f, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag, (flight, _) =>
+                {
+                    flight.ActivityLocationId = "stove: blocked";
+                    return DomesticActivityMovementResult.Unsupported;
+                });
+
+            f.Driver.DriveDay(inputs, day + 2, f.Tasks, f.Budgets, f.Schedules,
+                f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(1, f.Driver.Pending.Count);
+            f.Driver.AdvanceTick((day + 2) * 86400f + 990 * 60f, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag, (flight, _) =>
+                {
+                    flight.ActivityLocationId = "stove";
+                    return DomesticActivityMovementResult.Arrived;
+                });
+
+            Assert.AreEqual(0, f.Driver.RouteRecoveries.Count,
+                "the task's backoff clears after the resident physically arrives");
+            Assert.AreEqual(1, f.Driver.InFlight.Count,
+                "arrival starts timed work; it does not complete or award the task immediately");
+            Assert.AreEqual(0, f.FamilyLabor.ContributionCount);
         }
     }
 }

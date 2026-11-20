@@ -345,6 +345,19 @@ namespace LandLedgers.Economy.Businesses.Carpentry
                 // nothing to buy logs nothing.
                 return;
             }
+            // Buy what the store can actually sell today. Requiring the whole
+            // target in one transaction left smaller, legitimate retail lots
+            // stranded (for example 3 available cloth yards against an 8-yard
+            // target). This does not book expected stock or relax the target:
+            // the normal purchase authority still proves and consumes each
+            // available item lot, and a later day can replenish the remainder.
+            int available = CountAvailableStoreUnits(storeRuntime, storeBusinessId, itemId);
+            int unitPriceCents = unitPriceCentsForItem(itemId);
+            int cashAffordableUnits = unitPriceCents > 0
+                ? Math.Max(0, workshopCash.BalanceCents / unitPriceCents)
+                : shortfall;
+            int unitsToBuy = Math.Min(shortfall, Math.Min(available, cashAffordableUnits));
+            if (unitsToBuy <= 0) unitsToBuy = shortfall; // preserve the existing explicit stock-shortage refusal
             var inputs = new CarpentrySuppliesPurchaseInputs
             {
                 StoreRuntime = storeRuntime,
@@ -354,14 +367,34 @@ namespace LandLedgers.Economy.Businesses.Carpentry
                 WorkshopBusinessId = workshopBusinessId,
                 StoreBusinessId = storeBusinessId,
                 ItemId = itemId,
-                UnitPriceCents = unitPriceCentsForItem(itemId),
-                UnitsRequested = shortfall,
+                UnitPriceCents = unitPriceCents,
+                UnitsRequested = unitsToBuy,
                 DayIndex = dayIndex,
                 TransactionId = BuildTransactionId(itemId, workshopBusinessId, dayIndex),
             };
             CarpentrySuppliesPurchaseResult result = PurchaseUnits(inputs, diag);
             if (!result.Succeeded)
                 refusals.Add(result.Refusal);
+            else if (unitsToBuy < shortfall)
+                diag.Add($"CarpentrySuppliesPurchase: purchased {unitsToBuy} '{itemId}' unit(s) toward a {shortfall}-unit reorder (store available={available}, affordable at {unitPriceCents}c/unit={cashAffordableUnits}); remaining need is {shortfall - unitsToBuy} unit(s), with no incoming stock assumed.");
+        }
+
+        private static int CountAvailableStoreUnits(BusinessRuntimeState storeRuntime, string storeBusinessId, string itemId)
+        {
+            if (storeRuntime?.RetailItemLots == null
+                || !TryGetItemTable(itemId, out string categoryId, out string unitLabel)) return 0;
+            int available = 0;
+            foreach (var lot in storeRuntime.RetailItemLots)
+            {
+                if (lot == null
+                    || !string.Equals(lot.ItemId, itemId, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(lot.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(lot.UnitLabel, unitLabel, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(lot.OwnerBusinessId, storeBusinessId, StringComparison.Ordinal)
+                    || !string.Equals(lot.CustodianBusinessId, storeBusinessId, StringComparison.Ordinal)) continue;
+                available += Math.Max(0, lot.AvailableUnits);
+            }
+            return available;
         }
 
         private static bool HasReceivedShipment(BusinessInstanceState workshop, string transactionId)

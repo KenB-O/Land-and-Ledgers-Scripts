@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using LandLedgers.Primitives;
 
 namespace LandLedgers.Tasks
 {
@@ -33,6 +35,7 @@ namespace LandLedgers.Tasks
     public sealed partial class TaskAuthority
     {
         private ITaskTimingObserver timingObserver;
+        private readonly List<ITaskTimingObserver> additionalTimingObservers = new List<ITaskTimingObserver>();
         private Func<float> timingClock;
         private bool timingNotificationInProgress;
         private int timingNotificationReentrancyRefusals;
@@ -41,6 +44,21 @@ namespace LandLedgers.Tasks
         public void SetTimingObserver(ITaskTimingObserver observer)
         {
             timingObserver = observer;
+        }
+
+        /// <summary>Adds an independent diagnostic observer without displacing the primary observer.</summary>
+        public bool AddTimingObserver(ITaskTimingObserver observer)
+        {
+            if (observer == null || ReferenceEquals(observer, timingObserver) || additionalTimingObservers.Contains(observer))
+                return false;
+            additionalTimingObservers.Add(observer);
+            return true;
+        }
+
+        /// <summary>Removes an observer previously added through <see cref="AddTimingObserver"/>.</summary>
+        public bool RemoveTimingObserver(ITaskTimingObserver observer)
+        {
+            return observer != null && additionalTimingObservers.Remove(observer);
         }
 
         /// <summary>
@@ -56,7 +74,7 @@ namespace LandLedgers.Tasks
         /// <summary>True while a timing observer is installed.</summary>
         public bool HasTimingObserver
         {
-            get { return timingObserver != null; }
+            get { return timingObserver != null || additionalTimingObservers.Count != 0; }
         }
 
         /// <summary>Nested timing notifications refused by the re-entrancy guard so far.</summary>
@@ -69,7 +87,7 @@ namespace LandLedgers.Tasks
         {
             // No observer: no clock read, no work at all — behaviour is identical
             // to the pre-hook authority.
-            if (timingObserver == null || task == null)
+            if (!HasTimingObserver || task == null)
             {
                 return;
             }
@@ -84,12 +102,43 @@ namespace LandLedgers.Tasks
             timingNotificationInProgress = true;
             try
             {
-                timingObserver.OnTransition(task, transitionKind, nowSeconds, currentDayIndex);
+                timingObserver?.OnTransition(task, transitionKind, nowSeconds, currentDayIndex);
+                for (int i = 0; i < additionalTimingObservers.Count; i++)
+                    additionalTimingObservers[i].OnTransition(task, transitionKind, nowSeconds, currentDayIndex);
             }
             finally
             {
                 timingNotificationInProgress = false;
             }
+        }
+
+        private void NotifyTimingRefusal(string taskId, string method, string reason, int day)
+        {
+            if (!HasTimingObserver) return;
+            if (timingNotificationInProgress)
+            {
+                timingNotificationReentrancyRefusals++;
+                return;
+            }
+
+            timingNotificationInProgress = true;
+            try
+            {
+                timingObserver?.RecordRefusal(taskId, method, reason, day);
+                for (int i = 0; i < additionalTimingObservers.Count; i++)
+                    additionalTimingObservers[i].RecordRefusal(taskId, method, reason, day);
+            }
+            finally
+            {
+                timingNotificationInProgress = false;
+            }
+        }
+
+        private bool RefuseTask(EntityId taskId, string method, string reason, int day, out string rejectionReason)
+        {
+            rejectionReason = reason;
+            NotifyTimingRefusal(taskId.ToString(), method, reason, day);
+            return false;
         }
     }
 }

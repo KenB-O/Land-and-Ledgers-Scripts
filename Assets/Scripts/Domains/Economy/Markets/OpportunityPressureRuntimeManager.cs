@@ -369,7 +369,8 @@ namespace LandLedgers.Economy
 
             currentHudAlertText = BuildHudAlertText(notices);
             currentSnapshotInitialized = true;
-            hudController?.SetOpportunityNoticeAlert(currentHudAlertText);
+            // Opportunity pressure remains available through its read model and
+            // diagnostic board. It is not part of the playable HUD alert strip.
             return CurrentSnapshot;
         }
 
@@ -537,7 +538,6 @@ namespace LandLedgers.Economy
                 state.expansionPressure01,
                 CloneNotices(state.activeNotices));
             currentHudAlertText = state.hudAlertText ?? string.Empty;
-            hudController?.SetOpportunityNoticeAlert(currentHudAlertText);
         }
 
         public void ClearRuntimeState()
@@ -547,7 +547,6 @@ namespace LandLedgers.Economy
             noticeMemory = new List<OpportunityNoticeMemory>();
             CurrentSnapshot.Replace(0f, 0f, 0f, 0f, 0f, new List<OpportunityNotice>());
             currentHudAlertText = string.Empty;
-            hudController?.SetOpportunityNoticeAlert(string.Empty);
         }
 
         private void EnsureSnapshotInitializedForRead()
@@ -577,13 +576,6 @@ namespace LandLedgers.Economy
         private void OnDisable()
         {
             UnsubscribeFromTime();
-            // Null-conditional dispatch checks only the managed reference. Unity
-            // can destroy the HUD native object first during scene/test teardown,
-            // so use Unity's overloaded null check before touching it.
-            if (hudController != null)
-            {
-                hudController.SetOpportunityNoticeAlert(string.Empty);
-            }
         }
 
         private static T FindNewest<T>() where T : Component

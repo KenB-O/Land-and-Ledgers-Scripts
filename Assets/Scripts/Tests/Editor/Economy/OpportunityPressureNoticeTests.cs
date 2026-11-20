@@ -639,6 +639,34 @@ namespace LandLedgers.EditorTests.Economy
             }
         }
 
+        [Test]
+        public void OpportunityPressureRetainsNoticeBoardReadModelWithoutDrivingPlayableAlertStrip()
+        {
+            var cleanup = new List<Object>();
+            try
+            {
+                GameObject hudObject = new("Opportunity pressure HUD removal test");
+                cleanup.Add(hudObject);
+                GameObject stripObject = new("HUD_AlertStrip", typeof(RectTransform));
+                cleanup.Add(stripObject);
+                stripObject.transform.SetParent(hudObject.transform, false);
+                LandLedgersHUDController hud = hudObject.AddComponent<LandLedgersHUDController>();
+                SetPrivateField(hud, "alertStrip", stripObject.GetComponent<RectTransform>());
+
+                OpportunityPressureRuntimeManager manager = CreateManager(cleanup);
+                SetPrivateField(manager, "hudController", hud);
+                manager.Configure(null, null, null, null, null, null, null, null);
+                manager.RefreshNotices();
+
+                Assert.IsFalse(hud.IsOpportunityNoticeAlertVisible);
+                StringAssert.Contains("Notice Board", manager.BuildNoticeBoardText());
+            }
+            finally
+            {
+                DestroyAll(cleanup);
+            }
+        }
+
         private static OpportunityPressureRuntimeManager CreateManager(List<Object> cleanup)
         {
             return CreateComponent<OpportunityPressureRuntimeManager>("Opportunity Pressure Test Runtime", cleanup);

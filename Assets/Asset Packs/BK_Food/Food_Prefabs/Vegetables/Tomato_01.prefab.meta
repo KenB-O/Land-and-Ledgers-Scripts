@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 5aadd6a105ac4f8479141d1285a8a29a
+timeCreated: 1466163897
+licenseType: Store
+NativeFormatImporter:
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 55272
+  packageName: HD Fruits & Vegetables
+  packageVersion: 1.0
+  assetPath: Assets/BK_Food/Food_Prefabs/Vegetables/Tomato_01.prefab
+  uploadId: 123055

@@ -962,6 +962,7 @@ namespace LandLedgers.Economy.Logistics
         {
             reason = string.Empty;
             if (shipment == null) { reason = "FreightShipmentService: no shipment to load."; return false; }
+            if (RecoverStaleHandlingTask(shipment, hooks, out reason)) return false;
             if (!loadTasks.TryGetValue(shipment.ShipmentId, out EntityId taskId))
             {
                 reason = "FreightShipmentService: no load task for '" + shipment.ShipmentId + "'.";
@@ -1346,6 +1347,7 @@ namespace LandLedgers.Economy.Logistics
         {
             reason = string.Empty;
             if (shipment == null) { reason = "FreightShipmentService: no shipment to unload."; return false; }
+            if (RecoverStaleHandlingTask(shipment, hooks, out reason)) return false;
             if (!unloadTasks.TryGetValue(shipment.ShipmentId, out EntityId taskId))
             {
                 reason = "FreightShipmentService: no unload task for '" + shipment.ShipmentId + "'.";
@@ -1560,6 +1562,73 @@ namespace LandLedgers.Economy.Logistics
                 LogisticsShipmentStatus.Arrived);
             Log(hooks, "shipment '" + shipment.ShipmentId + "': NOT delivered — " + shipment.BlockedReason
                 + "; " + remaining + "u remain in wagon custody.");
+            return true;
+        }
+
+        /// <summary>
+        /// Recovers a shipment whose handling-task binding disappeared or
+        /// terminalized while the shipment still claims to be Loading or
+        /// Unloading. The task window is released, the shipment enters the
+        /// existing bounded delay/retry lifecycle, and no cargo or payment
+        /// is changed. Missing load work retries from Planned; missing
+        /// unload work retries at the destination with cargo still in wagon
+        /// custody. Returns true only when recovery changed shipment state.
+        /// </summary>
+        public bool RecoverStaleHandlingTask(LogisticsShipmentState shipment,
+            FreightShipmentHooks hooks, out string reason)
+        {
+            reason = string.Empty;
+            if (shipment == null || hooks?.Tasks == null) return false;
+
+            Dictionary<string, EntityId> taskMap;
+            Dictionary<string, string> reservationMap;
+            bool loading;
+            LogisticsShipmentStatus retryState;
+            if (shipment.Status == LogisticsShipmentStatus.Loading && !shipment.loadApplied)
+            {
+                taskMap = loadTasks;
+                reservationMap = loadReservations;
+                loading = true;
+                retryState = LogisticsShipmentStatus.Planned;
+            }
+            else if (shipment.Status == LogisticsShipmentStatus.Unloading && !shipment.deliveryApplied)
+            {
+                taskMap = unloadTasks;
+                reservationMap = unloadReservations;
+                loading = false;
+                retryState = LogisticsShipmentStatus.Arrived;
+            }
+            else
+            {
+                return false;
+            }
+
+            bool hasTaskId = taskMap.TryGetValue(shipment.ShipmentId, out EntityId taskId);
+            WorkTask task = hasTaskId ? hooks.Tasks.FindTask(taskId) : null;
+            bool terminal = task != null
+                && (task.Status == TaskStatus.Complete
+                    || task.Status == TaskStatus.Failed
+                    || task.Status == TaskStatus.Cancelled);
+            if (hasTaskId && task != null && !terminal) return false;
+
+            EntityId handlerId = task != null ? task.AssigneeId : EntityId.Invalid;
+            string phase = loading ? "load" : "unload";
+            string cause = !hasTaskId
+                ? $"shipment '{shipment.ShipmentId}' was {shipment.Status} without an owned {phase} task"
+                : task == null
+                    ? $"{phase} task '{taskId}' for shipment '{shipment.ShipmentId}' is missing"
+                    : $"{phase} task '{taskId}' for shipment '{shipment.ShipmentId}' is terminal ({task.Status})";
+
+            ReleaseHandlerWindow(reservationMap, hooks, shipment.ShipmentId, handlerId,
+                "freight:" + phase + ":" + shipment.ShipmentId);
+            taskMap.Remove(shipment.ShipmentId);
+            if (!loading) physicalReceivingPins.Remove(shipment.ShipmentId);
+            shipment.MarkDelayed(cause, retryState);
+            reason = "FreightShipmentService: " + cause + "; reservation released and the shipment was deferred for bounded recovery. "
+                + (loading
+                    ? "Source cargo remains uncommitted."
+                    : "Cargo remains in wagon custody at the destination.");
+            Log(hooks, reason);
             return true;
         }
 

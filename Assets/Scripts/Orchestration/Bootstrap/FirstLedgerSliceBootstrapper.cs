@@ -230,7 +230,15 @@ namespace LandLedgers.FirstLedger
 
         private void OnEnable()
         {
-            SubscribeToWorldVisualRebuilds();
+            // OnEnable runs before Start on a fresh scene. At that point a
+            // generated-world callback can precede population/business setup,
+            // so recovery would report every configured business fixture as
+            // missing even though New Game seeds them later in InitializeSlice.
+            // Fresh New Game and Continue explicitly subscribe after their
+            // authorities and presentations are restored; re-enabling an
+            // already initialized bootstrapper still restores the listener.
+            if (initialized)
+                SubscribeToWorldVisualRebuilds();
         }
 
         private void OnDisable()

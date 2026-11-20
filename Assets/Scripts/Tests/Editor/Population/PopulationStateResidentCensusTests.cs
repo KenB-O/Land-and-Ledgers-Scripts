@@ -1,4 +1,5 @@
 using LandLedgers.Population;
+using LandLedgers.Orchestration.Systems;
 using NUnit.Framework;
 
 namespace LandLedgers.EditorTests.Population
@@ -52,6 +53,21 @@ namespace LandLedgers.EditorTests.Population
             state.people = null;
             Assert.AreEqual(0, state.LivingResidentCount);
             Assert.IsFalse(state.HasExactLivingResidentCount(14));
+        }
+
+        [Test]
+        public void MealDaySummary_UsesLivingResidentsRatherThanStoredIdentityRecords()
+        {
+            PopulationState state = new PopulationState();
+            for (int i = 0; i < 14; i++)
+                state.people.Add(new PersonState { id = i, isOffMap = false, deathDayIndex = -1 });
+            for (int i = 14; i < 98; i++)
+                state.people.Add(new PersonState { id = i, isOffMap = true, deathDayIndex = -1 });
+
+            string summary = SimulationDrivers.FormatCompletedMealDaySummary(0, 42, 0, state, 3);
+
+            StringAssert.Contains("out of 14 residents × 3 slots", summary);
+            StringAssert.DoesNotContain("out of 98 residents", summary);
         }
     }
 }

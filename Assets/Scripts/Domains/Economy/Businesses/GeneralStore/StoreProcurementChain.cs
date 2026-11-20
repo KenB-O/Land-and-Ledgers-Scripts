@@ -199,11 +199,16 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                         itemManagedCategories.Add(offer.CategoryId);
 
                         int current = Math.Max(0, itemRestock.ItemRestockStockUnits(itemId));
-                        float itemHealth = current / (float)target;
+                        int incoming = OutstandingStoreUnits(store.StoreBusinessId, offer.CategoryId, itemId);
+                        int projected = SaturatingAdd(current, incoming);
+                        float itemHealth = projected / (float)target;
                         if (itemHealth > Math.Max(0f, Math.Min(1f, reorderThreshold01))) continue;
-                        if (HasOpenOrder(store.StoreBusinessId, offer.CategoryId, itemId)) continue;
 
-                        int missing = Math.Max(0, target - current);
+                        // An open order is not an all-or-nothing block. Sales
+                        // after the order was placed can create a real new
+                        // shortfall. Count actual incoming units and order
+                        // only the uncovered remainder.
+                        int missing = Math.Max(0, target - projected);
                         if (missing <= 0) continue;
                         TryPlaceSpecificItemLevelOrder(store, itemRestock, upstreamSuppliers,
                             offer.CategoryId, itemId, missing, dayIndex, deliveredCostPerUnitCents);
@@ -223,23 +228,20 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 if (itemManagedCategories.Contains(categoryId)) continue;
                 int target = Math.Max(0, store.CategoryTargetStockUnits(categoryId));
                 int current = Math.Max(0, store.CategoryStockUnits(categoryId));
+                int incoming = OutstandingStoreUnits(store.StoreBusinessId, categoryId, null);
+                int projected = SaturatingAdd(current, incoming);
                 if (target <= 0)
                 {
                     continue;
                 }
 
-                float health = current / (float)target;
+                float health = projected / (float)target;
                 if (health > Math.Max(0f, Math.Min(1f, reorderThreshold01)))
                 {
                     continue;
                 }
 
-                if (HasOpenOrder(store.StoreBusinessId, categoryId, null))
-                {
-                    continue;
-                }
-
-                int missing = Math.Max(0, target - current);
+                int missing = Math.Max(0, target - projected);
                 if (missing <= 0)
                 {
                     continue;
@@ -267,7 +269,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 }
 
                 int unitCost = Math.Max(0, best.QuoteUnitCostCents(categoryId));
-                int available = Math.Max(0, best.AvailableUnits(categoryId));
+                int available = Math.Max(0, best.AvailableUnits(categoryId)
+                    - OutstandingSupplierOrderUnits(best.SupplierId, categoryId, string.Empty));
                 int orderUnits = Math.Min(missing, available);
                 if (orderUnits <= 0)
                 {
@@ -337,7 +340,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                         }
                 if (!offersItem) continue;
 
-                int available = Math.Max(0, supplier.AvailableItemUnits(itemId));
+                int available = Math.Max(0, supplier.AvailableItemUnits(itemId)
+                    - OutstandingSupplierOrderUnits(supplier.SupplierId, categoryId, itemId));
                 int goodsCost = Math.Max(0, supplier.QuoteItemUnitCostCents(itemId));
                 if (available <= 0 || goodsCost <= 0) continue;
                 int lotSize = Math.Max(1, itemPort.ItemReorderLotSize(itemId));
@@ -413,7 +417,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 {
                     string itemId = items[j];
                     if (string.IsNullOrWhiteSpace(itemId)) continue;
-                    int available = Math.Max(0, itemSupplier.AvailableItemUnits(itemId));
+                    int available = Math.Max(0, itemSupplier.AvailableItemUnits(itemId)
+                        - OutstandingSupplierOrderUnits(itemSupplier.SupplierId, categoryId, itemId));
                     if (available <= 0) continue;
                     int orderUnits = Math.Min(missing, available);
                     if (orderUnits <= 0) continue;
@@ -646,7 +651,25 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     continue;
                 }
                 int unitCost = order.UnitCostCents;
-                int receivable = Math.Max(0, store.CategoryReceivableUnits(delivery.CategoryId));
+                bool identifiedItemDelivery = !string.IsNullOrWhiteSpace(delivery.ItemId)
+                    && store is IItemLevelRestockTradingPort
+                    && store is IIdentifiedRetailStockReceivingPort;
+                int receivable;
+                if (identifiedItemDelivery)
+                {
+                    // A named SKU is limited by its own authored reorder
+                    // target. Its category row is only the shared aggregate
+                    // ledger and may have a different remaining capacity.
+                    IItemLevelRestockTradingPort itemPort = (IItemLevelRestockTradingPort)store;
+                    int target = Math.Max(0, itemPort.ItemReorderTargetUnits(delivery.ItemId));
+                    receivable = target > 0
+                        ? Math.Max(0, target - Math.Max(0, itemPort.ItemRestockStockUnits(delivery.ItemId)))
+                        : 0;
+                }
+                else
+                {
+                    receivable = Math.Max(0, store.CategoryReceivableUnits(delivery.CategoryId));
+                }
                 int unitsToReceive = Math.Min(delivery.Units, receivable);
                 if (unitsToReceive <= 0)
                 {
@@ -654,9 +677,6 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     continue;
                 }
 
-                bool identifiedItemDelivery = !string.IsNullOrWhiteSpace(delivery.ItemId)
-                    && store is IItemLevelRestockTradingPort
-                    && store is IIdentifiedRetailStockReceivingPort;
                 string itemUnitLabel = identifiedItemDelivery
                     ? ((IItemLevelRestockTradingPort)store).ItemUnitLabel(delivery.ItemId)
                     : string.Empty;
@@ -719,26 +739,71 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             }
         }
 
-        private bool HasOpenOrder(string storeBusinessId, string categoryId, string itemId)
+        private int OutstandingStoreUnits(string storeBusinessId, string categoryId, string itemId)
         {
+            long total = 0;
             for (int i = 0; i < orders.Count; i++)
             {
                 StoreProcurementOrder order = orders[i];
-                if (order != null &&
-                    string.Equals(order.StoreBusinessId, storeBusinessId, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(order.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase) &&
-                    (string.IsNullOrWhiteSpace(itemId) || string.IsNullOrWhiteSpace(order.ItemId)
-                        || string.Equals(order.ItemId, itemId, StringComparison.OrdinalIgnoreCase)) &&
-                    (order.Stage == StoreProcurementStage.Ordered || order.Stage == StoreProcurementStage.InTransit))
+                if (order == null
+                    || !string.Equals(order.StoreBusinessId, storeBusinessId, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(order.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.IsNullOrWhiteSpace(itemId)
+                    && !string.Equals(order.ItemId, itemId, StringComparison.OrdinalIgnoreCase)) continue;
+
+                if (order.Stage == StoreProcurementStage.Ordered)
                 {
-                    return true;
+                    total += Math.Max(0, order.UnitsOrdered);
+                    continue;
+                }
+                if (order.Stage != StoreProcurementStage.InTransit) continue;
+
+                // Once shipped, only the extant delivery quantity is a
+                // reliable incoming claim. The original ordered amount can
+                // exceed a supplier's partial shipment and must not mask the
+                // resulting shortage.
+                for (int j = 0; j < deliveries.Count; j++)
+                {
+                    StoreDelivery delivery = deliveries[j];
+                    if (delivery == null || delivery.Received
+                        || !string.Equals(delivery.OrderId, order.OrderId, StringComparison.Ordinal)
+                        || !string.Equals(delivery.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.IsNullOrWhiteSpace(itemId)
+                        && !string.Equals(delivery.ItemId, itemId, StringComparison.OrdinalIgnoreCase)) continue;
+                    total += Math.Max(0, delivery.Units);
                 }
             }
 
-            return false;
+            return total >= int.MaxValue ? int.MaxValue : (int)total;
         }
 
-        private static IUpstreamGoodsSupplier ChooseSupplier(
+        private int OutstandingSupplierOrderUnits(string supplierId, string categoryId, string itemId)
+        {
+            long total = 0;
+            for (int i = 0; i < orders.Count; i++)
+            {
+                StoreProcurementOrder order = orders[i];
+                if (order == null || order.Stage != StoreProcurementStage.Ordered
+                    || !string.Equals(order.UpstreamSupplierId, supplierId, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(order.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase)) continue;
+                // A category order can draw from any SKU in that supplier's
+                // category, so conservatively hold its units against an
+                // item-level quote from the same finite supplier.
+                if (!string.IsNullOrWhiteSpace(itemId) && !string.IsNullOrWhiteSpace(order.ItemId)
+                    && !string.Equals(order.ItemId, itemId, StringComparison.OrdinalIgnoreCase)) continue;
+                total += Math.Max(0, order.UnitsOrdered);
+            }
+
+            return total >= int.MaxValue ? int.MaxValue : (int)total;
+        }
+
+        private static int SaturatingAdd(int left, int right)
+        {
+            long total = (long)Math.Max(0, left) + Math.Max(0, right);
+            return total >= int.MaxValue ? int.MaxValue : (int)total;
+        }
+
+        private IUpstreamGoodsSupplier ChooseSupplier(
             List<IUpstreamGoodsSupplier> suppliers, string categoryId, int unitsNeeded, int dayIndex,
             Func<IUpstreamGoodsSupplier, string, string, int, int> deliveredCostPerUnitCents = null)
         {
@@ -757,7 +822,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     continue;
                 }
 
-                int available = Math.Max(0, supplier.AvailableUnits(categoryId));
+                int available = Math.Max(0, supplier.AvailableUnits(categoryId)
+                    - OutstandingSupplierOrderUnits(supplier.SupplierId, categoryId, string.Empty));
                 if (available <= 0)
                 {
                     continue;

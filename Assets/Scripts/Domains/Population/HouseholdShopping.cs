@@ -34,6 +34,7 @@ namespace LandLedgers.Population
     public sealed class ShoppingDiagnosticEvent
     {
         public int EventSequence;
+        public string TripId = string.Empty;
         public int DayIndex;
         public ShoppingEventKind Kind;
         public int HouseholdId = -1;
@@ -361,6 +362,7 @@ namespace LandLedgers.Population
     [Serializable]
     public sealed class ShoppingTripResult
     {
+        public string TripId = string.Empty;
         public int NeedSequence = -1;
         public int HouseholdId = -1;
         public int ShopperPersonId = -1;

@@ -4,6 +4,7 @@ using LandLedgers.Economy.Transport;
 using LandLedgers.Pathing;
 using LandLedgers.Population;
 using LandLedgers.Orchestration.Systems;
+using LandLedgers.Diagnostics;
 using LandLedgers.Time;
 using LandLedgers.World;
 using UnityEngine;
@@ -74,6 +75,7 @@ namespace LandLedgers.FirstLedger
 
         private SimulationSystemsHub systemsHub;
         public Func<int, bool> ShoppingTripOwnsPerson { get; set; }
+        public Func<int, string> ShoppingTripIdentityForPerson { get; set; }
 
         [SerializeField]
         private GeneralStoreRuntimeManager storeRuntime;
@@ -146,10 +148,10 @@ namespace LandLedgers.FirstLedger
         private int residentActorEntriesCreated;
 
         // Campaign C (DEF-021): agent-cap truncation diagnostics. The walk in
-        // PopulateManagedAgents stops once agents.Count reaches maxActiveAgents,
-        // so residents past the examined prefix never get a visual agent. These
-        // counters name that cut (count, cap value, resident summary) instead of
-        // leaving it silent. Appended fields only; nothing renamed or reordered.
+        // PopulateManagedAgents scans the registry and counts otherwise eligible
+        // residents skipped only because agents.Count reached maxActiveAgents.
+        // These counters name that cut (count, cap value, resident summary).
+        // Appended fields only; nothing renamed or reordered.
         [SerializeField]
         private int residentsCutByAgentCap;
 
@@ -248,6 +250,95 @@ namespace LandLedgers.FirstLedger
                 else if (agent.mover.IsArrivedVisible) status = "Arrived and visible";
                 else if (agent.mover.IsHidden) status = "No visible on-map presentation";
                 else status = "Stationary; no active route";
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Supplies the task trace with the managed person's authoritative
+        /// household/work destination and current physical route ownership.
+        /// This is a read-only diagnostic view; it does not alter routing or
+        /// schedule state.
+        /// </summary>
+        public bool TryGetPersonOperationalReadout(
+            int personId,
+            out int homeBuildingId,
+            out int workplaceBuildingId,
+            out int currentDestinationBuildingId,
+            out string scheduleState,
+            out string routeMode,
+            out bool moverVisible,
+            out bool routeActive)
+        {
+            homeBuildingId = -1;
+            workplaceBuildingId = -1;
+            currentDestinationBuildingId = -1;
+            scheduleState = string.Empty;
+            routeMode = string.Empty;
+            moverVisible = false;
+            routeActive = false;
+            if (personId < 0) return false;
+
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent agent = agents[i];
+                if (agent?.person == null || agent.person.id != personId) continue;
+
+                homeBuildingId = agent.person.homeBuildingId;
+                workplaceBuildingId = agent.person.workplaceBuildingId;
+                currentDestinationBuildingId = agent.person.currentDestinationBuildingId;
+                scheduleState = agent.person.scheduleState.ToString();
+                routeMode = agent.routeMode.ToString();
+                moverVisible = agent.mover != null
+                    && !agent.mover.IsHidden
+                    && agent.mover.gameObject.activeInHierarchy;
+                routeActive = agent.mover != null && agent.mover.IsRouteActive;
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>Read-only physical route identity and progress for the development trace.</summary>
+        public bool TryGetMovementTraceReadout(int personId, out string routeIdentity, out int routeGeneration,
+            out int waypointIndex, out int waypointCount, out Vector3 routeDestination, out bool hasRouteDestination,
+            out string routeMode, out string scheduleState, out string activityLocationId,
+            out bool moverVisible, out bool routeActive, out string moverState)
+        {
+            routeIdentity = string.Empty;
+            routeGeneration = -1;
+            waypointIndex = -1;
+            waypointCount = 0;
+            routeDestination = Vector3.zero;
+            hasRouteDestination = false;
+            routeMode = string.Empty;
+            scheduleState = string.Empty;
+            activityLocationId = string.Empty;
+            moverVisible = false;
+            routeActive = false;
+            moverState = string.Empty;
+            if (personId < 0) return false;
+
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent agent = agents[i];
+                if (agent?.person == null || agent.person.id != personId || agent.mover == null) continue;
+                routeGeneration = agent.mover.RouteGeneration;
+                waypointIndex = agent.mover.CurrentWaypointIndex;
+                waypointCount = agent.mover.CurrentPath != null ? agent.mover.CurrentPath.Count : 0;
+                routeActive = agent.mover.IsRouteActive;
+                moverVisible = !agent.mover.IsHidden && agent.mover.gameObject.activeInHierarchy;
+                moverState = agent.mover.CurrentStateName;
+                routeMode = agent.routeMode.ToString();
+                scheduleState = agent.person.scheduleState.ToString();
+                activityLocationId = agent.domesticActivityLocationId ?? string.Empty;
+                if (routeActive && routeGeneration >= 0)
+                {
+                    routeIdentity = "P" + personId + ":route:" + routeGeneration;
+                    routeDestination = agent.mover.RouteDestinationWorld;
+                    hasRouteDestination = true;
+                }
                 return true;
             }
             return false;
@@ -630,20 +721,44 @@ namespace LandLedgers.FirstLedger
             explicitArrivalChecksForCutResidents = 0;
             warnedCutArrivalPersonIds.Clear();
             PopulationState state = populationManager.State;
-            for (int i = 0; i < state.people.Count && agents.Count < maxActiveAgents; i++)
+            List<string> cutLabels = new List<string>();
+            for (int i = 0; i < state.people.Count; i++)
             {
                 PersonState person = state.people[i];
                 populationRecordsExamined++;
-                if (!CanRepresentOnMap(person, state))
+                bool isMapResident = CanRepresentOnMap(person, state);
+                if (!isMapResident)
                 {
                     recordsRejectedAsNonLocalResidents++;
                     continue;
                 }
 
                 BuildingAnchor homeAnchor;
-                if (!TryGetDoorAnchor(person.homeBuildingId, out homeAnchor))
+                bool hasHomeDoorAnchor = TryGetDoorAnchor(person.homeBuildingId, out homeAnchor);
+                if (!hasHomeDoorAnchor)
                 {
                     residentsMissingHomeDoorAnchors++;
+                    continue;
+                }
+
+                // Scan every record, but attribute cap cuts only to residents
+                // who would otherwise receive an actor. The unexamined suffix
+                // of state.people is not necessarily a set of local residents:
+                // it can contain departed, deceased, unhoused, or unanchored
+                // records. Those must retain their own rejection diagnostics.
+                if (AgentCapTruncation.IsEligibleResidentCut(
+                        isMapResident, hasHomeDoorAnchor, agents.Count, maxActiveAgents))
+                {
+                    residentsCutByAgentCap++;
+                    cutResidentIds.Add(person.id);
+                    if (cutLabels.Count < 5)
+                    {
+                        string cutName = string.IsNullOrWhiteSpace(person.firstName)
+                            && string.IsNullOrWhiteSpace(person.lastName)
+                            ? string.Empty
+                            : (" " + person.firstName + " " + person.lastName).TrimEnd();
+                        cutLabels.Add("#" + person.id + cutName);
+                    }
                     continue;
                 }
 
@@ -681,31 +796,13 @@ namespace LandLedgers.FirstLedger
                 residentActorEntriesCreated++;
             }
 
-            // Campaign C (DEF-021): the loop above stops once agents.Count
-            // reaches maxActiveAgents, so any resident past the examined prefix
-            // never gets an agent. That cut was silent; name it here (count,
-            // cap value, resident ids) and keep the ids so the arrival check
-            // can tell a cut resident apart from any other person with no agent.
-            int[] cutIndices = AgentCapTruncation.CutIndices(state.people.Count, populationRecordsExamined);
-            if (cutIndices.Length > 0)
+            // Campaign C (DEF-021): only otherwise eligible local residents
+            // without an actor belong in this set. Their ids let arrival checks
+            // distinguish a genuine cap cut from invalid or unanchored records.
+            if (residentsCutByAgentCap > 0)
             {
-                residentsCutByAgentCap = cutIndices.Length;
-                List<string> cutLabels = new List<string>();
-                for (int i = 0; i < cutIndices.Length; i++)
-                {
-                    PersonState cutPerson = state.people[cutIndices[i]];
-                    cutResidentIds.Add(cutPerson.id);
-                    if (cutLabels.Count < 5)
-                    {
-                        string cutName = string.IsNullOrWhiteSpace(cutPerson.firstName)
-                            && string.IsNullOrWhiteSpace(cutPerson.lastName)
-                            ? string.Empty
-                            : (" " + cutPerson.firstName + " " + cutPerson.lastName).TrimEnd();
-                        cutLabels.Add("#" + cutPerson.id + cutName);
-                    }
-                }
                 lastCutResidentSummary = string.Join(", ", cutLabels)
-                    + (cutIndices.Length > 5 ? $" and {cutIndices.Length - 5} more" : string.Empty);
+                    + (residentsCutByAgentCap > 5 ? $" and {residentsCutByAgentCap - 5} more" : string.Empty);
                 Debug.LogWarning(
                     $"PopulationPathingDirector cut {residentsCutByAgentCap} resident(s) at the agent cap: " +
                     $"people={state.people.Count}, examined={populationRecordsExamined}, cap={maxActiveAgents}, " +
@@ -1148,6 +1245,43 @@ namespace LandLedgers.FirstLedger
             return false;
         }
 
+        /// <summary>
+        /// Returns a concrete reason a resident's mover cannot be reassigned
+        /// to a household shopping trip. Schedule availability alone does not
+        /// reveal a freight receiving claim or a task-directed route that is
+        /// already owned by another authority.
+        /// </summary>
+        public string GetShopperMovementBlockReason(int personId)
+        {
+            ManagedPersonAgent managed = null;
+            foreach (ManagedPersonAgent candidate in agents)
+            {
+                if (candidate?.person == null || candidate.person.id != personId) continue;
+                managed = candidate;
+                break;
+            }
+
+            if (managed == null)
+                return $"no managed physical actor is registered for P{personId}";
+            if (managed.mover == null)
+                return $"P{personId} has no physical movement component";
+            if (managed.isRiding)
+                return $"P{personId} is aboard a wagon";
+            if (WagonRiderPlacement.ShouldDeferCompetingRoute(managed.transportStagingSeat != null))
+                return $"P{personId} is approaching an assigned freight wagon";
+            if (managed.freightReceivingTargetBuildingId >= 0)
+                return $"P{personId} is carrying freight to receiving building {managed.freightReceivingTargetBuildingId}";
+            if (managed.mover.IsRouteActive
+                && (managed.routeMode == AgentRouteMode.TaskDirected
+                    || managed.routeMode == AgentRouteMode.Scheduled))
+            {
+                return $"P{personId} has an active {managed.routeMode.ToString().ToLowerInvariant()} route "
+                    + $"to building {managed.person.currentDestinationBuildingId}";
+            }
+
+            return null;
+        }
+
         public float? GetTaskRouteRemainingSeconds(int personId, int buildingId)
         {
             foreach (ManagedPersonAgent managed in agents)
@@ -1551,9 +1685,15 @@ namespace LandLedgers.FirstLedger
             ManagedPersonAgent managed = null;
             foreach (ManagedPersonAgent candidate in agents)
                 if (candidate?.person != null && candidate.person.id == flight.PersonId) { managed = candidate; break; }
-            if (managed?.mover == null || managed.isRiding)
+            PersonState resident = populationManager?.State?.GetPerson(flight.PersonId);
+            string presentationFailure = DomesticActivityPresentationFailure(
+                resident != null && resident.isOffMap,
+                managed != null,
+                managed?.mover != null,
+                managed != null && managed.isRiding);
+            if (!string.IsNullOrEmpty(presentationFailure))
             {
-                reason = "The resident has no usable physical presentation or is aboard a wagon.";
+                reason = presentationFailure;
                 return DomesticActivityMovementResult.Unsupported;
             }
             if (ShouldDeferDomesticActivityForFreightMovement(
@@ -1618,10 +1758,23 @@ namespace LandLedgers.FirstLedger
                     managed.domesticActivityLastRemainingDistance))
             {
                 string taskId = managed.domesticActivityTaskId;
+                string personId = managed.person != null ? $"P{managed.person.id}" : "unknown";
+                string position = FormatRouteDiagnosticVector(managed.mover.transform.position);
+                float remainingDistance = managed.mover.RemainingWorldRouteDistance;
+                double totalElapsed = routeClock - managed.domesticActivityRouteStartedGameSeconds;
+                double noProgressElapsed = routeClock - managed.domesticActivityLastProgressGameSeconds;
+                string measuredSpeed = managed.mover.MeasuredMovementSpeed.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+                string diagnostic = FormatDomesticActivityRouteWatchdogDiagnostic(
+                    taskId, personId, activityLocationId, managed.mover.RouteGeneration,
+                    managed.mover.IsRouteActive, managed.mover.IsHidden, position,
+                    remainingDistance, managed.domesticActivityLastRemainingDistance,
+                    measuredSpeed, totalElapsed, noProgressElapsed,
+                    managed.domesticActivityNoProgressTimeoutGameSeconds,
+                    managed.domesticActivityRouteTimeoutGameSeconds);
                 if (managed.mover.IsRouteActive) managed.mover.CancelActiveRoute();
                 ClearDomesticActivityRoute(managed);
                 managed.routeMode = AgentRouteMode.None;
-                reason = $"The physical route for domestic task {taskId} did not reach '{activityLocationId}' within its bounded travel allowance; the task was released for retry.";
+                reason = diagnostic;
                 return DomesticActivityMovementResult.Unsupported;
             }
 
@@ -1653,30 +1806,57 @@ namespace LandLedgers.FirstLedger
                         activity.FloorIndex, activity.FunctionalSpaceId, out _))
                 {
                     if (!managed.mover.BeginBuildingInteriorRoute(authority, activityLocationId, out reason))
+                    {
+                        RecordMovementTrace(managed, "refused", "ActivityLocationRouteFailed", home.id, reason, activityLocationId);
                         return DomesticActivityMovementResult.Unsupported;
+                    }
                     managed.person.scheduleState = PopulationScheduleState.AtHome;
                     managed.person.currentDestinationBuildingId = home.id;
                     managed.routeMode = AgentRouteMode.TaskDirected;
+                    RecordMovementTrace(managed, "started", managed.mover.CurrentStateName, home.id, string.Empty, activityLocationId);
                     return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
                 }
                 if (!authority.TryGetEntrancePair("main-entrance", out BuildingEntrancePairAuthoring entrance, out reason))
+                {
+                    RecordMovementTrace(managed, "refused", "MissingEntrance", home.id, reason, activityLocationId);
                     return DomesticActivityMovementResult.Unsupported;
+                }
                 Vector3 outdoor = authority.transform.TransformPoint(entrance.outdoorApproachLocal);
                 float stagingRadius = AgentMover.BuildingActivityStagingRadius(entrance.clearWidthMeters);
                 if (Vector3.Distance(managed.mover.transform.position, outdoor) > stagingRadius)
                 {
-                    GridCoord actualStart = pathingManager.Grid.WorldToCoord(managed.mover.transform.position);
-                    GridCoord outdoorCell = pathingManager.Grid.WorldToCoord(outdoor);
-                    if (home.footprint.Contains(actualStart))
+                    if (TryFindReachableInteriorEntrance(authority,
+                            managed.mover.transform.position, out BuildingEntrancePairAuthoring interiorEntrance))
                     {
-                        if (!managed.mover.BeginBuildingRoute(actualStart, outdoorCell, home.id, -1,
-                                activity.FloorIndex, activity.FunctionalSpaceId, false))
+                        // The actor failed validation in the requested activity's
+                        // functional space above. A coarse grid cell inside the
+                        // building footprint does not make that actor a valid
+                        // start point for the same floor/space path request.
+                        // Walk the actor to an authored entrance using the actual
+                        // entrance floor and functional space instead.
+                        if (!managed.mover.BeginBuildingInteriorExitRoute(authority,
+                                interiorEntrance.id, out reason))
                         {
-                            reason = "The resident is inside the home footprint but no authorized exit route reaches its outdoor doorway.";
+                            if (string.IsNullOrWhiteSpace(reason))
+                                reason = $"The resident could not physically exit home through authored entrance '{interiorEntrance.id}'.";
+                            RecordMovementTrace(managed, "refused", "InteriorExitRouteFailed", home.id, reason, activityLocationId);
                             return DomesticActivityMovementResult.Unsupported;
                         }
                         managed.routeMode = AgentRouteMode.TaskDirected;
+                        managed.person.currentDestinationBuildingId = -1;
+                        RecordMovementTrace(managed, "started", managed.mover.CurrentStateName, home.id, string.Empty, activityLocationId);
                         return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
+                    }
+                    GridCoord actualStart = pathingManager.Grid.WorldToCoord(managed.mover.transform.position);
+                    if (home.footprint.Contains(actualStart))
+                    {
+                        // A rasterized building cell can overlap outdoor space.
+                        // Do not ask PathingManager to validate this point as an
+                        // interior start; only the authored entrance route above
+                        // can establish that the actor is inside and connected.
+                        reason = $"The resident's position maps to home {home.id}'s coarse footprint cell, but is not connected to an authored interior entrance or the requested activity space.";
+                        RecordMovementTrace(managed, "refused", "InteriorOriginUnreachable", home.id, reason, activityLocationId);
+                        return DomesticActivityMovementResult.Unsupported;
                     }
                     if (!TrySendAgent(managed, home.id, PopulationScheduleState.ReturningHome, out _))
                     {
@@ -1690,11 +1870,13 @@ namespace LandLedgers.FirstLedger
                 if (!managed.mover.BeginBuildingActivityRoute(authority, "main-entrance", activityLocationId))
                 {
                     reason = "The authored entrance-to-activity route could not start.";
+                    RecordMovementTrace(managed, "refused", "ActivityLocationRouteFailed", home.id, reason, activityLocationId);
                     return DomesticActivityMovementResult.Unsupported;
                 }
                 managed.person.scheduleState = PopulationScheduleState.AtHome;
                 managed.person.currentDestinationBuildingId = home.id;
                 managed.routeMode = AgentRouteMode.TaskDirected;
+                RecordMovementTrace(managed, "started", managed.mover.CurrentStateName, home.id, string.Empty, activityLocationId);
                 return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
             }
 
@@ -1719,10 +1901,10 @@ namespace LandLedgers.FirstLedger
                     Vector3 outdoor = authority.transform.TransformPoint(entrance.outdoorApproachLocal);
                     Vector3 toPorch = activity.WorldPosition - outdoor;
                     toPorch.y = 0f;
-                    if (toPorch.magnitude > Mathf.Max(1.5f, entrance.clearWidthMeters * 2f)
-                        || Physics.Linecast(outdoor + Vector3.up * 0.8f,
-                            activity.WorldPosition + Vector3.up * 0.8f, out _, ~0,
-                            QueryTriggerInteraction.Ignore)) continue;
+                    bool directApproachClear = !Physics.Linecast(outdoor + Vector3.up * 0.8f,
+                        activity.WorldPosition + Vector3.up * 0.8f, out _, ~0,
+                        QueryTriggerInteraction.Ignore);
+                    if (!CanApproachPorchActivityDoorway(toPorch.magnitude, directApproachClear)) continue;
 
                     GridCoord outdoorCell = pathingManager.Grid.WorldToCoord(outdoor);
                     if (!pathingManager.Grid.IsInBounds(outdoorCell)) continue;
@@ -1766,6 +1948,7 @@ namespace LandLedgers.FirstLedger
                 if (selectedDistance == float.PositiveInfinity)
                 {
                     reason = "The authored porch point has no nearby unobstructed doorway with a walkable outdoor approach cell.";
+                    RecordMovementTrace(managed, "refused", "PorchApproachUnavailable", home.id, reason, activityLocationId);
                     return DomesticActivityMovementResult.Unsupported;
                 }
 
@@ -1782,6 +1965,7 @@ namespace LandLedgers.FirstLedger
                     if (!managed.mover.BeginInteriorDoorToDoor(authority, porchTarget, out reason))
                     {
                         reason = "The resident has a valid interior origin, but no authorized doorway route reaches the porch activity: " + reason;
+                        RecordMovementTrace(managed, "refused", "PorchRouteFailed", home.id, reason, activityLocationId);
                         return DomesticActivityMovementResult.Unsupported;
                     }
                 }
@@ -1790,6 +1974,7 @@ namespace LandLedgers.FirstLedger
                     if (home.footprint.Contains(exteriorStart))
                     {
                         reason = "The resident is within the home footprint but is not on an authorized interior floor point or an exterior route cell.";
+                        RecordMovementTrace(managed, "refused", "InvalidInteriorOrigin", home.id, reason, activityLocationId);
                         return DomesticActivityMovementResult.Unsupported;
                     }
 
@@ -1798,12 +1983,14 @@ namespace LandLedgers.FirstLedger
                         exteriorStart, selectedOutdoorCell, finalApproach))
                     {
                         reason = $"No valid exterior route from {exteriorStart} reaches doorway approach {selectedOutdoorCell} and porch point '{activityLocationId}'.";
+                        RecordMovementTrace(managed, "refused", "PorchRouteFailed", home.id, reason, activityLocationId);
                         return DomesticActivityMovementResult.Unsupported;
                     }
                 }
 
                 managed.routeMode = AgentRouteMode.TaskDirected;
                 managed.person.currentDestinationBuildingId = home.id;
+                RecordMovementTrace(managed, "started", managed.mover.CurrentStateName, home.id, string.Empty, activityLocationId);
                 return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
             }
 
@@ -1836,6 +2023,7 @@ namespace LandLedgers.FirstLedger
                 if (!validInteriorOrigin)
                 {
                     reason = "The resident is within the home footprint, but cannot use the outdoor path graph from this position: " + interiorOriginFailure;
+                    RecordMovementTrace(managed, "refused", "InvalidInteriorOrigin", home.id, reason, activityLocationId);
                     return DomesticActivityMovementResult.Unsupported;
                 }
 
@@ -1850,20 +2038,37 @@ namespace LandLedgers.FirstLedger
                 if (!managed.mover.BeginInteriorDoorToDoor(authority, porchTarget, out reason))
                 {
                     reason = "The resident has a valid interior origin, but no authorized doorway route reaches the porch activity: " + reason;
+                    RecordMovementTrace(managed, "refused", "PorchRouteFailed", home.id, reason, activityLocationId);
                     return DomesticActivityMovementResult.Unsupported;
                 }
                 managed.routeMode = AgentRouteMode.TaskDirected;
                 managed.person.currentDestinationBuildingId = home.id;
+                RecordMovementTrace(managed, "started", managed.mover.CurrentStateName, home.id, string.Empty, activityLocationId);
                 return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
             }
             if (!managed.mover.BeginGridRoute(exteriorStart, target, false))
             {
                 reason = "No reachable outdoor path to the authored porch activity point.";
+                RecordMovementTrace(managed, "refused", "PorchRouteFailed", home.id, reason, activityLocationId);
                 return DomesticActivityMovementResult.Unsupported;
             }
             managed.person.currentDestinationBuildingId = home.id;
             managed.routeMode = AgentRouteMode.TaskDirected;
+            RecordMovementTrace(managed, "started", managed.mover.CurrentStateName, home.id, string.Empty, activityLocationId);
             return TrackDomesticActivityRoute(managed, flight, activityLocationId, routeClock);
+        }
+
+        /// <summary>
+        /// Porch activity points may sit along a porch rather than beside the
+        /// doorway. Their authored geometry and a clear physical segment decide
+        /// reachability; door width is not a maximum walking distance.
+        /// </summary>
+        public static bool CanApproachPorchActivityDoorway(float horizontalDistance, bool directApproachClear)
+        {
+            return directApproachClear
+                && horizontalDistance >= 0f
+                && !float.IsNaN(horizontalDistance)
+                && !float.IsInfinity(horizontalDistance);
         }
 
         private DomesticActivityMovementResult TrackDomesticActivityRoute(
@@ -1939,6 +2144,34 @@ namespace LandLedgers.FirstLedger
                 || (!IsDomesticActivityRouteMakingProgress(remainingDistance, previousRemainingDistance)
                     && nowGameSeconds - lastProgressGameSeconds >= noProgressTimeoutGameSeconds);
         }
+
+        internal static string FormatDomesticActivityRouteWatchdogDiagnostic(
+            string taskId, string personId, string activityLocationId, int routeGeneration,
+            bool routeActive, bool hidden, string position, float remainingDistance,
+            float previousRemainingDistance, string measuredSpeed, double totalElapsedSeconds,
+            double noProgressElapsedSeconds, float noProgressLimitSeconds, float totalLimitSeconds)
+        {
+            string elapsed = totalElapsedSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+            string stalled = noProgressElapsedSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+            string remaining = remainingDistance.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+            string previous = previousRemainingDistance.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+            string noProgressLimit = noProgressLimitSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+            string totalLimit = totalLimitSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+            return $"Domestic route watchdog released task '{taskId}' for retry: person={personId}, activity='{activityLocationId}', routeGeneration={routeGeneration}, routeActive={routeActive}, hidden={hidden}, position={position}, remainingDistance={remaining}m (previous={previous}m), measuredSpeed={measuredSpeed}m/s, elapsed={elapsed}/{totalLimit}s, noProgress={stalled}/{noProgressLimit}s.";
+        }
+
+        internal static string DomesticActivityPresentationFailure(
+            bool isOffMap, bool hasManagedActor, bool hasMover, bool isRiding)
+        {
+            if (isOffMap) return "The resident is away from town on an off-map journey.";
+            if (!hasManagedActor) return "The resident has no managed on-map physical actor.";
+            if (!hasMover) return "The resident's physical actor has no movement component.";
+            if (isRiding) return "The resident is aboard a wagon and cannot begin a household activity route.";
+            return string.Empty;
+        }
+
+        private static string FormatRouteDiagnosticVector(Vector3 value) =>
+            $"({value.x.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},{value.y.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},{value.z.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)})";
 
         private static void ClearDomesticActivityRoute(ManagedPersonAgent managed)
         {
@@ -2374,6 +2607,7 @@ namespace LandLedgers.FirstLedger
                 refusal = managed.transportStagingSeat != null
                     ? "Resident is approaching an assigned freight wagon; the boarding route must arrive or be released before another task can claim movement."
                     : $"Resident is carrying freight to receiving building {managed.freightReceivingTargetBuildingId}; the receiving route must arrive or be released before another destination can claim movement.";
+                RecordMovementTrace(managed, "refused", "RouteNotStarted", targetBuildingId, refusal);
                 return false;
             }
 
@@ -2382,6 +2616,7 @@ namespace LandLedgers.FirstLedger
             {
                 failureKind = ScheduledRouteFailureKind.MissingStartAnchor;
                 refusal = $"No valid exterior start anchor for current destination {managed.person.currentDestinationBuildingId} or home {managed.person.homeBuildingId}.";
+                RecordMovementTrace(managed, "refused", "MissingStartAnchor", targetBuildingId, refusal);
                 return false;
             }
 
@@ -2389,6 +2624,7 @@ namespace LandLedgers.FirstLedger
             {
                 failureKind = ScheduledRouteFailureKind.MissingTargetAnchor;
                 refusal = $"Building {targetBuildingId} has no valid destination door anchor.";
+                RecordMovementTrace(managed, "refused", "MissingTargetAnchor", targetBuildingId, refusal);
                 return false;
             }
 
@@ -2402,7 +2638,9 @@ namespace LandLedgers.FirstLedger
             bool startsInsideOrigin = grid != null && grid.IsInBounds(actorCell)
                 && grid.GetCell(actorCell).HasBuilding
                 && grid.GetCell(actorCell).buildingId == startBuilding?.id
-                && startBuilding.runtimeFootprintAuthority != null;
+                && startBuilding.runtimeFootprintAuthority != null
+                && TryFindReachableInteriorEntrance(startBuilding.runtimeFootprintAuthority,
+                    managed.mover.transform.position, out _);
             if (startsInsideOrigin)
             {
                 started = managed.mover.BeginInteriorDoorToDoor(
@@ -2423,6 +2661,7 @@ namespace LandLedgers.FirstLedger
             {
                 failureKind = ScheduledRouteFailureKind.PathFailed;
                 if (string.IsNullOrWhiteSpace(refusal)) refusal = "Interior-to-exterior route could not be constructed.";
+                RecordMovementTrace(managed, "refused", "PathFailed", targetBuildingId, refusal);
                 return false;
             }
 
@@ -2432,7 +2671,73 @@ namespace LandLedgers.FirstLedger
             managed.person.scheduleState = nextState;
             managed.person.currentDestinationBuildingId = targetBuildingId;
             failureKind = ScheduledRouteFailureKind.None;
+            RecordMovementTrace(managed, "started", managed.mover.CurrentStateName, targetBuildingId, string.Empty);
             return true;
+        }
+
+        /// <summary>
+        /// A building grid cell is only a coarse raster. Confirm an actual
+        /// walkable interior route to an authored entrance before treating the
+        /// resident as indoors for door-to-door movement.
+        /// </summary>
+        internal static bool TryFindReachableInteriorEntrance(
+            BuildingFootprintAuthority authority, Vector3 actorWorldPosition,
+            out BuildingEntrancePairAuthoring reachableEntrance)
+        {
+            reachableEntrance = null;
+            if (authority == null || authority.EntrancePairs == null) return false;
+            foreach (BuildingEntrancePairAuthoring candidate in authority.EntrancePairs)
+            {
+                if (candidate == null
+                    || !authority.TryGetEntrancePair(candidate.id,
+                        out BuildingEntrancePairAuthoring entrance, out _)) continue;
+                Vector3 indoor = authority.transform.TransformPoint(entrance.indoorPositionLocal);
+                if (!authority.TryBuildInteriorPath(actorWorldPosition, indoor,
+                        entrance.floorIndex, entrance.functionalSpaceId, out _, out _)) continue;
+                reachableEntrance = entrance;
+                return true;
+            }
+            return false;
+        }
+
+        private void RecordMovementTrace(ManagedPersonAgent managed, string transition, string status,
+            int destinationBuildingId, string reason, string activityLocationId = null)
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (managed?.person == null) return;
+            systemsHub ??= FindAnyObjectByType<SimulationSystemsHub>();
+            if (systemsHub == null) return;
+            NpcActivityTraceRecorder trace = systemsHub.ActivityTrace;
+            if (trace == null || !trace.Monitoring || trace.Level < NpcTraceLevel.Detailed) return;
+
+            AgentMover mover = managed.mover;
+            int personId = managed.person.id;
+            int day = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : lastDayIndex;
+            double seconds = timeManager != null ? timeManager.AbsoluteGameSeconds : -1d;
+            var movementTask = managed.routeMode == AgentRouteMode.TaskDirected
+                ? systemsHub.Tasks.FindBlockingTaskForAssignee(
+                    LandLedgers.Primitives.EntityId.For(LandLedgers.Primitives.EntityKind.Person, personId))
+                : null;
+            string shoppingTripId = ShoppingTripIdentityForPerson?.Invoke(personId);
+            float remainingMeters = mover != null && mover.IsRouteActive ? mover.RemainingWorldRouteDistance : 0f;
+            bool activeRequestRoute = !string.Equals(transition, "refused", StringComparison.Ordinal);
+            string routeId = activeRequestRoute && mover != null && mover.RouteGeneration >= 0
+                ? $"P{personId}:route:{mover.RouteGeneration}"
+                : string.Empty;
+            string destination = destinationBuildingId >= 0 ? $"building:{destinationBuildingId}" : "unknown-destination";
+            trace.RecordMovement(personId, day, seconds, transition, status, destination,
+                remainingMeters, routeId, reason, destinationBuildingId,
+                activeRequestRoute && mover != null ? mover.RouteGeneration : -1,
+                managed.routeMode.ToString(), managed.person.scheduleState.ToString(),
+                mover != null ? mover.CurrentStateName : string.Empty,
+                activeRequestRoute && mover != null && mover.IsRouteActive ? mover.RouteDestinationWorld : (Vector3?)null,
+                activityLocationId,
+                mover != null ? mover.transform.position : (Vector3?)null,
+                mover != null && !mover.IsHidden && mover.gameObject.activeInHierarchy,
+                mover != null && mover.IsRouteActive,
+                movementTask,
+                shoppingTripId);
+#endif
         }
 
         private void EnsureAmbientStreetLife()
@@ -2739,11 +3044,18 @@ namespace LandLedgers.FirstLedger
                 return false;
             }
 
-            if (!pathingManager.TryFindAnchorByBuildingId(buildingId, AnchorType.FrontDoor, out building, out anchor))
+            // Resolve the authored building/door first, even if its coarse
+            // marker cell is not traversable. The footprint authority below
+            // can then project a valid entrance pair to a real exterior cell.
+            // Without an authored entrance authority, retain the strict
+            // traversability requirement for the original endpoint.
+            if (!pathingManager.TryFindAuthoredAnchorByBuildingId(
+                    buildingId, AnchorType.FrontDoor, out building, out anchor))
                 return false;
 
             BuildingFootprintAuthority authority = building != null ? building.runtimeFootprintAuthority : null;
-            if (authority == null) return true;
+            if (authority == null)
+                return pathingManager.TryGetMovementCost(anchor.coord, out _);
 
             if (authority.EntrancePairs == null || authority.EntrancePairs.Count == 0)
             {
@@ -2908,6 +3220,9 @@ namespace LandLedgers.FirstLedger
                 {
                     continue;
                 }
+
+                RecordMovementTrace(managed, "arrived", "ArrivedVisible",
+                    managed.person.currentDestinationBuildingId, string.Empty);
 
                 PopulationScheduleState previous = managed.person.scheduleState;
                 if (managed.routeMode == AgentRouteMode.AmbientOutbound)

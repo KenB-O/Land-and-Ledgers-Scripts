@@ -1,0 +1,4 @@
+EditorLog=C:\Users\kenne\AppData\Local\Temp\ll-rebuild-library-20261114.log
+StartBytes=112255125
+EndBytes=115507218
+StartUtc=2026-11-15T10:45:00Z

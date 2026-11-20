@@ -484,11 +484,26 @@ namespace LandLedgers.Economy.Businesses.Logging
                 diagnostics.Add(refusal);
                 return false;
             }
-            if (!taskAuthority.RecordWorkProgress(task.TaskId, requiredMinutes, budgetStore, dayIndex, out bool reached, out string workReason)
+            // Assignment applies the worker's causal duration estimate to the
+            // calibrated base. Work the assigned task's actual remaining
+            // duration; recording only the unscaled base leaves slower
+            // workers with an incomplete task that is then cancelled every
+            // day, consuming their time without ever reaching RunSawing.
+            int assignedWorkMinutes = task.MinutesRemaining;
+            bool reached = false;
+            string workReason = null;
+            if (assignedWorkMinutes <= 0
+                || !taskAuthority.RecordWorkProgress(task.TaskId, assignedWorkMinutes, budgetStore, dayIndex,
+                    out reached, out workReason)
                 || !reached)
             {
                 taskAuthority.CancelTask(task.TaskId, budgetStore);
-                refusal = $"SawmillProductionDriver.RunProduction: job '{jobId}' — run task labour refused: {workReason}";
+                string detail = !string.IsNullOrWhiteSpace(workReason)
+                    ? workReason
+                    : assignedWorkMinutes <= 0
+                        ? "the assigned run task has no remaining work minutes"
+                        : $"the assigned run task remains incomplete ({task.MinutesWorked}/{task.PlannedMinutes} minutes)";
+                refusal = $"SawmillProductionDriver.RunProduction: job '{jobId}' — run task work could not complete: {detail}";
                 diagnostics.Add(refusal);
                 return false;
             }

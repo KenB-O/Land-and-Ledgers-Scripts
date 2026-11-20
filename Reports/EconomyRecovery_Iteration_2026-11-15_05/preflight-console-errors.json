@@ -1,0 +1,492 @@
+{
+  "entries": [
+    {
+      "seq": 55144,
+      "timestampUtc": "2026-11-15T05:25:21.3310061Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55186,
+      "timestampUtc": "2026-11-15T05:26:15.6164028Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55192,
+      "timestampUtc": "2026-11-15T05:26:29.890049Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55201,
+      "timestampUtc": "2026-11-15T05:26:44.7222701Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55253,
+      "timestampUtc": "2026-11-15T05:26:59.9426423Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55259,
+      "timestampUtc": "2026-11-15T05:27:13.4283885Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55304,
+      "timestampUtc": "2026-11-15T05:29:12.6333787Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55356,
+      "timestampUtc": "2026-11-15T05:29:27.782197Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55362,
+      "timestampUtc": "2026-11-15T05:29:42.4574142Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55447,
+      "timestampUtc": "2026-11-15T05:42:30.9145673Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55453,
+      "timestampUtc": "2026-11-15T05:42:54.0522265Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55472,
+      "timestampUtc": "2026-11-15T05:43:03.7125465Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55514,
+      "timestampUtc": "2026-11-15T05:47:46.7638816Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55521,
+      "timestampUtc": "2026-11-15T05:47:54.5825425Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55528,
+      "timestampUtc": "2026-11-15T05:48:01.5931774Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55535,
+      "timestampUtc": "2026-11-15T05:48:08.6294837Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55541,
+      "timestampUtc": "2026-11-15T05:48:15.8898577Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55584,
+      "timestampUtc": "2026-11-15T05:49:39.5893433Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55592,
+      "timestampUtc": "2026-11-15T05:49:47.5158584Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55599,
+      "timestampUtc": "2026-11-15T05:49:55.328316Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55605,
+      "timestampUtc": "2026-11-15T05:50:02.6210364Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55615,
+      "timestampUtc": "2026-11-15T05:50:10.8120965Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55621,
+      "timestampUtc": "2026-11-15T05:50:17.7379753Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55627,
+      "timestampUtc": "2026-11-15T05:50:25.4937796Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55647,
+      "timestampUtc": "2026-11-15T05:50:38.9593531Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55683,
+      "timestampUtc": "2026-11-15T05:59:24.2317723Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Assets\\Scripts\\Domains\\Economy\\BreadDrivers\\BakeryWholesaleDailyDriver.cs(287,74): error CS7036: There is no argument given that corresponds to the required formal parameter 'comparisonType' of 'MemoryExtensions.Contains(ReadOnlySpan<char>, ReadOnlySpan<char>, StringComparison)'",
+      "stackTrace": "",
+      "seeded": false
+    },
+    {
+      "seq": 55734,
+      "timestampUtc": "2026-11-15T06:00:44.4058774Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55742,
+      "timestampUtc": "2026-11-15T06:01:14.6404875Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55786,
+      "timestampUtc": "2026-11-15T06:02:08.9956228Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55830,
+      "timestampUtc": "2026-11-15T06:03:33.6747533Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55874,
+      "timestampUtc": "2026-11-15T06:04:58.1943856Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55918,
+      "timestampUtc": "2026-11-15T06:06:58.1092455Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 55962,
+      "timestampUtc": "2026-11-15T06:08:33.1662748Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56005,
+      "timestampUtc": "2026-11-15T06:11:04.3192973Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56048,
+      "timestampUtc": "2026-11-15T06:12:22.6627755Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56056,
+      "timestampUtc": "2026-11-15T06:12:30.469511Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56067,
+      "timestampUtc": "2026-11-15T06:12:38.1569442Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56074,
+      "timestampUtc": "2026-11-15T06:12:45.6439404Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56081,
+      "timestampUtc": "2026-11-15T06:12:52.2034905Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56102,
+      "timestampUtc": "2026-11-15T06:12:59.8275288Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56198,
+      "timestampUtc": "2026-11-15T06:15:08.2188827Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56205,
+      "timestampUtc": "2026-11-15T06:15:24.356337Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56249,
+      "timestampUtc": "2026-11-15T06:17:11.3064828Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56270,
+      "timestampUtc": "2026-11-15T06:18:41.846864Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56277,
+      "timestampUtc": "2026-11-15T06:19:30.2161552Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56320,
+      "timestampUtc": "2026-11-15T06:20:16.985878Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56341,
+      "timestampUtc": "2026-11-15T06:20:25.9858337Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56423,
+      "timestampUtc": "2026-11-15T06:29:06.9032048Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56430,
+      "timestampUtc": "2026-11-15T06:29:47.0752345Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56437,
+      "timestampUtc": "2026-11-15T06:29:57.5789945Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56444,
+      "timestampUtc": "2026-11-15T06:30:05.6136229Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    },
+    {
+      "seq": 56451,
+      "timestampUtc": "2026-11-15T06:31:56.483817Z",
+      "level": "error",
+      "logType": "Error",
+      "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+      "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+      "seeded": false
+    }
+  ],
+  "cursor": 56451,
+  "session": "d022c2a3090e4762bfd305c366a1102d",
+  "returned": 52,
+  "dropped": false,
+  "reset": false,
+  "counts": {
+    "error": 52,
+    "warn": 1646,
+    "log": 302
+  },
+  "groundTruth": {
+    "sampledUtc": "2026-11-15T06:37:11.2490013Z",
+    "ageMs": 74,
+    "compilationFailed": false,
+    "compiling": false,
+    "consoleErrors": 1,
+    "consoleWarnings": 76,
+    "consoleLogs": 14,
+    "seeded": true
+  }
+}

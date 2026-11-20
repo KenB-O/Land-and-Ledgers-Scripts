@@ -32,7 +32,7 @@ MonoBehaviour:
   rotationSmoothing: 0.055
   closeControlStartDistance: 16
   standardControlDistance: 40
-  closePanSensitivity: 0.08
+  closePanSensitivity: 0.3
   closeRotationSensitivity: 0.25
   focusViewCenterWhenRotatingClose: 1
   focusViewCenterWhenZoomingClose: 1
@@ -57,6 +57,7 @@ MonoBehaviour:
   preciseWheelZoomScale: 0.25
   farWheelZoomScale: 2
   maximumWheelZoomScale: 4
+  maximumWheelZoomStepPerInput: 6
   preserveAbsolutePitchWhileZooming: 1
   zoomSmoothing: 0.1
   closePitch: 20

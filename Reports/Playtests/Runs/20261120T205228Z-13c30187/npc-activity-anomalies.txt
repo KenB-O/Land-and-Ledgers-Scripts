@@ -1,0 +1,5 @@
+NPC Activity Trace Anomalies 6f16ed38fefc431198488efbc66a2a2b
+Detected: 3; dropped session events: 0
+task-no-progress|T8 | task-no-progress | task=T8 person= household=-1 detected=378005.979s | Open Queued task has had no recorded lifecycle/work progress for 72.0 simulated hours. | worked=0; remaining=41; reservation=
+task-no-progress|T9 | task-no-progress | task=T9 person= household=-1 detected=383665.785s | Open Queued task has had no recorded lifecycle/work progress for 72.1 simulated hours. | worked=0; remaining=41; reservation=
+task-no-progress|T11 | task-no-progress | task=T11 person= household=-1 detected=390625.348s | Open Queued task has had no recorded lifecycle/work progress for 72.0 simulated hours. | worked=0; remaining=41; reservation=

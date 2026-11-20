@@ -37,6 +37,27 @@ namespace LandLedgers.Editor.Economy
             public SawmillProductionDriver Driver;
         }
 
+        private sealed class ScaledTaskDurationEstimator : ITaskDurationEstimator
+        {
+            private readonly float multiplier;
+
+            public ScaledTaskDurationEstimator(float multiplier)
+            {
+                this.multiplier = multiplier;
+            }
+
+            public int EstimateMinutes(TaskDefinition definition, EntityId workerId)
+            {
+                return EstimateMinutesForBase(definition != null ? definition.BaseMinutes : 1,
+                    definition != null ? definition.RequiredSkillId : null, workerId);
+            }
+
+            public int EstimateMinutesForBase(int baseMinutes, string skillId, EntityId workerId)
+            {
+                return Math.Max(1, (int)Math.Ceiling(baseMinutes * multiplier));
+            }
+        }
+
         private static LogLot DocumentedLogLot(int lotNumber, int logs, string standId,
             string species = "white pine", int felledDayIndex = 200)
         {
@@ -676,6 +697,34 @@ namespace LandLedgers.Editor.Economy
             Assert.IsFalse(world.Driver.TryReassignSawyerAfterUnstartedRefusal(job.JobId,
                 EntityId.For(EntityKind.Person, 5004), out string completedRefusal));
             Assert.That(completedRefusal, Does.Contain("only an unstarted planned job"));
+        }
+
+        [Test]
+        public void P13_SkillScaledLongerRun_WorksAssignedDuration_AndProducesOnce()
+        {
+            World world = NewWorld(MillWithLogs(2));
+            world.Tasks.SetDurationEstimator(new ScaledTaskDurationEstimator(1.5f));
+            SawmillProductionJob job = world.Driver.BeginProduction(LotId(9101), Sawyer, 2, Day,
+                out string beginRefusal);
+            Assert.IsNotNull(job, beginRefusal);
+
+            bool ran = world.Driver.RunProduction(job.JobId, Day, out string refusal);
+
+            Assert.IsTrue(ran, refusal);
+            WorkTask task = world.Tasks.FindTask(job.TaskId);
+            Assert.IsNotNull(task);
+            Assert.AreEqual(TaskStatus.Complete, task.Status);
+            Assert.AreEqual(90, task.PlannedMinutes,
+                "The worker's assigned duration remains the authoritative task duration.");
+            Assert.AreEqual(90, task.MinutesWorked,
+                "The task must be fully worked before the mill consumes logs.");
+            Assert.AreEqual(0, world.Mill.LogStock.TotalLogUnits);
+            Assert.AreEqual(8, world.Mill.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(90, world.Budgets.GetOrCreate(Sawyer).MinutesWorked,
+                "The sawyer's actual task work is charged once to the daily budget.");
+            Assert.AreEqual(60, world.Counters.TotalSawMinutes,
+                "The mill keeps the calibrated production minutes distinct from the task's skill-scaled duration.");
+            Assert.AreEqual(SawmillProductionJobState.Complete, job.State);
         }
 
         // ---- FailProduction (1) ----

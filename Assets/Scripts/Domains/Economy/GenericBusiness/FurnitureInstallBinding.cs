@@ -324,6 +324,12 @@ namespace LandLedgers.Economy.GenericBusiness
             if (source != FurnishingAcquisitionSource.Purchase
                 && source != FurnishingAcquisitionSource.Secondhand)
                 return $"FurniturePurchaseInstallHandler: source {source} is not a purchase source — workshop pieces install through the custody leg, never through the F4 handler.";
+            FurnishingPlacementBinding existing = buyerRegister.LiveBindingFor(asset.AssetId);
+            if (existing != null)
+            {
+                if (asset.LocationId == HouseholdFurnishingRegister.BuildingLocationId(buildingInstanceId)) return null;
+                return $"FurniturePurchaseInstallHandler: asset {asset.AssetId} is already installed at {asset.LocationId}; refusing a duplicate placement.";
+            }
             if (source == FurnishingAcquisitionSource.Secondhand && sellerRegister != null)
             {
                 string sellerRefusal = EndSellerHolding(asset);
@@ -337,6 +343,14 @@ namespace LandLedgers.Economy.GenericBusiness
                 return refusal;
             diagnostics?.Add($"FurniturePurchaseInstallHandler: purchase '{purchaseId}' installed '{asset.AssetId}' ({asset.Kind}) in building {buildingInstanceId} (placement {binding?.PlacementId}, capability {binding?.CapabilityKind}, source {source}).");
             return null;
+        }
+
+        /// <summary>Records received ownership in the household register before any placement attempt.</summary>
+        public string RegisterReceived(EquipmentAsset asset)
+        {
+            if (asset == null) return "FurniturePurchaseInstallHandler: received asset is missing.";
+            if (buyerRegister == null) return $"FurniturePurchaseInstallHandler: no buyer register for received asset {asset.AssetId}.";
+            return buyerRegister.TryRegisterAsset(asset);
         }
 
         private string EndSellerHolding(EquipmentAsset asset)

@@ -1,0 +1,16 @@
+Result=completed
+StartGameSeconds=26111.29
+EndGameSeconds=5210319.54
+SimulatedDays=60.00241
+RealSeconds=340.56
+FinalSpeed=Paused
+CapturedLogEntries=1428
+CapturedWarnings=914
+CapturedErrors=0
+ManagedResidents=9
+VisibleAgents=9
+LastMovementStatus=Jacob Boniecki arrived: GoingToWork -> AtWork. Managed=9, Visible=9, AmbientStarted=0, AmbientFailures(anchor/path)=0/0.
+LastRouteFailure=
+CappedRolloverFrames=0
+CappedShortTickFrames=0
+PendingGameSeconds=0.0

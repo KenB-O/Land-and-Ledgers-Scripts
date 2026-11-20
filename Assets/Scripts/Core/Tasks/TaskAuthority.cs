@@ -226,14 +226,12 @@ namespace LandLedgers.Tasks
             WorkTask task = FindTask(taskId);
             if (task == null)
             {
-                rejectionReason = "Unknown task: " + taskId;
-                return false;
+                return RefuseTask(taskId, "AssignTask", "Unknown task: " + taskId, currentDayIndex, out rejectionReason);
             }
 
             if (workerId.Kind != EntityKind.Person)
             {
-                rejectionReason = "Tasks assign to Persons; got " + workerId.Kind + ".";
-                return false;
+                return RefuseTask(taskId, "AssignTask", "Tasks assign to Persons; got " + workerId.Kind + ".", currentDayIndex, out rejectionReason);
             }
 
             // Pass VIII Worker 7: the dead are never offered work. The seam is
@@ -248,28 +246,24 @@ namespace LandLedgers.Tasks
                 }
                 catch (Exception ex)
                 {
-                    rejectionReason = "Cannot assign " + taskId + ": worker-availability check failed (" +
-                        ex.GetType().Name + ") — refused rather than assigned blind.";
-                    return false;
+                    return RefuseTask(taskId, "AssignTask", "Cannot assign " + taskId + ": worker-availability check failed (" +
+                        ex.GetType().Name + ") — refused rather than assigned blind.", currentDayIndex, out rejectionReason);
                 }
                 if (unavailable)
                 {
-                    rejectionReason = "Cannot assign " + taskId + ": " + workerId +
-                        " is unavailable for work (worker-availability seam).";
-                    return false;
+                    return RefuseTask(taskId, "AssignTask", "Cannot assign " + taskId + ": " + workerId +
+                        " is unavailable for work (worker-availability seam).", currentDayIndex, out rejectionReason);
                 }
             }
 
             if (task.Status != TaskStatus.Queued)
             {
-                rejectionReason = "Task " + taskId + " is " + task.Status + ", not Queued.";
-                return false;
+                return RefuseTask(taskId, "AssignTask", "Task " + taskId + " is " + task.Status + ", not Queued.", currentDayIndex, out rejectionReason);
             }
 
             if (!PrerequisitesComplete(task))
             {
-                rejectionReason = "Task " + taskId + " has incomplete prerequisites.";
-                return false;
+                return RefuseTask(taskId, "AssignTask", "Task " + taskId + " has incomplete prerequisites.", currentDayIndex, out rejectionReason);
             }
 
             TaskDefinition definition = GetDefinition(task.DefinitionId);
@@ -292,8 +286,7 @@ namespace LandLedgers.Tasks
             }
             if (budgetStore != null && !budgetStore.TryCommitTask(workerId, commitMinutes, out budgetReason))
             {
-                rejectionReason = "Cannot assign " + taskId + ": " + budgetReason;
-                return false;
+                return RefuseTask(taskId, "AssignTask", "Cannot assign " + taskId + ": " + budgetReason, currentDayIndex, out rejectionReason);
             }
 
             task.AssignTo(workerId);
@@ -349,16 +342,14 @@ namespace LandLedgers.Tasks
             WorkTask task = FindTask(taskId);
             if (task == null)
             {
-                rejectionReason = "Unknown task: " + taskId;
-                return false;
+                return RefuseTask(taskId, "StartTask", "Unknown task: " + taskId, currentDayIndex, out rejectionReason);
             }
 
             bool fromAssigned = task.Status == TaskStatus.Assigned;
             bool fromReserved = task.Status == TaskStatus.ResourcesReserved;
             if (!fromAssigned && !fromReserved)
             {
-                rejectionReason = "Task " + taskId + " is " + task.Status + ", not Assigned or ResourcesReserved.";
-                return false;
+                return RefuseTask(taskId, "StartTask", "Task " + taskId + " is " + task.Status + ", not Assigned or ResourcesReserved.", currentDayIndex, out rejectionReason);
             }
 
             if (task.HasAssignee)
@@ -368,9 +359,8 @@ namespace LandLedgers.Tasks
                     if (activeTask == null || ReferenceEquals(activeTask, task) || !activeTask.HasAssignee
                         || !TaskLifecyclePolicy.BlocksConcurrentTaskStart(activeTask.Status)
                         || activeTask.AssigneeId != task.AssigneeId) continue;
-                    rejectionReason = "Cannot start task " + taskId + ": " + task.AssigneeId
-                        + " is already occupied by task " + activeTask.TaskId + " (" + OccupancyStatusWord(activeTask.Status) + ").";
-                    return false;
+                    return RefuseTask(taskId, "StartTask", "Cannot start task " + taskId + ": " + task.AssigneeId
+                        + " is already occupied by task " + activeTask.TaskId + " (" + OccupancyStatusWord(activeTask.Status) + ").", currentDayIndex, out rejectionReason);
                 }
             }
 
@@ -385,15 +375,13 @@ namespace LandLedgers.Tasks
                 }
                 catch (Exception ex)
                 {
-                    rejectionReason = "Task " + taskId + ": worker-availability check failed (" +
-                        ex.GetType().Name + ") — refused rather than started blind.";
-                    return false;
+                    return RefuseTask(taskId, "StartTask", "Task " + taskId + ": worker-availability check failed (" +
+                        ex.GetType().Name + ") — refused rather than started blind.", currentDayIndex, out rejectionReason);
                 }
                 if (unavailable)
                 {
-                    rejectionReason = "Task " + taskId + ": " + task.AssigneeId +
-                        " is unavailable for work (worker-availability seam) — start refused.";
-                    return false;
+                    return RefuseTask(taskId, "StartTask", "Task " + taskId + ": " + task.AssigneeId +
+                        " is unavailable for work (worker-availability seam) — start refused.", currentDayIndex, out rejectionReason);
                 }
             }
 
@@ -405,8 +393,7 @@ namespace LandLedgers.Tasks
                 string gateRefusal = executionGate.CheckStart(task, GetDefinition(task.DefinitionId), currentDayIndex);
                 if (gateRefusal != null)
                 {
-                    rejectionReason = gateRefusal;
-                    return false;
+                    return RefuseTask(taskId, "StartTask", gateRefusal, currentDayIndex, out rejectionReason);
                 }
             }
 
@@ -420,21 +407,18 @@ namespace LandLedgers.Tasks
                 }
                 catch (Exception builderFailure)
                 {
-                    rejectionReason = "Task " + taskId + ": reservation request builder failed: " + builderFailure.Message;
-                    return false;
+                    return RefuseTask(taskId, "StartTask", "Task " + taskId + ": reservation request builder failed: " + builderFailure.Message, currentDayIndex, out rejectionReason);
                 }
 
                 if (request == null)
                 {
-                    rejectionReason = "Task " + taskId + ": reservation request builder returned no request.";
-                    return false;
+                    return RefuseTask(taskId, "StartTask", "Task " + taskId + ": reservation request builder returned no request.", currentDayIndex, out rejectionReason);
                 }
 
                 string reservationRefusal = reservationAuthority.TryReserveAll(request, out ReservationHandle handle);
                 if (reservationRefusal != null)
                 {
-                    rejectionReason = "Task " + taskId + ": resource reservation refused: " + reservationRefusal;
-                    return false;
+                    return RefuseTask(taskId, "StartTask", "Task " + taskId + ": resource reservation refused: " + reservationRefusal, currentDayIndex, out rejectionReason);
                 }
 
                 task.SetReservationHandleId(handle != null ? handle.ReservationId : string.Empty);
@@ -443,8 +427,7 @@ namespace LandLedgers.Tasks
 
             if (!TaskLifecyclePolicy.CanTransition(task.Status, TaskStatus.InProgress))
             {
-                rejectionReason = "Task " + taskId + ": " + task.Status + " -> InProgress is not a legal lifecycle transition.";
-                return false;
+                return RefuseTask(taskId, "StartTask", "Task " + taskId + ": " + task.Status + " -> InProgress is not a legal lifecycle transition.", currentDayIndex, out rejectionReason);
             }
 
             task.MarkStarted(currentDayIndex);

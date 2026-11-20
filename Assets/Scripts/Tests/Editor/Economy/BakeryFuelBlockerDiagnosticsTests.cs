@@ -90,6 +90,20 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void DealerStockAndBakeryStock_AreReportedSeparately()
+        {
+            string line = BakeryFuelBlockerDiagnostics.BuildFuelLine(
+                Inputs(onHand: 3, factor: 2, intake: true, dealerAttached: true, dealerUnits: 4));
+
+            Assert.IsTrue(line.Contains("fuel sufficient — 3u on hand"),
+                "production coverage is the bakery's physical stock; line: " + line);
+            Assert.IsTrue(line.Contains("dealer holds 4u"),
+                "dealer inventory is reported separately after unit conversion; line: " + line);
+            Assert.IsFalse(line.Contains("dealer holds 7u"),
+                "bakery stock must not be counted as dealer stock; line: " + line);
+        }
+
+        [Test]
         public void NoBatchesPlanned_NoFuelNeeded()
         {
             string line = BakeryFuelBlockerDiagnostics.BuildFuelLine(Inputs(batches: 0));

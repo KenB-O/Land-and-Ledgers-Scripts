@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Freight;
@@ -89,6 +90,44 @@ namespace LandLedgers.Population
         /// filled clerk's person id, or -1 when no clerk is available.
         /// Null means "no clerk resolution configured".</summary>
         public Func<string, int> ResolveServiceClerkPersonId { get; set; }
+        /// <summary>
+        /// Optional ordered candidates for physical counter service. When
+        /// configured, TaskAuthority is tried against each present candidate
+        /// until one can actually accept the work; a merely present but busy
+        /// clerk must not prevent an available owner or employee from serving.
+        /// </summary>
+        public Func<string, IReadOnlyList<int>> ResolveServiceClerkCandidates { get; set; }
+        /// <summary>
+        /// Identifies the configured counter clerk for a supplier without
+        /// requiring the person to be physically present yet. A household
+        /// cannot schedule that same sole clerk as the customer for the
+        /// counter they must operate; the window search should try another
+        /// real household member or a later feasible opportunity instead.
+        /// </summary>
+        public Func<string, int, bool> IsPotentialServiceClerkForBusiness { get; set; }
+        /// <summary>
+        /// Optional development-only observer for authoritative shopping lifecycle events.
+        /// The callback receives the same event appended to the trip result; it does not
+        /// participate in seller selection, settlement, custody, or receipt decisions.
+        /// </summary>
+        public Action<ShoppingDiagnosticEvent> DevelopmentTraceObserver { get; set; }
+        /// <summary>
+        /// Production store bindings set this when an identified staffed
+        /// counter is part of the seller authority. Test/direct-supplier
+        /// adapters without a counter model retain their direct settlement
+        /// semantics.
+        /// </summary>
+        public bool RequirePhysicalCounterService { get; set; }
+        /// <summary>
+        /// When enabled, automatic production shopping searches the two
+        /// household shopping opportunities (09:00–11:00 and 14:00–16:00)
+        /// rather than reserving any otherwise-free point in the day. The
+        /// shopper is still selected against the exact proposed time, current
+        /// location, travel estimate, employment and task reservations.
+        /// Explicit one-off/test plans retain the legacy all-day search unless
+        /// their production binding opts in.
+        /// </summary>
+        public bool UsePreferredShoppingWindows { get; set; }
         private readonly PersonScheduleTracker scheduleTracker;
         private readonly ShopperSellerKnowledge knowledge;
         private readonly FinancialObligationAuthority obligations;
@@ -128,6 +167,15 @@ namespace LandLedgers.Population
             get => offMapJourneys;
             set => offMapJourneys = value;
         }
+
+        /// <summary>
+        /// Optional physical-ownership check used while selecting a shopper.
+        /// The person-time calendar can be free while freight or another
+        /// task still owns the person's mover; production supplies the live
+        /// pathing authority's reason so those people are not selected for
+        /// trips they cannot physically begin.
+        /// </summary>
+        public Func<int, string> ShopperMovementBlockReason { get; set; }
 
         private int nextEventSequence;
         private int nextBatchSequence;
@@ -1365,7 +1413,8 @@ namespace LandLedgers.Population
                         ? null
                         : winnerItemSupplier.CheckTradingCapability(dayIndex, arrival),
                     scheduleTracker, budgets, personEntityId, out foundDeparture, out shopperReason,
-                    offMapJourneys, OneWayMinutesToSupplier(winner, options));
+                    offMapJourneys, OneWayMinutesToSupplier(winner, options),
+                    ShopperMovementBlockReason);
             }
 
             if (shopperId < 0)
@@ -1447,7 +1496,8 @@ namespace LandLedgers.Population
                             ? null
                             : correctedWinnerSupplier.CheckTradingCapability(dayIndex, arrival),
                         scheduleTracker, budgets, personEntityId, out correctedDeparture, out correctedReason,
-                        offMapJourneys, OneWayMinutesToSupplier(winner, options));
+                        offMapJourneys, OneWayMinutesToSupplier(winner, options),
+                        ShopperMovementBlockReason);
                     if (correctedShopper < 0)
                     {
                         batch.FailureReason = $"Unavailable shopper: {correctedReason ?? "nobody can shop today."} Needs stay open.";
@@ -2186,10 +2236,9 @@ namespace LandLedgers.Population
             chosen = null;
             shopperReason = null;
 
-            // The physical-trip path previously attempted a single
-            // 08:00 reservation. Search later feasible windows using the
-            // same person-time authority instead of rejecting a real
-            // household need against one occupied slot.
+            // Production households get two flexible shopping opportunities.
+            // Do not score a person's unrelated commitment across the entire
+            // day: query availability for each actual candidate window below.
             int latestDeparture = Math.Min(17 * 60, 18 * 60 - Math.Max(1, estimateMinutes));
             if (Math.Max(0, requestedDeparture) > latestDeparture)
             {
@@ -2199,42 +2248,75 @@ namespace LandLedgers.Population
                 return false;
             }
 
-            for (int departure = Math.Max(0, requestedDeparture); departure <= latestDeparture; departure += 15)
+            int earliestDeparture = Math.Max(0, requestedDeparture);
+            int[][] opportunities = UsePreferredShoppingWindows
+                ? new[] { new[] { 9 * 60, 11 * 60 }, new[] { 14 * 60, 16 * 60 } }
+                : new[] { new[] { earliestDeparture, latestDeparture } };
+            bool consideredAnyDeparture = false;
+            for (int windowIndex = 0; windowIndex < opportunities.Length; windowIndex++)
             {
-                int candidateShopper = ShopperAssignmentPolicy.ChooseShopper(
-                    population, memberIds, dayIndex, departure, estimateMinutes,
-                    scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys,
-                    OneWayMinutesToNearestSupplier(knownOffering, options),
-                    personId =>
+                int windowStart = Math.Max(earliestDeparture, opportunities[windowIndex][0]);
+                int windowEnd = Math.Min(latestDeparture, opportunities[windowIndex][1]);
+                if (windowStart > windowEnd) continue;
+                for (int departure = windowStart; departure <= windowEnd; departure += 15)
+                {
+                    consideredAnyDeparture = true;
+                    var rejectedClerksAtOwnCounter = new HashSet<int>();
+                    for (int attempt = 0; attempt < memberIds.Count; attempt++)
                     {
-                        EntityId person = personEntityId != null ? personEntityId(personId) : default(EntityId);
-                        WorkTask activeTask = person.IsValid ? tasks.FindBlockingTaskForAssignee(person) : null;
-                        return activeTask == null
-                            ? null
-                            : $"already occupied by task {activeTask.TaskId} ({activeTask.Status})";
-                    });
-                if (candidateShopper < 0)
-                {
-                    continue;
-                }
+                        int candidateShopper = ShopperAssignmentPolicy.ChooseShopper(
+                            population, memberIds, dayIndex, departure, estimateMinutes,
+                            scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys,
+                            OneWayMinutesToNearestSupplier(knownOffering, options),
+                            personId =>
+                            {
+                                if (rejectedClerksAtOwnCounter.Contains(personId))
+                                    return "is the configured clerk for the selected supplier and cannot serve while shopping there";
+                                string movementBlock = ShopperMovementBlockReason?.Invoke(personId);
+                                if (!string.IsNullOrWhiteSpace(movementBlock)) return movementBlock;
+                                EntityId person = personEntityId != null ? personEntityId(personId) : default(EntityId);
+                                WorkTask activeTask = person.IsValid ? tasks.FindBlockingTaskForAssignee(person) : null;
+                                return activeTask == null
+                                    ? null
+                                    : $"already occupied by task {activeTask.TaskId} ({activeTask.Status})";
+                            });
+                        if (candidateShopper < 0)
+                        {
+                            break;
+                        }
 
-                options.DepartureMinuteOfDay = departure;
-                string candidateHome = ResolvePersonLocation(candidateShopper, options);
-                ShoppingCandidate candidate = EvaluateCandidates(
-                    result, need, candidateShopper, candidateHome, knownOffering, dayIndex, options, diag);
-                if (candidate == null)
-                {
-                    continue;
-                }
+                        options.DepartureMinuteOfDay = departure;
+                        string candidateHome = ResolvePersonLocation(candidateShopper, options);
+                        ShoppingCandidate candidate = EvaluateCandidates(
+                            result, need, candidateShopper, candidateHome, knownOffering, dayIndex, options, diag);
+                        if (candidate == null)
+                        {
+                            break;
+                        }
 
-                shopperId = candidateShopper;
-                selectedDeparture = departure;
-                chosen = candidate;
-                options.DepartureMinuteOfDay = requestedDeparture;
-                return true;
+                        if (IsPotentialServiceClerkForBusiness?.Invoke(
+                                candidate.Supplier.SupplierBusinessId, candidateShopper) == true)
+                        {
+                            rejectedClerksAtOwnCounter.Add(candidateShopper);
+                            shopperReason = $"P{candidateShopper} is the configured clerk at '{candidate.Supplier.SupplierName}'; another available household member or shopping window is required";
+                            continue;
+                        }
+
+                        shopperId = candidateShopper;
+                        selectedDeparture = departure;
+                        chosen = candidate;
+                        options.DepartureMinuteOfDay = requestedDeparture;
+                        return true;
+                    }
+                }
             }
 
             options.DepartureMinuteOfDay = requestedDeparture;
+            if (UsePreferredShoppingWindows && !consideredAnyDeparture)
+            {
+                shopperReason = $"No preferred shopping opportunity remains today that can fit the {Math.Max(1, estimateMinutes)}-min trip; " +
+                    "the need remains open for the next legitimate window.";
+            }
             return false;
         }
 
@@ -2258,6 +2340,7 @@ namespace LandLedgers.Population
             trip.DayIndex = Math.Max(0, dayIndex);
             trip.TripId = $"trip-{trip.DayIndex}-{nextTripSequence++}";
             var result = new ShoppingTripResult();
+            result.TripId = trip.TripId;
             trip.Result = result;
 
             // ---- Step 1: the need exists. ----
@@ -2610,7 +2693,7 @@ namespace LandLedgers.Population
             PersonState shopper = population.GetPerson(trip.ShopperPersonId);
             if (trip.Legs.Outbound != null)
             {
-                if (!tasks.StartTask(trip.Legs.Outbound.TaskId, dayIndex, out string rejection))
+                if (!StartLegTaskIdempotently(trip.Legs.Outbound, dayIndex, out string rejection))
                 {
                     return $"Outbound leg could not start: {rejection}";
                 }
@@ -2622,6 +2705,22 @@ namespace LandLedgers.Population
                 $"outbound {trip.Legs.OutboundMinutes} min; real travel task, real person-time.");
             trip.State = PlannedShoppingTrip.TripState.Outbound;
             return null;
+        }
+
+        /// <summary>
+        /// A shopping stage can be replayed by its due-event recovery or after
+        /// restoration. Re-starting a task already in progress is not a second
+        /// start, and a completed task must not be reopened or awarded work a
+        /// second time. The driver still gates travel completion on physical
+        /// arrival before it advances the trip.
+        /// </summary>
+        private bool StartLegTaskIdempotently(WorkTask task, int dayIndex, out string rejection)
+        {
+            rejection = string.Empty;
+            if (task == null) return true;
+            if (task.Status == TaskStatus.InProgress || task.Status == TaskStatus.Complete)
+                return true;
+            return tasks.StartTask(task.TaskId, dayIndex, out rejection);
         }
 
         /// <summary>Slice 17: the settle part of ArriveAtStoreAndSettle,
@@ -2661,7 +2760,8 @@ namespace LandLedgers.Population
         /// STORE_CLOSED or SETTLE_FAILED so the driver can walk the shopper
         /// home empty-handed through the real return leg.
         /// </summary>
-        public string ArriveAtStoreAndSettle(PlannedShoppingTrip trip, int arrivalDayIndex, int arrivalMinuteOfDay, List<string> diag)
+        public string ArriveAtStoreAndSettle(PlannedShoppingTrip trip, int arrivalDayIndex, int arrivalMinuteOfDay,
+            List<string> diag, float arrivalGameSeconds = float.NaN)
         {
             if (trip == null || trip.Candidate == null)
             {
@@ -2686,98 +2786,136 @@ namespace LandLedgers.Population
                     "Shopper returns empty-handed; trip rescheduled, need stays open.";
             }
 
-            // Plan 16: employee service. The shopper joins the store's live
-            // queue and a TendCustomer task is created for a filled clerk.
-            // Slice 17: settlement waits for service — when a task was started
-            // the trip waits in AwaitingService (below) and the
-            // service-completion branch settles it; with no task it settles
-            // at arrival, as before. Skips are silent-or-diagnostic only, never invented
-            // state: no queue -> today; unresolvable category -> skip (never
-            // pass ItemId as CategoryId); full line -> skip WITHOUT calling
-            // Enqueue (calling it would record a false QueueBalk lost sale for
-            // a customer who is about to settle); no clerk -> enqueue only,
-            // no task.
+            // A physical retail purchase requires a real counter service
+            // queue. Arrival alone cannot charge the household or transfer
+            // stock: those occur only after a clerk completes TendCustomer.
             CustomerQueue serviceQueue = ResolveCustomerQueue?.Invoke(chosen.Supplier.SupplierBusinessId);
-            if (serviceQueue != null)
+            if (serviceQueue == null)
             {
-                string serviceCategoryId = chosen.ItemSupplier != null
-                    ? chosen.ItemSupplier.CategoryForItem(need.ItemId)
-                    : null;
-                if (!string.IsNullOrWhiteSpace(serviceCategoryId)
-                    && serviceQueue.WaitingCount < CustomerQueue.MaxToleratedQueueLength)
+                if (RequirePhysicalCounterService)
                 {
-                    string serviceCustomerRef = $"shop:{trip.HouseholdId}:{need.NeedSequence}";
-                    bool enqueued = serviceQueue.Enqueue(
-                        serviceCustomerRef, trip.ShopperPersonId, serviceCategoryId,
-                        chosen.UnitsPlanned, chosen.UnitPriceCents, arrivalDayIndex);
-                    if (enqueued)
-                    {
-                        int clerkPersonId = ResolveServiceClerkPersonId?.Invoke(chosen.Supplier.SupplierBusinessId) ?? -1;
-                        if (clerkPersonId >= 0)
-                        {
-                            EntityId storeEntity = GeneralStoreTaskCatalog.StoreBusinessEntityId(chosen.Supplier.SupplierBusinessId);
-                            WorkTask serviceTask = GeneralStoreTaskCatalog.EnqueueTendCustomer(
-                                tasks, storeEntity, arrivalDayIndex, serviceCustomerRef);
-                            EntityId clerkEntity = EntityId.For(EntityKind.Person, clerkPersonId);
-                            bool assigned = tasks.AssignTask(serviceTask.TaskId, clerkEntity, budgets, out string assignReason);
-                            bool started = false;
-                            if (assigned)
-                            {
-                                started = tasks.StartTask(serviceTask.TaskId, arrivalDayIndex, out string startReason);
-                                if (!started)
-                                {
-                                    diag.Add($"Plan16: TendCustomer task {serviceTask.TaskId} start refused ({startReason}); customer stays queued; task cancelled.");
-                                    tasks.CancelTask(serviceTask.TaskId, budgets);
-                                }
-                            }
-                            else
-                            {
-                                diag.Add($"Plan16: TendCustomer task {serviceTask.TaskId} assign refused ({assignReason}); customer stays queued; task cancelled.");
-                                tasks.CancelTask(serviceTask.TaskId, budgets);
-                            }
-                            if (started)
-                            {
-                                trip.ServiceTaskId = serviceTask.TaskId;
-                                trip.ServiceTaskPlannedMinutes = serviceTask.PlannedMinutes;
-                            }
-                        }
-                        else
-                        {
-                            diag.Add($"Plan16: no clerk for store '{chosen.Supplier.SupplierBusinessId}'; customer {serviceCustomerRef} waits in the queue without a service task.");
-                        }
-                    }
-                    else
-                    {
-                        diag.Add($"Plan16: queue refused {serviceCustomerRef} (full at enqueue time); settling as today.");
-                    }
+                    return $"STORE_UNSERVED: no physical counter queue is bound for '{chosen.Supplier.SupplierName}'; no transaction occurred.";
                 }
-                else if (string.IsNullOrWhiteSpace(serviceCategoryId))
-                {
-                    diag.Add($"Plan16: no category for item '{need.ItemId}'; customer not queued.");
-                }
-                else
-                {
-                    diag.Add($"Plan16: queue full ({serviceQueue.WaitingCount}); customer not queued, settling as today.");
-                }
+
+                // Explicit compatibility mode for integrations that do not
+                // model a staffed counter. Production retail enables the
+                // physical-service requirement and therefore fails closed.
+                string directSettlementError = SettleAfterService(trip, arrivalDayIndex, diag);
+                return directSettlementError == null ? null : $"SETTLE_FAILED: {directSettlementError}";
             }
 
-            // Slice 17: settlement waits for service. A service task was
-            // started — the trip waits in AwaitingService and the
-            // service-completion branch settles it. No service task —
-            // settle immediately, as today (rule (g)).
+            string serviceCategoryId = chosen.ItemSupplier?.CategoryForItem(need.ItemId);
+            if (string.IsNullOrWhiteSpace(serviceCategoryId))
+            {
+                if (RequirePhysicalCounterService)
+                    return $"STORE_UNSERVED: no service category exists for '{need.ItemId}'; no counter transaction occurred.";
+                string directSettlementError = SettleAfterService(trip, arrivalDayIndex, diag);
+                return directSettlementError == null ? null : $"SETTLE_FAILED: {directSettlementError}";
+            }
+
+            string serviceCustomerRef = $"shop:{trip.HouseholdId}:{need.NeedSequence}";
+            bool alreadyQueued = serviceQueue.Waiting.Any(customer => customer != null
+                && string.Equals(customer.CustomerRef, serviceCustomerRef, StringComparison.Ordinal));
+            if (!alreadyQueued && !serviceQueue.Enqueue(
+                    serviceCustomerRef, trip.ShopperPersonId, serviceCategoryId,
+                    chosen.UnitsPlanned, chosen.UnitPriceCents, arrivalDayIndex,
+                    CustomerQueue.DefaultPatienceMinutes,
+                    float.IsNaN(arrivalGameSeconds) || float.IsInfinity(arrivalGameSeconds)
+                        ? arrivalDayIndex * 86400f + Math.Max(0, arrivalMinuteOfDay) * 60f
+                        : arrivalGameSeconds))
+            {
+                if (RequirePhysicalCounterService)
+                    return $"STORE_UNSERVED: queue at '{chosen.Supplier.SupplierName}' is full; no counter transaction occurred.";
+                string directSettlementError = SettleAfterService(trip, arrivalDayIndex, diag);
+                return directSettlementError == null ? null : $"SETTLE_FAILED: {directSettlementError}";
+            }
+
+            trip.State = PlannedShoppingTrip.TripState.AwaitingService;
+            bool serviceStarted = TryStartCustomerService(trip, arrivalDayIndex, diag, out string serviceRefusal);
+            if (!serviceStarted && !string.IsNullOrWhiteSpace(serviceRefusal))
+                diag?.Add($"HouseholdShoppingLoop: trip {trip.TripId} is waiting in the counter queue; {serviceRefusal}. No sale has settled.");
+            if (!trip.ServiceTaskId.IsValid && !RequirePhysicalCounterService)
+            {
+                serviceQueue.TryRemove(serviceCustomerRef);
+                string directSettlementError = SettleAfterService(trip, arrivalDayIndex, diag);
+                return directSettlementError == null ? null : $"SETTLE_FAILED: {directSettlementError}";
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Start counter work for the FIFO customer only when a production
+        /// binding resolves a physically present clerk. If the clerk is away
+        /// or occupied, the customer remains queued and no sale is settled.
+        /// </summary>
+        internal bool TryStartCustomerService(PlannedShoppingTrip trip, int dayIndex,
+            List<string> diag, out string refusal)
+        {
+            refusal = null;
+            if (trip == null || trip.Candidate?.Supplier == null)
+            {
+                refusal = "trip or supplier is missing";
+                return false;
+            }
             if (trip.ServiceTaskId.IsValid)
             {
-                trip.State = PlannedShoppingTrip.TripState.AwaitingService;
-                return null;
+                WorkTask existing = tasks.FindTask(trip.ServiceTaskId);
+                if (existing != null && existing.Status == TaskStatus.InProgress) return true;
+                trip.ServiceTaskId = default;
+                trip.ServiceTaskPlannedMinutes = 0;
             }
 
-            string settleError = SettleAfterService(trip, arrivalDayIndex, diag);
-            if (settleError != null)
+            string businessId = trip.Candidate.Supplier.SupplierBusinessId;
+            string customerRef = $"shop:{trip.HouseholdId}:{trip.Need?.NeedSequence ?? -1}";
+            CustomerQueue queue = ResolveCustomerQueue?.Invoke(businessId);
+            if (queue == null || queue.Waiting.Count == 0
+                || !string.Equals(queue.Waiting[0].CustomerRef, customerRef, StringComparison.Ordinal))
             {
-                return $"SETTLE_FAILED: {settleError}";
+                refusal = "customer is not at the head of the live store queue";
+                return false;
             }
 
-            return null;
+            IReadOnlyList<int> clerkCandidates = ResolveServiceClerkCandidates?.Invoke(businessId);
+            if (clerkCandidates == null)
+            {
+                int singleCandidate = ResolveServiceClerkPersonId?.Invoke(businessId) ?? -1;
+                clerkCandidates = singleCandidate >= 0 ? new[] { singleCandidate } : Array.Empty<int>();
+            }
+            if (clerkCandidates.Count == 0)
+            {
+                refusal = "no physically present service clerk is available";
+                return false;
+            }
+
+            EntityId storeEntity = GeneralStoreTaskCatalog.StoreBusinessEntityId(businessId);
+            var attemptedPeople = new HashSet<int>();
+            string lastRefusal = null;
+            foreach (int clerkPersonId in clerkCandidates)
+            {
+                if (clerkPersonId < 0 || !attemptedPeople.Add(clerkPersonId)) continue;
+                WorkTask task = GeneralStoreTaskCatalog.EnqueueTendCustomer(tasks, storeEntity, dayIndex, customerRef);
+                EntityId clerk = EntityId.For(EntityKind.Person, clerkPersonId);
+                if (!tasks.AssignTask(task.TaskId, clerk, budgets, out string assignReason))
+                {
+                    tasks.CancelTask(task.TaskId, budgets);
+                    lastRefusal = "clerk P" + clerkPersonId + " task assignment refused: " + assignReason;
+                    continue;
+                }
+                if (!tasks.StartTask(task.TaskId, dayIndex, out string startReason))
+                {
+                    tasks.CancelTask(task.TaskId, budgets);
+                    lastRefusal = "clerk P" + clerkPersonId + " task start refused: " + startReason;
+                    continue;
+                }
+
+                trip.ServiceTaskId = task.TaskId;
+                trip.ServiceTaskPlannedMinutes = task.PlannedMinutes;
+                diag?.Add($"HouseholdShoppingLoop: P{clerkPersonId} began counter service for {customerRef} at '{trip.Candidate.Supplier.SupplierName}'.");
+                return true;
+            }
+
+            refusal = lastRefusal ?? "no valid physically present service clerk candidates";
+            return false;
         }
 
         private int EstimateDeliveryMinutes(PlannedShoppingTrip trip, List<string> diag)
@@ -2802,7 +2940,7 @@ namespace LandLedgers.Population
                 return "BeginInStoreLeg: no in-store leg planned.";
             }
 
-            if (!tasks.StartTask(trip.Legs.InStore.TaskId, dayIndex, out string rejection))
+            if (!StartLegTaskIdempotently(trip.Legs.InStore, dayIndex, out string rejection))
             {
                 return $"In-store leg could not start: {rejection}";
             }
@@ -2823,7 +2961,7 @@ namespace LandLedgers.Population
             SetScheduleState(shopper, PopulationScheduleState.ReturningHome);
             if (trip.Legs.Return != null)
             {
-                if (!tasks.StartTask(trip.Legs.Return.TaskId, dayIndex, out string rejection))
+                if (!StartLegTaskIdempotently(trip.Legs.Return, dayIndex, out string rejection))
                 {
                     return $"Return leg '{legName}' could not start: {rejection}";
                 }
@@ -2884,15 +3022,51 @@ namespace LandLedgers.Population
                 return null; // zero-travel leg: nothing to complete.
             }
 
-            int remaining = Math.Max(1, leg.MinutesRemaining);
-            if (!tasks.RecordWorkProgress(leg.TaskId, remaining, budgets, dayIndex, out bool reached, out string rejection))
+            // Planned trips retain a task snapshot for persistence and route
+            // correlation. Another legitimate progress path (notably the
+            // autonomous player-task driver) can complete the authoritative
+            // task while that retained snapshot still says InProgress. Always
+            // resolve the current authority by durable id before recording
+            // minutes; otherwise RecordWorkProgress rejects the stale snapshot
+            // and the entire physically arrived shopping trip is aborted.
+            WorkTask current = tasks.FindTask(leg.TaskId);
+            if (current == null)
+            {
+                // Preserve idempotency for a terminal snapshot that has
+                // already been pruned after its retention window. A missing
+                // open task remains an explicit ownership failure.
+                if (leg.Status == TaskStatus.Complete)
+                {
+                    return null;
+                }
+                return $"Leg task {leg.TaskId} is missing from TaskAuthority; physical arrival cannot complete an unowned task.";
+            }
+
+            // Another legitimate task-progress path may have recorded the
+            // reserved work interval and completed this task before the
+            // shopping driver's matching due callback is dispatched. The
+            // driver has already verified physical arrival before reaching
+            // this method, so treat that terminal success as idempotent rather
+            // than trying to award the same minutes again.
+            if (current.Status == TaskStatus.Complete)
+            {
+                return null;
+            }
+
+            if (current.Status != TaskStatus.InProgress)
+            {
+                return $"Leg task {leg.TaskId} cannot complete from {current.Status}; physical arrival does not override task ownership.";
+            }
+
+            int remaining = Math.Max(1, current.MinutesRemaining);
+            if (!tasks.RecordWorkProgress(current.TaskId, remaining, budgets, dayIndex, out bool reached, out string rejection))
             {
                 return $"Leg task progress refused: {rejection}";
             }
 
-            if (reached && !tasks.CompleteTask(leg.TaskId, TaskOutcome.Success, dayIndex, budgets))
+            if (reached && !tasks.CompleteTask(current.TaskId, TaskOutcome.Success, dayIndex, budgets))
             {
-                return $"Leg task {leg.TaskId} reached its plan but CompleteTask refused.";
+                return $"Leg task {current.TaskId} reached its plan but CompleteTask refused.";
             }
 
             return null;
@@ -2910,15 +3084,31 @@ namespace LandLedgers.Population
                 return null;
             }
 
-            int remaining = Math.Max(1, serviceTask.MinutesRemaining);
-            if (!tasks.RecordWorkProgress(serviceTask.TaskId, remaining, budgets, dayIndex, out bool reached, out string rejection))
+            WorkTask current = tasks.FindTask(serviceTask.TaskId);
+            if (current == null)
+            {
+                if (serviceTask.Status == TaskStatus.Complete) return null;
+                return $"Service task {serviceTask.TaskId} is missing from TaskAuthority; service cannot complete without its owning task.";
+            }
+            if (current.Status == TaskStatus.Complete)
+            {
+                return null;
+            }
+
+            if (current.Status != TaskStatus.InProgress)
+            {
+                return $"Service task {current.TaskId} cannot complete from {current.Status}.";
+            }
+
+            int remaining = Math.Max(1, current.MinutesRemaining);
+            if (!tasks.RecordWorkProgress(current.TaskId, remaining, budgets, dayIndex, out bool reached, out string rejection))
             {
                 return $"Service task progress refused: {rejection}";
             }
 
-            if (reached && !tasks.CompleteTask(serviceTask.TaskId, TaskOutcome.Success, dayIndex, budgets))
+            if (reached && !tasks.CompleteTask(current.TaskId, TaskOutcome.Success, dayIndex, budgets))
             {
-                return $"Service task {serviceTask.TaskId} reached its plan but CompleteTask refused.";
+                return $"Service task {current.TaskId} reached its plan but CompleteTask refused.";
             }
 
             return null;
@@ -3181,9 +3371,18 @@ namespace LandLedgers.Population
             }
 
             diag = diag ?? new List<string>();
-            WorkTask[] openLegs = { trip.Legs?.Outbound, trip.Legs?.InStore, trip.Legs?.Return };
-            foreach (WorkTask leg in openLegs)
-                if (leg != null && leg.IsOpen) tasks.CancelTask(leg.TaskId, budgets);
+            EntityId[] legTaskIds = { trip.OutboundTaskId, trip.InStoreTaskId, trip.ReturnTaskId };
+            var cancelledTaskIds = new HashSet<EntityId>();
+            foreach (EntityId taskId in legTaskIds)
+            {
+                if (!taskId.IsValid || !cancelledTaskIds.Add(taskId)) continue;
+                // Live trip leg references are runtime caches. Resolve the
+                // durable task identity through TaskAuthority so aborting a
+                // trip still releases an open assignment after a partial
+                // restore or lost in-memory leg mapping.
+                WorkTask leg = tasks != null ? tasks.FindTask(taskId) : null;
+                if (leg != null && leg.IsOpen) tasks.CancelTask(taskId, budgets);
+            }
             // Slice 18 Tier 1: the trip is leaving without service — remove its
             // queue entry silently (no lost sale, no refusal). A trip that
             // failed before arrival was never enqueued, so this is a no-op.
@@ -3202,6 +3401,12 @@ namespace LandLedgers.Population
             }
 
             diag.Add($"Day {dayIndex}: shopping trip {trip.TripId} ABORTED — {trip.FailureReason}");
+        }
+
+        internal void MarkShopperReturningHomeAfterInterruptedTrip(PlannedShoppingTrip trip)
+        {
+            if (trip == null) return;
+            SetScheduleState(population.GetPerson(trip.ShopperPersonId), PopulationScheduleState.ReturningHome);
         }
 
         public void ExpireUndepartedTrip(PlannedShoppingTrip trip, int dayIndex, List<string> diag)
@@ -4011,9 +4216,10 @@ namespace LandLedgers.Population
             ShoppingTripResult result, int dayIndex, ShoppingEventKind kind,
             int personId, HouseholdPurchasingNeed need, string summary, string details)
         {
-            result.Events.Add(new ShoppingDiagnosticEvent
+            var activityEvent = new ShoppingDiagnosticEvent
             {
                 EventSequence = nextEventSequence++,
+                TripId = result.TripId ?? string.Empty,
                 DayIndex = Math.Max(0, dayIndex),
                 Kind = kind,
                 HouseholdId = result.HouseholdId,
@@ -4021,7 +4227,9 @@ namespace LandLedgers.Population
                 NeedSequence = need != null ? need.NeedSequence : result.NeedSequence,
                 Summary = summary ?? string.Empty,
                 Details = details ?? string.Empty,
-            });
+            };
+            result.Events.Add(activityEvent);
+            DevelopmentTraceObserver?.Invoke(activityEvent);
         }
 
         private ShoppingTripResult Fail(

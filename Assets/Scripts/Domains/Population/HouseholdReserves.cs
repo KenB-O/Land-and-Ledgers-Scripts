@@ -334,7 +334,20 @@ namespace LandLedgers.Population
                     : 0f;
             if (string.Equals(definition.CategoryId, StapleFoodCategoryId, StringComparison.OrdinalIgnoreCase))
             {
-                return Mathf.Clamp(Mathf.Max(definition.LowThresholdUnits, Mathf.CeilToInt(target * (0.35f + dwellingPressure))), 0, target);
+                HouseholdItemDefinition unspecifiedStaple = HouseholdItemCatalog.Get(
+                    HouseholdItemCatalog.UnspecifiedStapleFoodId);
+                int unitsPerServing = Mathf.Max(1, unspecifiedStaple != null
+                    ? unspecifiedStaple.MealServingUnits
+                    : 1);
+                int consumers = Mathf.Max(1, GetHouseholdConsumerCount(household));
+                int ordinaryThreeDayNeed = consumers
+                    * MealSchedulingPolicy.Default.ExpectedMealsPerDay
+                    * 3
+                    * unitsPerServing;
+                int dwellingPressureUnits = Mathf.CeilToInt(target * dwellingPressure);
+                return Mathf.Clamp(Mathf.Max(
+                    definition.LowThresholdUnits,
+                    ordinaryThreeDayNeed + dwellingPressureUnits), 0, target);
             }
 
             return Mathf.Clamp(Mathf.Max(definition.LowThresholdUnits, Mathf.CeilToInt(target * dwellingPressure)), 0, target);
@@ -575,7 +588,7 @@ namespace LandLedgers.Population
 
         public static int ResolveDailyUse(
             HouseholdState household, int absoluteDayIndex, CalendarAnchor anchor,
-            HouseholdStoveRegistry stoves = null)
+            HouseholdStoveRegistry stoves = null, bool foodInventoryIsAuthoritative = false)
         {
             if (household == null)
             {
@@ -603,6 +616,18 @@ namespace LandLedgers.Population
                 reserve.ApplyDefinition(definition, household);
                 reserve.ResetDailyPurchaseTracking();
                 reserve.DecayShoppingMemory();
+
+                // In the physical Phase C food path, actual household lots
+                // are consumed by DailyNeedsService and mirrored back to
+                // these reserves. Do not also decrement the same food need
+                // through the legacy category reserve cadence.
+                if (foodInventoryIsAuthoritative
+                    && (definition.DemandGroup == RetailDemandGroup.DailyStaple
+                        || definition.DemandGroup == RetailDemandGroup.FoodProtein))
+                {
+                    reserve.lastDailyUseUnits = 0;
+                    continue;
+                }
 
                 if (HouseholdHeatingEvaluator.IsFuelReserve(definition))
                 {

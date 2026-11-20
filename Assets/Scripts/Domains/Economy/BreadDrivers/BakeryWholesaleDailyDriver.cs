@@ -45,6 +45,12 @@ namespace LandLedgers.Economy.BreadDrivers
         public BusinessRuntimeState StoreRuntimeState;
         public BusinessRuntimeState BakeryRuntimeState;
         public int StoreFlourUnitPriceCents;
+        /// <summary>
+        /// Open household bread needs already registered by the physical
+        /// purchasing authority. Zero means no household demand signal was
+        /// available to this daily production review.
+        /// </summary>
+        public int OpenHouseholdBreadNeedUnits;
         public MillbrookFlourQuote MillbrookQuote;
         public OffMapAidBusinessRuntime MillbrookSupplier;
         public int ImportFlourPricePerLbCents;
@@ -125,12 +131,20 @@ namespace LandLedgers.Economy.BreadDrivers
         public int TransfersCompleted;
         /// <summary>Units stocked into the live store category pool today (prior-day shelf retries included).</summary>
         public int UnitsStocked;
+        /// <summary>Actual bakery-counter units sold today from persisted sale records.</summary>
+        public int RetailUnitsSoldToday;
+        /// <summary>Cash revenue from actual bakery-counter sales today; no forecast revenue.</summary>
+        public int RetailRevenueTodayCents;
+        /// <summary>Stale bread written off today, retained in the waste ledger.</summary>
+        public int WasteUnitsToday;
+        /// <summary>Current bakery business cash when its live cash authority is connected; -1 when unavailable.</summary>
+        public int BakeryCashAvailableCents;
         /// <summary>
-        /// Names the day's blocker, if any: no account on the books, or
-        /// the production refusal that stopped the bake. A transfer of
-        /// previously baked stock can still complete on a day whose bake
-        /// was refused; per-account transfer refusals are in the
-        /// diagnostics, not here.
+        /// Names a technical production blocker, if any. A bakery with no
+        /// wholesale account is not a refusal; zero demand is an ordinary
+        /// idle day. A transfer of previously baked stock can still complete
+        /// on a day whose bake was refused; per-account transfer refusals
+        /// are in the diagnostics, not here.
         /// </summary>
         public string Refusal;
         /// <summary>Whole flour sacks bought locally from the General Store today (Plan 02).</summary>
@@ -153,7 +167,7 @@ namespace LandLedgers.Economy.BreadDrivers
         public int FlourNeedPoundsRemaining;
         /// <summary>Plan 04 M4: remaining flour shortfall in whole sacks (ceil(lb/10)) — the registerable need.</summary>
         public int FlourNeedSacks;
-        /// <summary>Plan 04 M4: remaining notions shortfall after today's feed (batches minus fed, 0 when covered).</summary>
+        /// <summary>Plan 04 M4: remaining notions shortfall after bin stock and today's feed.</summary>
         public int NotionsNeedUnits;
         /// <summary>Plan 04 Slice 4: cumulative actuals across the run
         /// (prior threaded totals + today). Diagnostics only — the
@@ -164,6 +178,20 @@ namespace LandLedgers.Economy.BreadDrivers
         public int CumulativeFlourPoundsPurchased;
         public int CumulativeNotionsCashSpentCents;
         public int CumulativeWholesaleRevenueCents;
+
+        /// <summary>
+        /// Creates the daily driver's ordinary zeroed result while keeping
+        /// the established -1 sentinel for an unavailable cash authority.
+        /// A factory is used because C# 9 does not support struct field
+        /// initializers; default(BakeryWholesaleDailyResult) remains the
+        /// language-defined all-zero value.
+        /// </summary>
+        public static BakeryWholesaleDailyResult CreateDefault()
+        {
+            BakeryWholesaleDailyResult result = default;
+            result.BakeryCashAvailableCents = -1;
+            return result;
+        }
     }
 
     /// <summary>
@@ -198,6 +226,18 @@ namespace LandLedgers.Economy.BreadDrivers
     {
         /// <summary>Live store category bread stocks into (staple_food in the store definition).</summary>
         public const string StoreCategoryId = "staple_food";
+
+        /// <summary>
+        /// A catalog transit estimate is a valid procurement horizon only
+        /// when that import order path is actually available. The town's
+        /// flour import catalog entry describes a dormant railhead route;
+        /// it must not make the same-day General Store counter purchase
+        /// stock up for fourteen days of demand.
+        /// </summary>
+        public static int ResolveCatalogPipelineDepthDays(bool liveImportOrderPathExists, int catalogTransitDays)
+        {
+            return liveImportOrderPathExists ? Math.Max(0, catalogTransitDays) : 0;
+        }
 
         /// <summary>
         /// Plan 04 M4 (Obj 42/43, D-S5 — wire branch): maps the driver's
@@ -339,7 +379,7 @@ namespace LandLedgers.Economy.BreadDrivers
         public static BakeryWholesaleDailyResult RunDay(BakeryWholesaleDailyInputs inputs, List<string> diag)
         {
             diag = diag ?? new List<string>();
-            var result = new BakeryWholesaleDailyResult();
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyResult.CreateDefault();
             if (inputs == null || inputs.Bakery == null || inputs.ProductionDriver == null)
             {
                 result.Refusal = "BakeryWholesaleDailyDriver: a bakery runtime and production driver are required; nothing planned.";
@@ -354,17 +394,25 @@ namespace LandLedgers.Economy.BreadDrivers
             foreach (var account in bakery.WholesaleAccounts)
                 if (account != null && account.IsActive) activeAccounts++;
             result.AccountsOnBooks = activeAccounts;
-            if (activeAccounts == 0)
-            {
-                result.Refusal = "BakeryWholesaleDailyDriver: no wholesale account on the books — book one via scenario config; nothing planned.";
-                diag.Add(result.Refusal);
-                return result;
-            }
 
-            // (b) Plan + bake — existing calls, moved verbatim.
+            // (b) Plan wholesale obligations first, then let the same shop
+            // runtime plan only the uncovered retail demand it has actually
+            // observed. A wholesale account is not a prerequisite for the
+            // bakery to operate its counter.
             List<string> planned = bakery.PlanWholesaleBatches(dayIndex, diag);
+            List<string> retailPlanned = bakery.PlanRetailBatches(
+                dayIndex, inputs.OpenHouseholdBreadNeedUnits, diag);
+            if (planned == null) planned = new List<string>();
+            if (retailPlanned != null) planned.AddRange(retailPlanned);
             result.BatchesPlanned = planned != null ? planned.Count : 0;
             inputs.ProductionDriver.AdoptPlannedBatches(dayIndex, planned, diag);
+
+            if (activeAccounts == 0 && result.BatchesPlanned == 0
+                && inputs.ProductionDriver.PlannedBatchIds.Count == 0)
+            {
+                diag.Add("BakeryWholesaleDailyDriver: no wholesale obligation or observed uncovered retail demand; no production was planned.");
+                return FinishWithActualsLine(inputs, result, 0, diag);
+            }
 
             // (b½) Flour procurement — Plan 02 slice 2A: buy only today's
             // need, from the recommended executable source, then bake through
@@ -586,11 +634,16 @@ namespace LandLedgers.Economy.BreadDrivers
                 result.NotionsArrivalDayIndex = notionsResult.NotionsArrivalDayIndex;
             }
 
-            // M4 (Plan 04, D-S5): the remaining notions shortfall is the
-            // registerable need — the day's batches minus what the bin
-            // was fed. Zero when the bin covers the plan. (The pipeline
-            // order above is the supply response, not a second need.)
-            result.NotionsNeedUnits = Math.Max(0, batchesToday - result.NotionsUnitsFed);
+            // M4 (Plan 04, D-S5): register only the physical shortfall
+            // remaining after the bakery's own bin stock and today's paid
+            // feed. FeedNotionsToBakery has already credited successful feed
+            // into this bin before this calculation, so this is the complete
+            // current physical quantity; subtracting NotionsUnitsFed again
+            // would hide a partial-feed shortfall. Incoming shipments are not
+            // physical stock and are intentionally not subtracted here.
+            int notionsOnHandForPlan = bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId);
+            int notionsRequiredForPlan = batchesToday * BakeryBreadCatalog.StandardNotionsPerBatch;
+            result.NotionsNeedUnits = Math.Max(0, notionsRequiredForPlan - notionsOnHandForPlan);
 
             // Per-batch economics, logged whenever a batch is planned today:
             // the TRUE cost — flour + notions — vs wholesale revenue, margin
@@ -653,10 +706,18 @@ namespace LandLedgers.Economy.BreadDrivers
             // RunScheduledDay — log-only, no state or ordering change.
             LogPipelineCoverage(inputs, dayIndex, diag);
 
+            int baked = 0;
             int diagnosticsBeforeRun = diag.Count;
-            int baked = inputs.ProductionDriver.RunScheduledDay(
-                dayIndex, inputs.BakerKitUsable, inputs.OvenDefinition,
-                inputs.FindOvenComponent, inputs.CallerDailyBudgetMinutes, diag, inputs.IdRegistry);
+            if (inputs.ProductionDriver.PlannedBatchIds.Count > 0)
+            {
+                baked = inputs.ProductionDriver.RunScheduledDay(
+                    dayIndex, inputs.BakerKitUsable, inputs.OvenDefinition,
+                    inputs.FindOvenComponent, inputs.CallerDailyBudgetMinutes, diag, inputs.IdRegistry);
+            }
+            else
+            {
+                diag.Add($"BakeryWholesaleDailyDriver: no bake execution needed on day {dayIndex}; due accounts are covered by eligible finished stock and no new retail demand is uncovered.");
+            }
             result.BatchesBaked = Math.Max(0, baked);
             if (baked < 0)
             {
@@ -711,73 +772,103 @@ namespace LandLedgers.Economy.BreadDrivers
                 if (!string.Equals(account.ProductId, BakeryBreadCatalog.BreadLoafId, StringComparison.Ordinal)) continue;
                 if (!string.Equals(account.BuyerBusinessId, inputs.StoreBusinessId, StringComparison.Ordinal)) continue;
 
-                // Capture the source lot and its provenance BEFORE the
-                // transfer takes the units, so the delivery record keeps
-                // the full upstream chain. The transfer takes from this
-                // same oldest sellable lot and never partials, so the
-                // captured lot is the transferred lot.
-                BakeryBreadLot sourceLot = OldestSellableLot(bakery, account.ProductId);
-                string sourceLotId = sourceLot != null ? sourceLot.LotId.ToString() : string.Empty;
-                var provenance = new List<string>();
-                if (sourceLot?.InputProvenance != null) provenance.AddRange(sourceLot.InputProvenance);
+                bool alreadyRecordedToday = false;
+                foreach (BakeryWholesaleDeliveryRecord prior in bakery.WholesaleDeliveries)
+                {
+                    if (prior != null && prior.DayIndex == dayIndex
+                        && string.Equals(prior.AccountId, account.AccountId, StringComparison.Ordinal))
+                    {
+                        alreadyRecordedToday = true;
+                        break;
+                    }
+                }
+                if (alreadyRecordedToday) continue;
 
-                int retailPriceCents = inputs.StorePort.CategoryPricePerUnitCents(StoreCategoryId);
-                // The accepted account quantity is a maximum for this
-                // delivery, not permission to create stock. A short real
-                // lot can fulfill a partial order; the actual quantity is
-                // charged and recorded below, and the account records the
-                // shortage instead of retrying the same paid transfer.
-                int transferUnits = sourceLot != null
-                    ? Math.Min(Math.Max(0, account.UnitsPerDelivery), sourceLot.UnitCount)
-                    : 0;
+                List<BakeryBreadLot> sourceLots = SellableLotsForWholesale(bakery, account, dayIndex);
+                int availableUnits = 0;
+                foreach (BakeryBreadLot lot in sourceLots)
+                    availableUnits = checked(availableUnits + Math.Max(0, lot.UnitCount));
+                int transferUnits = Math.Min(Math.Max(0, account.UnitsPerDelivery), availableUnits);
                 if (transferUnits <= 0)
                 {
-                    diag.Add($"BakeryWholesaleDailyDriver: account {account.AccountId} stays due — no sellable finished bread lot is available; no reservation, receipt, or payment was created.");
+                    diag.Add($"BakeryWholesaleDailyDriver: account {account.AccountId} stays due — no fresh, sellable finished bread lot meets its delivery terms; no reservation, receipt, or payment was created.");
                     continue;
                 }
 
-                var options = new Review2WholesaleTransferOptions
+                int retailPriceCents = inputs.StorePort.CategoryPricePerUnitCents(StoreCategoryId);
+                int expectedSettlementCents = checked(transferUnits * Math.Max(0, account.PricePerUnitCents));
+                if (inputs.StoreCashPort == null || inputs.StoreCashPort.BalanceCents < expectedSettlementCents)
                 {
-                    Bakery = bakery,
-                    BakeryProductId = account.ProductId,
-                    Units = transferUnits,
-                    WholesalePriceCents = account.PricePerUnitCents,
-                    RetailPriceCents = retailPriceCents,
-                    TransferDayIndex = dayIndex,
-                    Intake = inputs.Intake,
-                    StoreCatalog = inputs.StoreCatalog,
-                    StoreCashPort = inputs.StoreCashPort,
-                    BakeryCashPort = inputs.BakeryCashPort,
-                    StoreBusinessId = inputs.StoreBusinessId,
-                    BakeryBusinessId = inputs.BakeryBusinessId,
-                };
-                Review2WholesaleTransferResult transfer =
-                    Review2BakeryToStoreWholesaleDriver.TransferToShelf(options, diag);
-                if (!transfer.Transferred)
-                {
-                    diag.Add($"BakeryWholesaleDailyDriver: account {account.AccountId} stays due — transfer refused, no cash moved, no bread lost.");
+                    diag.Add($"BakeryWholesaleDailyDriver: account {account.AccountId} stays due — store cash cannot cover the {expectedSettlementCents}c settlement for {transferUnits} actual loaves; no cargo moved.");
                     continue;
                 }
+
+                var sourceLotIds = new List<string>();
+                var unitsByLot = new List<int>();
+                var provenance = new List<string>();
+                int remainingUnits = transferUnits;
+                int wholesaleRevenueForAccount = 0;
+                string transferredProductId = string.Empty;
+                foreach (BakeryBreadLot sourceLot in sourceLots)
+                {
+                    if (remainingUnits <= 0) break;
+                    int unitsFromLot = Math.Min(remainingUnits, Math.Max(0, sourceLot.UnitCount));
+                    if (unitsFromLot <= 0) continue;
+                    string sourceLotId = sourceLot.LotId.ToString();
+                    var options = new Review2WholesaleTransferOptions
+                    {
+                        Bakery = bakery,
+                        BakeryProductId = account.ProductId,
+                        BakerySourceLotId = sourceLotId,
+                        Units = unitsFromLot,
+                        WholesalePriceCents = account.PricePerUnitCents,
+                        RetailPriceCents = retailPriceCents,
+                        TransferDayIndex = dayIndex,
+                        Intake = inputs.Intake,
+                        StoreCatalog = inputs.StoreCatalog,
+                        StoreCashPort = inputs.StoreCashPort,
+                        BakeryCashPort = inputs.BakeryCashPort,
+                        StoreBusinessId = inputs.StoreBusinessId,
+                        BakeryBusinessId = inputs.BakeryBusinessId,
+                    };
+                    Review2WholesaleTransferResult transfer =
+                        Review2BakeryToStoreWholesaleDriver.TransferToShelf(options, diag);
+                    if (!transfer.Transferred)
+                    {
+                        diag.Add($"BakeryWholesaleDailyDriver: account {account.AccountId} stopped after {transferUnits - remainingUnits}/{transferUnits} units — source lot '{sourceLotId}' transfer refused; prior settled lots will be recorded once.");
+                        break;
+                    }
+
+                    sourceLotIds.Add(sourceLotId);
+                    unitsByLot.Add(transfer.Units);
+                    if (sourceLot.InputProvenance != null) provenance.AddRange(sourceLot.InputProvenance);
+                    remainingUnits -= transfer.Units;
+                    wholesaleRevenueForAccount = checked(wholesaleRevenueForAccount + transfer.AmountCents);
+                    transferredProductId = transfer.StoreProductId;
+                }
+
+                int transferredUnits = transferUnits - remainingUnits;
+                if (transferredUnits <= 0) continue;
 
                 // TransferToShelf has completed intake, moved this bread
-                // lot into the store's receiving catalog, and settled the
-                // cash. That is the wholesale delivery boundary. A full
-                // live category pool may defer stocking, but must not leave
-                // this paid delivery due for another settlement attempt.
+                // source lots into the store's receiving catalog, and
+                // settled each lot once. Record the aggregate account
+                // delivery once so a multi-lot order advances its cadence
+                // exactly once.
                 string recordRefusal = bakery.RecordWholesaleTransfer(
-                    account.AccountId, sourceLotId, transfer.Units,
+                    account.AccountId, sourceLotIds, unitsByLot,
                     account.PricePerUnitCents, dayIndex, provenance, diag);
                 if (!string.IsNullOrWhiteSpace(recordRefusal))
                 {
-                    diag.Add($"BakeryWholesaleDailyDriver: transfer settled and received into catalog back stock, but the account record refused — {recordRefusal}");
+                    diag.Add($"BakeryWholesaleDailyDriver: {transferredUnits} settled units from {sourceLotIds.Count} lot(s) reached catalog back stock, but the account record refused — {recordRefusal}");
                     continue;
                 }
                 result.TransfersCompleted++;
-                wholesaleRevenueTodayCents += transfer.AmountCents;
+                wholesaleRevenueTodayCents = checked(wholesaleRevenueTodayCents + wholesaleRevenueForAccount);
 
                 Review2StockingResult stocked = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
-                    inputs.StoreCatalog, transfer.StoreProductId, transfer.Units, StoreCategoryId, inputs.StorePort, diag,
-                    "loaf", transfer.BakeryLotId, dayIndex, transfer.AmountCents);
+                    inputs.StoreCatalog, transferredProductId, transferredUnits, StoreCategoryId, inputs.StorePort, diag,
+                    "loaf", string.Join(",", sourceLotIds), dayIndex, wholesaleRevenueForAccount);
                 if (!stocked.Stocked)
                 {
                     // The settled delivery and schedule are already
@@ -821,17 +912,31 @@ namespace LandLedgers.Economy.BreadDrivers
             return 0;
         }
 
-        private static BakeryBreadLot OldestSellableLot(BakeryShopRuntime bakery, string productId)
+        private static List<BakeryBreadLot> SellableLotsForWholesale(
+            BakeryShopRuntime bakery, BakeryWholesaleAccount account, int dayIndex)
         {
-            if (bakery?.BreadShelf == null) return null;
-            BakeryBreadLot oldest = null;
+            var lots = new List<BakeryBreadLot>();
+            if (bakery?.BreadShelf == null || account == null) return lots;
             foreach (var lot in bakery.BreadShelf)
             {
                 if (lot == null || !lot.CanSell) continue;
-                if (!string.Equals(lot.ProductId, productId, StringComparison.Ordinal)) continue;
-                if (oldest == null || lot.BakedDayIndex < oldest.BakedDayIndex) oldest = lot;
+                if (!string.Equals(lot.ProductId, account.ProductId, StringComparison.Ordinal)) continue;
+                int ageAtDelivery = dayIndex - lot.BakedDayIndex;
+                if (ageAtDelivery < 0 || ageAtDelivery > 1) continue;
+                if (account.Freshness == BakeryWholesaleFreshness.FreshOnly && ageAtDelivery != 0) continue;
+                lots.Add(lot);
             }
-            return oldest;
+
+            // The wholesale terms explicitly prefer fresh bread. Within
+            // equal baked-day lots, stable lot identity gives repeatable FIFO.
+            lots.Sort((a, b) =>
+            {
+                int byFreshness = b.BakedDayIndex.CompareTo(a.BakedDayIndex);
+                return byFreshness != 0
+                    ? byFreshness
+                    : string.Compare(a.LotId.ToString(), b.LotId.ToString(), StringComparison.Ordinal);
+            });
+            return lots;
         }
 
         private static string FirstRefusal(List<string> diag, int fromIndex, int dayIndex)
@@ -1142,12 +1247,38 @@ namespace LandLedgers.Economy.BreadDrivers
         /// account price); when any standard component is unknown the
         /// line says so instead of inventing a standard. No price is
         /// changed; the line reports both definitions side by side so
-        /// the -20c standard vs actual gap is explained by carryover in
-        /// the open.</summary>
+        /// purchase cash flow is not treated as consumed-stock COGS or an
+        /// actual margin because inventory-purchase timing is not
+        /// consumption.</summary>
         private static BakeryWholesaleDailyResult FinishWithActualsLine(
             BakeryWholesaleDailyInputs inputs, BakeryWholesaleDailyResult result,
             int wholesaleRevenueTodayCents, List<string> diag)
         {
+            int retailRevenueTodayCents = 0;
+            int retailUnitsToday = 0;
+            if (inputs.Bakery?.Sales != null)
+            {
+                foreach (BakerySaleRecord sale in inputs.Bakery.Sales)
+                {
+                    if (sale == null || sale.DayIndex != inputs.DayIndex) continue;
+                    retailUnitsToday += Math.Max(0, sale.Units);
+                    retailRevenueTodayCents += Math.Max(0, sale.TotalCents);
+                }
+            }
+            int wasteUnitsToday = 0;
+            if (inputs.Bakery?.Waste != null)
+            {
+                foreach (BakeryWasteRecord waste in inputs.Bakery.Waste)
+                {
+                    if (waste != null && waste.WastedDayIndex == inputs.DayIndex)
+                        wasteUnitsToday += Math.Max(0, waste.Units);
+                }
+            }
+            result.RetailUnitsSoldToday = retailUnitsToday;
+            result.RetailRevenueTodayCents = retailRevenueTodayCents;
+            result.WasteUnitsToday = wasteUnitsToday;
+            result.BakeryCashAvailableCents = inputs.BakeryRuntimeState != null
+                ? inputs.BakeryRuntimeState.CurrentCashCents : -1;
             int flourCashToday = result.FlourSacksPurchased * Math.Max(0, inputs.StoreFlourUnitPriceCents);
             int notionsPricePerUnit = inputs.NotionsRegistration != null
                 ? Math.Max(0, inputs.NotionsRegistration.UnitGoodsCostCents) : 0;
@@ -1158,6 +1289,7 @@ namespace LandLedgers.Economy.BreadDrivers
             result.CumulativeFlourPoundsPurchased = inputs.PriorCumulativeFlourPoundsPurchased + result.FlourPoundsPurchased;
             result.CumulativeNotionsCashSpentCents = inputs.PriorCumulativeNotionsCashSpentCents + notionsCashToday;
             result.CumulativeWholesaleRevenueCents = inputs.PriorCumulativeWholesaleRevenueCents + wholesaleRevenueTodayCents;
+            diag.Add($"[BakeryOperations] day {inputs.DayIndex}: {result.BatchesBaked} batch(es) baked; actual retail sales {retailUnitsToday}u/{retailRevenueTodayCents}c; actual wholesale revenue {wholesaleRevenueTodayCents}c; stale bread written off {wasteUnitsToday}u; bakery cash {(result.BakeryCashAvailableCents >= 0 ? result.BakeryCashAvailableCents + "c" : "unavailable")}.");
             if (result.BatchesBaked <= 0) return result;
 
             int batches = inputs.CumulativeActualsThreaded ? result.CumulativeBatchesBaked : result.BatchesBaked;
@@ -1167,9 +1299,7 @@ namespace LandLedgers.Economy.BreadDrivers
             int notions = inputs.CumulativeActualsThreaded ? result.CumulativeNotionsCashSpentCents : notionsCashToday;
             int revenue = inputs.CumulativeActualsThreaded ? result.CumulativeWholesaleRevenueCents : wholesaleRevenueTodayCents;
             string label = inputs.CumulativeActualsThreaded ? "cumulative actuals" : "day actuals";
-            double actualPerBatch = batches > 0 ? (double)(flour + notions) / batches : 0.0;
-            double revenuePerBatch = batches > 0 ? (double)revenue / batches : 0.0;
-            double marginPerBatch = revenuePerBatch - actualPerBatch;
+            double purchaseCashOutlayPerBatch = batches > 0 ? (double)(flour + notions) / batches : 0.0;
             string vsStandard;
             int standardCostPerBatch = -1;
             int standardMarginPerBatch = 0;
@@ -1187,9 +1317,9 @@ namespace LandLedgers.Economy.BreadDrivers
                 }
             }
             vsStandard = standardCostPerBatch >= 0
-                ? $"vs standard {standardCostPerBatch}c/batch (margin {marginPerBatch:0.0}c/batch actual vs {standardMarginPerBatch}c standard)"
-                : "(standard unknown)";
-            diag.Add($"[BakeryProduction] {label}: {batches} batch(es) baked, flour {flour}c ({sacks} sacks, {pounds} lb), notions {notions}c, revenue {revenue}c, actual {actualPerBatch:0.0}c/batch {vsStandard}");
+                ? $"standard direct-material cost {standardCostPerBatch}c/batch (standard contribution {standardMarginPerBatch}c/batch before wages, fuel, freight, and overhead)"
+                : "standard direct-material cost unknown; no contribution stated";
+            diag.Add($"[BakeryProduction] {label}: {batches} batch(es) baked, flour purchases {flour}c ({sacks} sacks, {pounds} lb), notions purchases {notions}c, wholesale revenue {revenue}c, ingredient-purchase cash outlay {purchaseCashOutlayPerBatch:0.0}c/produced batch (cash timing, not consumed-stock COGS); {vsStandard}.");
             return result;
         }
     }

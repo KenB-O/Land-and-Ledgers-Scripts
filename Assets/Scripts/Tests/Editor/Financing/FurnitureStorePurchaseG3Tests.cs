@@ -24,6 +24,7 @@ using LandLedgers.Economy.GenericBusiness;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Storage;
 using LandLedgers.Population;
+using LandLedgers.Persistence;
 using LandLedgers.World;
 using UnityEngine;
 
@@ -703,6 +704,247 @@ namespace LandLedgers.Editor.Economy
             Assert.IsNull(buyerRegister.LiveBindingFor(buyerRegister.Assets[0].AssetId), "nothing installed");
             Assert.AreEqual(0, storeRuntime.FindRetailItemLot("bed-lot-1").AvailableUnits, "the lot was debited at load, as F4 specifies");
             Assert.AreEqual(1, freight.TrackedShipments.Count, "the shipment completed — the install is the only refused stage");
+        }
+
+        private FurnitureStorePurchaseDriver NewStagedDriver(List<FurniturePurchaseOrder> orders,
+            out FreightProductionDriver freightOwner)
+        {
+            freightOwner = new FreightProductionDriver(freight);
+            freightOwner.EnsureCompany(CarrierId, carrierRuntime);
+            return new FurnitureStorePurchaseDriver(storeRuntime, QuotePrice, carrierCash, freight,
+                "opening-freight-wagon", loader, driver, null, () => placements, PlacementIsBound,
+                hooksTemplate, DayIndex, true, orders, freightOwner, CarrierId, carrierRuntime);
+        }
+
+        private FurniturePurchaseOrder StartStagedBedOrder(List<FurniturePurchaseOrder> orders,
+            out FurnitureStorePurchaseDriver stagedDriver, out FreightProductionDriver freightOwner)
+        {
+            AddLot("bed-lot-1", FurnitureItemSpecs.BedId, 1);
+            stagedDriver = NewStagedDriver(orders, out freightOwner);
+            return stagedDriver.TryPurchaseForHousehold(buyerLedger, buyerRegister,
+                BuyerHousehold, BuildingInstance, building, FurnitureItemSpecs.BedId, 45, new List<string>());
+        }
+
+        private void AdvanceFreightUntilTerminal(FurniturePurchaseOrder order, FreightProductionDriver owner)
+        {
+            LogisticsShipmentState shipment = owner.AllShipments().Find(item => item != null && item.ShipmentId == order.ShipmentId);
+            Assert.NotNull(shipment, "purchase shipment must be enrolled in the carrier production authority");
+            var diagnostics = new List<string>();
+            FreightShipmentHooks hooks = order.FreightHooks;
+            Assert.NotNull(hooks);
+            for (int day = DayIndex + 1; day <= DayIndex + 15 && shipment.Status != LogisticsShipmentStatus.Completed
+                && shipment.Status != LogisticsShipmentStatus.Failed; day++)
+            {
+                budgets.EnsureDay(day);
+                hooks.DayIndex = day;
+                owner.AdvanceTick(86400f, hooks, loader, diagnostics);
+            }
+            Assert.AreEqual(LogisticsShipmentStatus.Completed, shipment.Status,
+                "freight must physically progress over repeated game-time ticks: " + string.Join(" | ", diagnostics));
+        }
+
+        [Test]
+        public void StagedOrder_IsPaidOnce_AndWaitsForCarrierOverGameTime()
+        {
+            var orders = new List<FurniturePurchaseOrder>();
+            FurniturePurchaseOrder order = StartStagedBedOrder(orders, out _, out FreightProductionDriver owner);
+
+            Assert.NotNull(order);
+            Assert.AreEqual(EquipmentPurchaseStage.Shipped, order.Lines[0].Stage);
+            Assert.AreEqual(1, orders.Count, "durable order identity is recorded before physical transport");
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, owner.AllShipments()[0].Status,
+                "purchase does not synchronously load, travel, unload, or install");
+            Assert.AreEqual(40000 - 339, buyerLedger.GetBalanceCents(), "goods and freight are charged once");
+            Assert.AreEqual(1, storeRuntime.FindRetailItemLot("bed-lot-1").AvailableUnits,
+                "seller stock remains until the freight loading task commits it");
+            Assert.AreEqual(0, buyerRegister.Assets.Count, "no household receipt before delivery");
+        }
+
+        [Test]
+        public void StagedOrder_RepeatedStableIdentityCannotDoubleChargeOrCreateShipment()
+        {
+            var orders = new List<FurniturePurchaseOrder>();
+            FurniturePurchaseOrder order = StartStagedBedOrder(orders,
+                out FurnitureStorePurchaseDriver staged, out FreightProductionDriver owner);
+            int paidBalance = buyerLedger.GetBalanceCents();
+            FurniturePurchaseOrder repeated = staged.TryPurchaseForHousehold(buyerLedger, buyerRegister,
+                BuyerHousehold, BuildingInstance, building, FurnitureItemSpecs.BedId, 45,
+                new List<string>());
+
+            Assert.AreSame(order, repeated, "the stable purchase identity resolves to the saved order");
+            Assert.AreEqual(1, orders.Count);
+            Assert.AreEqual(1, owner.AllShipments().Count);
+            Assert.AreEqual(paidBalance, buyerLedger.GetBalanceCents(), "a repeated call does not charge again");
+            Assert.AreEqual(1, storeRuntime.FindRetailItemLot("bed-lot-1").AvailableUnits,
+                "seller stock remains until the one shipment's physical loading task commits it");
+        }
+
+        [Test]
+        public void StagedOrder_CompletesFreightThenWaitsForInstallationWorkAtAuthoredPlacement()
+        {
+            AddLot("bed-lot-1", FurnitureItemSpecs.BedId, 1);
+            BuildingEquipmentPlacement placement = MakePlacement("Bed", building, "furniture.bed", "plc-staged-bed");
+            placements.Add(placement);
+            var orders = new List<FurniturePurchaseOrder>();
+            FurnitureStorePurchaseDriver staged = NewStagedDriver(orders, out FreightProductionDriver owner);
+            FurniturePurchaseOrder order = staged.TryPurchaseForHousehold(buyerLedger, buyerRegister,
+                BuyerHousehold, BuildingInstance, building, FurnitureItemSpecs.BedId, 45, new List<string>());
+
+            Assert.NotNull(order);
+            AdvanceFreightUntilTerminal(order, owner);
+            Assert.IsNull(staged.ReconcilePendingOrder(order, buyerLedger, buyerRegister, building,
+                BuildingInstance, new List<string>()));
+            Assert.IsFalse(order.IsOperational, "freight receipt is not a substitute for household installation work");
+            Assert.AreEqual(1, buyerRegister.Assets.Count);
+            Assert.IsNull(buyerRegister.LiveBindingFor(buyerRegister.Assets[0].AssetId));
+            Assert.AreEqual("household:" + BuyerHousehold, buyerRegister.Assets[0].LocationId,
+                "the delivered item remains physically represented in household custody");
+            StringAssert.Contains("No production furnishing.install task outcome is wired", order.InstallationBlockedReason);
+            Assert.AreEqual(40000 - 339, buyerLedger.GetBalanceCents(), "reconciliation does not duplicate payment");
+            Assert.AreEqual(1, owner.AllShipments().Count, "shipment identity survives the complete lifecycle");
+        }
+
+        [Test]
+        public void DelayedOrder_RemainsDurable_AndDoesNotCreateSecondShipmentOrPayment()
+        {
+            var orders = new List<FurniturePurchaseOrder>();
+            FurniturePurchaseOrder order = StartStagedBedOrder(orders, out FurnitureStorePurchaseDriver staged, out FreightProductionDriver owner);
+            LogisticsShipmentState shipment = owner.AllShipments()[0];
+            freight.DelayShipment(shipment, "weather delay", order.FreightHooks, LogisticsShipmentStatus.Planned);
+            int balanceAfterPayment = buyerLedger.GetBalanceCents();
+            string refusal = staged.ReconcilePendingOrder(order, buyerLedger, buyerRegister, building,
+                BuildingInstance, new List<string>());
+
+            Assert.IsNull(refusal);
+            Assert.AreEqual(LogisticsShipmentStatus.Delayed, shipment.Status, "furniture service does not bypass freight's delay authority");
+            Assert.AreEqual(1, owner.AllShipments().Count, "a delay never causes duplicate shipment creation");
+            Assert.AreEqual(balanceAfterPayment, buyerLedger.GetBalanceCents(), "reconciliation never charges again");
+            Assert.IsFalse(order.IsOperational);
+        }
+
+        [Test]
+        public void NoAuthoredPlacement_LeavesReceivedFurnitureInCustodyWithBlocker()
+        {
+            var orders = new List<FurniturePurchaseOrder>();
+            FurniturePurchaseOrder order = StartStagedBedOrder(orders, out FurnitureStorePurchaseDriver staged, out FreightProductionDriver owner);
+            AdvanceFreightUntilTerminal(order, owner);
+            string refusal = staged.ReconcilePendingOrder(order, buyerLedger, buyerRegister, building,
+                BuildingInstance, new List<string>());
+
+            Assert.IsNull(refusal, "lack of a placement is a delivery success with a durable installation blocker");
+            Assert.AreEqual(1, buyerRegister.Assets.Count);
+            Assert.IsNull(buyerRegister.LiveBindingFor(buyerRegister.Assets[0].AssetId));
+            Assert.AreEqual("household:" + BuyerHousehold, buyerRegister.Assets[0].LocationId);
+            StringAssert.Contains("no free placement", order.InstallationBlockedReason);
+            string blocker = order.InstallationBlockedReason;
+            staged.ReconcilePendingOrder(order, buyerLedger, buyerRegister, building, BuildingInstance, new List<string>());
+            Assert.AreEqual(blocker, order.InstallationBlockedReason, "the unavailable placement is observed without repeating or mutating the attempt");
+            Assert.AreEqual(1, buyerRegister.Assets.Count, "reconciliation cannot duplicate the delivered item");
+        }
+
+        [Test]
+        public void UnpaidOrder_CanBeCancelledWithoutGoodsOrMoneyMovement()
+        {
+            AddLot("bed-lot-1", FurnitureItemSpecs.BedId, 1);
+            FurnitureStorePurchase.TryBuildOrder(storeRuntime, QuotePrice, FurnitureItemSpecs.BedId, 1,
+                "furn-store-cancel-before-pay", BuyerHousehold, BuildingInstance, DayIndex, 45,
+                out FurniturePurchaseOrder order);
+            var service = new FurniturePurchaseService(buyerLedger,
+                new StoreFurnitureVendorStock(storeRuntime, new List<string>()),
+                (int goods, int fare, string id) => null, (asset, id) => null, null);
+            Assert.IsNull(service.Quote(order));
+            Assert.IsNull(service.TryOrder(order));
+            int balance = buyerLedger.GetBalanceCents();
+            Assert.IsNull(service.CancelUnpaidOrder(order));
+            Assert.IsTrue(order.CancellationRequested);
+            Assert.AreEqual(balance, buyerLedger.GetBalanceCents());
+            Assert.AreEqual(1, storeRuntime.FindRetailItemLot("bed-lot-1").AvailableUnits);
+        }
+
+        [Test]
+        public void FailedDelivery_IsTerminalInFreightAndDoesNotCreditHouseholdOrRefundSilently()
+        {
+            var orders = new List<FurniturePurchaseOrder>();
+            FurniturePurchaseOrder order = StartStagedBedOrder(orders, out FurnitureStorePurchaseDriver staged, out FreightProductionDriver owner);
+            LogisticsShipmentState shipment = owner.AllShipments()[0];
+            freight.FailAbandonedShipment(shipment, "test terminal failure", order.FreightHooks);
+            int paidBalance = buyerLedger.GetBalanceCents();
+            Assert.IsNull(staged.ReconcilePendingOrder(order, buyerLedger, buyerRegister, building,
+                BuildingInstance, new List<string>()));
+
+            Assert.IsFalse(order.IsOperational);
+            StringAssert.Contains("test terminal failure", order.TerminalReason);
+            Assert.AreEqual(0, buyerRegister.Assets.Count, "failed, undelivered cargo is not credited as household furniture");
+            Assert.AreEqual(paidBalance, buyerLedger.GetBalanceCents(), "failure does not invent a refund or charge");
+            Assert.AreEqual(LogisticsShipmentStatus.Failed, shipment.Status);
+        }
+
+        [Test]
+        public void Pass9SaveContinue_RestoresOrderShipmentAndExactlyOncePayment()
+        {
+            var orders = new List<FurniturePurchaseOrder>();
+            FurniturePurchaseOrder order = StartStagedBedOrder(orders, out _, out FreightProductionDriver owner);
+            var source = new Series2Pass9SaveState
+            {
+                FreightDriver = owner,
+                FurniturePurchaseOrders = orders,
+                HouseholdFurnishingRegisters = new List<HouseholdFurnishingRegister> { buyerRegister },
+            };
+            Series2Pass9SaveDto dto = source.Capture(new List<string>());
+            var restoredOwner = new FreightProductionDriver(new FreightShipmentService());
+            restoredOwner.EnsureCompany(CarrierId, carrierRuntime);
+            var restored = new Series2Pass9SaveState
+            {
+                FreightDriver = restoredOwner,
+                HouseholdFurnishingRegisters = new List<HouseholdFurnishingRegister>(),
+            };
+            restored.Restore(dto, null, new List<string>());
+
+            Assert.AreEqual(1, restored.FurniturePurchaseOrders.Count);
+            Assert.AreEqual(order.PurchaseId, restored.FurniturePurchaseOrders[0].PurchaseId);
+            Assert.AreEqual(order.ShipmentId, restored.FurniturePurchaseOrders[0].ShipmentId);
+            Assert.AreEqual(EquipmentPurchaseStage.Shipped, restored.FurniturePurchaseOrders[0].Lines[0].Stage);
+            Assert.AreEqual(1, restoredOwner.AllShipments().Count);
+            Assert.AreEqual(40000 - 339, buyerLedger.GetBalanceCents(), "saving or restoring cannot charge again");
+        }
+
+        [Test]
+        public void Pass9SaveContinue_AfterReceiptRetainsFurnitureAndInstallationBlocker()
+        {
+            var orders = new List<FurniturePurchaseOrder>();
+            FurniturePurchaseOrder order = StartStagedBedOrder(orders, out FurnitureStorePurchaseDriver staged,
+                out FreightProductionDriver owner);
+            AdvanceFreightUntilTerminal(order, owner);
+            Assert.IsNull(staged.ReconcilePendingOrder(order, buyerLedger, buyerRegister, building,
+                BuildingInstance, new List<string>()));
+            Assert.AreEqual(1, buyerRegister.Assets.Count);
+            Assert.IsFalse(order.IsOperational);
+            int paidBalance = buyerLedger.GetBalanceCents();
+
+            var source = new Series2Pass9SaveState
+            {
+                FreightDriver = owner,
+                FurniturePurchaseOrders = orders,
+                HouseholdFurnishingRegisters = new List<HouseholdFurnishingRegister> { buyerRegister },
+            };
+            Series2Pass9SaveDto dto = source.Capture(new List<string>());
+            var restoredOwner = new FreightProductionDriver(new FreightShipmentService());
+            restoredOwner.EnsureCompany(CarrierId, carrierRuntime);
+            var restored = new Series2Pass9SaveState
+            {
+                FreightDriver = restoredOwner,
+                HouseholdFurnishingRegisters = new List<HouseholdFurnishingRegister>(),
+            };
+            restored.Restore(dto, null, new List<string>());
+
+            FurniturePurchaseOrder restoredOrder = restored.FurniturePurchaseOrders[0];
+            Assert.AreEqual(EquipmentPurchaseStage.Received, restoredOrder.Lines[0].Stage);
+            Assert.AreEqual(1, restoredOrder.ReceivedAssets.Count, "receipt stays exactly once in household custody");
+            Assert.AreEqual("household:" + BuyerHousehold, restoredOrder.ReceivedAssets[0].LocationId);
+            Assert.AreEqual(order.InstallationBlockedReason, restoredOrder.InstallationBlockedReason);
+            Assert.IsFalse(restoredOrder.IsOperational, "loading never fabricates the installation stage");
+            Assert.AreEqual(paidBalance, buyerLedger.GetBalanceCents(), "restoration does not charge again");
+            Assert.AreEqual(1, restoredOwner.AllShipments().Count, "shipment identity remains singular after receipt");
         }
     }
 }

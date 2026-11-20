@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 1948142dfafa96140a404d93b58e7b2f
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 100100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 151648
+  packageName: Western Town Environment
+  packageVersion: 1.1
+  assetPath: Assets/Western/Prefabs/Interior/Chair.prefab
+  uploadId: 359150

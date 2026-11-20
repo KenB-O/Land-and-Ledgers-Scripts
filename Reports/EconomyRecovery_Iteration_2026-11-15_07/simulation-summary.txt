@@ -1,0 +1,16 @@
+Result=completed
+StartGameSeconds=25560.36
+EndGameSeconds=5209642.96
+SimulatedDays=60.00096
+RealSeconds=339.43
+FinalSpeed=Paused
+CapturedLogEntries=1582
+CapturedWarnings=1025
+CapturedErrors=0
+ManagedResidents=9
+VisibleAgents=9
+LastMovementStatus=Glen Pierce arrived: GoingToWork -> AtWork. Managed=9, Visible=9, AmbientStarted=0, AmbientFailures(anchor/path)=0/0.
+LastRouteFailure=
+CappedRolloverFrames=0
+CappedShortTickFrames=0
+PendingGameSeconds=0.0

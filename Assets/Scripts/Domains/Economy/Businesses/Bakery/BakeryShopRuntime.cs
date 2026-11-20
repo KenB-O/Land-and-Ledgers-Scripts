@@ -1197,49 +1197,309 @@ namespace LandLedgers.Economy.Businesses.Bakery
         /// <summary>
         /// D1D: turns due wholesale accounts into planned dough batches
         /// (Canon §7.3E: large recurring buyers improve throughput visibility).
-        /// Accounts due within the planning lead window are covered from the
-        /// existing pipeline first — only the shortfall is planned. Returns
-        /// the planned batch ids. Planning never bakes; <see cref="WorkDay"/>
-        /// executes.
+        /// Accounts due within the planning lead window share eligible
+        /// finished stock and active production in deterministic due-date
+        /// order; each lot or batch is allocated at most once. Only uncovered
+        /// shortfall is planned. Finished stock due today is counted only
+        /// when the configured supply policy protects it from the retail
+        /// counter. Planning never bakes; <see cref="WorkDay"/> executes.
         /// </summary>
         public List<string> PlanWholesaleBatches(int dayIndex, List<string> diag)
         {
             diag = diag ?? diagnostics;
             var planned = new List<string>();
-            foreach (var account in wholesaleAccounts)
+            var dueAccounts = new List<BakeryWholesaleAccount>();
+            foreach (BakeryWholesaleAccount account in wholesaleAccounts)
             {
                 if (account == null || !account.IsActive) continue;
                 if (account.NextDeliveryDayIndex > dayIndex + BakeryBreadCatalog.WholesalePlanningLeadDays) continue;
+                if (string.IsNullOrEmpty(BakeryBreadCatalog.GetSpec(account.ProductId).ProductId)) continue;
+                dueAccounts.Add(account);
+            }
 
+            // A production batch and a finished lot are shared finite goods.
+            // Allocate them once, in due-date/account order, instead of
+            // letting every account independently claim the whole pipeline.
+            dueAccounts.Sort((a, b) =>
+            {
+                int byDueDate = a.NextDeliveryDayIndex.CompareTo(b.NextDeliveryDayIndex);
+                return byDueDate != 0
+                    ? byDueDate
+                    : string.Compare(a.AccountId, b.AccountId, StringComparison.Ordinal);
+            });
+
+            AgeShelf(dayIndex, diag);
+            var availableLots = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (BakeryBreadLot lot in breadShelf)
+            {
+                if (lot == null || !lot.CanSell || string.IsNullOrWhiteSpace(lot.LotId.ToString())) continue;
+                string lotId = lot.LotId.ToString();
+                if (!availableLots.ContainsKey(lotId)) availableLots.Add(lotId, Math.Max(0, lot.UnitCount));
+            }
+
+            var activeBatchUnits = new Dictionary<string, int>(StringComparer.Ordinal);
+            var activeBatches = new List<BakeryDoughBatch>();
+            foreach (BakeryDoughBatch batch in batches)
+            {
+                if (batch == null || !batch.IsActive || string.IsNullOrWhiteSpace(batch.BatchId)) continue;
+                if (activeBatchUnits.ContainsKey(batch.BatchId)) continue;
+                int yield = BakeryBreadCatalog.GetSpec(batch.ProductId).YieldUnitsPerBatch;
+                if (yield <= 0) continue;
+                activeBatchUnits.Add(batch.BatchId, yield);
+                activeBatches.Add(batch);
+            }
+            activeBatches.Sort((a, b) =>
+            {
+                int byScheduledDay = a.ScheduledDayIndex.CompareTo(b.ScheduledDayIndex);
+                return byScheduledDay != 0
+                    ? byScheduledDay
+                    : string.Compare(a.BatchId, b.BatchId, StringComparison.Ordinal);
+            });
+
+            foreach (BakeryWholesaleAccount account in dueAccounts)
+            {
                 BakeryProductSpec spec = BakeryBreadCatalog.GetSpec(account.ProductId);
-                if (string.IsNullOrEmpty(spec.ProductId)) continue;
-
+                int deliveryDay = Math.Max(dayIndex, account.NextDeliveryDayIndex);
                 int covered = 0;
-                foreach (var batch in batches)
+
+                // Finished goods are distinct from work in progress and
+                // count only when product and contract freshness permit.
+                // Future deliveries use active production cover here; shelf
+                // units are not assumed safely committed across intervening
+                // retail sales without a durable lot reservation authority.
+                // Likewise, a counter-priority policy means a shelf lot is
+                // not promised to wholesale by this planning estimate.
+                var lots = new List<BakeryBreadLot>();
+                if (account.NextDeliveryDayIndex <= dayIndex
+                    && supplyProtection == BakerySupplyProtectionPolicy.ProtectWholesaleContracts)
                 {
-                    if (batch != null && batch.IsActive
-                        && string.Equals(batch.ProductId, account.ProductId, StringComparison.Ordinal))
+                    foreach (BakeryBreadLot lot in breadShelf)
                     {
-                        covered += spec.YieldUnitsPerBatch;
+                        if (lot == null || !string.Equals(lot.ProductId, account.ProductId, StringComparison.Ordinal)) continue;
+                        int ageAtDelivery = deliveryDay - lot.BakedDayIndex;
+                        bool freshnessAllows = account.Freshness != BakeryWholesaleFreshness.FreshOnly || ageAtDelivery <= 0;
+                        if (ageAtDelivery < 0 || ageAtDelivery > (account.Freshness == BakeryWholesaleFreshness.FreshOnly ? 0 : 1)) continue;
+                        if (freshnessAllows) lots.Add(lot);
                     }
+                }
+                // Match fulfillment's freshest-first ordering.
+                lots.Sort((a, b) => b.BakedDayIndex.CompareTo(a.BakedDayIndex));
+                foreach (BakeryBreadLot lot in lots)
+                {
+                    string lotId = lot.LotId.ToString();
+                    if (!availableLots.TryGetValue(lotId, out int available) || available <= 0) continue;
+                    int take = Math.Min(Math.Max(0, account.UnitsPerDelivery) - covered, available);
+                    if (take <= 0) break;
+                    availableLots[lotId] = available - take;
+                    covered += take;
+                }
+
+                // Allocate each active batch's expected output at most once.
+                // A batch scheduled after a delivery cannot cover that earlier
+                // obligation; late obligations may use today's re-preparation.
+                foreach (BakeryDoughBatch batch in activeBatches)
+                {
+                    if (covered >= account.UnitsPerDelivery) break;
+                    if (!string.Equals(batch.ProductId, account.ProductId, StringComparison.Ordinal)
+                        || batch.ScheduledDayIndex > deliveryDay) continue;
+                    if (!activeBatchUnits.TryGetValue(batch.BatchId, out int available) || available <= 0) continue;
+                    int take = Math.Min(Math.Max(0, account.UnitsPerDelivery) - covered, available);
+                    activeBatchUnits[batch.BatchId] = available - take;
+                    covered += take;
                 }
 
                 int needed = Math.Max(0, account.UnitsPerDelivery) - covered;
                 int toPlan = (needed + spec.YieldUnitsPerBatch - 1) / spec.YieldUnitsPerBatch;
                 if (toPlan <= 0)
                 {
-                    diag.Add($"BakeryShopRuntime: wholesale account {account.AccountId} already covered ({covered} units in the pipeline).");
+                    diag.Add($"BakeryShopRuntime: wholesale account {account.AccountId} already covered ({covered} units in finished stock and scheduled production).");
                     continue;
                 }
 
                 var ids = PlanBatch(account.ProductId, toPlan, dayIndex, diag);
                 if (ids == null) continue; // refusal already noted loudly by PlanBatch
                 planned.AddRange(ids);
+                int outputStillNeeded = needed;
+                foreach (string id in ids)
+                {
+                    int output = spec.YieldUnitsPerBatch;
+                    int allocatedToThisAccount = Math.Min(output, outputStillNeeded);
+                    outputStillNeeded -= allocatedToThisAccount;
+                    activeBatchUnits[id] = output - allocatedToThisAccount;
+                    foreach (BakeryDoughBatch batch in batches)
+                    {
+                        if (batch != null && string.Equals(batch.BatchId, id, StringComparison.Ordinal))
+                        {
+                            activeBatches.Add(batch);
+                            break;
+                        }
+                    }
+                }
+                activeBatches.Sort((a, b) =>
+                {
+                    int byScheduledDay = a.ScheduledDayIndex.CompareTo(b.ScheduledDayIndex);
+                    return byScheduledDay != 0
+                        ? byScheduledDay
+                        : string.Compare(a.BatchId, b.BatchId, StringComparison.Ordinal);
+                });
                 diag.Add($"BakeryShopRuntime: planned {toPlan} batch(es) for wholesale account {account.AccountId} " +
                     $"(delivery day {account.NextDeliveryDayIndex}, {account.BuyerBusinessId}).");
             }
 
             return planned;
+        }
+
+        /// <summary>
+        /// Plans a conservative one-day retail response from recorded bakery
+        /// counter sales. Only observed sales create a production signal; the
+        /// planner nets current retail-available finished stock and active
+        /// production not needed for near-term wholesale obligations. It does
+        /// not infer guaranteed town demand or create a standing stock target.
+        /// </summary>
+        public List<string> PlanRetailBatches(int dayIndex, List<string> diag)
+        {
+            return PlanRetailBatches(dayIndex, 0, diag);
+        }
+
+        public List<string> PlanRetailBatches(int dayIndex, int openHouseholdBreadNeedUnits, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            const int historyDays = 3;
+            int firstDay = Math.Max(0, dayIndex - historyDays);
+            int elapsedDays = Math.Max(1, dayIndex - firstDay);
+            int observedUnits = 0;
+            foreach (BakerySaleRecord sale in sales)
+            {
+                if (sale == null || !string.Equals(sale.ProductId, BakeryBreadCatalog.BreadLoafId, StringComparison.Ordinal)) continue;
+                if (sale.DayIndex < firstDay || sale.DayIndex >= dayIndex) continue;
+                observedUnits += Math.Max(0, sale.Units);
+            }
+            int targetUnits = observedUnits <= 0 ? 0 : (observedUnits + elapsedDays - 1) / elapsedDays;
+            int openNeedSignal = Math.Min(Math.Max(0, openHouseholdBreadNeedUnits), BakeryBreadCatalog.BreadYieldPerBatch);
+            targetUnits = Math.Max(targetUnits, openNeedSignal);
+            if (targetUnits <= 0)
+            {
+                diag.Add($"BakeryShopRuntime: retail production planner found no recorded bread sales in the {historyDays}-day history and no open household bread need; no retail batch planned.");
+                return new List<string>();
+            }
+
+            AgeShelf(dayIndex, diag);
+            int shelfForRetail = RetailAllowanceFor(BakeryBreadCatalog.BreadLoafId, dayIndex);
+            // Use the same finite-stock allocation order as wholesale
+            // planning. Subtracting all near-term commitments from all active
+            // output double-counts contracts already covered by finished
+            // shelf lots and can schedule a needless additional retail batch.
+            int retailPipeline = ActiveBreadUnitsUncommittedForRetail(dayIndex);
+            int uncovered = Math.Max(0, targetUnits - shelfForRetail - retailPipeline);
+            int batchesToPlan = (uncovered + BakeryBreadCatalog.BreadYieldPerBatch - 1)
+                / BakeryBreadCatalog.BreadYieldPerBatch;
+            if (batchesToPlan <= 0)
+            {
+                diag.Add($"BakeryShopRuntime: retail production forecast is covered ({targetUnits} daily target units from {observedUnits} recent sales and {openHouseholdBreadNeedUnits} open household need units, {shelfForRetail} retail-available finished, {retailPipeline} uncommitted active production).");
+                return new List<string>();
+            }
+
+            List<string> ids = PlanBatch(BakeryBreadCatalog.BreadLoafId, batchesToPlan, dayIndex, diag);
+            if (ids != null)
+                diag.Add($"BakeryShopRuntime: planned {ids.Count} retail bread batch(es) from {observedUnits} recorded counter sale unit(s) across {elapsedDays} day(s) and {openHouseholdBreadNeedUnits} open household need unit(s); physical inputs and capacity remain enforced by production.");
+            return ids ?? new List<string>();
+        }
+
+        /// <summary>
+        /// Estimates active bread output left for retail after allocating
+        /// eligible finished lots and active batches to near-term wholesale
+        /// obligations in the same due-date/account order used by
+        /// <see cref="PlanWholesaleBatches"/>. This is a planning estimate
+        /// only; it creates no reservation and moves no stock.
+        /// </summary>
+        private int ActiveBreadUnitsUncommittedForRetail(int dayIndex)
+        {
+            var availableLots = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (BakeryBreadLot lot in breadShelf)
+            {
+                if (lot == null || !lot.CanSell
+                    || !string.Equals(lot.ProductId, BakeryBreadCatalog.BreadLoafId, StringComparison.Ordinal)) continue;
+                string lotId = lot.LotId.ToString();
+                if (string.IsNullOrWhiteSpace(lotId) || availableLots.ContainsKey(lotId)) continue;
+                availableLots.Add(lotId, Math.Max(0, lot.UnitCount));
+            }
+
+            var activeUnits = new Dictionary<string, int>(StringComparer.Ordinal);
+            var activeBatches = new List<BakeryDoughBatch>();
+            foreach (BakeryDoughBatch batch in batches)
+            {
+                if (batch == null || !batch.IsActive
+                    || batch.ScheduledDayIndex > dayIndex + BakeryBreadCatalog.WholesalePlanningLeadDays
+                    || !string.Equals(batch.ProductId, BakeryBreadCatalog.BreadLoafId, StringComparison.Ordinal)
+                    || string.IsNullOrWhiteSpace(batch.BatchId)
+                    || activeUnits.ContainsKey(batch.BatchId)) continue;
+                activeUnits.Add(batch.BatchId, BakeryBreadCatalog.BreadYieldPerBatch);
+                activeBatches.Add(batch);
+            }
+            activeBatches.Sort((a, b) =>
+            {
+                int byDay = a.ScheduledDayIndex.CompareTo(b.ScheduledDayIndex);
+                return byDay != 0 ? byDay : string.Compare(a.BatchId, b.BatchId, StringComparison.Ordinal);
+            });
+
+            var dueAccounts = new List<BakeryWholesaleAccount>();
+            foreach (BakeryWholesaleAccount account in wholesaleAccounts)
+            {
+                if (account == null || !account.IsActive
+                    || !string.Equals(account.ProductId, BakeryBreadCatalog.BreadLoafId, StringComparison.Ordinal)
+                    || account.NextDeliveryDayIndex > dayIndex + BakeryBreadCatalog.WholesalePlanningLeadDays) continue;
+                dueAccounts.Add(account);
+            }
+            dueAccounts.Sort((a, b) =>
+            {
+                int byDueDate = a.NextDeliveryDayIndex.CompareTo(b.NextDeliveryDayIndex);
+                return byDueDate != 0
+                    ? byDueDate
+                    : string.Compare(a.AccountId, b.AccountId, StringComparison.Ordinal);
+            });
+
+            foreach (BakeryWholesaleAccount account in dueAccounts)
+            {
+                int deliveryDay = Math.Max(dayIndex, account.NextDeliveryDayIndex);
+                int covered = 0;
+                if (account.NextDeliveryDayIndex <= dayIndex
+                    && supplyProtection == BakerySupplyProtectionPolicy.ProtectWholesaleContracts)
+                {
+                    var eligibleLots = new List<BakeryBreadLot>();
+                    foreach (BakeryBreadLot lot in breadShelf)
+                    {
+                        if (lot == null || !string.Equals(lot.ProductId, account.ProductId, StringComparison.Ordinal)) continue;
+                        int ageAtDelivery = deliveryDay - lot.BakedDayIndex;
+                        bool freshnessAllows = account.Freshness != BakeryWholesaleFreshness.FreshOnly || ageAtDelivery <= 0;
+                        if (ageAtDelivery < 0 || ageAtDelivery > (account.Freshness == BakeryWholesaleFreshness.FreshOnly ? 0 : 1)) continue;
+                        if (freshnessAllows) eligibleLots.Add(lot);
+                    }
+                    eligibleLots.Sort((a, b) => b.BakedDayIndex.CompareTo(a.BakedDayIndex));
+                    foreach (BakeryBreadLot lot in eligibleLots)
+                    {
+                        string lotId = lot.LotId.ToString();
+                        if (!availableLots.TryGetValue(lotId, out int available) || available <= 0) continue;
+                        int take = Math.Min(Math.Max(0, account.UnitsPerDelivery) - covered, available);
+                        if (take <= 0) break;
+                        availableLots[lotId] = available - take;
+                        covered += take;
+                    }
+                }
+
+                foreach (BakeryDoughBatch batch in activeBatches)
+                {
+                    if (covered >= account.UnitsPerDelivery) break;
+                    if (batch.ScheduledDayIndex > deliveryDay
+                        || !activeUnits.TryGetValue(batch.BatchId, out int available) || available <= 0) continue;
+                    int take = Math.Min(Math.Max(0, account.UnitsPerDelivery) - covered, available);
+                    activeUnits[batch.BatchId] = available - take;
+                    covered += take;
+                }
+            }
+
+            int uncommitted = 0;
+            foreach (int units in activeUnits.Values) uncommitted += Math.Max(0, units);
+            return uncommitted;
         }
 
         /// <summary>
@@ -1378,6 +1638,26 @@ namespace LandLedgers.Economy.Businesses.Bakery
             string accountId, string sellerLotId, int units, int pricePerUnitCents,
             int dayIndex, List<string> provenanceLines, List<string> diag)
         {
+            return RecordWholesaleTransfer(
+                accountId,
+                new[] { sellerLotId ?? string.Empty },
+                new[] { units },
+                pricePerUnitCents,
+                dayIndex,
+                provenanceLines,
+                diag);
+        }
+
+        /// <summary>
+        /// Records one account delivery fulfilled from several distinct
+        /// finished lots. Each source lot and quantity remains explicit in
+        /// the durable delivery record; the account cadence advances once
+        /// for the aggregate contract delivery.
+        /// </summary>
+        public string RecordWholesaleTransfer(
+            string accountId, IReadOnlyList<string> sellerLotIds, IReadOnlyList<int> unitsByLot,
+            int pricePerUnitCents, int dayIndex, List<string> provenanceLines, List<string> diag)
+        {
             diag = diag ?? diagnostics;
             BakeryWholesaleAccount account = null;
             foreach (var candidate in wholesaleAccounts)
@@ -1393,7 +1673,23 @@ namespace LandLedgers.Economy.Businesses.Bakery
                 diag.Add($"BakeryShopRuntime: wholesale transfer record refused — no active account '{accountId}'.");
                 return $"BakeryShopRuntime: wholesale transfer record refused — no active account '{accountId}'.";
             }
-            if (units <= 0 || units > account.UnitsPerDelivery)
+            if (sellerLotIds == null || unitsByLot == null || sellerLotIds.Count == 0
+                || sellerLotIds.Count != unitsByLot.Count)
+            {
+                diag.Add($"BakeryShopRuntime: wholesale transfer record refused — account '{accountId}' needs parallel source-lot ids and quantities; no advance, nothing recorded.");
+                return $"BakeryShopRuntime: wholesale transfer record refused — account '{accountId}' needs parallel source-lot ids and quantities; no advance, nothing recorded.";
+            }
+            int units = 0;
+            for (int i = 0; i < sellerLotIds.Count; i++)
+            {
+                if (string.IsNullOrWhiteSpace(sellerLotIds[i]) || unitsByLot[i] <= 0)
+                {
+                    diag.Add($"BakeryShopRuntime: wholesale transfer record refused — account '{accountId}' has an empty source lot or non-positive lot quantity; no advance, nothing recorded.");
+                    return $"BakeryShopRuntime: wholesale transfer record refused — account '{accountId}' has an empty source lot or non-positive lot quantity; no advance, nothing recorded.";
+                }
+                units = checked(units + unitsByLot[i]);
+            }
+            if (units > account.UnitsPerDelivery)
             {
                 diag.Add($"BakeryShopRuntime: wholesale transfer record refused — account '{accountId}' allows 1–{account.UnitsPerDelivery} units per delivery, not {units}; no advance, nothing recorded.");
                 return $"BakeryShopRuntime: wholesale transfer record refused — account '{accountId}' allows 1–{account.UnitsPerDelivery} units per delivery, not {units}; no advance, nothing recorded.";
@@ -1427,14 +1723,17 @@ namespace LandLedgers.Economy.Businesses.Bakery
                 DayIndex = dayIndex,
                 FullyCovered = units == account.UnitsPerDelivery,
             };
-            record.SellerLotIds.Add(sellerLotId ?? string.Empty);
-            record.UnitsByLot.Add(units);
+            for (int i = 0; i < sellerLotIds.Count; i++)
+            {
+                record.SellerLotIds.Add(sellerLotIds[i].Trim());
+                record.UnitsByLot.Add(unitsByLot[i]);
+            }
             if (provenanceLines != null) record.ProvenanceLines.AddRange(provenanceLines);
             wholesaleDeliveries.Add(record);
             account.NextDeliveryDayIndex += Math.Max(1, account.DeliveryCadenceDays);
 
             diag.Add($"BakeryShopRuntime: wholesale transfer recorded {record.DeliveryId} — {units}/{account.UnitsPerDelivery} {account.ProductId} " +
-                $"to {account.BuyerBusinessId} (lot {sellerLotId}, day {dayIndex})" +
+                $"to {account.BuyerBusinessId} ({sellerLotIds.Count} source lot(s), day {dayIndex})" +
                 (record.FullyCovered ? string.Empty : " — SHORT delivery recorded against finite available stock") +
                 $"; next delivery day {account.NextDeliveryDayIndex}.");
             return null;
@@ -1486,6 +1785,19 @@ namespace LandLedgers.Economy.Businesses.Bakery
 
             // ProtectWholesaleContracts (the default): due accounts first.
             return Math.Max(0, totalSellable - Math.Max(0, committed));
+        }
+
+        /// <summary>
+        /// Returns bakery-owned units the retail counter can actually sell
+        /// after aging current lots and protecting due wholesale commitments.
+        /// This is a read for production planning; it never reserves or moves
+        /// stock. The same allowance is enforced again by SellBread at sale.
+        /// </summary>
+        public int RetailUnitsAvailableForSale(string productId, int dayIndex, List<string> diag = null)
+        {
+            if (!BakeryBreadCatalog.IsKnownProduct(productId)) return 0;
+            AgeShelf(dayIndex, diag);
+            return RetailAllowanceFor(productId, dayIndex);
         }
 
         #endregion

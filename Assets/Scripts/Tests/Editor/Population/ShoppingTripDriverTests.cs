@@ -31,6 +31,97 @@ namespace LandLedgers.Editor.Population
     [TestFixture]
     public sealed class ShoppingTripDriverTests
     {
+        [TestCase("Resident is carrying freight to receiving building 1", true)]
+        [TestCase("Resident already has an active task or scheduled route to building 4", true)]
+        [TestCase("Resident is physically approaching an assigned freight wagon", true)]
+        [TestCase("No physical route reaches seller location 'building:0'", false)]
+        [TestCase("Destination entrance is not authored", false)]
+        public void MovementRefusalClassifierOnlyTreatsOwnedMovementAsReplannable(string reason, bool expected)
+        {
+            Assert.AreEqual(expected, ShoppingTripDriver.IsPhysicalMovementOwnershipRefusal(reason));
+        }
+
+        [Test]
+        public void FreightClaimAppearingAfterPlan_CancelsUnmovedLegAndReplansToAvailableHouseholdMember()
+        {
+            var f = new Fixture();
+            f.Population.GetPerson(2).ageBand = AgeBand.Adult18Plus;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            string routeRefusal = string.Empty;
+            var routedPeople = new List<int>();
+            var driver = new ShoppingTripDriver(f.Loop,
+                (personId, destination) =>
+                {
+                    routedPeople.Add(personId);
+                    if (personId == 1)
+                    {
+                        routeRefusal = "Resident is carrying freight to receiving building 1";
+                        return false;
+                    }
+                    routeRefusal = string.Empty;
+                    return true;
+                },
+                (personId, destination) => false,
+                (personId, destination) => false,
+                (personId, destination) => 120f,
+                cancelPhysicalRoute: null,
+                routeObservationIntervalSeconds: 60f,
+                physicalRouteRefusalProvider: () => routeRefusal);
+
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip original = driver.ActiveTrips.Single();
+            Assert.AreEqual(1, original.ShopperPersonId, "member order chooses P1 while both members are free");
+
+            // A freight claim appears after the trip is planned. At the
+            // actual departure the mover refuses the competing route.
+            f.Loop.ShopperMovementBlockReason = personId => personId == 1
+                ? "P1 is carrying freight to receiving building 1"
+                : null;
+            float departure = Fixture.Day * 86400f + original.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+            driver.AdvanceTick(departure + 60f, Fixture.Day, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Failed, original.State);
+            Assert.AreEqual(1, driver.ActiveTrips.Count, "replan outcome: " + string.Join("\n", f.Diag));
+            PlannedShoppingTrip replacement = driver.ActiveTrips.Single();
+            Assert.AreNotEqual(original.TripId, replacement.TripId);
+            Assert.AreEqual(2, replacement.ShopperPersonId);
+            float replacementDeparture = Fixture.Day * 86400f + replacement.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(replacementDeparture, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.AreEqual(2, routedPeople.Last(), "the replacement shopper starts at the newly planned feasible departure");
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(0, f.Store.CashReceived, "route refusal cannot settle a purchase");
+            Assert.AreEqual(50000, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents(),
+                "route refusal cannot debit the household");
+            Assert.IsTrue(f.Tasks.FindTask(original.OutboundTaskId).Status != TaskStatus.InProgress,
+                "the task started before route validation must be released without work");
+        }
+
+        [Test]
+        public void OwnerOperatorIsNotScheduledAsCustomerAtOwnCounter_WhenSpouseHasLaterWindow()
+        {
+            var f = new Fixture();
+            f.Population.GetPerson(2).ageBand = AgeBand.Adult18Plus;
+            f.Knowledge.LearnSupplier(2, "store-1", "lives in the same town", 0);
+            Assert.IsNull(f.Tracker.TryReserve(2, PersonActivityKind.JobSeeking, Fixture.Day,
+                540, 180, "morning job seeking"));
+            f.Loop.UsePreferredShoppingWindows = true;
+            f.Loop.IsPotentialServiceClerkForBusiness =
+                (businessId, personId) => businessId == "store-1" && personId == 1;
+
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = f.Loop.PlanTrip(need, Fixture.Day, f.LoopOptions);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Planned, trip.State, string.Join("\n", f.Diag));
+            Assert.AreEqual(2, trip.ShopperPersonId,
+                "the store owner cannot take the only clerk away from their own counter");
+            Assert.AreEqual(14 * 60, trip.DepartureMinuteOfDay,
+                "the spouse's morning job-seeking commitment is respected and the later preferred window is used");
+            Assert.AreEqual("store-1", trip.Candidate.Supplier.SupplierBusinessId);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status,
+                "planning the later real trip does not settle or fulfill the need");
+        }
+
         private sealed class TestStore : IItemResolvingSupplier
         {
             public string SupplierBusinessId { get; set; } = "store-1";
@@ -160,8 +251,10 @@ namespace LandLedgers.Editor.Population
                 for (int t = 0; t < maxTicks && Driver.ActiveTrips.Count > 0; t++)
                 {
                     float now = start + t * tickSeconds;
-                    Driver.AdvanceTick(now, Day, DueEvents, Diag);
+                    // Match production: due events are dispatched before the
+                    // driver's newly reached schedule boundaries are advanced.
                     DrainDue(now);
+                    Driver.AdvanceTick(now, Day, DueEvents, Diag);
                 }
 
                 // Drain anything left (large steps schedule completions past the
@@ -174,12 +267,17 @@ namespace LandLedgers.Editor.Population
 
             private void DrainDue(float now)
             {
-                // Handle in due order; use each event's own due time as the
-                // clock so arrival-time checks see honest minutes.
-                foreach (DueEvent ev in DueEvents.PopDue(now))
+                // A single accelerated frame may cross several consecutive
+                // due events. Drain the newly scheduled, already-due work too,
+                // in the same timestamp order as the production time loop.
+                for (int pass = 0; pass < 256; pass++)
                 {
-                    Driver.HandleDueEvent(ev, Day, ev.DueGameSeconds, DueEvents, Diag);
+                    List<DueEvent> due = DueEvents.PopDue(now);
+                    if (due.Count == 0) return;
+                    foreach (DueEvent ev in due)
+                        Driver.HandleDueEvent(ev, Day, ev.DueGameSeconds, DueEvents, Diag);
                 }
+                Diag.Add($"Test driver due-event drain reached its 256-event guard at {now}.");
             }
         }
 
@@ -374,7 +472,7 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
             // Conservation: household paid 10u x 120c, store stock dropped 10u.
             Assert.AreEqual(50000 - 1200, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
-            Assert.AreEqual(1200, f.Store.CashReceived);
+            Assert.AreEqual(1200, f.Store.CashReceived, string.Join("\n", f.Diag));
             Assert.AreEqual(90, f.Store.Stock[HouseholdItemCatalog.FlourId]);
             // Physical receipt only at the end: inventory grew by exactly 10u.
             int inventoryAfter = f.Inventories.GetOrCreate(Fixture.HouseholdId)
@@ -400,19 +498,214 @@ namespace LandLedgers.Editor.Population
             driver.AdvanceTick(start, Fixture.Day, f.DueEvents, f.Diag);
             var ev = f.DueEvents.PopDue(start + 86400f)[0];
             driver.HandleDueEvent(ev, Fixture.Day, ev.DueGameSeconds, f.DueEvents, f.Diag);
-            float now = ev.DueGameSeconds;
-            for (int i = 0; i < 5 && trip.IsActive; i++)
-            {
-                now += 60f;
-                remaining += 1f; // Moving farther away is not route progress.
-                foreach (var due in f.DueEvents.PopDue(now))
-                    driver.HandleDueEvent(due, Fixture.Day, due.DueGameSeconds, f.DueEvents, f.Diag);
-            }
+            // A short live estimate cannot override the planned journey time.
+            // Allow the bounded no-progress window, then verify recovery.
+            remaining += 1f; // Moving farther away is not route progress.
+            float now = start + trip.Legs.Outbound.PlannedMinutes * 60f + 90f * 60f;
+            driver.AdvanceTick(now, Fixture.Day, f.DueEvents, f.Diag);
             Assert.AreEqual(PlannedShoppingTrip.TripState.Failed, trip.State);
             Assert.IsTrue(cancelled);
             Assert.IsFalse(driver.HasDepartedTripForPerson(trip.ShopperPersonId));
             Assert.AreEqual(0, f.Store.CashReceived);
             Assert.AreEqual(0, trip.WindowReservationIds.Count);
+        }
+
+        [TestCase(0)]
+        [TestCase(1)]
+        [TestCase(2)]
+        public void OutboundRouteWithMissingOrInvalidEstimate_ExpiresIndependentlyAndReturnsShopper(int estimateKind)
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            bool routeActive = false;
+            bool routeCancelled = false;
+            var startedRoutes = new List<string>();
+            var driver = new ShoppingTripDriver(f.Loop,
+                (person, destination) => { startedRoutes.Add(destination); routeActive = true; return true; },
+                (person, destination) => false,
+                (person, destination) => routeActive,
+                (person, destination) => estimateKind == 0 ? (float?)null
+                    : estimateKind == 1 ? float.NaN : float.PositiveInfinity,
+                (person, destination) => { routeCancelled = true; routeActive = false; },
+                60f);
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = driver.ActiveTrips[0];
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.IsTrue(trip.ActiveRouteDeadlineGameSeconds > departure,
+                "the route needs a persisted absolute deadline even when its estimate is unavailable");
+
+            DueEvent outboundDue = f.DueEvents.PeekNext();
+            Assert.IsNotNull(outboundDue);
+            driver.HandleDueEvent(outboundDue, Fixture.Day, outboundDue.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Outbound, trip.State,
+                "an invalid estimate must not imply arrival or immediate failure");
+
+            driver.AdvanceTick(trip.ActiveRouteDeadlineGameSeconds + 1f, Fixture.Day, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Failed, trip.State,
+                "the absolute liveness deadline must recover the trip even without another due callback");
+            Assert.IsTrue(routeCancelled);
+            CollectionAssert.Contains(startedRoutes, trip.HomeLocationId,
+                "after releasing the failed shopping task, attempt a real physical return route");
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(0, trip.WindowReservationIds.Count);
+            Assert.IsTrue(f.Diag.Any(line => line.Contains("absolute liveness deadline")));
+        }
+
+        [Test]
+        public void DueEventOwnership_RebuildsFromLiveTripTaskIdentityWhenRuntimeMapIsMissing()
+        {
+            var f = new Fixture();
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            bool arrived = false;
+            var driver = new ShoppingTripDriver(f.Loop, (person, destination) => true,
+                (person, destination) => arrived, (person, destination) => true,
+                (person, destination) => 120f, null, 60f);
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = driver.ActiveTrips[0];
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+            DueEvent outboundDue = f.DueEvents.PeekNext();
+            Assert.IsNotNull(outboundDue);
+
+            var ownershipMap = (System.Collections.IDictionary)typeof(ShoppingTripDriver)
+                .GetField("legsByTaskIdString", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .GetValue(driver);
+            ownershipMap.Clear();
+
+            Assert.IsTrue(driver.OwnsDueEvent(outboundDue),
+                "the persisted trip leg identity must recover due-event ownership before generic task completion");
+            driver.HandleDueEvent(outboundDue, Fixture.Day, outboundDue.DueGameSeconds, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Outbound, trip.State);
+            Assert.AreEqual(0, f.Store.CashReceived,
+                "missing in-memory ownership must not settle before physical store arrival");
+            Assert.IsTrue(f.DueEvents.ScheduledCount > 0, "the physical arrival check should be re-armed");
+        }
+
+        [Test]
+        public void OutboundRouteWithAbsurdFiniteEstimate_StillHasBoundedDeadline()
+        {
+            var f = new Fixture();
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            var driver = new ShoppingTripDriver(f.Loop, (person, destination) => true,
+                (person, destination) => false, (person, destination) => true,
+                (person, destination) => 1e20f, null, 60f);
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = driver.ActiveTrips[0];
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+
+            Assert.LessOrEqual(trip.ActiveRouteDeadlineGameSeconds - departure, 24f * 3600f,
+                "a valid-but-unreasonable mover estimate must not defeat the independent liveness bound");
+        }
+
+        [Test]
+        public void SameLocationOutboundWithoutTask_StillExpiresWhenArrivalNeverConfirms()
+        {
+            var f = new Fixture();
+            f.Store.LocationId = "home";
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            bool routeCancelled = false;
+            var driver = new ShoppingTripDriver(f.Loop,
+                (person, destination) => true,
+                (person, destination) => false,
+                (person, destination) => true,
+                remainingPhysicalRouteSeconds: null,
+                cancelPhysicalRoute: (person, destination) => routeCancelled = true,
+                routeObservationIntervalSeconds: 60f);
+
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = driver.ActiveTrips[0];
+            Assert.IsFalse(trip.OutboundTaskId.IsValid,
+                "same-location travel legitimately has no TaskAuthority travel leg");
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Outbound, trip.State);
+            float deadline = trip.ActiveRouteDeadlineGameSeconds;
+            Assert.Greater(deadline, departure,
+                "zero-task physical approaches still need an independent persisted deadline");
+
+            driver.AdvanceTick(deadline + 1f, Fixture.Day, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Failed, trip.State,
+                "a missing arrival callback must not keep a same-location Outbound trip open forever");
+            Assert.IsTrue(routeCancelled);
+            Assert.AreEqual(0, f.DueEvents.ScheduledCount,
+                "recovery must cancel the synthetic arrival-check after failing a taskless leg");
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(0, trip.WindowReservationIds.Count);
+        }
+
+        [Test]
+        public void MissingLiveOutboundTask_AbortsWithoutSettlementAndCancelsByDurableIdentity()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            bool routeCancelled = false;
+            var driver = new ShoppingTripDriver(f.Loop,
+                (person, destination) => true,
+                (person, destination) => false,
+                (person, destination) => true,
+                remainingPhysicalRouteSeconds: null,
+                cancelPhysicalRoute: (person, destination) => routeCancelled = true,
+                routeObservationIntervalSeconds: 60f);
+
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = driver.ActiveTrips[0];
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+            EntityId outboundTaskId = trip.OutboundTaskId;
+            Assert.IsTrue(outboundTaskId.IsValid);
+            Assert.IsNotNull(f.Tasks.FindTask(outboundTaskId));
+
+            trip.Legs.Outbound = null; // simulate a lost live reference while retaining saved task identity
+            driver.AdvanceTick(departure + 60f, Fixture.Day, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Failed, trip.State);
+            Assert.IsTrue(routeCancelled);
+            Assert.AreEqual(TaskStatus.Cancelled, f.Tasks.FindTask(outboundTaskId).Status,
+                "aborting through the trip's durable identity must release its still-open task reservation");
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(0, f.Store.CashReceived,
+                "a missing live task reference must not award a purchase or settlement");
+            Assert.AreEqual(0, trip.WindowReservationIds.Count);
+        }
+
+        [Test]
+        public void OutboundRouteWithoutArrivalCallback_StillExpiresAndReleasesTrip()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            bool routeCancelled = false;
+            var driver = new ShoppingTripDriver(f.Loop,
+                (person, destination) => true,
+                hasPhysicallyArrived: null,
+                hasActivePhysicalRoute: (person, destination) => true,
+                remainingPhysicalRouteSeconds: null,
+                cancelPhysicalRoute: (person, destination) => routeCancelled = true,
+                routeObservationIntervalSeconds: 60f);
+
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = driver.ActiveTrips[0];
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+            float deadline = trip.ActiveRouteDeadlineGameSeconds;
+            Assert.Greater(deadline, departure);
+
+            driver.AdvanceTick(deadline + 1f, Fixture.Day, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Failed, trip.State,
+                "the liveness sweep must run even when no arrival callback was rebound");
+            Assert.IsTrue(routeCancelled, "the physical route must be cancelled during recovery");
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status,
+                "an uncompleted trip leaves the household's need outstanding");
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(0, trip.WindowReservationIds.Count,
+                "recovery must release the shopper's reserved window");
         }
 
         [Test]
@@ -541,8 +834,11 @@ namespace LandLedgers.Editor.Population
 
             float now = Fixture.Day * 86400f + 600 * 60f;
             Assert.IsFalse(driver.HasDepartedTripForPerson(Fixture.ShopperId));
+            Assert.AreEqual(string.Empty, driver.DepartedTripIdForPerson(Fixture.ShopperId));
             driver.AdvanceTick(now, Fixture.Day, f.DueEvents, f.Diag);
             Assert.IsTrue(driver.HasDepartedTripForPerson(Fixture.ShopperId));
+            string activeTripId = driver.DepartedTripIdForPerson(Fixture.ShopperId);
+            Assert.IsNotEmpty(activeTripId, "The route trace must be able to correlate the mover with its durable trip identity.");
             DueEvent outboundDue = f.DueEvents.PopDue(now + 86400f)[0];
             driver.HandleDueEvent(outboundDue, Fixture.Day, outboundDue.DueGameSeconds,
                 f.DueEvents, f.Diag);
@@ -566,6 +862,7 @@ namespace LandLedgers.Editor.Population
             driver.HandleDueEvent(returning, Fixture.Day, returning.DueGameSeconds, f.DueEvents, f.Diag);
             Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
             Assert.IsFalse(driver.HasDepartedTripForPerson(Fixture.ShopperId));
+            Assert.AreEqual(string.Empty, driver.DepartedTripIdForPerson(Fixture.ShopperId));
             Assert.AreEqual(10, f.Inventories.GetOrCreate(Fixture.HouseholdId)
                 .GetAvailableUnits(HouseholdItemCatalog.FlourId));
         }
@@ -648,7 +945,9 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(small.Balance, large.Balance, "ledger balance must match across tick sizes");
             Assert.AreEqual(small.StoreStock, large.StoreStock);
             Assert.AreEqual(small.StoreCash, large.StoreCash);
-            Assert.AreEqual(small.Inventory, large.Inventory);
+            Assert.AreEqual(small.Inventory, large.Inventory,
+                $"small cash={small.Balance}, store={small.StoreStock}, sellerCash={small.StoreCash}, inventory={small.Inventory}, need={small.NeedStatus}; " +
+                $"large cash={large.Balance}, store={large.StoreStock}, sellerCash={large.StoreCash}, inventory={large.Inventory}, need={large.NeedStatus}. Large-tick diagnostics: {large.Diagnostics}");
             Assert.AreEqual(small.NeedStatus, large.NeedStatus);
             Assert.AreEqual(small.WorkedMinutes, large.WorkedMinutes, "person work time must match");
         }
@@ -661,6 +960,7 @@ namespace LandLedgers.Editor.Population
             public int Inventory;
             public PurchasingNeedStatus NeedStatus;
             public int WorkedMinutes;
+            public string Diagnostics;
         }
 
         private static TripOutcome RunTrip(int tickSeconds)
@@ -677,6 +977,7 @@ namespace LandLedgers.Editor.Population
                 Inventory = f.Inventories.GetOrCreate(Fixture.HouseholdId).GetAvailableUnits(HouseholdItemCatalog.FlourId),
                 NeedStatus = need.Status,
                 WorkedMinutes = f.Budgets.GetOrCreate(EntityId.For(EntityKind.Person, Fixture.ShopperId)).MinutesWorked,
+                Diagnostics = string.Join(" | ", f.Diag),
             };
         }
 
@@ -699,6 +1000,66 @@ namespace LandLedgers.Editor.Population
             Assert.IsEmpty(f.Tracker.ActiveFor(Fixture.ShopperId, Fixture.Day)
                 .Where(reservation => reservation.Activity == PersonActivityKind.Shopping),
                 "The unused in-store window is released while the return journey remains legitimate.");
+        }
+
+        [Test]
+        public void EmptyReturn_OccupiedShopperDefersAcrossSaveLoadThenStartsOnce()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = f.Driver.ActiveTrips.Single();
+
+            const string blockerDefinition = "test.shopping-return-blocker";
+            Assert.IsTrue(f.Tasks.RegisterDefinition(new TaskDefinition(blockerDefinition, "Temporary work", 30), out string registerError), registerError);
+            WorkTask blocker = f.Tasks.CreateTask(blockerDefinition, EntityId.For(EntityKind.Business, 88), Fixture.Day);
+            Assert.IsTrue(f.Tasks.AssignTask(blocker.TaskId,
+                EntityId.For(EntityKind.Person, Fixture.ShopperId), f.Budgets, out string assignError), assignError);
+            Assert.IsTrue(f.Tasks.StartTask(blocker.TaskId, Fixture.Day, out string startError), startError);
+
+            float now = Fixture.Day * 86400f + 10 * 3600f;
+            typeof(ShoppingTripDriver).GetMethod("ReturnEmpty", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .Invoke(f.Driver, new object[] { trip, "test stockout", "test", Fixture.Day, now, f.DueEvents, f.Diag });
+
+            Assert.IsTrue(trip.ReturnStartPending);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State);
+            Assert.AreEqual(1, f.Driver.ActiveTrips.Count, "the need and trip identity remain live while the other task owns the shopper");
+            Assert.AreEqual(TaskStatus.Assigned, trip.Legs.Return.Status, "the return leg remains assigned, not credited as performed");
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(50000, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
+            Assert.AreEqual(100, f.Store.Stock[HouseholdItemCatalog.FlourId]);
+
+            // Continue from the serialized authorities with the blocker still active.
+            var savedTasks = f.Tasks.CaptureSaveDto();
+            var savedBudgets = f.Budgets.CaptureSaveDto();
+            var savedSchedules = f.Tracker.CaptureSaveDto();
+            var savedTrips = f.Driver.CaptureSaveDto();
+            var savedDue = f.DueEvents.CaptureSaveDto();
+            var g = new Fixture();
+            g.Tasks.LoadFromSaveDto(savedTasks);
+            g.Budgets.LoadFromSaveDto(savedBudgets, Fixture.Day);
+            g.Tracker.LoadFromSaveDto(savedSchedules);
+            g.Driver.LoadFromSaveDto(savedTrips);
+            g.DueEvents.LoadFromSaveDto(savedDue);
+            HouseholdPurchasingNeed restoredNeed = g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip restoredTrip = g.Driver.ActiveTrips.Single();
+            g.Driver.RehydrateAfterLoad(g.Tasks, id => id == g.Store.SupplierBusinessId ? g.Store : null,
+                Fixture.Day, now + 900f, g.DueEvents, g.Diag);
+
+            Assert.IsTrue(restoredTrip.ReturnStartPending, "pending return retry survives Save/Continue");
+            WorkTask restoredBlocker = g.Tasks.FindTask(blocker.TaskId);
+            Assert.IsNotNull(restoredBlocker);
+            Assert.IsTrue(g.Tasks.CancelTask(restoredBlocker.TaskId, g.Budgets), "the temporary blocker is released");
+            g.Driver.AdvanceTick(now + 900f, Fixture.Day, g.DueEvents, g.Diag);
+
+            Assert.IsFalse(restoredTrip.ReturnStartPending);
+            Assert.AreEqual(TaskStatus.InProgress, restoredTrip.Legs.Return.Status,
+                "the real return task starts through TaskAuthority after the blocker clears");
+            Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
+            Assert.AreEqual(PurchasingNeedStatus.Open, restoredNeed.Status);
+            Assert.AreEqual(50000, g.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents(),
+                "return recovery does not create a purchase, charge, or refund");
+            Assert.AreEqual(100, g.Store.Stock[HouseholdItemCatalog.FlourId]);
         }
 
         [Test]
@@ -882,6 +1243,9 @@ namespace LandLedgers.Editor.Population
             f.Driver.AdvanceTick(start + 610 * 60f, Fixture.Day, f.DueEvents, f.Diag);
             Assert.AreEqual(1, f.Driver.ActiveTrips.Count);
             Assert.AreEqual(PlannedShoppingTrip.TripState.Outbound, f.Driver.ActiveTrips[0].State);
+            Assert.IsTrue(f.Driver.ActiveTrips[0].ActiveRouteDeadlineGameSeconds > 0f,
+                "outbound liveness deadline should be included in the save snapshot");
+            float savedRouteDeadline = f.Driver.ActiveTrips[0].ActiveRouteDeadlineGameSeconds;
 
             var tasksDto = f.Tasks.CaptureSaveDto();
             var budgetsDto = f.Budgets.CaptureSaveDto();
@@ -921,6 +1285,8 @@ namespace LandLedgers.Editor.Population
             // Pop the outbound leg due while the shopper has not arrived:
             // the trip must retry on its live route, not abort.
             PlannedShoppingTrip restored = gDriver.ActiveTrips[0];
+            Assert.AreEqual(savedRouteDeadline, restored.ActiveRouteDeadlineGameSeconds,
+                "Save/Continue must preserve the absolute route deadline rather than restarting patience");
             DueEvent outboundDue = null;
             foreach (DueEvent ev in g.DueEvents.PopDue(gStart + 86400f))
             {
@@ -960,6 +1326,69 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(PurchasingNeedStatus.Fulfilled, gNeed.Status);
             Assert.AreEqual(90, g.Store.Stock[HouseholdItemCatalog.FlourId]);
             Assert.AreEqual(1200, g.Store.CashReceived);
+        }
+
+        [Test]
+        public void InStoreLegStartIsIdempotentForInProgressAndCompletedTask()
+        {
+            var f = new Fixture();
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out _);
+            WorkTask leg = trip.Legs.InStore;
+            Assert.NotNull(leg);
+            Assert.AreEqual(TaskStatus.InProgress, leg.Status);
+
+            int workBefore = leg.MinutesWorked;
+            Assert.IsNull(f.Loop.BeginInStoreLeg(trip, Fixture.Day, f.Diag),
+                "replaying an in-progress stage must not abort the shopping trip");
+            Assert.AreEqual(workBefore, leg.MinutesWorked,
+                "an idempotent stage start does not award additional work");
+
+            Assert.IsTrue(f.Tasks.RecordWorkProgress(leg.TaskId, leg.MinutesRemaining, f.Budgets,
+                Fixture.Day, out bool reached, out string refusal), refusal);
+            Assert.IsTrue(reached);
+            Assert.IsTrue(f.Tasks.CompleteTask(leg.TaskId, TaskOutcome.Success, Fixture.Day, f.Budgets));
+            workBefore = leg.MinutesWorked;
+
+            Assert.IsNull(f.Loop.BeginInStoreLeg(trip, Fixture.Day, f.Diag),
+                "a restored or replayed completed stage is not restarted");
+            Assert.AreEqual(TaskStatus.Complete, leg.Status,
+                "completed task identity remains terminal");
+            Assert.AreEqual(workBefore, leg.MinutesWorked,
+                "completed work is never credited a second time");
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State);
+        }
+
+        [Test]
+        public void CompletedAuthoritativeOutboundTask_IsIdempotentAgainstStaleTripSnapshot()
+        {
+            var f = new Fixture();
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = f.Driver.ActiveTrips.Single();
+            WorkTask leg = trip.Legs.Outbound;
+            Assert.NotNull(leg);
+            Assert.IsNull(f.Loop.BeginOutboundLeg(trip, Fixture.Day, f.Diag));
+
+            // The trip retains its own WorkTask snapshot. The autonomous
+            // task-progress path can complete the authority record first,
+            // leaving that snapshot stale until the matching arrival callback.
+            WorkTask staleSnapshot = leg.Copy();
+            Assert.IsTrue(f.Tasks.RecordWorkProgress(leg.TaskId, leg.MinutesRemaining,
+                f.Budgets, Fixture.Day, out bool reached, out string refusal), refusal);
+            Assert.IsTrue(reached);
+            Assert.IsTrue(f.Tasks.CompleteTask(leg.TaskId, TaskOutcome.Success, Fixture.Day, f.Budgets));
+            Assert.AreEqual(TaskStatus.InProgress, staleSnapshot.Status,
+                "the retained trip snapshot deliberately remains stale");
+
+            int authoritativeMinutes = f.Tasks.FindTask(leg.TaskId).MinutesWorked;
+            Assert.IsNull(f.Loop.CompleteLegTask(staleSnapshot, Fixture.Day, f.Diag),
+                "the due callback recognizes the already-complete authoritative task");
+            Assert.AreEqual(TaskStatus.Complete, f.Tasks.FindTask(leg.TaskId).Status);
+            Assert.AreEqual(authoritativeMinutes, f.Tasks.FindTask(leg.TaskId).MinutesWorked,
+                "a stale snapshot cannot award the travel minutes a second time");
+            Assert.IsFalse(string.Join("\n", f.Diag).Contains("progress refused"),
+                "idempotent authority resolution must not abort the arrived shopping leg");
         }
 
         [Test]
@@ -1257,7 +1686,7 @@ namespace LandLedgers.Editor.Population
             // Slice 17: settlement waits for service completion — nothing
             // settles at arrival when a service task was started.
             Assert.AreEqual(0, f.Store.CashReceived);
-            Assert.AreEqual(1, queue.WaitingCount);
+            Assert.AreEqual(1, queue.WaitingCount, string.Join("\n", f.Diag));
             WaitingCustomer waiting = queue.Waiting[0];
             // Plan 16 §1.3: the ref reuses the in-store leg format
             // shop:{HouseholdId}:{NeedSequence} (fixture household is 7).
@@ -1277,6 +1706,82 @@ namespace LandLedgers.Editor.Population
             Assert.IsNotNull(serviceEv, "service due event not scheduled");
             f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
             Assert.AreEqual(1200, f.Store.CashReceived);
+        }
+
+        [Test]
+        public void RequiredPhysicalCounterService_DoesNotSettleUntilClerkIsAvailableAndTaskCompletes()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, -1);
+            f.Loop.RequirePhysicalCounterService = true;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            int cashBefore = f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents();
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+
+            Assert.IsTrue(IsAwaitingService(trip));
+            Assert.IsFalse(ServiceTaskIdOf(trip).IsValid);
+            Assert.AreEqual(1, queue.WaitingCount);
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(cashBefore, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
+            Assert.IsNull(trip.Batch, "no purchased cargo exists before counter service");
+
+            f.Loop.ResolveServiceClerkPersonId = businessId => businessId == "store-1" ? 3 : -1;
+            f.Driver.AdvanceTick(arrival + 60f, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.IsTrue(ServiceTaskIdOf(trip).IsValid);
+            Assert.AreEqual(0, f.Store.CashReceived, "starting service is not a sale");
+
+            DueEvent serviceEv = PopServiceDueEvent(f, trip, arrival + 60f);
+            Assert.IsNotNull(serviceEv);
+            f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.AreEqual(1200, f.Store.CashReceived, string.Join("\n", f.Diag));
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status,
+                "payment can precede physical return and household receipt, not need fulfillment");
+            Assert.IsNotNull(trip.Batch);
+        }
+
+        [Test]
+        public void RequiredPhysicalCounterService_MissingQueueReturnsWithoutTransaction()
+        {
+            var f = new Fixture();
+            f.Loop.RequirePhysicalCounterService = true;
+            f.Loop.ResolveCustomerQueue = _ => null;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 1);
+            int buyerCashBefore = f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents();
+
+            PlannedShoppingTrip trip = DriveToArrival(f, out _);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State,
+                "A production seller without a physical service queue must cause an empty return, not direct settlement.");
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(buyerCashBefore, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.IsNull(trip.Batch);
+            Assert.IsTrue(f.Diag.Any(line => line.Contains("no physical counter queue")));
+        }
+
+        [Test]
+        public void RequiredPhysicalCounterService_AbsentClerkEventuallyReturnsWithoutPurchase()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            CustomerQueue queue = WireService(f, log, -1);
+            f.Loop.RequirePhysicalCounterService = true;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            int cashBefore = f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents();
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+
+            f.Driver.AdvanceTick(arrival + CustomerQueue.DefaultPatienceMinutes * 60f + 1f,
+                Fixture.Day, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(cashBefore, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
+            Assert.IsNull(trip.Batch);
+            Assert.AreEqual(0, queue.WaitingCount);
+            Assert.IsTrue(f.Diag.Any(line => line.Contains("counter service expired")));
         }
 
         [Test]
@@ -1304,11 +1809,12 @@ namespace LandLedgers.Editor.Population
             var f = new Fixture();
             var log = new LostSaleLog();
             CustomerQueue queue = WireService(f, log, -1);
+            f.Loop.RequirePhysicalCounterService = true;
             f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
             PlannedShoppingTrip trip = DriveToArrival(f, out _);
             Assert.AreEqual(1, queue.WaitingCount);
             Assert.IsTrue(!ServiceTaskIdOf(trip).IsValid);
-            StringAssert.Contains("no clerk", string.Join("\n", f.Diag));
+            StringAssert.Contains("service clerk is available", string.Join("\n", f.Diag));
         }
 
         [Test]
@@ -1318,6 +1824,7 @@ namespace LandLedgers.Editor.Population
             var log = new LostSaleLog();
             AddClerk(f);
             CustomerQueue queue = WireService(f, log, 3);
+            f.Loop.RequirePhysicalCounterService = true;
             for (int i = 0; i < 5; i++)
             {
                 Assert.IsTrue(queue.Enqueue("prefill-" + i, Fixture.ShopperId, "staple_food", 1, 120, Fixture.Day));
@@ -1331,9 +1838,10 @@ namespace LandLedgers.Editor.Population
                 Assert.AreEqual("prefill-" + i, queue.Waiting[i].CustomerRef);
             }
 
-            Assert.AreEqual(0, log.Count);
+            Assert.AreEqual(1, log.Count, "the full counter line records one genuine lost sale");
             Assert.IsTrue(!ServiceTaskIdOf(trip).IsValid);
-            StringAssert.Contains("queue full", string.Join("\n", f.Diag));
+            StringAssert.Contains("queue at", string.Join("\n", f.Diag));
+            Assert.AreEqual(0, f.Store.CashReceived, "a refused queue arrival cannot settle a sale");
         }
 
         private sealed class EmptyCategoryStore : IItemResolvingSupplier
@@ -1410,12 +1918,12 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(0, f.Driver.ActiveTrips.Count, "trip should be done\n" + string.Join("\n", f.Diag));
             Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
             Assert.AreEqual(50000 - 1200, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
-            Assert.AreEqual(1200, f.Store.CashReceived);
+            Assert.AreEqual(1200, f.Store.CashReceived, string.Join("\n", f.Diag));
             Assert.AreEqual(90, f.Store.Stock[HouseholdItemCatalog.FlourId]);
         }
 
         [Test]
-        public void ServiceCompletionRefusal_SettlesAnywayAndPopsQueue()
+        public void ServiceTaskAlreadyCompletedBeforeDueEvent_SettlesOnceAndPopsQueue()
         {
             var f = new Fixture();
             var log = new LostSaleLog();
@@ -1433,18 +1941,53 @@ namespace LandLedgers.Editor.Population
             DueEvent serviceEv = PopServiceDueEvent(f, trip, arrival);
             Assert.IsNotNull(serviceEv, "service due event not scheduled");
             f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
-            // Slice 17 (d1, ruled by note 79): the failure is task
-            // bookkeeping, not a customer refusal — settle anyway and pop
-            // the queue, as on success. (Plan 22 §12 named one existing-test
-            // update; this is the second, forced by the same ruling — the
-            // old assertion pinned the pre-gate "customer stays queued"
-            // disposition that (d1) replaces. Flagged for Agent 3.)
             Assert.AreEqual(0, queue.WaitingCount);
             Assert.AreEqual(TaskStatus.Complete, f.Tasks.FindTask(ServiceTaskIdOf(trip)).Status);
             Assert.IsNotNull(trip.Batch);
             Assert.AreEqual(1200, f.Store.CashReceived);
             Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State);
-            StringAssert.Contains("did not complete", string.Join("\n", f.Diag));
+            Assert.IsFalse(f.Diag.Any(line => line.Contains("did not complete")));
+        }
+
+        [Test]
+        public void OutboundLegAlreadyCompletedBeforeArrivalDue_AdvancesTripWithoutDuplicateWork()
+        {
+            var f = new Fixture();
+            var driver = new ShoppingTripDriver(f.Loop,
+                (personId, destination) => true,
+                (personId, destination) => f.Locations.TryGetValue(personId, out string location)
+                    && string.Equals(location, destination, StringComparison.Ordinal),
+                (personId, destination) => false,
+                (personId, destination) => 0f);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = driver.ActiveTrips.Single();
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+
+            DueEvent outboundDue = f.DueEvents.PopDue(departure + 86400f)
+                .Single(ev => ev.PayloadRef == trip.OutboundTaskId.ToString());
+            WorkTask outbound = f.Tasks.FindTask(trip.OutboundTaskId);
+            Assert.IsNotNull(outbound);
+            Assert.IsTrue(f.Tasks.RecordWorkProgress(outbound.TaskId, outbound.MinutesRemaining,
+                f.Budgets, Fixture.Day, out bool reached, out string rejection), rejection);
+            Assert.IsTrue(reached);
+            Assert.IsTrue(f.Tasks.CompleteTask(outbound.TaskId, TaskOutcome.Success,
+                Fixture.Day, f.Budgets), "the task authority completed the genuinely worked travel leg");
+            f.Locations[trip.ShopperPersonId] = trip.Candidate.Supplier.LocationId;
+
+            driver.HandleDueEvent(outboundDue, Fixture.Day, outboundDue.DueGameSeconds,
+                f.DueEvents, f.Diag);
+
+            Assert.AreEqual(TaskStatus.Complete, outbound.Status);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State,
+                "confirmed physical arrival should advance instead of aborting on duplicate progress");
+            Assert.IsNotNull(trip.Batch);
+            Assert.AreEqual(1200, f.Store.CashReceived);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status,
+                "the need remains open until physical receipt at home");
+            Assert.IsFalse(f.Diag.Any(line => line.Contains("is Complete, not InProgress")),
+                string.Join("\n", f.Diag));
         }
 
         // ---- Plan 20: Plan 16 follow-ups (CancelTask disposal) ----
@@ -1501,6 +2044,7 @@ namespace LandLedgers.Editor.Population
             var log = new LostSaleLog();
             AddClerk(f);
             CustomerQueue queue = WireService(f, log, 3);
+            f.Loop.RequirePhysicalCounterService = true;
             // Exhaust the clerk's whole day budget (600 minutes) so the
             // TendCustomer AssignTask refuses.
             EntityId clerk = EntityId.For(EntityKind.Person, 3);
@@ -1510,7 +2054,7 @@ namespace LandLedgers.Editor.Population
             PlannedShoppingTrip trip = DriveToArrival(f, out _);
             Assert.AreEqual(1, queue.WaitingCount);
             Assert.IsTrue(!ServiceTaskIdOf(trip).IsValid);
-            StringAssert.Contains("assign refused", string.Join("\n", f.Diag));
+            StringAssert.Contains("assignment refused", string.Join("\n", f.Diag));
             WorkTask serviceTask = FindTendCustomerTask(f);
             Assert.IsNotNull(serviceTask, "no TendCustomer task was created");
             Assert.AreEqual(TaskStatus.Cancelled, serviceTask.Status);
@@ -1523,6 +2067,7 @@ namespace LandLedgers.Editor.Population
             var log = new LostSaleLog();
             AddClerk(f);
             CustomerQueue queue = WireService(f, log, 3);
+            f.Loop.RequirePhysicalCounterService = true;
             EntityId clerk = EntityId.For(EntityKind.Person, 3);
             // Occupy the clerk first: an InProgress task, so the
             // TendCustomer StartTask refuses on occupancy.
@@ -1540,6 +2085,51 @@ namespace LandLedgers.Editor.Population
             Assert.IsNotNull(serviceTask, "no TendCustomer task was created");
             Assert.AreEqual(TaskStatus.Cancelled, serviceTask.Status);
             Assert.AreEqual(committedBefore, f.Budgets.GetOrCreate(clerk).MinutesCommitted);
+        }
+
+        [Test]
+        public void BusyAssignedClerk_FallsBackToPresentOwnerWithoutLeakingRejectedTask()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            f.Population.people.Add(new PersonState { id = 4, firstName = "Owner", lastName = "Test", age = 40, ageBand = AgeBand.Adult18Plus });
+            CustomerQueue queue = WireService(f, log, 3);
+            f.Loop.RequirePhysicalCounterService = true;
+            f.Loop.ResolveServiceClerkCandidates = businessId => businessId == "store-1"
+                ? new[] { 3, 4 }
+                : Array.Empty<int>();
+
+            EntityId assignedClerk = EntityId.For(EntityKind.Person, 3);
+            WorkTask occupying = f.Tasks.CreateTaskWithPlannedMinutes(
+                HouseholdShoppingLoop.ShoppingTaskId, assignedClerk, Fixture.Day, 10);
+            Assert.IsTrue(f.Tasks.AssignTask(occupying.TaskId, assignedClerk, f.Budgets, out string assignReason), assignReason);
+            Assert.IsTrue(f.Tasks.StartTask(occupying.TaskId, Fixture.Day, out string startReason), startReason);
+
+            f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            PlannedShoppingTrip trip = DriveToArrival(f, out _);
+
+            Assert.AreEqual(1, queue.WaitingCount);
+            Assert.IsTrue(ServiceTaskIdOf(trip).IsValid);
+            WorkTask serviceTask = f.Tasks.FindTask(ServiceTaskIdOf(trip));
+            Assert.IsNotNull(serviceTask);
+            Assert.AreEqual(EntityId.For(EntityKind.Person, 4), serviceTask.AssigneeId,
+                "TaskAuthority should reject the busy clerk and let the available owner serve");
+            Assert.AreEqual(0, f.Store.CashReceived, "starting service is not a sale");
+            WorkTask[] tendTasks = GetTendCustomerTasks(f);
+            Assert.AreEqual(2, tendTasks.Length);
+            Assert.AreEqual(TaskStatus.Cancelled, tendTasks[0].Status,
+                "the rejected candidate's task must be closed without retaining a reservation");
+            Assert.AreEqual(TaskStatus.InProgress, tendTasks[1].Status);
+        }
+
+        private static WorkTask[] GetTendCustomerTasks(Fixture f)
+        {
+            System.Reflection.FieldInfo field = typeof(TaskAuthority).GetField("tasks",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.IsNotNull(field);
+            return ((System.Collections.Generic.List<WorkTask>)field.GetValue(f.Tasks))
+                .Where(t => t.DefinitionId == GeneralStoreTaskCatalog.TendCustomerId).ToArray();
         }
 
         [Test]
@@ -1812,13 +2402,14 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
-        public void ServedEntry_LingersAfterFrontPop_SweptSilently()
+        public void CustomerQueueServesInFifoOrderWhenClerkBecomesAvailable()
         {
             var f = new Fixture();
             var log = new LostSaleLog();
             AddClerk(f);
             // WireService ONCE: a second call would create a new queue.
             CustomerQueue queue = WireService(f, log, -1);
+            f.Loop.RequirePhysicalCounterService = true;
             f.LoopOptions.InStoreMinutes = 30;
             HouseholdPurchasingNeed needA = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
             // Second household (customer B): person 4, household 8.
@@ -1863,42 +2454,42 @@ namespace LandLedgers.Editor.Population
             Assert.IsNotNull(outboundB, "B outbound leg due event not scheduled");
             float arrival = outboundA.DueGameSeconds;
             Assert.AreEqual(outboundB.DueGameSeconds, arrival, "both trips arrive together");
-            // B arrives first with no clerk: settles immediately via (g1),
-            // InStore, entry [B].
+            // B arrives first with no clerk and remains queued, unpaid.
             f.Driver.HandleDueEvent(outboundB, Fixture.Day, arrival, f.DueEvents, f.Diag);
-            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, tripB.State);
-            Assert.IsNotNull(tripB.Batch);
+            Assert.IsTrue(IsAwaitingService(tripB));
+            Assert.IsNull(tripB.Batch);
+            Assert.AreEqual(0, f.Store.CashReceived);
             Assert.AreEqual(1, queue.WaitingCount);
-            // A arrives with the clerk: service starts, AwaitingService,
-            // entry [B, A].
+            // A arrives after a clerk becomes available, but cannot jump B.
             clerkId = 3;
             f.Driver.HandleDueEvent(outboundA, Fixture.Day, arrival, f.DueEvents, f.Diag);
             Assert.IsTrue(IsAwaitingService(tripA));
+            Assert.IsFalse(ServiceTaskIdOf(tripA).IsValid);
             Assert.AreEqual(2, queue.WaitingCount);
             Assert.AreEqual(HouseholdShoppingLoop.ServiceCustomerRefFor(tripB), queue.Waiting[0].CustomerRef);
             Assert.AreEqual(HouseholdShoppingLoop.ServiceCustomerRefFor(tripA), queue.Waiting[1].CustomerRef);
-            // Serve A: PopServiceDueEvent's window is arrival + 4 min + 1s,
-            // so B's InStore leg due (arrival + 30 min) is NOT popped.
-            // ServeNext pops waiting[0] = B (front, not the served trip —
-            // the mismatch); A settles and starts the InStore leg.
-            DueEvent serviceEv = PopServiceDueEvent(f, tripA, arrival);
-            Assert.IsNotNull(serviceEv, "service due event not scheduled");
+            f.Driver.AdvanceTick(arrival + 60f, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.IsTrue(ServiceTaskIdOf(tripB).IsValid, "the queue head gets the clerk first");
+            Assert.IsFalse(ServiceTaskIdOf(tripA).IsValid);
+            DueEvent serviceEv = PopServiceDueEvent(f, tripB, arrival + 60f);
+            Assert.IsNotNull(serviceEv, "head customer's service due event not scheduled");
             f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
             Assert.AreEqual(1, queue.WaitingCount);
-            Assert.AreEqual(HouseholdShoppingLoop.ServiceCustomerRefFor(tripA), queue.Waiting[0].CustomerRef, "A's entry lingers after the front-pop");
+            Assert.AreEqual(HouseholdShoppingLoop.ServiceCustomerRefFor(tripA), queue.Waiting[0].CustomerRef);
+            Assert.IsNotNull(tripB.Batch);
+            Assert.AreEqual(1200, f.Store.CashReceived);
+            f.Driver.AdvanceTick(serviceEv.DueGameSeconds + 60f, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.IsTrue(ServiceTaskIdOf(tripA).IsValid, "A is served after B leaves the queue");
+            DueEvent serviceA = PopServiceDueEvent(f, tripA, serviceEv.DueGameSeconds + 60f);
+            Assert.IsNotNull(serviceA);
+            f.Driver.HandleDueEvent(serviceA, Fixture.Day, serviceA.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.AreEqual(0, queue.WaitingCount);
             Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, tripA.State);
             Assert.IsNotNull(tripA.Batch);
             Assert.AreEqual(2400, f.Store.CashReceived);
             Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, tripB.State);
             Assert.IsNotNull(tripB.Batch);
-            f.Driver.AdvanceTick(arrival + 25 * 60f, Fixture.Day, f.DueEvents, f.Diag);
-            Assert.AreEqual(0, queue.WaitingCount, "A's lingering entry was swept, no false QueueBalk");
-            Assert.AreEqual(0, log.Count, "no false lost sale for a settled customer");
-            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, tripA.State);
-            Assert.IsNotNull(tripA.Batch);
-            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, tripB.State);
-            Assert.IsNotNull(tripB.Batch);
-            Assert.IsTrue(!f.Diag.Any(line => line.Contains("balked")), "sweep is silent");
+            Assert.AreEqual(0, log.Count, "waiting customers were served; no one balked");
         }
 
         [Test]
@@ -1910,6 +2501,9 @@ namespace LandLedgers.Editor.Population
             f.LoopOptions.InStoreMinutes = 30;
             HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
             PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            Assert.AreEqual(0, queue.WaitingCount, "compatibility settlement removes its own queue entry");
+            Assert.IsTrue(queue.Enqueue(HouseholdShoppingLoop.ServiceCustomerRefFor(trip), trip.ShopperPersonId,
+                "staple_food", 10, 120, Fixture.Day), "recreate a stale entry to exercise the defensive sweep");
             Assert.AreEqual(1, queue.WaitingCount);
             f.Driver.AdvanceTick(arrival + 25 * 60f, Fixture.Day, f.DueEvents, f.Diag);
             Assert.AreEqual(0, queue.WaitingCount, "settled entry must be swept before Tick, never balked");
@@ -1929,6 +2523,9 @@ namespace LandLedgers.Editor.Population
             CustomerQueue queue = WireService(f, log, -1);
             HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
             PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            Assert.AreEqual(0, queue.WaitingCount, "settlement removes the live queue entry");
+            Assert.IsTrue(queue.Enqueue(HouseholdShoppingLoop.ServiceCustomerRefFor(trip), trip.ShopperPersonId,
+                "staple_food", 10, 120, Fixture.Day), "recreate a stale entry to exercise leg cleanup");
             Assert.AreEqual(1, queue.WaitingCount);
             // Run the InStore leg due (default 15 min); pop past the due time
             // so the boundary is not in question. The return leg due is
@@ -2033,21 +2630,23 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
-        public void NoClerk_SettlesAtArrivalAsToday()
+        public void NoClerk_WaitsForPhysicalServiceWithoutSettlement()
         {
             var f = new Fixture();
             var log = new LostSaleLog();
             CustomerQueue queue = WireService(f, log, -1);
+            f.Loop.RequirePhysicalCounterService = true;
             f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
             PlannedShoppingTrip trip = DriveToArrival(f, out _);
-            Assert.IsNotNull(trip.Batch);
-            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State);
-            Assert.AreEqual(1200, f.Store.CashReceived);
+            Assert.IsNull(trip.Batch);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.AwaitingService, trip.State);
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(50000, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
             Assert.AreEqual(1, queue.WaitingCount);
         }
 
         [Test]
-        public void ServiceCompletionFailure_SettlesAnyway()
+        public void FailedServiceTaskDoesNotSettleAndReturnsEmpty()
         {
             var f = new Fixture();
             var log = new LostSaleLog();
@@ -2057,13 +2656,15 @@ namespace LandLedgers.Editor.Population
             PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
             Assert.IsNull(trip.Batch);
             Assert.IsTrue(IsAwaitingService(trip));
-            Assert.IsTrue(f.Tasks.CompleteTask(ServiceTaskIdOf(trip), TaskOutcome.Success, Fixture.Day, f.Budgets));
+            Assert.IsTrue(f.Tasks.CompleteTask(ServiceTaskIdOf(trip), TaskOutcome.RecoverableFailure, Fixture.Day, f.Budgets));
             DueEvent serviceEv = PopServiceDueEvent(f, trip, arrival);
             Assert.IsNotNull(serviceEv, "service due event not scheduled");
             f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
-            Assert.IsNotNull(trip.Batch);
-            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State);
-            Assert.AreEqual(1200, f.Store.CashReceived);
+            Assert.IsNull(trip.Batch);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State);
+            Assert.AreEqual(0, queue.WaitingCount);
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(50000, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
             StringAssert.Contains("did not complete", string.Join("\n", f.Diag));
         }
 
@@ -2243,7 +2844,7 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
-        public void SaveLoad_AwaitingService_TaskGone_SettlesOnRestore()
+        public void SaveLoad_AwaitingService_TaskGone_RemainsQueuedWithoutSettlement()
         {
             // Phase (a): the service task is missing from the saved tasks.
             {
@@ -2262,8 +2863,12 @@ namespace LandLedgers.Editor.Population
                 var schedulesDto = f.Tracker.CaptureSaveDto();
                 var driverDto = f.Driver.CaptureSaveDto();
                 var dueDto = f.DueEvents.CaptureSaveDto();
+                CustomerQueue.CustomerQueueSaveDto queueDto = queue.CaptureSaveDto();
 
                 var g = new Fixture();
+                AddClerk(g);
+                CustomerQueue restoredQueue = WireService(g, new LostSaleLog(), 3);
+                restoredQueue.LoadFromSaveDto(queueDto);
                 g.Tasks.LoadFromSaveDto(tasksDto);
                 g.Budgets.LoadFromSaveDto(budgetsDto, Fixture.Day);
                 g.Tracker.LoadFromSaveDto(schedulesDto);
@@ -2279,11 +2884,19 @@ namespace LandLedgers.Editor.Population
                     Fixture.Day, arrival, g.DueEvents, g.Diag);
                 Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
                 PlannedShoppingTrip restored = g.Driver.ActiveTrips[0];
-                Assert.IsNotNull(restored.Batch);
-                Assert.AreEqual(10, restored.UnitsSettled);
-                Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, restored.State);
-                Assert.AreEqual(1200, g.Store.CashReceived);
-                StringAssert.Contains("lost its live service task", string.Join("\n", g.Diag));
+                Assert.IsNull(restored.Batch, "missing task mapping is not proof a purchase was served");
+                Assert.AreEqual(0, restored.UnitsSettled);
+                Assert.AreEqual(PlannedShoppingTrip.TripState.AwaitingService, restored.State);
+                Assert.AreEqual(0, g.Store.CashReceived, "restore must not charge without physical counter work");
+                Assert.AreEqual(1, restoredQueue.WaitingCount, "the customer keeps their FIFO queue place");
+                StringAssert.Contains("remains unsettled after restore", string.Join("\n", g.Diag));
+
+                g.Driver.AdvanceTick(arrival + 60f, Fixture.Day, g.DueEvents, g.Diag);
+                Assert.IsTrue(ServiceTaskIdOf(restored).IsValid,
+                    "the restored queued customer should retry when a clerk is available");
+                g.RunUntilDone(tickSeconds: 300);
+                Assert.AreEqual(1200, g.Store.CashReceived, "settlement occurs once after service and the later return");
+                Assert.AreEqual(PurchasingNeedStatus.Fulfilled, gNeed.Status);
             }
 
             // Phase (b): the service task was cancelled before the save.
@@ -2310,8 +2923,12 @@ namespace LandLedgers.Editor.Population
                 var schedulesDto = f.Tracker.CaptureSaveDto();
                 var driverDto = f.Driver.CaptureSaveDto();
                 var dueDto = f.DueEvents.CaptureSaveDto();
+                CustomerQueue.CustomerQueueSaveDto queueDto = queue.CaptureSaveDto();
 
                 var g = new Fixture();
+                AddClerk(g);
+                CustomerQueue restoredQueue = WireService(g, new LostSaleLog(), 3);
+                restoredQueue.LoadFromSaveDto(queueDto);
                 g.Tasks.LoadFromSaveDto(tasksDto);
                 g.Budgets.LoadFromSaveDto(budgetsDto, Fixture.Day);
                 g.Tracker.LoadFromSaveDto(schedulesDto);
@@ -2327,12 +2944,16 @@ namespace LandLedgers.Editor.Population
                     Fixture.Day, arrival, g.DueEvents, g.Diag);
                 Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
                 PlannedShoppingTrip restored = g.Driver.ActiveTrips[0];
-                Assert.IsNotNull(restored.Batch);
-                Assert.AreEqual(10, restored.UnitsSettled);
-                Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, restored.State);
-                Assert.AreEqual(1200, g.Store.CashReceived);
-                StringAssert.Contains("lost its live service task", string.Join("\n", g.Diag));
+                Assert.IsNull(restored.Batch);
+                Assert.AreEqual(0, restored.UnitsSettled);
+                Assert.AreEqual(PlannedShoppingTrip.TripState.AwaitingService, restored.State);
+                Assert.AreEqual(0, g.Store.CashReceived);
+                Assert.AreEqual(1, restoredQueue.WaitingCount);
+                StringAssert.Contains("remains unsettled after restore", string.Join("\n", g.Diag));
                 Assert.AreEqual(TaskStatus.Cancelled, g.Tasks.FindTask(serviceTaskId).Status);
+                g.Driver.AdvanceTick(arrival + 60f, Fixture.Day, g.DueEvents, g.Diag);
+                Assert.IsTrue(ServiceTaskIdOf(restored).IsValid,
+                    "a cancelled service task should be replaced only by a fresh legitimate clerk task");
             }
         }
 
@@ -2547,7 +3168,8 @@ namespace LandLedgers.Editor.Population
             StringAssert.Contains("lost its supplier across save/load", string.Join("\n", g2.Diag));
             Assert.AreEqual(PurchasingNeedStatus.Open, gNeed2.Status, "aborted trip must leave the need open");
 
-            // Phase (c) service task gone: the (f1) fallback settles on restore.
+            // Phase (c) service task gone: restore preserves the pending
+            // physical service and does not settle without a completed task.
             var f3 = new Fixture();
             var log3 = new LostSaleLog();
             AddClerk(f3);
@@ -2559,9 +3181,13 @@ namespace LandLedgers.Editor.Population
             var tasksDto3 = f3.Tasks.CaptureSaveDto();
             var driverDto3 = f3.Driver.CaptureSaveDto();
             var dueDto3 = f3.DueEvents.CaptureSaveDto();
+            CustomerQueue.CustomerQueueSaveDto queueDto3 = f3.Loop.ResolveCustomerQueue("store-1").CaptureSaveDto();
             tasksDto3.tasks.RemoveAll(t => t.TaskId == serviceTaskId3);
 
             var g3 = new Fixture();
+            AddClerk(g3);
+            CustomerQueue restoredQueue3 = WireService(g3, new LostSaleLog(), 3);
+            restoredQueue3.LoadFromSaveDto(queueDto3);
             HouseholdPurchasingNeed gNeed3 = g3.OpenNeed(HouseholdItemCatalog.FlourId, 10);
             gNeed3.UnitsNeeded = need3.UnitsNeeded;
             g3.Tasks.LoadFromSaveDto(tasksDto3);
@@ -2571,11 +3197,12 @@ namespace LandLedgers.Editor.Population
                 Fixture.Day, arrival3, g3.DueEvents, g3.Diag);
             Assert.AreEqual(1, g3.Driver.ActiveTrips.Count);
             PlannedShoppingTrip restored3 = g3.Driver.ActiveTrips[0];
-            Assert.IsNotNull(restored3.Batch);
-            Assert.AreEqual(10, restored3.UnitsSettled);
-            Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, restored3.State);
-            Assert.AreEqual(1200, g3.Store.CashReceived);
-            StringAssert.Contains("lost its live service task", string.Join("\n", g3.Diag));
+            Assert.IsNull(restored3.Batch);
+            Assert.AreEqual(0, restored3.UnitsSettled);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.AwaitingService, restored3.State);
+            Assert.AreEqual(0, g3.Store.CashReceived);
+            Assert.AreEqual(1, restoredQueue3.WaitingCount);
+            StringAssert.Contains("remains unsettled after restore", string.Join("\n", g3.Diag));
         }
 
         [Test]

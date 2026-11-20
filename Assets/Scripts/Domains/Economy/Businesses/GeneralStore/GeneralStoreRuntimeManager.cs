@@ -88,6 +88,16 @@ namespace LandLedgers.FirstLedger
         /// </summary>
         public HouseholdLedgerRegistry HouseholdLedgers { get; set; }
 
+        /// <summary>
+        /// When the production town's physical household shopping loop is
+        /// bound, food purchasing and consumption belong to its identified
+        /// retail-lot transaction path. The compatibility reserve-sales path
+        /// remains active for non-food categories, but must not also consume
+        /// household food reserves, debit households, or sell pooled food
+        /// from the daily category cadence.
+        /// </summary>
+        public bool PhysicalHouseholdFoodAuthorityEnabled { get; set; }
+
         private HouseholdLedgerRegistry ResolvedHouseholdLedgers
         {
             get
@@ -573,13 +583,15 @@ namespace LandLedgers.FirstLedger
                     continue;
                 }
 
-                // Multi-SKU category: per-item offers over the pooled stock,
-                // exactly as the NPC overload projects them, minus the
-                // identified-lot requirement (this port has no Business
-                // whose lots could back them). Slice 10: a unit mismatch
-                // drops the item only when no package conversion is
-                // declared; a declared conversion sets the offer factor so
-                // pooled units mean the same thing on both sides.
+                // Multi-SKU category: the category total cannot identify
+                // which SKU is physically present. Keep the declared item
+                // offers, but require identified retail lots for each one,
+                // just as the concrete-business port does. Otherwise a
+                // flour-only pooled balance could be sold and received as
+                // bread. Legacy category sales remain available through
+                // their category authority; the household SKU path must not
+                // invent product identity. Slice 10 package conversions
+                // still apply to each identified SKU.
                 var categoryItemIds = new List<string>();
                 ReadOnlySpan<string> declaredItemIds = category.ItemIds;
                 for (int j = 0; j < declaredItemIds.Length; j++)
@@ -602,6 +614,7 @@ namespace LandLedgers.FirstLedger
 
                     candidate.StoreUnitsPerItemUnit = candidateFactor;
                     candidate.HouseholdUnitsPerStoreUnit = candidatePackageSize;
+                    candidate.UsesItemLevelInventory = true;
                     offers.Add(candidate);
                 }
             }
@@ -794,8 +807,42 @@ namespace LandLedgers.FirstLedger
                 }
             }
 
+            EnsureIdentifiedRetailCategoryCapacity(npcBusiness.RuntimeState, offers);
             var capability = new StoreTradingCapability { Staffed = npcBusiness.RuntimeState.FilledWorkerCount > 0 };
             return new GeneralStoreTradingPort(this, npcBusiness, offers, capability);
+        }
+
+        private void EnsureIdentifiedRetailCategoryCapacity(
+            BusinessRuntimeState state,
+            IReadOnlyList<GeneralStoreCategoryOffer> offers)
+        {
+            if (state == null || offers == null) return;
+
+            var targetUnitsByCategory = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < offers.Count; i++)
+            {
+                GeneralStoreCategoryOffer offer = offers[i];
+                if (offer == null || !offer.UsesItemLevelInventory
+                    || string.IsNullOrWhiteSpace(offer.CategoryId) || offer.OfferedItemIds == null) continue;
+
+                long categoryTarget = targetUnitsByCategory.TryGetValue(offer.CategoryId, out int existingTarget)
+                    ? existingTarget
+                    : 0L;
+                for (int itemIndex = 0; itemIndex < offer.OfferedItemIds.Count; itemIndex++)
+                {
+                    ItemDefinition item = FindAuthoredStoreItem(offer.OfferedItemIds[itemIndex]);
+                    if (item == null || item.ReorderTargetUnits <= 0) continue;
+                    categoryTarget = Math.Min(int.MaxValue, categoryTarget + item.ReorderTargetUnits);
+                }
+
+                targetUnitsByCategory[offer.CategoryId] = (int)categoryTarget;
+            }
+
+            foreach (KeyValuePair<string, int> entry in targetUnitsByCategory)
+            {
+                if (entry.Value > 0)
+                    state.EnsureCategoryStorageCapacity(entry.Key, entry.Value);
+            }
         }
 
         /// <summary>
@@ -1647,7 +1694,8 @@ namespace LandLedgers.FirstLedger
                     household,
                     absoluteDay,
                     timeManager != null ? timeManager.TimelineAnchor : CalendarAnchor.Default,
-                    systemsHub?.HouseholdStoveRegistryFor(household.id));
+                    systemsHub?.HouseholdStoveRegistryFor(household.id),
+                    PhysicalHouseholdFoodAuthorityEnabled);
                 HouseholdDemandSnapshot demand = HouseholdReserveEvaluator.BuildDemandSnapshot(household);
                 household.demandSnapshot = demand;
 
@@ -3329,6 +3377,15 @@ namespace LandLedgers.FirstLedger
             }
 
             List<HouseholdReserveNeed> needs = HouseholdReserveEvaluator.BuildShoppingNeeds(household);
+            if (PhysicalHouseholdFoodAuthorityEnabled)
+            {
+                // Phase C owns actual food SKU lots, household cash, custody,
+                // and pantry receipts. The legacy category pool is not a
+                // second food transaction route in the same simulation.
+                needs.RemoveAll(need => need.Definition != null
+                    && (need.Definition.DemandGroup == RetailDemandGroup.DailyStaple
+                        || need.Definition.DemandGroup == RetailDemandGroup.FoodProtein));
+            }
             if (needs.Count == 0)
             {
                 return result;

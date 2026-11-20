@@ -1,16 +1,67 @@
 using System.Reflection;
+using System.Linq;
 using LandLedgers.FirstLedger;
 using LandLedgers.Pathing;
 using LandLedgers.Population;
 using LandLedgers.World;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEditor;
 using UnityEngine.TestTools;
 
 namespace LandLedgers.EditorTests.Population
 {
     public sealed class PopulationPathingProfessionRhythmTests
     {
+        [Test]
+        public void NaturalWoodHouse_PorchActivityMayBeReachedAlongPorchBeyondDoorWidthRadius()
+        {
+            const string prefabPath = "Assets/Environment/Buildings/House Natural Wood.prefab";
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            Assert.IsNotNull(prefab, "The authored household prefab used by the captured route failures must be available.");
+            BuildingFootprintAuthority authority = prefab.GetComponent<BuildingFootprintAuthority>();
+            Assert.IsNotNull(authority);
+            BuildingEntrancePairAuthoring entrance = authority.EntrancePairs.SingleOrDefault(x => x != null && x.id == "main-entrance");
+            BuildingActivityLocationAuthoring porch = authority.ActivityLocations.SingleOrDefault(x => x != null && x.id == "porch-dropoff");
+            Assert.IsNotNull(entrance);
+            Assert.IsNotNull(porch);
+
+            Vector3 delta = porch.positionLocal - entrance.outdoorApproachLocal;
+            delta.y = 0f;
+            float distance = delta.magnitude;
+            float oldDoorWidthRadius = Mathf.Max(1.5f, entrance.clearWidthMeters * 2f);
+            Assert.Greater(distance, oldDoorWidthRadius,
+                "This regression must keep representing the authored porch point beyond the former arbitrary radius.");
+            Assert.IsTrue(PopulationPathingDirector.CanApproachPorchActivityDoorway(distance, directApproachClear: true),
+                "A clear physical approach along the authored porch is reachable regardless of doorway width.");
+            Assert.IsFalse(PopulationPathingDirector.CanApproachPorchActivityDoorway(distance, directApproachClear: false),
+                "Removing the proximity cap must not permit a physically obstructed approach.");
+        }
+
+        [Test]
+        public void NaturalWoodHouse_InteriorOriginRequiresAnAuthoredWalkableRouteToItsEntrance()
+        {
+            const string prefabPath = "Assets/Environment/Buildings/House Natural Wood.prefab";
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            Assert.IsNotNull(prefab);
+            BuildingFootprintAuthority authority = prefab.GetComponent<BuildingFootprintAuthority>();
+            Assert.IsNotNull(authority);
+            BuildingEntrancePairAuthoring entrance = authority.EntrancePairs
+                .SingleOrDefault(x => x != null && x.id == "main-entrance");
+            Assert.IsNotNull(entrance);
+
+            Vector3 indoor = authority.transform.TransformPoint(entrance.indoorPositionLocal);
+            Assert.IsTrue(PopulationPathingDirector.TryFindReachableInteriorEntrance(
+                    authority, indoor, out BuildingEntrancePairAuthoring resolved),
+                "An authored indoor point must be recognized through its actual floor and entrance space.");
+            Assert.AreEqual(entrance.id, resolved.id);
+
+            Vector3 outdoor = authority.transform.TransformPoint(entrance.outdoorApproachLocal);
+            Assert.IsFalse(PopulationPathingDirector.TryFindReachableInteriorEntrance(
+                    authority, outdoor, out _),
+                "A position outside the authored walkable interior must not become an interior path start merely because its coarse grid cell overlaps the footprint.");
+        }
+
         [TestCase("task-1", 4, "stove", "task-1", "stove", 4, true)]
         [TestCase("task-1", 4, "stove", "task-2", "stove", 4, false)]
         [TestCase("task-1", 4, "stove", "task-1", "stove", 5, false)]
@@ -46,6 +97,42 @@ namespace LandLedgers.EditorTests.Population
             Assert.IsTrue(PopulationPathingDirector.ShouldAbortStalledDomesticActivityRoute(
                 3600.0, 0.0, 3500.0, 600f, 3600f, 19.0f, 20.0f),
                 "The hard route bound must release a task whose physical route makes progress but never arrives.");
+        }
+
+        [Test]
+        public void DomesticActivityRouteWatchdogDiagnosticIncludesPhysicalFailureContext()
+        {
+            string diagnostic = PopulationPathingDirector.FormatDomesticActivityRouteWatchdogDiagnostic(
+                "domestic-chores:280", "P14", "cleaning", 37,
+                true, false, "(12.50,0.80,-3.25)", 4.25f, 4.30f, "0.18",
+                720.0, 610.0, 600f, 1800f);
+
+            StringAssert.Contains("person=P14", diagnostic);
+            StringAssert.Contains("activity='cleaning'", diagnostic);
+            StringAssert.Contains("routeGeneration=37", diagnostic);
+            StringAssert.Contains("routeActive=True", diagnostic);
+            StringAssert.Contains("hidden=False", diagnostic);
+            StringAssert.Contains("position=(12.50,0.80,-3.25)", diagnostic);
+            StringAssert.Contains("remainingDistance=4.25m (previous=4.30m)", diagnostic);
+            StringAssert.Contains("elapsed=720.0/1800.0s", diagnostic);
+            StringAssert.Contains("noProgress=610.0/600.0s", diagnostic);
+        }
+
+        [TestCase(true, true, true, false, "off-map journey")]
+        [TestCase(false, false, false, false, "no managed on-map physical actor")]
+        [TestCase(false, true, false, false, "no movement component")]
+        [TestCase(false, true, true, true, "aboard a wagon")]
+        [TestCase(false, true, true, false, "")]
+        public void DomesticActivityPresentationFailureNamesTheActualUnavailableState(
+            bool isOffMap, bool hasManagedActor, bool hasMover, bool isRiding, string expectedFragment)
+        {
+            string reason = PopulationPathingDirector.DomesticActivityPresentationFailure(
+                isOffMap, hasManagedActor, hasMover, isRiding);
+
+            if (string.IsNullOrEmpty(expectedFragment))
+                Assert.IsEmpty(reason);
+            else
+                StringAssert.Contains(expectedFragment, reason);
         }
 
         [Test]

@@ -620,7 +620,8 @@ namespace LandLedgers.Population
 
                 if (person.ageBand >= AgeBand.Adult18Plus)
                 {
-                    int score = HouseholdAvailabilityScore(scheduleTracker, personId, dayIndex);
+                    int score = HouseholdAvailabilityScore(
+                        scheduleTracker, personId, dayIndex, tripStartMinute, tripDurationMinutes);
                     int oneWay = OneWayMinutesFor(oneWayMinutesFor, personId);
                     if (preferredAdult < 0
                         || score < preferredAdultScore
@@ -720,7 +721,8 @@ namespace LandLedgers.Population
             out int departureMinute,
             out string reason,
             OffMapJourneyAuthority offMapJourneys = null,
-            Func<int, int> oneWayMinutesFor = null)
+            Func<int, int> oneWayMinutesFor = null,
+            Func<int, string> physicalMovementBlockReason = null)
         {
             departureMinute = -1;
             reason = null;
@@ -811,6 +813,13 @@ namespace LandLedgers.Population
                         continue;
                     }
 
+                    string movementBlock = physicalMovementBlockReason?.Invoke(personId);
+                    if (!string.IsNullOrWhiteSpace(movementBlock))
+                    {
+                        rejections.Add($"departure {departure}: P{personId}: {movementBlock}");
+                        continue;
+                    }
+
                     if (budgets != null && personEntityId != null)
                     {
                         LandLedgers.Primitives.EntityId eid = personEntityId(personId);
@@ -891,7 +900,8 @@ namespace LandLedgers.Population
 
                     if (person.ageBand >= AgeBand.Adult18Plus)
                     {
-                        int score = HouseholdAvailabilityScore(scheduleTracker, personId, dayIndex);
+                        int score = HouseholdAvailabilityScore(
+                            scheduleTracker, personId, dayIndex, departure, duration);
                         if (preferredAdult < 0
                             || score < preferredAdultScore
                             || (score == preferredAdultScore && candidateOneWay < preferredAdultOneWay))
@@ -937,22 +947,35 @@ namespace LandLedgers.Population
             return Math.Max(0, oneWayMinutesFor(personId));
         }
 
-        private static int HouseholdAvailabilityScore(PersonScheduleTracker scheduleTracker, int personId, int dayIndex)
+        private static int HouseholdAvailabilityScore(PersonScheduleTracker scheduleTracker, int personId,
+            int dayIndex, int tripStartMinute, int tripDurationMinutes)
         {
             if (scheduleTracker == null) return 0;
             int score = 0;
             List<PersonActivityReservation> reservations = scheduleTracker.ActiveFor(personId, dayIndex);
+            int tripStart = Math.Max(0, tripStartMinute);
+            int tripEnd = tripStart + Math.Max(0, tripDurationMinutes);
             foreach (PersonActivityReservation reservation in reservations)
             {
-                if (reservation == null) continue;
-                // Household supply work should fall first to adults without
-                // an active job-search or livelihood commitment when both
-                // are otherwise available. This is derived from the existing
-                // reservation authority and applies without sex-based rules.
-                if (reservation.Activity == PersonActivityKind.JobSeeking) score += 100;
-                else if (reservation.Activity == PersonActivityKind.Work
-                    || reservation.Activity == PersonActivityKind.Managing) score += 20;
-                else score += 1;
+                if (reservation == null || reservation.Released) continue;
+                // Rank actual availability in the proposed trip window. A
+                // morning job or unrelated early errand must not make an
+                // otherwise-free afternoon shopper lose to someone with a
+                // lighter whole-day reservation list. Rest is the only
+                // overlap the window search can preempt; score that overlap
+                // so a completely free member remains the first choice.
+                int overlapStart = Math.Max(tripStart, reservation.StartMinuteOfDay);
+                int overlapEnd = Math.Min(tripEnd, reservation.EndMinuteOfDay);
+                if (overlapEnd <= overlapStart) continue;
+
+                int weight = reservation.Activity switch
+                {
+                    PersonActivityKind.Resting => 1,
+                    PersonActivityKind.JobSeeking => 100,
+                    PersonActivityKind.Work or PersonActivityKind.Managing => 20,
+                    _ => 1,
+                };
+                score += weight * (overlapEnd - overlapStart);
             }
             return score;
         }

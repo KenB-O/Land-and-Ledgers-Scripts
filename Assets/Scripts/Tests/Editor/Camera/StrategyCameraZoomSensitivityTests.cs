@@ -103,6 +103,23 @@ namespace LandLedgers.Tests.Camera
         }
 
         [Test]
+        public void WheelZoomStepIsBoundedAtNearAndFarZoomDistances()
+        {
+            StrategyCameraSettings settings = ScriptableObject.CreateInstance<StrategyCameraSettings>();
+            try
+            {
+                settings.maximumWheelZoomStepPerInput = 3f;
+                Assert.AreEqual(3f, settings.LimitWheelZoomStep(24f), 0.001f);
+                Assert.AreEqual(-3f, settings.LimitWheelZoomStep(-24f), 0.001f);
+                Assert.AreEqual(0.5f, settings.LimitWheelZoomStep(0.5f), 0.001f);
+            }
+            finally
+            {
+                Object.DestroyImmediate(settings);
+            }
+        }
+
+        [Test]
         public void CloseViewCanZoomTowardFurnitureAndDoesNotRequireFirstPersonDistance()
         {
             StrategyCameraSettings settings = ScriptableObject.CreateInstance<StrategyCameraSettings>();
@@ -115,6 +132,24 @@ namespace LandLedgers.Tests.Camera
                 Assert.AreEqual(1.5f, settings.minZoomDistance, 0.001f);
                 Assert.IsTrue(settings.focusViewCenterWhenZoomingClose);
                 Assert.AreEqual(0.2f, settings.EvaluateClosePanSensitivity(1.5f), 0.001f);
+                Assert.AreEqual(1f, settings.EvaluateClosePanSensitivity(40f), 0.001f);
+            }
+            finally
+            {
+                Object.DestroyImmediate(settings);
+            }
+        }
+
+        [Test]
+        public void CloseRangePanCanBeMoreResponsiveWithoutChangingWideScaleSpeed()
+        {
+            StrategyCameraSettings settings = ScriptableObject.CreateInstance<StrategyCameraSettings>();
+            try
+            {
+                settings.closeControlStartDistance = 16f;
+                settings.standardControlDistance = 40f;
+                settings.closePanSensitivity = 0.3f;
+                Assert.AreEqual(0.3f, settings.EvaluateClosePanSensitivity(8f), 0.001f);
                 Assert.AreEqual(1f, settings.EvaluateClosePanSensitivity(40f), 0.001f);
             }
             finally
@@ -169,6 +204,20 @@ namespace LandLedgers.Tests.Camera
                 Object.DestroyImmediate(rig);
                 Object.DestroyImmediate(settings);
             }
+        }
+
+        [Test]
+        public void CameraArmExtensionAfterObstructionIsBoundedWhileCollisionRetractionIsImmediate()
+        {
+            Assert.AreEqual(3f,
+                StrategyCameraController.LimitCameraArmExtension(8f, 3f, 24f, 0.1f), 0.001f,
+                "The camera must retract immediately to remain in front of an obstruction.");
+            Assert.AreEqual(5.4f,
+                StrategyCameraController.LimitCameraArmExtension(3f, 10f, 24f, 0.1f), 0.001f,
+                "After the obstruction clears, the camera must not jump to a distant retained zoom target.");
+            Assert.AreEqual(10f,
+                StrategyCameraController.LimitCameraArmExtension(3f, 10f, 24f, 1f), 0.001f,
+                "A clear target within the allowed recovery distance should be reached in one step.");
         }
 
         [Test]

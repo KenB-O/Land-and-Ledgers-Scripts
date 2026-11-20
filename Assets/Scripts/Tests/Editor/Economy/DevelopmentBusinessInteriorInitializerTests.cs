@@ -1,8 +1,13 @@
+using System;
+using System.Reflection;
 using LandLedgers.Economy.Blacksmith;
+using LandLedgers.FirstLedger;
 using LandLedgers.Orchestration;
 using LandLedgers.Population;
+using LandLedgers.World;
 using NUnit.Framework;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace LandLedgers.EditorTests.Economy
 {
@@ -68,6 +73,60 @@ namespace LandLedgers.EditorTests.Economy
         public void ConfiguredOperationIdDoesNotResolveDifferentRuntimeProfile()
         {
             Assert.IsFalse(DevelopmentBusinessInteriorInitializer.OperationMatchesRuntimeProfile("general-store", "bakery"));
+        }
+
+        [Test]
+        public void WorldVisualRecoverySubscription_WaitsUntilBootstrapHasInitialized()
+        {
+            GameObject worldObject = new GameObject("world");
+            worldObject.SetActive(false);
+            TownWorldController world = worldObject.AddComponent<TownWorldController>();
+
+            GameObject bootstrapObject = new GameObject("bootstrapper");
+            bootstrapObject.SetActive(false);
+            FirstLedgerSliceBootstrapper bootstrapper = bootstrapObject.AddComponent<FirstLedgerSliceBootstrapper>();
+            SetPrivateField(bootstrapper, "townWorld", world);
+            MethodInfo onEnable = typeof(FirstLedgerSliceBootstrapper).GetMethod(
+                "OnEnable", BindingFlags.Instance | BindingFlags.NonPublic);
+            FieldInfo initialized = typeof(FirstLedgerSliceBootstrapper).GetField(
+                "initialized", BindingFlags.Instance | BindingFlags.NonPublic);
+            FieldInfo listeners = typeof(TownWorldController).GetField(
+                "WorldVisualsRebuilt", BindingFlags.Instance | BindingFlags.NonPublic);
+
+            Assert.IsNotNull(onEnable);
+            Assert.IsNotNull(initialized);
+            Assert.IsNotNull(listeners);
+            try
+            {
+                onEnable.Invoke(bootstrapper, null);
+                Assert.IsNull(listeners.GetValue(world),
+                    "the initial world build may fire before the development business roster exists");
+
+                initialized.SetValue(bootstrapper, true);
+                onEnable.Invoke(bootstrapper, null);
+                Delegate subscribed = listeners.GetValue(world) as Delegate;
+                Assert.IsNotNull(subscribed,
+                    "re-enabling after startup must restore the world-visual recovery listener");
+                Assert.IsTrue(System.Array.Exists(subscribed.GetInvocationList(),
+                    handler => handler.Target == bootstrapper
+                        && handler.Method.Name == "RestoreRuntimePresentationsAfterWorldRebuild"));
+            }
+            finally
+            {
+                MethodInfo onDisable = typeof(FirstLedgerSliceBootstrapper).GetMethod(
+                    "OnDisable", BindingFlags.Instance | BindingFlags.NonPublic);
+                onDisable?.Invoke(bootstrapper, null);
+                Object.DestroyImmediate(bootstrapObject);
+                Object.DestroyImmediate(worldObject);
+            }
+        }
+
+        private static void SetPrivateField(object target, string fieldName, object value)
+        {
+            FieldInfo field = target.GetType().GetField(fieldName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field, "Expected private field '" + fieldName + "'.");
+            field.SetValue(target, value);
         }
     }
 }

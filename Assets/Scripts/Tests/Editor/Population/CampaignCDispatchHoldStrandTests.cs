@@ -8,7 +8,9 @@
 using System;
 using System.IO;
 using System.Text;
+using LandLedgers.Economy;
 using LandLedgers.Economy.Transport;
+using LandLedgers.Orchestration.Systems;
 using NUnit.Framework;
 
 namespace LandLedgers.Editor.Population
@@ -295,6 +297,37 @@ namespace LandLedgers.Editor.Population
             string driveBefore = raw.Substring(Math.Max(0, driveKey - 30), Math.Min(30, driveKey));
             Assert.IsTrue(driveBefore.Contains("LogRefusalDayKeyed("),
                 "The daily driver's missing-prerequisite line must be logged day-keyed, not once-only");
+        }
+
+        [Test]
+        public void PreparedAssignmentScanStopsAfterShipmentAuthorizationIsReleased()
+        {
+            // Once dispatch authorization is released, the daily preparation
+            // scan must defer to the departure/transit lifecycle. A failed
+            // shipment remains visible for recovery, so it is deliberately
+            // not covered by this quiet path.
+            string code = StripNonCode(ReadRepoFile(DriversPath));
+            string method = MethodBody(code, "private void DrivePreparedFreightDispatchAssignments(int dayIndex)");
+            int holdGuard = method.IndexOf("ShouldScanPreparedFreightDispatchAssignment(", StringComparison.Ordinal);
+            int taskCreation = method.IndexOf("CreatePreparedFreightDispatchTask(", StringComparison.Ordinal);
+            Assert.IsTrue(holdGuard >= 0,
+                "The scan must stop retrying after authorization release while keeping failed shipments visible.");
+            Assert.IsTrue(taskCreation > holdGuard,
+                "The authorization guard must run before the prepared task is reconsidered.");
+            string helper = MethodBody(code, "internal static bool ShouldScanPreparedFreightDispatchAssignment(");
+            Assert.IsTrue(helper.Contains("requiresDispatchAuthorization"), "The hold must remain eligible for the first assignment.");
+            Assert.IsTrue(helper.Contains("status == LogisticsShipmentStatus.Failed"), "Failed shipments must remain visible to recovery.");
+        }
+
+        [TestCase(true, LogisticsShipmentStatus.Planned, true)]
+        [TestCase(false, LogisticsShipmentStatus.Planned, false)]
+        [TestCase(false, LogisticsShipmentStatus.InTransit, false)]
+        [TestCase(false, LogisticsShipmentStatus.Failed, true)]
+        public void PreparedDispatchScanOnlyRevisitsAuthorizedOrFailedShipments(
+            bool requiresAuthorization, LogisticsShipmentStatus status, bool expected)
+        {
+            Assert.AreEqual(expected, SimulationDrivers.ShouldScanPreparedFreightDispatchAssignment(
+                requiresAuthorization, status));
         }
 
         [Test]

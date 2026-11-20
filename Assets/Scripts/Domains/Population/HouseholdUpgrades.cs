@@ -216,15 +216,24 @@ namespace LandLedgers.Population
 
         public static int GetFoodReserveCapacityUnits(HouseholdState household)
         {
-            int capacity = BaseFoodReserveCapacityUnits;
             if (household == null)
             {
-                return capacity;
+                return BaseFoodReserveCapacityUnits;
             }
 
             household.EnsureHouseholdUpgradesInitialized();
-            int consumerCount = household.ConsumptionMemberCount;
-            capacity += Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(0, consumerCount - 2) / 4f), 0, 3);
+            int consumerCount = Mathf.Max(1, household.ConsumptionMemberCount);
+            HouseholdItemDefinition unspecifiedStaple = HouseholdItemCatalog.Get(
+                HouseholdItemCatalog.UnspecifiedStapleFoodId);
+            // MealServingUnits is the quantity consumed for one serving, not
+            // the number of servings contained in a unit. Opening stock must
+            // therefore multiply the seven-day meal demand by this quantity.
+            int unitsPerServing = Mathf.Max(1, unspecifiedStaple != null
+                ? unspecifiedStaple.MealServingUnits
+                : 1);
+            int sevenDayServings = consumerCount * MealSchedulingPolicy.Default.ExpectedMealsPerDay * 7;
+            int capacity = Mathf.Max(BaseFoodReserveCapacityUnits,
+                sevenDayServings * unitsPerServing);
 
             for (int i = 0; i < household.upgrades.Count; i++)
             {

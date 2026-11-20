@@ -378,6 +378,7 @@ namespace LandLedgers.CameraSystem
                         settings.wheelZoomSensitivity,
                         settings.EvaluateWheelZoomMultiplier(targetZoomDistance),
                         settings.EvaluateDistanceWheelZoomScale(targetZoomDistance));
+                    zoomInput = settings.LimitWheelZoomStep(zoomInput);
                     float newZoom = ClampZoom(targetZoomDistance - zoomInput);
 
                     if (settings.focusViewCenterWhenZoomingClose
@@ -390,6 +391,7 @@ namespace LandLedgers.CameraSystem
                             settings.wheelZoomSensitivity,
                             settings.EvaluateWheelZoomMultiplier(targetZoomDistance),
                             settings.EvaluateDistanceWheelZoomScale(targetZoomDistance));
+                        zoomInput = settings.LimitWheelZoomStep(zoomInput);
                         newZoom = ClampZoom(targetZoomDistance - zoomInput);
                     }
 
@@ -791,7 +793,7 @@ namespace LandLedgers.CameraSystem
                 dt);
 
             targetManualPitchOffset = settings.ManualOffsetFromFinalPitch(currentPitch, smoothedZoom);
-            ApplyRig(smoothedYaw, currentPitch, smoothedZoom);
+            ApplyRig(smoothedYaw, currentPitch, smoothedZoom, smoothObstructionRecovery: true);
         }
 
         private static float CalculateWheelZoomInput(
@@ -850,7 +852,8 @@ namespace LandLedgers.CameraSystem
             return Mathf.Clamp(safeDistance, 0.2f, desiredDistance);
         }
 
-        private void ApplyRig(float yawDegrees, float pitchDegrees, float zoomDistance)
+        private void ApplyRig(float yawDegrees, float pitchDegrees, float zoomDistance,
+            bool smoothObstructionRecovery = false)
         {
             if (yawPivot != null)
             {
@@ -867,9 +870,25 @@ namespace LandLedgers.CameraSystem
             if (cameraTransform != null)
             {
                 float safeDistance = ResolveCameraObstruction(yawDegrees, pitchDegrees, zoomDistance);
+                if (smoothObstructionRecovery && settings != null)
+                {
+                    float currentDistance = Mathf.Abs(cameraTransform.localPosition.z);
+                    safeDistance = LimitCameraArmExtension(currentDistance, safeDistance,
+                        settings.cameraObstructionRecoverySpeed, UnityEngine.Time.unscaledDeltaTime);
+                }
                 cameraTransform.localPosition = new Vector3(0f, 0f, -Mathf.Max(0.2f, safeDistance));
                 cameraTransform.localRotation = Quaternion.identity;
             }
+        }
+
+        internal static float LimitCameraArmExtension(float currentDistance, float safeDistance,
+            float maximumExtensionSpeed, float deltaTime)
+        {
+            currentDistance = Mathf.Max(0.2f, currentDistance);
+            safeDistance = Mathf.Max(0.2f, safeDistance);
+            if (safeDistance <= currentDistance) return safeDistance;
+            if (deltaTime <= 0f || maximumExtensionSpeed <= 0f) return currentDistance;
+            return Mathf.Min(safeDistance, currentDistance + maximumExtensionSpeed * deltaTime);
         }
 
         private void RefreshManualPitchOffset()

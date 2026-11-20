@@ -62,8 +62,10 @@ namespace LandLedgers.EditorTests.Population
                 configuration.Businesses.Select(b => b.openingCashCents).ToArray());
 
             var store = configuration.FindBusiness("general-store");
-            Assert.AreEqual(15, store.opening.inventory.Length);
+            Assert.AreEqual(16, store.opening.inventory.Length);
             Assert.IsTrue(store.opening.inventory.Any(i => i.itemId == "bread" && i.minimumUnits == 24 && i.maximumUnits == 48));
+            Assert.IsTrue(store.opening.inventory.Any(i => i.itemId == "nails_hardware_lot" && i.minimumUnits == 2 && i.maximumUnits == 6),
+                "The development store starts with a finite, identified nails lot so legitimate opening carpentry can buy actual material.");
             Assert.AreEqual(1, configuration.FindBusiness("bakery").opening.equipment.ovens.Length);
             Assert.AreEqual(40, configuration.FindBusiness("bakery").opening.bakeryFuelUnits);
             Assert.AreEqual(120, configuration.FindBusiness("bakery").opening.bakeryFlourPounds);

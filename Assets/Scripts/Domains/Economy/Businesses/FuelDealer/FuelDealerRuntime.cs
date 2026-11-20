@@ -360,27 +360,33 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
             int stock = StockIntakeUnits;
             int target = TargetStockIntakeUnitsFor(coldSeason);
             int reorder = ReorderPointIntakeUnits > 0 ? ReorderPointIntakeUnits : DefaultReorderPointIntakeUnits;
+            int expectedIncoming = ExpectedIncomingFuelUnits();
+            int projectedStock = (int)Math.Min(int.MaxValue, (long)stock + expectedIncoming);
             var assessment = new FuelDealerProcurementAssessment();
             if (heldLocalUnits > 0)
             {
-                if (stock >= target)
+                if (projectedStock >= target)
                 {
                     assessment.Decision = FuelDealerProcurementDecision.DeclineFull;
                     assessment.WantIntakeUnits = 0;
-                    assessment.Reason = $"yard holds {stock}u, at/above target {target}u — declining the mill's {heldLocalUnits}u; the mill keeps its slabs.";
+                    assessment.Reason = $"yard holds {stock}u with {expectedIncoming}u expected from placed orders ({projectedStock}u projected), at/above target {target}u — declining the mill's {heldLocalUnits}u; the mill keeps its slabs.";
                 }
                 else
                 {
                     assessment.Decision = FuelDealerProcurementDecision.Buy;
-                    assessment.WantIntakeUnits = target - stock;
-                    assessment.Reason = $"yard holds {stock}u, below target {target}u — buying the mill's {heldLocalUnits}u byproduct.";
+                    assessment.WantIntakeUnits = target - projectedStock;
+                    assessment.Reason = $"yard holds {stock}u with {expectedIncoming}u expected from placed orders ({projectedStock}u projected), below target {target}u — the remaining procurement gap is {assessment.WantIntakeUnits}u; local output available today is {heldLocalUnits}u.";
                 }
             }
-            else if (stock >= reorder)
+            // The reorder point is the action threshold: reaching it means
+            // restocking should begin. Only a projection strictly above it
+            // suppresses another order, so an incoming shipment that lands
+            // exactly on the threshold does not defer procurement a full day.
+            else if (projectedStock > reorder)
             {
                 assessment.Decision = FuelDealerProcurementDecision.Sufficient;
                 assessment.WantIntakeUnits = 0;
-                assessment.Reason = $"yard holds {stock}u, at/above reorder {reorder}u — no local output today, nothing to do.";
+                assessment.Reason = $"yard holds {stock}u with {expectedIncoming}u expected from placed orders ({projectedStock}u projected), above reorder {reorder}u — no local output today, nothing to do.";
             }
             else
             {
@@ -388,19 +394,48 @@ namespace LandLedgers.Economy.Businesses.FuelDealer
                 if (offMap != null)
                 {
                     assessment.Decision = FuelDealerProcurementDecision.OffMapAvailable;
-                    assessment.WantIntakeUnits = target - stock;
-                    assessment.Reason = $"yard holds {stock}u, below reorder {reorder}u, no local output — authored off-map supplier '{offMap.SupplierId}' is available; order from it.";
+                    assessment.WantIntakeUnits = target - projectedStock;
+                    assessment.Reason = $"yard holds {stock}u with {expectedIncoming}u expected from placed orders ({projectedStock}u projected), at or below reorder {reorder}u, no local output — authored off-map supplier '{offMap.SupplierId}' is available for the remaining {assessment.WantIntakeUnits}u target gap.";
                 }
                 else
                 {
                     assessment.Decision = FuelDealerProcurementDecision.NoSupply;
                     assessment.WantIntakeUnits = 0;
-                    assessment.Reason = $"yard holds {stock}u, below reorder {reorder}u, no local output and no authored off-map supplier — cannot restock; no vendor is conjured.";
+                    assessment.Reason = $"yard holds {stock}u with {expectedIncoming}u expected from placed orders ({projectedStock}u projected), at or below reorder {reorder}u, no local output and no authored off-map supplier — cannot restock; no vendor is conjured.";
                 }
             }
             LastProcurementNote = assessment.Reason;
             LastProcurementDayIndex = dayIndex;
             return assessment;
+        }
+
+        /// <summary>
+        /// Counts only fuel that active placed orders are expected to yield.
+        /// This is a planning estimate, not saleable stock or a reservation;
+        /// physical intake remains the inventory authority until receipt.
+        /// Fractional conversions are floored exactly as they are on receipt.
+        /// </summary>
+        private int ExpectedIncomingFuelUnits()
+        {
+            long total = 0;
+            foreach (FuelDealerOrder order in orders)
+            {
+                if (order == null || order.Status != FuelDealerOrderStatus.Placed
+                    || order.InputUnits <= 0
+                    || double.IsNaN(order.ConversionRateFuelPerInputUnit)
+                    || double.IsInfinity(order.ConversionRateFuelPerInputUnit)
+                    || order.ConversionRateFuelPerInputUnit <= 0d)
+                {
+                    continue;
+                }
+
+                double converted = Math.Floor(order.InputUnits * order.ConversionRateFuelPerInputUnit);
+                if (converted <= 0d) continue;
+                if (converted >= int.MaxValue || total + (long)converted >= int.MaxValue)
+                    return int.MaxValue;
+                total += (long)converted;
+            }
+            return (int)total;
         }
 
         /// <summary>

@@ -1,0 +1,17 @@
+{
+    "schemaVersion": 1,
+    "sessionId": "9059cd74713c4b8e8b143475e4b9f340",
+    "sourceBranch": "codex/player-economic-participation-2026-11-18",
+    "sourceRevision": "8537f52fb7dea263fa3ba62da6cbd4d6b5aefbf8",
+    "scenario": "millbrook-development-town",
+    "seed": 1886,
+    "selectedSpeed": "Speed250x",
+    "traceLevel": "Deep",
+    "samplingIntervalSimulatedSeconds": 300.0,
+    "startedAtSimulatedSeconds": 0.0,
+    "retainedEvents": 20000,
+    "anomalyCount": 885,
+    "droppedSessionEvents": 24085,
+    "droppedHistoryEvents": 61225,
+    "droppedAnomalies": 0
+}

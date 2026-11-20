@@ -401,6 +401,26 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void WindowSearch_SkipsPersonWhoseMoverIsOwnedByFreight()
+        {
+            Fixture f = Fixture.Create();
+            int departure;
+            string reason;
+            int shopper = ShopperAssignmentPolicy.ChooseShopperWithWindowSearch(
+                f.Population, f.MemberIds(), f.Day, 480, 95, 40, 15, arrival => null,
+                f.Tracker, f.Budgets, f.PersonEntityId(), out departure, out reason,
+                offMapJourneys: null,
+                oneWayMinutesFor: pid => 40,
+                physicalMovementBlockReason: pid => pid == 1
+                    ? "P1 is carrying freight to receiving building 1"
+                    : null);
+
+            Assert.AreEqual(2, shopper, "The free second adult can shop; freight movement ownership is respected.");
+            Assert.AreEqual(480, departure, "Rejecting the carrier must not delay an otherwise feasible trip.");
+            Assert.IsNull(reason);
+        }
+
+        [Test]
         public void NoFreeAdult_ReturnsMinusOneWithReason()
         {
             Fixture f = Fixture.Create();
@@ -449,22 +469,36 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void ChooseShopper_PostShift_FreeAllDayMemberBeatsShiftWorker()
+        public void ChooseShopper_PostShift_UnrelatedMorningWorkDoesNotPenalizeAfternoonAvailability()
         {
-            // The kept reservation-count score, isolated: at 720 both
-            // adults are free for the trip window, but Tomas carries a
-            // Work reservation from his 480-720 shift (score 20) while
-            // Anna carries none (score 0). The score is one input among
-            // several — it is kept, not deleted — and it prefers the adult
-            // with the lighter day. (Mutation A inverts this comparison.)
+            // Availability is evaluated during the proposed trip, not by
+            // counting unrelated reservations elsewhere in the day. Both
+            // adults are free at 720; member order deterministically breaks
+            // the tie after actual window availability and travel.
             Fixture f = Fixture.Create();
             f.ReserveWork(1, 480, 240);
             string reason;
             int shopper = ShopperAssignmentPolicy.ChooseShopper(
                 f.Population, f.MemberIds(), f.Day, 720, 95,
                 f.Tracker, f.Budgets, f.PersonEntityId(), out reason);
-            Assert.AreEqual(2, shopper,
-                "At the post-shift departure the free-all-day adult shops. Reason: " + reason);
+            Assert.AreEqual(1, shopper,
+                "P1's completed morning shift must not make P2 preferred for an otherwise-free afternoon. Reason: " + reason);
+        }
+
+        [Test]
+        public void WindowSearch_AfternoonAvailabilityIgnoresUnrelatedMorningReservations()
+        {
+            Fixture f = Fixture.Create();
+            f.ReserveWork(1, 480, 240);
+            int departure;
+            string reason;
+            int shopper = ShopperAssignmentPolicy.ChooseShopperWithWindowSearch(
+                f.Population, f.MemberIds(), f.Day, 780, 95, 40, 15, arrival => null,
+                f.Tracker, f.Budgets, f.PersonEntityId(), out departure, out reason);
+
+            Assert.AreEqual(1, shopper,
+                "The availability-first choice must consider the 13:00 trip window, not morning work. Reason: " + reason);
+            Assert.AreEqual(780, departure);
         }
 
         [Test]
@@ -589,6 +623,40 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual("home", trip.HomeLocationId, "The trip departs from the shopper's actual location.");
             Assert.IsNotNull(trip.Legs, "Legs are planned for the chosen shopper.");
             Assert.IsFalse(f.HasAnyReservation(2), "Anna holds no reservation of any kind.");
+        }
+
+        [Test]
+        public void PlanTrip_ProductionShoppingUsesMorningOpportunityWhenHouseholdIsAvailable()
+        {
+            Fixture f = Fixture.Create();
+            f.Fund(5000);
+            f.Loop.UsePreferredShoppingWindows = true;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 2);
+
+            PlannedShoppingTrip trip = f.Loop.PlanTrip(need, f.Day, f.Options());
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Planned, trip.State, trip.FailureReason);
+            Assert.AreEqual(9 * 60, trip.DepartureMinuteOfDay,
+                "The first available production departure is inside the 09:00–11:00 opportunity.");
+            Assert.AreEqual(1, trip.ShopperPersonId,
+                "Availability remains gender-neutral and deterministic when both adults are free.");
+        }
+
+        [Test]
+        public void PlanTrip_ProductionShoppingDefersToAfternoonWhenBothAdultsWorkThroughMorning()
+        {
+            Fixture f = Fixture.Create();
+            f.Fund(5000);
+            f.Loop.UsePreferredShoppingWindows = true;
+            f.ReserveWork(1, 9 * 60, 4 * 60);
+            f.ReserveWork(2, 9 * 60, 4 * 60);
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 2);
+
+            PlannedShoppingTrip trip = f.Loop.PlanTrip(need, f.Day, f.Options());
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Planned, trip.State, trip.FailureReason);
+            Assert.AreEqual(14 * 60, trip.DepartureMinuteOfDay,
+                "The search respects work and waits for the 14:00 opportunity instead of penalizing the whole day.");
         }
 
         // ---------- Loop level: batch path (coordinator + ExecuteBatch) ----------

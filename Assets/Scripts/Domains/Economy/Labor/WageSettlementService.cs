@@ -66,6 +66,19 @@ namespace LandLedgers.Economy.Labor
     /// </summary>
     public sealed class WageSettlementService
     {
+        /// <summary>
+        /// True only for the routine weekly event emitted when no employee
+        /// records existed and no wages moved. Callers may present this as
+        /// informational; malformed settlement state and replay mismatches
+        /// must remain warnings.
+        /// </summary>
+        public static bool IsRoutineEmptyWeekSettlement(string diagnostic)
+        {
+            return !string.IsNullOrWhiteSpace(diagnostic)
+                && diagnostic.StartsWith("WageSettlementService: week ", StringComparison.Ordinal)
+                && diagnostic.IndexOf(" settled - paid 0c across 0 employments.", StringComparison.Ordinal) >= 0;
+        }
+
         private readonly Dictionary<string, int> settledWeekByBusiness =
             new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly List<PayrollEvent> events = new List<PayrollEvent>();

@@ -216,7 +216,8 @@ namespace LandLedgers.Editor.Population
             Assert.IsEmpty(mealLog.GetMeals(62), "No food => NO successful meal is recorded.");
             IReadOnlyList<MissedMealRecord> missed = mealLog.GetMissedMeals(62);
             Assert.IsNotEmpty(missed, "Shortage produces hardship records, never invisible replenishment.");
-            Assert.AreEqual("no food available in household inventory", missed[0].Reason);
+            StringAssert.Contains("No meal-sized recognized food lot", missed[0].Reason);
+            StringAssert.Contains("no food was consumed", missed[0].Reason);
             Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.BreadId));
         }
 
@@ -245,6 +246,51 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(MealSourceKind.BoardingArrangement, records[0].SourceKind,
                 "Out-of-home meals are recorded with their true source.");
             Assert.IsEmpty(records[0].ItemsConsumed, "No lots consumed for meals eaten elsewhere.");
+        }
+
+        [Test]
+        public void ScheduledMealSlots_UseFoodReceivedBeforeLaterMeal_AndResolveOnlyOnce()
+        {
+            var household = new HouseholdState { id = 631 };
+            var inventory = new HouseholdInventory(631);
+            var mealLog = new HouseholdMealLogRegistry();
+            var service = new HouseholdMealService(mealLog);
+            Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.BreadId, 1, 0, "finite opening pantry"));
+
+            Assert.IsTrue(service.ServeHouseholdMealSlot(household, 4, inventory,
+                MealSchedulingPolicy.Default, 2, MealSlot.Morning));
+            Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.BreadId));
+
+            // A legitimate same-day receipt is available to lunch, but the
+            // already resolved breakfast cannot consume it retroactively.
+            Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.BreadId, 1, 2, "physical household receipt"));
+            Assert.IsTrue(service.ServeHouseholdMealSlot(household, 4, inventory,
+                MealSchedulingPolicy.Default, 2, MealSlot.Midday));
+            Assert.IsFalse(service.ServeHouseholdMealSlot(household, 4, inventory,
+                MealSchedulingPolicy.Default, 2, MealSlot.Midday), "Repeated tick/Continue cannot resolve or consume lunch twice.");
+
+            Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.BreadId));
+            Assert.AreEqual(2, mealLog.GetMeals(631).Count);
+            Assert.AreEqual(0, mealLog.GetMissedMeals(631).Count);
+            Assert.IsTrue(mealLog.HasResolution(631, 4, 2, MealSlot.Morning));
+            Assert.IsTrue(mealLog.HasResolution(631, 4, 2, MealSlot.Midday));
+        }
+
+        [Test]
+        public void RawFlourDoesNotCountAsReadyToEatFood()
+        {
+            var household = new HouseholdState { id = 632 };
+            var inventory = new HouseholdInventory(632);
+            Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.FlourId, 21, 0, "general store purchase"));
+            var mealLog = new HouseholdMealLogRegistry();
+
+            MealDayResult result = new HouseholdMealService(mealLog).ServeHouseholdDay(
+                household, new List<int> { 5 }, inventory, MealSchedulingPolicy.Default, 1, null);
+
+            Assert.AreEqual(0, result.MealsServed, "Flour needs real preparation before it is edible as a meal.");
+            Assert.AreEqual(3, result.MealsMissed);
+            Assert.AreEqual(21, inventory.GetAvailableUnits(HouseholdItemCatalog.FlourId),
+                "A missed meal does not consume raw flour or create a prepared product.");
         }
 
         [Test]
@@ -311,12 +357,13 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
-        public void MealPolicy_MiddayMeal_SkippedWhenStoresLow()
+        public void MealPolicy_MiddayMeal_RemainsRequiredWhenStoresAreLow()
         {
             var household = new HouseholdState { id = 66 };
             var mealLog = new HouseholdMealLogRegistry();
             var inventory = new HouseholdInventory(66);
-            // 2 loaves: plenty for 2 substantial meals, not enough for midday per the threshold.
+            // Two loaves can serve two of the three ordinary slots; the
+            // remaining midday need is recorded as a real miss.
             Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.BreadId, 2, 1, "store"));
 
             var policy = new MealSchedulingPolicy { MiddayMealSupplyThresholdDays = 3f };
@@ -324,9 +371,9 @@ namespace LandLedgers.Editor.Population
             MealDayResult result = service.ServeHouseholdDay(
                 household, new List<int> { 6 }, inventory, policy, 10, null);
 
-            Assert.AreEqual(2, result.MealsServed, "Midday skipped when staple supply is below threshold.");
-            Assert.AreEqual(0, result.MealsMissed,
-                "The policy-skipped midday is a deliberate conservation decision, not a failed serving.");
+            Assert.AreEqual(2, result.MealsServed, "Only two meals have actual food available.");
+            Assert.AreEqual(1, result.MealsMissed,
+                "A low pantry does not erase the ordinary midday meal from household accounting.");
             Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.BreadId));
         }
 

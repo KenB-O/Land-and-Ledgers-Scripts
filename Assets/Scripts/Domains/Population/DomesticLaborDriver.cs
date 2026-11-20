@@ -49,6 +49,13 @@ namespace LandLedgers.Population
             public int MealsAtHomeCount;
             /// <summary>True only when an actual household need requires compatible fuel to be handled.</summary>
             public bool FuelHandlingNeeded;
+            /// <summary>
+            /// Whether the household home currently has a valid authored
+            /// firewood pickup point. Null preserves legacy callers that do
+            /// not supply building-authority data; false is a known physical
+            /// blocker and true permits a previously deferred trip to resume.
+            /// </summary>
+            public bool? FirewoodActivityLocationAvailable;
             /// <summary>True only when a supported household cleanliness need exists.</summary>
             public bool CleaningNeeded;
             public bool ColdSeason;
@@ -108,6 +115,7 @@ namespace LandLedgers.Population
             public int StartMinuteOfDay;
             public string Status = "Pending"; // Pending | Started | Failed
             public string Note = string.Empty;
+            [NonSerialized] public Func<int, int, int, bool> IsWindowUnavailable;
             /// <summary>
             /// B2 (Agent B, expanded campaign 2026-11-16): how this
             /// meal-prep task cooks — StoveCooking when the household's
@@ -163,8 +171,33 @@ namespace LandLedgers.Population
             public HouseholdStoveMealPrepMode MealPrepMode = HouseholdStoveMealPrepMode.Unspecified;
         }
 
+        /// <summary>
+        /// Keeps a task recoverable after a blocked physical route without
+        /// reclaiming a worker every day. The task identity, retry date and
+        /// last route reason survive Save/Continue.
+        /// </summary>
+        [Serializable]
+        public sealed class DomesticRouteRecoveryRecord
+        {
+            public EntityId TaskId;
+            public int FailureCount;
+            public int RetryAfterDay;
+            /// <summary>
+            /// Structural location blockers wait for a capability change
+            /// instead of waking a worker on an endless exponential retry.
+            /// The saved queued task remains the household's open need.
+            /// </summary>
+            public bool WaitForCapabilityChange;
+            public string ActivityLocationId = string.Empty;
+            public string LastFailureReason = string.Empty;
+        }
+
+        public const string MissingFirewoodStorageLocationId =
+            "firewood: no firewood storage is authored on the home.";
+
         private readonly List<PendingDomesticTask> pending = new List<PendingDomesticTask>();
         private readonly List<InFlightDomesticTask> inFlight = new List<InFlightDomesticTask>();
+        private readonly List<DomesticRouteRecoveryRecord> routeRecoveries = new List<DomesticRouteRecoveryRecord>();
         private readonly List<string> diagnostics = new List<string>();
         /// <summary>
         /// B3: the cooking conversion for one meal-prep session — 2 flour
@@ -203,6 +236,7 @@ namespace LandLedgers.Population
         public IReadOnlyList<string> Diagnostics => diagnostics;
         public IReadOnlyList<PendingDomesticTask> Pending => pending;
         public IReadOnlyList<InFlightDomesticTask> InFlight => inFlight;
+        public IReadOnlyList<DomesticRouteRecoveryRecord> RouteRecoveries => routeRecoveries;
 
         /// <summary>
         /// W2 (Obj 45 follow-up): the off-map journey authority, handed in
@@ -353,6 +387,7 @@ namespace LandLedgers.Population
                     StartMinuteOfDay = selectedStartMinute,
                     Status = "Pending",
                     Note = taskNote,
+                    IsWindowUnavailable = inputs.IsWindowUnavailable,
                     MealPrepMode = mealPrepMode,
                 });
                 diag.Add("DomesticLaborDriver: planned '" + definition.DisplayName + "' for P" + personId +
@@ -427,6 +462,18 @@ namespace LandLedgers.Population
 
                 if (error != null)
                 {
+                    if (IsLateReservationConflict(error)
+                        && TryFindNextWindowForPendingPerson(item, minuteOfDay, dayIndex,
+                            tasks, budgets, schedules, out int retryMinute))
+                    {
+                        item.StartMinuteOfDay = retryMinute;
+                        item.Note = error;
+                        diag.Add("DomesticLaborDriver: rescheduled '" + item.DefinitionId + "' for P" +
+                            item.PersonId + " at minute " + retryMinute +
+                            " after a hard reservation appeared after planning.");
+                        continue;
+                    }
+
                     item.Status = "Failed";
                     item.Note = error;
                     diag.Add("DomesticLaborDriver: scheduling failed for '" + item.DefinitionId +
@@ -474,7 +521,7 @@ namespace LandLedgers.Population
             }
 
             if (physicalActivity != null)
-                AdvancePhysicalActivities(currentGameSeconds, tasks, budgets, schedules, domestic,
+                AdvancePhysicalActivities(currentGameSeconds, dayIndex, tasks, budgets, schedules, domestic,
                     dueEvents, physicalActivity, diag);
 
             // Terminal entries (Started/Failed) have done their job in this
@@ -483,7 +530,7 @@ namespace LandLedgers.Population
                 || !string.Equals(item.Status, "Pending", StringComparison.Ordinal));
         }
 
-        private void AdvancePhysicalActivities(float currentGameSeconds, TaskAuthority tasks,
+        private void AdvancePhysicalActivities(float currentGameSeconds, int dayIndex, TaskAuthority tasks,
             WorkTimeBudgetStore budgets, PersonScheduleTracker schedules, DomesticLaborService domestic,
             IDueEventScheduler dueEvents,
             Func<InFlightDomesticTask, float, DomesticActivityMovementResult> physicalActivity,
@@ -504,6 +551,7 @@ namespace LandLedgers.Population
                     ReleaseFuelHold(flight, diag);
                     if (tasks.InterruptTask(flight.TaskId, budgets, out string rejection))
                     {
+                        RecordRouteFailure(flight, dayIndex, flight.ActivityLocationId);
                         dueEvents.Cancel(flight.DueEventId);
                         ReleaseAssignmentReservation(domestic, schedules, flight);
                         inFlight.RemoveAt(i);
@@ -515,6 +563,10 @@ namespace LandLedgers.Population
                         + flight.PersonId + ": " + rejection + ".");
                     continue;
                 }
+
+                // Clear the retry history only after the actor actually
+                // reaches the authored activity point.
+                ClearRouteRecovery(flight.TaskId);
 
                 // B3: a fuel-handling arrival is a leg arrival, not a work
                 // start. Leg 0 is the firewood pile (pick up the trip
@@ -586,6 +638,81 @@ namespace LandLedgers.Population
                     + "' in building " + flight.BuildingId + "; " + task.MinutesRemaining
                     + " minutes of household work now run until " + dueAt + ".");
             }
+        }
+
+        private static bool IsLateReservationConflict(string refusal)
+        {
+            return !string.IsNullOrWhiteSpace(refusal)
+                && refusal.IndexOf(" is already ", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private bool TryFindNextWindowForPendingPerson(PendingDomesticTask item, int currentMinute,
+            int dayIndex, TaskAuthority tasks, WorkTimeBudgetStore budgets,
+            PersonScheduleTracker schedules, out int startMinute)
+        {
+            startMinute = -1;
+            if (item == null || tasks == null || budgets == null || schedules == null
+                || item.DayIndex != dayIndex || item.PersonId < 0) return false;
+
+            EntityId worker = EntityId.For(EntityKind.Person, item.PersonId);
+            WorkTask existingTask = item.ExistingTaskId.IsValid ? tasks.FindTask(item.ExistingTaskId) : null;
+            int duration = existingTask != null
+                ? tasks.EstimateRemainingMinutesForWorker(item.ExistingTaskId, worker)
+                : tasks.EstimateMinutesForWorker(item.DefinitionId, worker);
+            if (duration <= 0 || budgets.GetOrCreate(worker).MinutesRemaining < duration) return false;
+
+            // Reuse DriveDay's deterministic quarter-hour opportunities when a
+            // new hard reservation lands after this activity was planned.
+            int firstMinute = Math.Max(currentMinute, item.StartMinuteOfDay);
+            firstMinute = ((firstMinute + 14) / 15) * 15;
+            for (int offset = 0; offset <= 180; offset += 15)
+            {
+                int candidate = firstMinute + offset;
+                if (candidate > 1439) break;
+                if (item.IsWindowUnavailable != null
+                    && item.IsWindowUnavailable(item.PersonId, candidate, duration)) continue;
+
+                bool overlapsHardReservation = false;
+                foreach (PersonActivityReservation reservation in schedules.Overlapping(
+                    item.PersonId, dayIndex, candidate, duration))
+                {
+                    if (reservation.Activity != PersonActivityKind.Resting)
+                    {
+                        overlapsHardReservation = true;
+                        break;
+                    }
+                }
+                if (overlapsHardReservation || HasOtherPendingWindowOverlap(item, candidate, duration, tasks))
+                    continue;
+
+                startMinute = candidate;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool HasOtherPendingWindowOverlap(PendingDomesticTask current, int startMinute,
+            int durationMinutes, TaskAuthority tasks)
+        {
+            int endMinute = startMinute + durationMinutes;
+            foreach (PendingDomesticTask other in pending)
+            {
+                if (other == null || ReferenceEquals(other, current) || other.HouseholdId != current.HouseholdId
+                    || other.PersonId != current.PersonId || other.DayIndex != current.DayIndex
+                    || !string.Equals(other.Status, "Pending", StringComparison.Ordinal)) continue;
+
+                WorkTask existing = other.ExistingTaskId.IsValid ? tasks.FindTask(other.ExistingTaskId) : null;
+                int otherDuration = existing != null
+                    ? tasks.EstimateRemainingMinutesForWorker(other.ExistingTaskId,
+                        EntityId.For(EntityKind.Person, current.PersonId))
+                    : tasks.EstimateMinutesForWorker(other.DefinitionId,
+                        EntityId.For(EntityKind.Person, current.PersonId));
+                if (startMinute < other.StartMinuteOfDay + otherDuration
+                    && other.StartMinuteOfDay < endMinute) return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -1045,6 +1172,7 @@ namespace LandLedgers.Population
             int householdId = inputs.HouseholdId;
             EntityId owner = EntityId.For(EntityKind.Household, householdId);
             List<WorkTask> open = tasks.GetOpenTasks(owner);
+            PruneRouteRecoveries(tasks);
             var adoptedDefinitions = new HashSet<string>(StringComparer.Ordinal);
             foreach (WorkTask task in open)
             {
@@ -1054,6 +1182,48 @@ namespace LandLedgers.Population
                 }
 
                 if (!DomesticTaskCatalog.IsDomesticDefinition(task.DefinitionId))
+                {
+                    continue;
+                }
+
+                DomesticRouteRecoveryRecord routeRecovery = FindRouteRecovery(task.TaskId);
+                if (string.Equals(task.DefinitionId, DomesticTaskCatalog.FuelHandlingId, StringComparison.Ordinal)
+                    && inputs.FirewoodActivityLocationAvailable == false)
+                {
+                    if (routeRecovery == null)
+                    {
+                        routeRecovery = new DomesticRouteRecoveryRecord
+                        {
+                            TaskId = task.TaskId,
+                            WaitForCapabilityChange = true,
+                            RetryAfterDay = int.MaxValue,
+                            ActivityLocationId = MissingFirewoodStorageLocationId,
+                            LastFailureReason = MissingFirewoodStorageLocationId,
+                        };
+                        routeRecoveries.Add(routeRecovery);
+                        diag.Add("DomesticLaborDriver: retained fuel-handling task " + task.TaskId
+                            + " in a capability-wait state; no worker or schedule reservation is held because the home has no authored Firewood location.");
+                    }
+                    else
+                    {
+                        routeRecovery.WaitForCapabilityChange = true;
+                        routeRecovery.RetryAfterDay = int.MaxValue;
+                    }
+                    continue;
+                }
+
+                if (routeRecovery != null && routeRecovery.WaitForCapabilityChange)
+                {
+                    if (inputs.FirewoodActivityLocationAvailable != true)
+                        continue;
+
+                    routeRecovery.WaitForCapabilityChange = false;
+                    routeRecovery.RetryAfterDay = dayIndex;
+                    diag.Add("DomesticLaborDriver: authored Firewood capability is now available; resuming retained fuel-handling task "
+                        + task.TaskId + " without creating a duplicate household need.");
+                }
+
+                if (routeRecovery != null && dayIndex < routeRecovery.RetryAfterDay)
                 {
                     continue;
                 }
@@ -1082,10 +1252,73 @@ namespace LandLedgers.Population
                     StartMinuteOfDay = selectedStartMinute,
                     Status = "Pending",
                     Note = "resumed existing task identity after a start refusal",
+                    IsWindowUnavailable = inputs.IsWindowUnavailable,
                 });
+                if (routeRecovery != null)
+                {
+                    diag.Add("DomesticLaborDriver: retrying task " + task.TaskId + " after "
+                        + routeRecovery.FailureCount + " failed physical route attempt(s) to '"
+                        + routeRecovery.ActivityLocationId + "'; last blocker: "
+                        + routeRecovery.LastFailureReason + ".");
+                }
                 diag.Add("DomesticLaborDriver: re-adopted existing task " + task.TaskId +
                     " ('" + task.DefinitionId + "') for household " + householdId + ".");
             }
+        }
+
+        private void RecordRouteFailure(InFlightDomesticTask flight, int dayIndex, string reason)
+        {
+            if (flight == null || !flight.TaskId.IsValid) return;
+            DomesticRouteRecoveryRecord record = FindRouteRecovery(flight.TaskId);
+            if (record == null)
+            {
+                record = new DomesticRouteRecoveryRecord { TaskId = flight.TaskId };
+                routeRecoveries.Add(record);
+            }
+            record.FailureCount = Math.Max(0, record.FailureCount) + 1;
+            if (string.Equals(flight.DefinitionId, DomesticTaskCatalog.FuelHandlingId, StringComparison.Ordinal)
+                && string.Equals(flight.ActivityLocationId, MissingFirewoodStorageLocationId, StringComparison.Ordinal))
+            {
+                record.WaitForCapabilityChange = true;
+                record.RetryAfterDay = int.MaxValue;
+                record.ActivityLocationId = MissingFirewoodStorageLocationId;
+                record.LastFailureReason = MissingFirewoodStorageLocationId;
+                return;
+            }
+
+            // Back off 2, 4, then 7 days. A route can become available after
+            // furniture or occupancy changes, so preserve the same task and
+            // recheck periodically instead of cancelling its need.
+            int exponent = Math.Min(3, Math.Max(1, record.FailureCount));
+            record.RetryAfterDay = dayIndex + Math.Min(7, 1 << exponent);
+            record.ActivityLocationId = flight.ActivityLocationId ?? string.Empty;
+            record.LastFailureReason = reason ?? string.Empty;
+        }
+
+        private DomesticRouteRecoveryRecord FindRouteRecovery(EntityId taskId)
+        {
+            for (int i = 0; i < routeRecoveries.Count; i++)
+            {
+                DomesticRouteRecoveryRecord record = routeRecoveries[i];
+                if (record != null && record.TaskId == taskId) return record;
+            }
+            return null;
+        }
+
+        private void ClearRouteRecovery(EntityId taskId)
+        {
+            routeRecoveries.RemoveAll(record => record == null || record.TaskId == taskId);
+        }
+
+        private void PruneRouteRecoveries(TaskAuthority tasks)
+        {
+            if (tasks == null) return;
+            routeRecoveries.RemoveAll(record =>
+            {
+                if (record == null || !record.TaskId.IsValid) return true;
+                WorkTask task = tasks.FindTask(record.TaskId);
+                return task == null || !task.IsOpen;
+            });
         }
 
         private bool HasOpenOrPlannedDemand(int householdId, string definitionId, int dayIndex,
@@ -1369,6 +1602,7 @@ namespace LandLedgers.Population
             {
                 pending = new List<PendingDomesticTask>(pending),
                 inFlight = new List<InFlightDomesticTask>(inFlight),
+                routeRecoveries = new List<DomesticRouteRecoveryRecord>(routeRecoveries),
                 // Campaign C-24 (DEF-010): cleanliness accumulation is domestic
                 // state too — a save that lost it would forget how soiled each
                 // household is and re-earn every cleaning need from zero.
@@ -1381,6 +1615,7 @@ namespace LandLedgers.Population
         {
             pending.Clear();
             inFlight.Clear();
+            routeRecoveries.Clear();
             cleanliness.LoadRecords(null);
             // B3: the transient per-household context is cleared on load —
             // a restored driver must never settle against a previous
@@ -1406,6 +1641,11 @@ namespace LandLedgers.Population
                 inFlight.AddRange(dto.inFlight);
             }
 
+            if (dto.routeRecoveries != null)
+            {
+                routeRecoveries.AddRange(dto.routeRecoveries);
+            }
+
             cleanliness.LoadRecords(dto.cleanliness);
         }
     }
@@ -1416,6 +1656,7 @@ namespace LandLedgers.Population
     {
         public List<DomesticLaborDriver.PendingDomesticTask> pending = new List<DomesticLaborDriver.PendingDomesticTask>();
         public List<DomesticLaborDriver.InFlightDomesticTask> inFlight = new List<DomesticLaborDriver.InFlightDomesticTask>();
+        public List<DomesticLaborDriver.DomesticRouteRecoveryRecord> routeRecoveries = new List<DomesticLaborDriver.DomesticRouteRecoveryRecord>();
         /// <summary>Campaign C-24 (DEF-010): per-household cleanliness accumulation.</summary>
         public List<HouseholdCleanlinessRecord> cleanliness = new List<HouseholdCleanlinessRecord>();
     }

@@ -1,0 +1,96 @@
+Path,GUID,RootScale,RenderBoundsRootLocal,MeshNames,Colliders,MonoBehaviours,NestedPrefabInstances
+"Assets/Environment/Props/Bar.prefab","fdd8c7be6beef19409350f13574456d3","(1;1;1)","center=(0;1.859;-0.031) size=(4;3.718;10.507)","Bar;Bar_Door;Mirror","BoxCollider;BoxCollider;BoxCollider;BoxCollider","none",0
+"Assets/Environment/Props/Barrel.prefab","9bd3026d1a5529a43aa9d937348a2a9d","(1;1;1)","center=(0.007;0.4;0.048) size=(0.568;0.8;0.69)","Barrel;Locker;Vent","CapsuleCollider","none",0
+"Assets/Environment/Props/Barrel01.prefab","ee65d6e6559cb4846b3c152aa87968e8","(1;1;1)","center=(0.001;0;0.403) size=(0.571;0.559;0.806)","Barrel01;Barrel01Top","CapsuleCollider","none",0
+"Assets/Environment/Props/Barrel02.prefab","f6fdfcdad6edc79458533d1b9b96e7f3","(1;1;1)","center=(0.001;0;0.323) size=(0.629;0.616;0.646)","Barrel02;Barrel02Top","CapsuleCollider","none",0
+"Assets/Environment/Props/Barrel03.prefab","439011d070de6bb4ba697aeca4d6775d","(1;1;1)","center=(0.001;0;0.483) size=(0.756;0.74;0.965)","Barrel03;Barrel03Top","CapsuleCollider","none",0
+"Assets/Environment/Props/Basin.prefab","b49c78e65550a664fa0673b3de092915","(1;1;1)","center=(0;0;0.309) size=(1.765;0.9;0.567)","basin","BoxCollider","none",0
+"Assets/Environment/Props/Bed.prefab","c36c6f5a2f1b81343a4f8c3d71ed5283","(1;1;1)","center=(0;0.683;0) size=(2.469;1.366;1.281)","Bed","BoxCollider","none",0
+"Assets/Environment/Props/Bucket01.prefab","9803f5f7e15195741ac1144482913bdc","(1;1;1)","center=(0;0;0.352) size=(0.778;0.71;0.714)","Bucket01","CapsuleCollider","none",0
+"Assets/Environment/Props/Bucket02.prefab","3a8e28b7741c8044bb63b7ced804193c","(1;1;1)","center=(0;0;0.247) size=(0.545;0.497;0.5)","Bucket02","CapsuleCollider","none",0
+"Assets/Environment/Props/Cabinet Large.prefab","c367a674eaee0794d91e7918fc11100f","(0.424;1.488;0.702)","center=(0;0;0) size=(1;1;1)","Cube","","none",0
+"Assets/Environment/Props/Cabinet Small.prefab","15f54a94a1028cc4e941e2f9a65279e1","(0.424;0.623;0.555)","center=(0;0;0) size=(1;1;1)","Cube","","none",0
+"Assets/Environment/Props/Can01.prefab","65bf298eeb43b2b48bcf9e76c7b95cc6","(1;1;1)","center=(0;0;0.645) size=(0.824;0.824;1.29)","Can01;CanHead01;LockerBase01;Locker01","CapsuleCollider","none",0
+"Assets/Environment/Props/Can02.prefab","69fb1aef54a07d343b462d51cdd1e6b0","(1;1;1)","center=(0;0;0.645) size=(0.824;0.824;1.29)","Can02;CanHead02;LockerBase02;Locker02","CapsuleCollider","none",0
+"Assets/Environment/Props/Carpet01.prefab","90f4fe3f689f923419dd6ebc93f15e41","(1;1;1)","center=(0;0.001;0) size=(3.392;0.067;2.192)","Carpet01","","none",0
+"Assets/Environment/Props/Carpet02.prefab","dcf17cda1c1c9784fb0dc0c5a6998918","(1;1;1)","center=(0;0.001;0) size=(2.734;0.054;2.734)","Carpet02","","none",0
+"Assets/Environment/Props/Carriage_a.prefab","f4c7d276f26012144ab250c7d9adee6d","(1;1;1)","center=(-0.205;0.003;1.971) size=(5.12;2.9;3.951)","Cart;CartCloth_a;CartDoor;CartLockerL;CartLockerR;Wheels_back;Wheels_Front;Cart001;CartCloth_a001;CartDoor001;CartLockerL001;CartLockerR001;Wheels_back001;Wheels_Front001;Cart_LOD2;CartCloth_a002;CartDoor002;Wheels_back002;Wheels_Front002","CapsuleCollider;BoxCollider;BoxCollider;CapsuleCollider;CapsuleCollider","none",0
+"Assets/Environment/Props/Carriage_b.prefab","7982dccb7c6b6dd4484291375f9066b7","(1;1;1)","center=(-0.205;0.003;1.971) size=(5.12;2.9;3.951)","Cart;CartCloth_b0;CartDoor;CartLockerL;CartLockerR;Wheels_back;Wheels_Front;Cart001;CartCloth_b1;CartDoor001;CartLockerL001;CartLockerR001;Wheels_back001;Wheels_Front001;Cart_LOD2;CartCloth_b3;CartDoor002;Wheels_back002;Wheels_Front002","CapsuleCollider;BoxCollider;BoxCollider;CapsuleCollider;CapsuleCollider","none",0
+"Assets/Environment/Props/Chair.prefab","1948142dfafa96140a404d93b58e7b2f","(0.763;0.763;0.763)","center=(0.056;0.691;0.002) size=(0.828;1.383;0.776)","Chair","BoxCollider","none",0
+"Assets/Environment/Props/Chandelier.prefab","6c9abcad497f0804b88b25d8da4114c1","(1;1;1)","center=(0;0.619;0) size=(1;1.347;1)","Chandelier","","none",0
+"Assets/Environment/Props/Closet.prefab","114f44285a04c52418758201457b3a6b","(1;1;1)","center=(0;1.197;-0.022) size=(2.601;2.394;0.644)","Closet","BoxCollider","none",0
+"Assets/Environment/Props/Cloth01.prefab","1eeef974608c34646905e487159fffe1","(1;1;1)","center=(0.019;-0.132;0.076) size=(0.18;0.39;0.152)","hanger_low;Towel_low","","none",0
+"Assets/Environment/Props/ClothHanger.prefab","7bee78f0760101147b2b20a1b2699b0b","(1;1;1)","center=(0;0;0.067) size=(0.902;0.18;0.135)","HangerWood_low","","none",0
+"Assets/Environment/Props/Cooking Stove.prefab","44812891b21407f42b2375da52be15c4","(0.424;0.623;1.525)","center=(0;0;0) size=(1;1;1)","Cube","","none",0
+"Assets/Environment/Props/Crate With Packages.prefab","d9226263bda77ec47b4804ec4c15f51c","(1;1;1)","center=(0.231;0.296;-0.11) size=(0.908;0.598;0.586)","Crate05;Package01;Package02;Sack02;Sack03","BoxCollider;BoxCollider;BoxCollider;BoxCollider;BoxCollider;BoxCollider;BoxCollider;BoxCollider;BoxCollider;CapsuleCollider;BoxCollider","none",11
+"Assets/Environment/Props/Crate01.prefab","6fb725fabfb47e64c95117ab0fd29e60","(1;1;1)","center=(-0.001;0.033;0.416) size=(1.285;0.802;0.844)","Crate01;Rope01","BoxCollider","none",0
+"Assets/Environment/Props/Crate02.prefab","f4ed31d6ae0a7ec448e0742de1656fca","(1;1;1)","center=(-0.058;0.092;0.536) size=(1.099;1.191;1.088)","Crate02;Rope02","BoxCollider","none",0
+"Assets/Environment/Props/Crate03.prefab","e23b67298bded4e4ba62d6719bb38f67","(1;1;1)","center=(0;0;0.35) size=(0.718;0.736;0.711)","Crate03","BoxCollider","none",0
+"Assets/Environment/Props/Crate04.prefab","f3ef3261f5ac7e04eac113221d1ec727","(1;1;1)","center=(0;0;0.229) size=(1.219;0.698;0.457)","Crate04;Crate04Roof","BoxCollider;BoxCollider","none",0
+"Assets/Environment/Props/Crate05.prefab","c56ab4b39bddedf46b4404d6d4ee8c0e","(1;1;1)","center=(0;-0.003;0.225) size=(0.897;0.568;0.451)","Crate05","BoxCollider","none",0
+"Assets/Environment/Props/Cross01.prefab","17b2f0d518cbf374c9951eff4e7f7e68","(1;1;1)","center=(-0.008;0.013;0.75) size=(0.12;0.152;1.5)","Cross01","BoxCollider","none",0
+"Assets/Environment/Props/Cross02.prefab","4a1f963820755a847a6eaaa950a942d8","(1;1;1)","center=(0.017;0.028;0.695) size=(0.263;1.156;1.39)","Cross02","BoxCollider","none",0
+"Assets/Environment/Props/Cross03.prefab","1af8a77913ebf674a80010ef1c78e944","(1;1;1)","center=(-0.059;0.023;0.75) size=(0.291;1.005;1.5)","Cross03","BoxCollider","none",0
+"Assets/Environment/Props/Cross04.prefab","5d3216615dfdd4141af7a830d4ce0abf","(1;1;1)","center=(0.018;-0.028;0.812) size=(0.274;1.209;1.623)","Cross04","BoxCollider","none",0
+"Assets/Environment/Props/Curtain.prefab","34ff879f3fafc074aa4098fa78ae1b26","(1;1;1)","center=(-0.026;1.241;0.005) size=(2.797;2.386;0.181)","Ball;Curtain_L;Curtain_R;CurtainPol","","none",0
+"Assets/Environment/Props/ElectroPoll.prefab","16dac1413f3a373429c274563bb372ff","(1;1;1)","center=(0.112;0.072;6) size=(3.684;1.742;12)","ElectroPoll;el_01;el_02;el_03;el_04;el_05;Metal01;Metal02","BoxCollider","none",0
+"Assets/Environment/Props/Fence01.prefab","b2fb89dd7f7c7554f89a4d28269295d2","(1;1;1)","center=(0.008;-1.263;0.8) size=(0.176;2.747;1.6)","Fence01","BoxCollider","none",0
+"Assets/Environment/Props/Fence02.prefab","c850606e5c8c3ad4a98d66b100b4263b","(1;1;1)","center=(0.008;-1.22;0.79) size=(0.176;2.833;1.58)","Fence02","BoxCollider","none",0
+"Assets/Environment/Props/Flag.prefab","1460f8b9e02904e45b127d71b9b77da7","(1;1;1)","center=(0;-0.358;0.004) size=(3.006;0.726;0.01)","Flag","","none",0
+"Assets/Environment/Props/GraveStone.prefab","46eb0c805e60c434eb2153b8a5763804","(1;1;1)","center=(0;0;0.405) size=(0.097;0.642;0.81)","GraveStone","BoxCollider","none",0
+"Assets/Environment/Props/HandWaterPump 1.prefab","76839340d56d92a41a854365dff56ca1","(1;1;1)","center=(0;0.855;-0.101) size=(0.226;1.71;0.943)","HandWaterPump","BoxCollider","none",0
+"Assets/Environment/Props/HandWaterPump.prefab","c4cc8647763e59f46910ef9ffe626c74","(1;1;1)","center=(0;0.855;-0.101) size=(0.226;1.71;0.943)","HandWaterPump","BoxCollider","none",0
+"Assets/Environment/Props/HorseStand01.prefab","0c37be1b9d42fd746870a2eca4499e37","(1;1;1)","center=(0;0.013;0.476) size=(2.018;0.458;0.953)","HorseStand01;Rope03","BoxCollider","none",0
+"Assets/Environment/Props/HorseStand02.prefab","5426b441a2934b94c8ad8b69f87bc964","(1;1;1)","center=(0;-0.004;0.464) size=(1.4;0.255;0.929)","HorseStand02;Rope04","BoxCollider","none",0
+"Assets/Environment/Props/HorseStand03.prefab","217d7fabb27bf4a45976b08e2591e242","(1;1;1)","center=(0;-0.001;0.483) size=(2.018;0.289;0.967)","HorseStand01;Rope05","BoxCollider","none",0
+"Assets/Environment/Props/Item Shelf.prefab","b11c2df6532ca4546916f0e9b3374d06","(1;1;1)","center=(0;0;0) size=(2;1;0.258)","Items_Shelf_low","","none",0
+"Assets/Environment/Props/Kitchen Counter.prefab","2817a1e0b001ad24fb56b6444bd61d77","(0.424;0.623;1.525)","center=(0;0;0) size=(1;1;1)","Cube","","none",0
+"Assets/Environment/Props/Lamp.prefab","b8fd3a9973c6b5e40bc539abb29caadb","(1;1;1)","center=(0;0.232;0) size=(0.244;0.463;0.244)","Lamp","","none",0
+"Assets/Environment/Props/Lantern.prefab","82ec254d6eb051045b96a7ea9600ad1d","(1;1;1)","center=(0;0;0.372) size=(0.364;0.217;0.743)","Lantern;LanderHanger","BoxCollider","none",0
+"Assets/Environment/Props/LanternHang.prefab","2a8496268a4335748bf82b26f94b4548","(1;1;1)","center=(-0.023;-0.296;-0.02) size=(0.462;0.592;0.479)","Lantern;LanderHanger;Wire04","BoxCollider","none",0
+"Assets/Environment/Props/Low Wooden Table.prefab","a827ffddbc6bcb84ea38bc7b4af5bb44","(1;1;1)","center=(0;0;0) size=(1.205;0.352;0.705)","Low_Wooden_Table_low","","none",0
+"Assets/Environment/Props/MetalBucket01.prefab","6966eb7583f2f4a44bb9ff4f0c23ad04","(1;1;1)","center=(0;0.004;0.267) size=(0.6;0.658;0.534)","Bucket01;BacketIron01","BoxCollider","none",0
+"Assets/Environment/Props/MetalBucket02.prefab","48914c584acea924d85d120eaf5dab18","(1;1;1)","center=(0;0.004;0.267) size=(0.6;0.658;0.534)","Bucket02;BacketIron02","BoxCollider","none",0
+"Assets/Environment/Props/New Mesh.prefab","75f07f58ca5c8794da4572a65da48da7","(1;1;1)","center=(0;0;0) size=(1;1;1)","Cube","","none",0
+"Assets/Environment/Props/Package01.prefab","91e7aee0c9550ee4786a3e9c9652db72","(1;1;1)","center=(0;0;0.097) size=(0.369;0.251;0.2)","Package01","BoxCollider","none",0
+"Assets/Environment/Props/Package02.prefab","e4b69cc1a6304b84f81a3c7c9bd20408","(1;1;1)","center=(0;0;0.097) size=(0.22;0.222;0.221)","Package02","BoxCollider","none",0
+"Assets/Environment/Props/Piano.prefab","5a164e4d8bb84ff4eb356aa127bdec6d","(1;1;1)","center=(-0.202;1.232;0) size=(1.246;2.463;3.058)","Piano;PianoHead","BoxCollider","none",0
+"Assets/Environment/Props/PickAxe.prefab","5bad70b44b728664c80610b417fa6385","(1;1;1)","center=(-0.04;0;0) size=(0.749;0.106;1.229)","PickAxe","BoxCollider","none",0
+"Assets/Environment/Props/Pot.prefab","0e9a39087fcca90479761f9dc10084e0","(1;1;1)","center=(0;0.169;0) size=(0.303;0.337;0.303)","Pot","","none",0
+"Assets/Environment/Props/Rock01.prefab","48a460efbbc65f44a96f7cc5b6bc8e32","(1;1;1)","center=(0;0;0) size=(1.418;1.031;1.842)","Rock01_LOD0;Rock01_LOD1","CapsuleCollider","none",0
+"Assets/Environment/Props/Rock02.prefab","77dfeeb851bc0fc4cafe94730cc7d0b2","(1;1;1)","center=(0;0;0) size=(3.48;1.008;1.749)","Rock02_LOD0;Rock02_LOD1","BoxCollider","none",0
+"Assets/Environment/Props/Rock03.prefab","2b7dbd872f9aff34fb80955328b8b89a","(1;1;1)","center=(0;0;0) size=(2.402;0.996;1.327)","Rock03_LOD0;Rock03_LOD1","BoxCollider","none",0
+"Assets/Environment/Props/Rock04.prefab","73c78062b088c664686777c355911044","(1;1;1)","center=(0;0;0) size=(1.473;0.813;1.306)","Rock04_LOD0;Rock04_LOD1","BoxCollider","none",0
+"Assets/Environment/Props/Rock05.prefab","42a80c12c432dee47bcd8d6d26fe001e","(1;1;1)","center=(0;0;0) size=(1.989;2.143;1.222)","Rock05","BoxCollider","none",0
+"Assets/Environment/Props/RopeCurled01.prefab","c11de879067151546acff386da01d11d","(1;1;1)","center=(0;0;0.025) size=(0.285;0.299;0.048)","RopeCurled01","BoxCollider","none",0
+"Assets/Environment/Props/RopeCurled02.prefab","18ce3601fbdd14c4a9cb1d3060e276f9","(1;1;1)","center=(0.001;0;-0.295) size=(0.331;0.275;0.892)","RopeCurled02","","none",0
+"Assets/Environment/Props/RopeCurled03.prefab","c528434928f5d7342841b8df1da0eeab","(1;1;1)","center=(0.005;-0.015;-0.359) size=(0.337;0.306;1.019)","RopeCurled03","","none",0
+"Assets/Environment/Props/Sack01.prefab","c4ef9fea2a4e69544bb952b6b2851ebc","(1;1;1)","center=(0;0;0.047) size=(0.406;0.252;0.093)","Sack01","BoxCollider","none",0
+"Assets/Environment/Props/Sack02.prefab","e53dbf4004cdda244ab4e88733339ebb","(1;1;1)","center=(0;0;0.187) size=(0.249;0.214;0.383)","Sack02","CapsuleCollider","none",0
+"Assets/Environment/Props/sack03.prefab","7449bbb838b8b2543be3c625c4a3e1bb","(1;1;1)","center=(0;0.009;0.202) size=(0.245;0.201;0.387)","Sack03","BoxCollider","none",0
+"Assets/Environment/Props/Shelf.prefab","485cbbde0a07edf438dd3fc07559bb52","(0.318;0.837;1.717)","center=(0;1.369;0) size=(4.13;2.738;0.304)","Shelves1_001","","none",0
+"Assets/Environment/Props/Showel.prefab","a3b701473d30c3a4daaacb358a4ca2fb","(1;1;1)","center=(0;0;0) size=(0.358;1.728;0.062)","Showel","BoxCollider","none",0
+"Assets/Environment/Props/Skull.prefab","9d3c87939a3b612499674ef74d629fe5","(1;1;1)","center=(0;0.031;0.002) size=(1.142;0.75;0.368)","Head","","none",0
+"Assets/Environment/Props/SmallChair.prefab","b27487c5ae3d6ab4e9c42c762335b159","(1;1;1)","center=(0;0.375;0) size=(0.6;0.75;0.6)","SmallChair","BoxCollider","none",0
+"Assets/Environment/Props/SmallRock01.prefab","c90718205a3562e46861f597226c90e3","(1;1;1)","center=(0;0;0) size=(0.237;0.285;0.126)","SmallRock01","","none",0
+"Assets/Environment/Props/SmallRock02.prefab","b8a5258bb6fb9624f857677d537a4b3f","(1;1;1)","center=(0;0;0) size=(0.249;0.216;0.152)","SmallRock02","","none",0
+"Assets/Environment/Props/SmallRock03.prefab","7f757427e9b564f4a8716086b4b61f7f","(1;1;1)","center=(0;0;0) size=(0.153;0.249;0.157)","SmallRock03","","none",0
+"Assets/Environment/Props/SmallTable.prefab","3e6a4ca8feac9584e992e46535ed3961","(1;1;1)","center=(0;0.35;-0.006) size=(0.838;0.7;0.651)","SmallTable","BoxCollider","none",0
+"Assets/Environment/Props/Sofa.prefab","f8fd5a4ffdf0f064b82b23eda69ccef0","(1;1;1)","center=(0;0.575;0) size=(3.348;1.15;1.353)","Sofa","BoxCollider","none",0
+"Assets/Environment/Props/Stove.prefab","12ffb9faea77d4f4c8881c365f0fc786","(0.75;0.75;0.75)","center=(0.001;0.707;0) size=(0.525;1.414;0.847)","Stove","","none",0
+"Assets/Environment/Props/Table.prefab","536ccc36b751d9244b62a4b4bec738d2","(0.763;0.763;0.763)","center=(0;0.549;0) size=(1.563;1.099;1.563)","Table","CapsuleCollider","none",0
+"Assets/Environment/Props/Teachers Room Chair.prefab","f2113d65b4a23cf4089096393b06e557","(1;1;1)","center=(-0.028;-0.001;0) size=(0.599;0.77;0.578)","Teachers_Room_Chair_low","","none",0
+"Assets/Environment/Props/Trough.prefab","2f131d1a79c140044abe288b68363964","(1;1;1)","center=(0;0;0.515) size=(2.917;1.481;1.03)","Cart_low","BoxCollider","none",0
+"Assets/Environment/Props/Wall Mounted Cabinet.prefab","948fb1d11ba3c1a4eac2401d7e120b3b","(1;1;1)","center=(0;0;0) size=(0.9;0.6;0.454)","Wall_Mounted_Cabinet_low","","none",0
+"Assets/Environment/Props/WallLamp.prefab","d175a08c397c86d438527ecf4c138c13","(1;1;1)","center=(0;0.079;0.178) size=(0.375;0.532;0.356)","WallLamp","","none",0
+"Assets/Environment/Props/WaterTank.prefab","2400764db42eac44abc59f356d6dffb2","(1;1;1)","center=(0.216;0.309;5.829) size=(4.239;4.377;11.658)","WaterTank","BoxCollider;BoxCollider","none",0
+"Assets/Environment/Props/WaterWell 1.prefab","83bcfb136a20de945b4ef0638f480500","(1;1;1)","center=(0;1.499;0) size=(2.386;3.205;2.366)","WaterWell","BoxCollider","none",0
+"Assets/Environment/Props/WaterWell.prefab","e584049c0fb375345a5a8e465996ca54","(1;1;1)","center=(0;1.499;0) size=(2.386;3.205;2.366)","WaterWell","BoxCollider","none",0
+"Assets/Environment/Props/Wheel.prefab","0b506050a777c03459179412288f40ce","(1;1;1)","center=(0;0;0.27) size=(1.391;1.388;0.539)","Wheels_back","BoxCollider","none",0
+"Assets/Environment/Props/WindPump.prefab","30ce80cc19bc1644ebf37f180ed36d9e","(1;1;1)","center=(-0.033;2.073;13.224) size=(10.195;12.705;26.457)","WindPump;PumpBase;Propeler","BoxCollider","none",0
+"Assets/Environment/Props/Wire01.prefab","f1550932fd9e5464b94392dc6b0c8a66","(1;1;1)","center=(10;0;-0.417) size=(20;0.069;0.914)","Wire01","","none",0
+"Assets/Environment/Props/Wire02.prefab","dcb9a25116010f2408efcfc305ed388a","(1;1;1)","center=(0;20;-1.002) size=(0.069;40;2.083)","Wire02","","none",0
+"Assets/Environment/Props/Wire03.prefab","94e36b68ea7aa4646a79433bce16d5c2","(1;1;1)","center=(-0.006;0.197;-1.979) size=(0.082;0.393;4.038)","Wire03","","none",0
+"Assets/Environment/Props/Wire04.prefab","d6aa79952d4f99d4dbaa0a6f2ddeb509","(1;1;1)","center=(0.051;0.197;-1.279) size=(0.176;0.393;2.639)","Wire04","","none",0
+"Assets/Environment/Props/Wooden Kitchen Counter.prefab","747b02fd9cc266e41ad64514eac0d162","(1;1;1)","center=(0;0;0) size=(2.6;0.8;0.794)","Wooden_Kitchen_Counter_low","","none",0
+"Assets/Environment/Props/Wooden Sign.prefab","5841c4d1c130b8c4fa90f1f8d29830c7","(1;1;1)","center=(0;0;0) size=(7.931;0.341;2.786)","Sign02;Sign03","BoxCollider;BoxCollider;BoxCollider","none",0

@@ -193,6 +193,32 @@ namespace LandLedgers.Pathing
             return TryFindAnchor(placedBuilding => placedBuilding.id == buildingId, anchorType, out building, out anchor);
         }
 
+        /// <summary>
+        /// Resolves the authored anchor record for a specific building without
+        /// asserting that its coarse grid cell is traversable. Callers that
+        /// reconcile authored door geometry to an exterior approach need the
+        /// original building and marker even when that grid cell is invalid.
+        /// This is not a movement authorization: route endpoints still have to
+        /// pass normal traversal validation after reconciliation.
+        /// </summary>
+        public bool TryFindAuthoredAnchorByBuildingId(int buildingId, AnchorType anchorType,
+            out PlacedBuilding building, out BuildingAnchor anchor)
+        {
+            building = null;
+            anchor = default;
+            if (!EnsureWorldReady()) return false;
+
+            foreach (PlacedBuilding candidate in worldController.Buildings)
+            {
+                if (candidate == null || candidate.id != buildingId) continue;
+                if (!candidate.TryGetAnchor(anchorType, out anchor)) continue;
+                building = candidate;
+                return true;
+            }
+
+            return false;
+        }
+
         public bool TryFindAnchor(Predicate<PlacedBuilding> buildingFilter, AnchorType anchorType, out PlacedBuilding building, out BuildingAnchor anchor)
         {
             building = null;

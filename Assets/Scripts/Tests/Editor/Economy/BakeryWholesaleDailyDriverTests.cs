@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
+using UnityEngine;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Core;
 using LandLedgers.Economy.Blacksmith;
@@ -59,6 +61,77 @@ namespace LandLedgers.Editor.Economy
     {
         private const string BakeryInstanceId = "pierce-bakery-1";
         private const string StoreInstanceId = "general-store-1";
+        private readonly List<ScriptableObject> createdScriptableObjects = new List<ScriptableObject>();
+
+        [TearDown]
+        public void DestroyCreatedScriptableObjects()
+        {
+            foreach (ScriptableObject asset in createdScriptableObjects)
+                if (asset != null) UnityEngine.Object.DestroyImmediate(asset);
+            createdScriptableObjects.Clear();
+        }
+
+        private OffMapAidBusinessDefinition CreateOffMapAidBusinessDefinition()
+        {
+            OffMapAidBusinessDefinition definition = ScriptableObject.CreateInstance<OffMapAidBusinessDefinition>();
+            createdScriptableObjects.Add(definition);
+            return definition;
+        }
+
+        [Test]
+        public void DailyResult_DefaultFactoryPreservesUnavailableCashSentinelAndZeroValueSemantics()
+        {
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyResult.CreateDefault();
+
+            Assert.AreEqual(-1, result.BakeryCashAvailableCents,
+                "the daily result uses -1 when no live cash authority is connected");
+            Assert.AreEqual(0, result.AccountsOnBooks);
+            Assert.AreEqual(0, result.BatchesPlanned);
+            Assert.AreEqual(0, result.BatchesBaked);
+            Assert.IsNull(result.Refusal);
+            Assert.AreEqual(0, default(BakeryWholesaleDailyResult).BakeryCashAvailableCents,
+                "default(T) remains the C# language-defined all-zero struct value");
+        }
+
+        [Test]
+        public void RetailPlanner_DoesNotCountFinishedWholesaleCoverAgainstFreeActiveRetailOutput()
+        {
+            Slice s = NewSlice();
+            BookAccount(s, units: BakeryBreadCatalog.BreadYieldPerBatch, cadence: 1, price: 4, dueDay: 0);
+            Assert.IsNotNull(s.Bakery.PlanBatch(
+                BakeryBreadCatalog.BreadLoafId, 1, 0, s.Diag),
+                "one active batch represents output beyond the finished lot reserved for the due account");
+            Assert.IsNotNull(s.Bakery.ReceiveTransferredBreadLot(new BakeryStagedBreadLot
+            {
+                LotId = "finished-wholesale-cover",
+                BatchId = "finished-wholesale-cover-batch",
+                ProductId = BakeryBreadCatalog.BreadLoafId,
+                BakedDayIndex = 0,
+                Units = BakeryBreadCatalog.BreadYieldPerBatch,
+            }, 0, s.Ids, s.Diag), "the due wholesale quantity is physically present as finished stock");
+
+            List<string> retailPlan = s.Bakery.PlanRetailBatches(
+                0, BakeryBreadCatalog.BreadYieldPerBatch, s.Diag);
+
+            Assert.IsEmpty(retailPlan,
+                "finished stock covers the wholesale promise, leaving the distinct active batch available to meet the observed household need without planning duplicate output");
+            Assert.AreEqual(1, s.Bakery.Batches.Count,
+                "retail planning must not create a second active batch for demand already covered by legitimate production");
+        }
+
+        [Test]
+        public void DormantFlourImportCatalogTransitDoesNotTriggerLocalForwardStocking()
+        {
+            Assert.AreEqual(0, BakeryWholesaleDailyDriver.ResolveCatalogPipelineDepthDays(
+                liveImportOrderPathExists: false, catalogTransitDays: 14),
+                "the registered railhead catalog entry is not an executable order path and must not inflate same-day store purchases");
+            Assert.AreEqual(14, BakeryWholesaleDailyDriver.ResolveCatalogPipelineDepthDays(
+                liveImportOrderPathExists: true, catalogTransitDays: 14),
+                "a live import path may use its authored supplier transit time");
+            Assert.AreEqual(0, BakeryWholesaleDailyDriver.ResolveCatalogPipelineDepthDays(
+                liveImportOrderPathExists: true, catalogTransitDays: -2),
+                "invalid negative transit is clamped to zero");
+        }
 
         private static readonly string[] OvenComponentIds =
         {
@@ -302,6 +375,103 @@ namespace LandLedgers.Editor.Economy
                 ImportOrderPathExists = false,
             };
 
+        [Test]
+        public void RunDay_RetailOnlyBakeryRespondsToObservedSalesWithoutWholesaleAccount()
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, flourLb: 36, notions: 2, fuel: 2);
+            List<string> firstBatch = s.ProductionDriver.PlanBatches(
+                BakeryBreadCatalog.BreadLoafId, 1, 1, s.Diag);
+            Assert.IsNotNull(firstBatch);
+            Assert.AreEqual(1, s.ProductionDriver.RunScheduledDay(
+                1, true, WorkstationCatalog.BakeOven, OvenFinder(), null, s.Diag, s.Ids));
+            var supplier = new Series2BakerySupplierAdapter(
+                s.Bakery, new Series2BusinessRuntimeCashPort(s.BakeryRuntime),
+                BakeryInstanceId, "Pierce Bakery", "bakery") { DayIndex = 1 };
+            Assert.AreEqual(24, supplier.SellItem("bread", 24, 1,
+                new ShoppingSettlement { Mode = ShoppingSettlementMode.CashFromLedger }, s.Diag),
+                "the demand signal is a real sale through the existing item/cash authority");
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
+
+            Assert.AreEqual(0, result.AccountsOnBooks, "direct retail does not require an artificial wholesale account");
+            Assert.AreEqual(1, result.BatchesPlanned, "actual counter sales create one uncovered batch plan");
+            Assert.AreEqual(1, result.BatchesBaked, "the existing production authority executes that plan with real remaining inputs");
+            Assert.AreEqual(24, s.Bakery.BreadShelf.Sum(lot => lot != null ? lot.UnitCount : 0));
+            Assert.AreEqual(24 * 8, s.BakeryRuntime.CurrentCashCents - 2000,
+                "the initial household sale is settled once through the bakery cash port");
+        }
+
+        [Test]
+        public void RunDay_FinishedWholesaleStockTransfersWithoutFalseEmptyProductionRefusal()
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, flourLb: 24, notions: 2, fuel: 2);
+            Assert.IsNotNull(s.ProductionDriver.PlanBatches(
+                BakeryBreadCatalog.BreadLoafId, 1, 1, s.Diag));
+            Assert.AreEqual(1, s.ProductionDriver.RunScheduledDay(
+                1, true, WorkstationCatalog.BakeOven, OvenFinder(), null, s.Diag, s.Ids));
+            BookAccount(s, units: 24, cadence: 1, price: 4, dueDay: 2);
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
+
+            Assert.AreEqual(0, result.BatchesPlanned, "the existing finished lot covers the due contract");
+            Assert.AreEqual(0, result.BatchesBaked, "finished inventory transfers without an empty-workday refusal");
+            Assert.AreEqual(1, result.TransfersCompleted);
+            Assert.AreEqual(24, s.StoreRuntime.GetCategoryStock("staple_food").CurrentStockUnits,
+                "this fixture uses a category-only store port, so the received wholesale units belong in the category pool");
+            Assert.IsFalse(s.Diag.Exists(line => line.Contains("no batches planned for day 2")),
+                "an empty production plan is not an execution failure when finished goods satisfy the contract");
+        }
+
+        [Test]
+        public void RunDay_OpenHouseholdBreadNeedCanStartRetailOnlyProduction()
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, flourLb: 24, notions: 2, fuel: 2);
+            BakeryWholesaleDailyInputs inputs = InputsFor(s, 2);
+            inputs.OpenHouseholdBreadNeedUnits = 24;
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, s.Diag);
+
+            Assert.AreEqual(0, result.AccountsOnBooks);
+            Assert.AreEqual(1, result.BatchesPlanned,
+                "the daily driver receives a real open household need without requiring a standing wholesale account");
+            Assert.AreEqual(1, result.BatchesBaked,
+                "the plan only becomes output after the existing physical production authority consumes actual flour, notions, fuel, equipment and work time");
+            Assert.AreEqual(24, s.Bakery.BreadShelf.Sum(lot => lot != null ? lot.UnitCount : 0));
+            Assert.AreEqual(0, s.BakeryRuntime.CurrentCashCents - 2000,
+                "production alone is not a sale and creates no revenue");
+        }
+
+        [Test]
+        public void RunDay_ReportsRecordedRetailRevenueWasteAndCashWithoutInventingSales()
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, flourLb: 24, notions: 2, fuel: 2);
+            Assert.IsNotNull(s.ProductionDriver.PlanBatches(BakeryBreadCatalog.BreadLoafId, 1, 2, s.Diag));
+            Assert.AreEqual(1, s.ProductionDriver.RunScheduledDay(
+                2, true, WorkstationCatalog.BakeOven, OvenFinder(), null, s.Diag, s.Ids));
+            var supplier = new Series2BakerySupplierAdapter(
+                s.Bakery, new Series2BusinessRuntimeCashPort(s.BakeryRuntime),
+                BakeryInstanceId, "Pierce Bakery", "bakery") { DayIndex = 2 };
+            Assert.AreEqual(24, supplier.SellItem("bread", 24, 2,
+                new ShoppingSettlement { Mode = ShoppingSettlementMode.CashFromLedger }, s.Diag));
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
+
+            Assert.AreEqual(24, result.RetailUnitsSoldToday);
+            Assert.AreEqual(24 * 8, result.RetailRevenueTodayCents);
+            Assert.AreEqual(2000 + 24 * 8, result.BakeryCashAvailableCents);
+            Assert.AreEqual(0, result.BatchesPlanned, "the already settled sale does not create duplicate production");
+            Assert.IsTrue(s.Diag.Exists(line => line.Contains("actual retail sales 24u/192c")),
+                "operating evidence reports the actual counter sale, separate from production and wholesale revenue");
+        }
+
         [TestCase(false, 0, 0)]
         [TestCase(true, 0, 0)]
         [TestCase(true, 2, 2)]
@@ -312,19 +482,19 @@ namespace LandLedgers.Editor.Economy
             SeedInputs(s, 0, 1, 1);
             SeedStoreFlour(s, 4);
             BookAccount(s, 24, 1, 2, 2);
-            var supplier = new OffMapAidBusinessRuntime(new OffMapAidBusinessDefinition
+            OffMapAidBusinessDefinition supplierDefinition = CreateOffMapAidBusinessDefinition();
+            supplierDefinition.BusinessId = "millbrook_grain_co";
+            supplierDefinition.DisplayName = "Millbrook Grain Co.";
+            supplierDefinition.Inventory = new List<OffMapAidInventoryRow>
             {
-                BusinessId = "millbrook_grain_co", DisplayName = "Millbrook Grain Co.",
-                Inventory = new List<OffMapAidInventoryRow>
+                new OffMapAidInventoryRow
                 {
-                    new OffMapAidInventoryRow
-                    {
-                        ItemId = "bakery_flour_sack", InventoryUnit = "lb", StartingUnits = 230,
-                        OrderUnit = "10 lb sack", InventoryUnitsPerOrderUnit = 10,
-                        BakeryUnitsPerOrderUnit = 18, OrderPriceCents = 48
-                    }
+                    ItemId = "bakery_flour_sack", InventoryUnit = "lb", StartingUnits = 230,
+                    OrderUnit = "10 lb sack", InventoryUnitsPerOrderUnit = 10,
+                    BakeryUnitsPerOrderUnit = 18, OrderPriceCents = 48
                 }
-            });
+            };
+            var supplier = new OffMapAidBusinessRuntime(supplierDefinition);
             var inputs = InputsFor(s, 2);
             inputs.MillbrookSupplier = supplier;
             inputs.FlourPipelineDepthDays = depth;
@@ -391,7 +561,7 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void MissingAccount_NamesTheBlocker_PlansNothing()
+        public void NoWholesaleAccountAndNoObservedDemand_IsNotABusinessBlocker()
         {
             Slice s = NewSlice();
             InstallOven(s);
@@ -403,8 +573,10 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(0, result.BatchesPlanned, "no account, nothing planned");
             Assert.AreEqual(0, result.BatchesBaked);
             Assert.AreEqual(0, result.TransfersCompleted);
-            Assert.IsTrue(result.Refusal != null && result.Refusal.Contains("no wholesale account"),
-                "result names the account blocker; refusal: " + result.Refusal);
+            Assert.IsTrue(string.IsNullOrEmpty(result.Refusal),
+                "a bakery without a wholesale account is not itself a refusal; refusal: " + result.Refusal);
+            Assert.IsTrue(s.Diag.Exists(line => line.Contains("no wholesale obligation or observed uncovered retail demand")),
+                "no speculative production is named as the actual reason for idling");
             Assert.AreEqual(5000, s.StoreRuntime.CurrentCashCents, "cash unchanged");
             Assert.AreEqual(2000, s.BakeryRuntime.CurrentCashCents, "cash unchanged");
             Assert.AreEqual(0, s.Bakery.WholesaleDeliveries.Count, "no delivery record");
@@ -504,6 +676,11 @@ namespace LandLedgers.Editor.Economy
 
             Assert.AreEqual(1, result.BatchesPlanned, "the lead window plans tomorrow's delivery today");
             Assert.AreEqual(1, result.BatchesBaked);
+            Assert.AreEqual(0, result.NotionsNeedUnits,
+                "the 2 notions already on hand cover this one-batch plan; no unmet notion demand is registered");
+            Assert.IsFalse(BakeryWholesaleDailyDriver.BuildInputNeeds(result, BakeryInstanceId)
+                    .Any(need => need.InputCategoryId == BakeryFlourSupply.NotionsMaterialId),
+                "covered bin stock must not be published as a shared-business procurement need");
             Assert.AreEqual(0, result.TransfersCompleted, "the account is not due today, so nothing transfers");
             Assert.AreEqual(1, s.Bakery.BreadShelf.Count, "one batch baked");
             Assert.AreEqual(24, s.Bakery.BreadShelf[0].UnitCount, "one batch yields 24 loaves on the shelf");
@@ -514,6 +691,32 @@ namespace LandLedgers.Editor.Economy
                 "labor 180m within the 840m day; diag: " + string.Join(" | ", s.Diag));
             Assert.AreEqual(5000, s.StoreRuntime.CurrentCashCents, "no cash moves before the delivery day");
             Assert.AreEqual(2000, s.BakeryRuntime.CurrentCashCents, "no cash moves before the delivery day");
+        }
+
+        [Test]
+        public void InputNeedRegistration_UsesActualBinStockAndReportsOnlyUncoveredNotions()
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, flourLb: 24, notions: 1, fuel: 2);
+            BookAccount(s, units: 48, cadence: 1, price: 3, dueDay: 2);
+            BakeryWholesaleDailyInputs inputs = InputsFor(s, 2);
+            inputs.NotionsSupply = null; // No supplier path; the physical bin remains authoritative.
+            inputs.NotionsRegistration = null;
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, s.Diag);
+
+            Assert.AreEqual(2, result.BatchesPlanned);
+            Assert.AreEqual(1, result.NotionsNeedUnits,
+                "two batches require two units; the one unit in the real bin covers one");
+            List<BusinessInputNeed> needs = BakeryWholesaleDailyDriver.BuildInputNeeds(result, BakeryInstanceId);
+            BusinessInputNeed notionsNeed = needs.SingleOrDefault(
+                need => need.InputCategoryId == BakeryFlourSupply.NotionsMaterialId);
+            Assert.IsNotNull(notionsNeed, "only the uncovered unit is registered");
+            Assert.AreEqual(1, notionsNeed.UnitsNeeded);
+            Assert.AreEqual(0, result.BatchesBaked, "the unavailable second notion still blocks baking");
+            Assert.AreEqual(1, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId),
+                "failed production preserves the physical unit");
         }
 
         [Test]
@@ -623,7 +826,7 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void ShortShelf_PartiallyFulfills_RecordsShortDelivery_AndSettlesOnlyTransferredUnits()
+        public void WholesaleDelivery_ConsumesFinishedOutputAcrossMultipleLots_AndSettlesOnce()
         {
             Slice s = NewSlice();
             InstallOven(s);
@@ -640,22 +843,38 @@ namespace LandLedgers.Editor.Economy
             BakeryWholesaleAccount account = BookAccount(s, 48, 1, 2, 2);
             BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
 
-            Assert.AreEqual(2, result.BatchesPlanned, "48 units plan two batches");
-            Assert.AreEqual(0, result.BatchesBaked, "flour for one batch cannot cover two");
-            Assert.AreEqual(1, result.TransfersCompleted, "the available finished lot is delivered partially");
-            Assert.AreEqual(3, account.NextDeliveryDayIndex, "the account cadence advances once for the short delivery");
-            Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents, "only 24 delivered loaves at the contracted 2c are charged");
-            Assert.AreEqual(2048, s.BakeryRuntime.CurrentCashCents, "Bakery receives only the settled 48c");
-            Assert.AreEqual(0, s.Bakery.BreadShelf[0].UnitCount, "the exact delivered lot quantity leaves the shelf");
-            Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count, "one short delivery record");
-            Assert.AreEqual(24, s.Bakery.WholesaleDeliveries[0].Units);
-            Assert.IsFalse(s.Bakery.WholesaleDeliveries[0].FullyCovered, "the 48-loaf order remains visibly short");
-            Assert.AreEqual(24, s.StorePort.CategoryStockUnits("staple_food"), "the buyer receives only actual transferred loaves");
+            Assert.AreEqual(1, result.BatchesPlanned,
+                "the 24 finished loaves cover half of the 48-unit obligation; one additional batch covers the remaining shortfall");
+            Assert.AreEqual(1, result.BatchesBaked,
+                "the planner has one additional batch to cover the 24-unit uncovered contract shortfall, and the remaining 12 lb flour supports it");
+            Assert.AreEqual(1, result.TransfersCompleted, "both source lots form one contract delivery");
+            Assert.AreEqual(48, result.UnitsStocked, "all finished loaves needed for the due order reach the buyer's live stock");
+            Assert.AreEqual(3, account.NextDeliveryDayIndex, "the account cadence advances once for the aggregate delivery");
+            Assert.AreEqual(4904, s.StoreRuntime.CurrentCashCents, "48 delivered loaves settle at the contracted 2c once");
+            Assert.AreEqual(2096, s.BakeryRuntime.CurrentCashCents, "Bakery receives the same 96c exactly once");
+            Assert.AreEqual(0, s.Bakery.BreadShelf.Sum(lot => lot != null ? lot.UnitCount : 0),
+                "both actual source lots leave the bakery shelf");
+            Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count, "one aggregate delivery record is created");
+            Assert.AreEqual(48, s.Bakery.WholesaleDeliveries[0].Units);
+            Assert.IsTrue(s.Bakery.WholesaleDeliveries[0].FullyCovered);
+            Assert.AreEqual(2, s.Bakery.WholesaleDeliveries[0].SellerLotIds.Count,
+                "the delivery retains both physical bakery source lots");
+            Assert.AreEqual(48, s.Bakery.WholesaleDeliveries[0].UnitsByLot.Sum());
+            Assert.AreEqual(48, s.StorePort.CategoryStockUnits("staple_food"), "the buyer receives only actual transferred loaves");
+
+            BakeryShopRuntime restored = new BakeryShopRuntime(BakeryInstanceId);
+            restored.LoadFromSaveDto(s.Bakery.CaptureSaveDto());
+            Assert.AreEqual(1, restored.WholesaleDeliveries.Count,
+                "Save/Continue preserves the aggregate delivery rather than replaying either source lot");
+            Assert.AreEqual(s.Bakery.WholesaleDeliveries[0].SellerLotIds,
+                restored.WholesaleDeliveries[0].SellerLotIds);
+            Assert.AreEqual(s.Bakery.WholesaleDeliveries[0].UnitsByLot,
+                restored.WholesaleDeliveries[0].UnitsByLot);
 
             BakeryWholesaleDailyResult repeated = BakeryWholesaleDailyDriver.RunDay(InputsFor(s, 2), s.Diag);
             Assert.AreEqual(0, repeated.TransfersCompleted, "repeating the same day cannot settle the short delivery again");
             Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count, "no duplicate delivery record");
-            Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents, "no duplicate buyer charge");
+            Assert.AreEqual(4904, s.StoreRuntime.CurrentCashCents, "no duplicate buyer charge");
         }
 
         [Test]
@@ -793,24 +1012,22 @@ namespace LandLedgers.Editor.Economy
             // Resources shim): values copied from
             // MillbrookGrainCo.asset (230 lb starting, 48c/sack, 10 lb
             // per sack, 18 bakery units per sack).
-            var millbrookDefinition = new OffMapAidBusinessDefinition
+            OffMapAidBusinessDefinition millbrookDefinition = CreateOffMapAidBusinessDefinition();
+            millbrookDefinition.BusinessId = "millbrook_grain_co";
+            millbrookDefinition.DisplayName = "Millbrook Grain Co.";
+            millbrookDefinition.PickupRouteMilesFromTown = 50f;
+            millbrookDefinition.Inventory = new List<OffMapAidInventoryRow>
             {
-                BusinessId = "millbrook_grain_co",
-                DisplayName = "Millbrook Grain Co.",
-                PickupRouteMilesFromTown = 50f,
-                Inventory = new List<OffMapAidInventoryRow>
+                new OffMapAidInventoryRow
                 {
-                    new OffMapAidInventoryRow
-                    {
-                        ItemId = "bakery_flour_sack",
-                        DisplayName = "Flour",
-                        InventoryUnit = "lb",
-                        StartingUnits = 230,
-                        OrderUnit = "10 lb sack",
-                        InventoryUnitsPerOrderUnit = 10,
-                        BakeryUnitsPerOrderUnit = 18,
-                        OrderPriceCents = 48,
-                    },
+                    ItemId = "bakery_flour_sack",
+                    DisplayName = "Flour",
+                    InventoryUnit = "lb",
+                    StartingUnits = 230,
+                    OrderUnit = "10 lb sack",
+                    InventoryUnitsPerOrderUnit = 10,
+                    BakeryUnitsPerOrderUnit = 18,
+                    OrderPriceCents = 48,
                 },
             };
             var supplier = new OffMapAidBusinessRuntime(millbrookDefinition);
@@ -867,10 +1084,10 @@ namespace LandLedgers.Editor.Economy
         [Test]
         public void PersonBudgetGate_DriverLevel_BudgetSuppliedRefuses_BudgetAbsentBakes()
         {
-            // Plan 10 E3 driver-level gate test: same fixture, seeded
-            // inputs, account due day 2. With a 150m person budget the
-            // bake refuses on the person budget (flour/notions/fuel are
-            // all in hand); with no budget the same day bakes.
+            // The pure daily-driver API preserves its optional-budget mode
+            // for non-live fixtures. The production forwarder never uses
+            // this bypass: it supplies zero when the live worker binding
+            // or person budget cannot be resolved.
             Slice refused = NewSlice();
             InstallOven(refused);
             SeedInputs(refused, 24, 2, 2);
@@ -892,6 +1109,32 @@ namespace LandLedgers.Editor.Economy
             BookAccount(baked, 24, 1, 2, 2);
             BakeryWholesaleDailyResult bakedResult = BakeryWholesaleDailyDriver.RunDay(InputsFor(baked, 2), baked.Diag);
             Assert.AreEqual(1, bakedResult.BatchesBaked, "no budget supplied — the gate is inactive, bake proceeds");
+        }
+
+        [Test]
+        public void PersonBudgetGate_ZeroResolvedWorkerTimeRefusesWithoutConsumingInputs()
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, 24, 2, 2);
+            BookAccount(s, 24, 1, 2, 2);
+            BakeryWholesaleDailyInputs inputs = InputsFor(s, 2);
+            inputs.CallerDailyBudgetMinutes = 0;
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, s.Diag);
+
+            Assert.AreEqual(1, result.BatchesPlanned);
+            Assert.AreEqual(0, result.BatchesBaked);
+            Assert.IsTrue(result.Refusal != null && result.Refusal.Contains("person budget"),
+                "zero resolved worker time must refuse production; refusal: " + result.Refusal);
+            Assert.AreEqual(24, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "no flour is dispensed while the worker has no available time");
+            Assert.AreEqual(2, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId),
+                "no notions are consumed while the worker has no available time");
+            Assert.AreEqual(2, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId),
+                "no fuel is consumed while the worker has no available time");
+            Assert.AreEqual(BakeryBatchStage.Planned, s.Bakery.Batches[0].Stage,
+                "the wholesale obligation remains planned for a later legitimate work window");
         }
 
         [Test]

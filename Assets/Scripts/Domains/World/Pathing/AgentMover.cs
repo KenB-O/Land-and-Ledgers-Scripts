@@ -168,6 +168,9 @@ namespace LandLedgers.Pathing
         private Quaternion rightLowerLegBaseRotation = Quaternion.identity;
 
         public IReadOnlyList<GridCoord> CurrentPath => currentPath;
+        public int CurrentWaypointIndex => waypointIndex;
+        public string CurrentStateName => state.ToString();
+        public Vector3 RouteDestinationWorld => routeDestinationWorld;
         /// <summary>Changes whenever a new physical route replaces the previous route.</summary>
         public int RouteGeneration => routeGeneration;
         public bool IsHidden => state == AgentMoveState.Hidden;

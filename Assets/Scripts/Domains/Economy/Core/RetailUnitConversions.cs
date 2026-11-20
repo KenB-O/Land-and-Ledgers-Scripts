@@ -38,7 +38,8 @@ namespace LandLedgers.Economy
                 return false;
             }
 
-            if (string.Equals(store, household, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(store, household, StringComparison.OrdinalIgnoreCase)
+                || IsYardUnitAliasPair(store, household))
                 return true;
 
             string id = itemId.Trim().ToLowerInvariant();
@@ -100,7 +101,8 @@ namespace LandLedgers.Economy
                 return false;
             }
 
-            if (string.Equals(store, household, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(store, household, StringComparison.OrdinalIgnoreCase)
+                || IsYardUnitAliasPair(store, household))
                 return true;
 
             string id = itemId.Trim().ToLowerInvariant();
@@ -135,6 +137,17 @@ namespace LandLedgers.Economy
             reason = $"no package definition for '{itemId.Trim()}' sold as '{store}' against household '{household}': " +
                 "the package size is not authored, so no conversion is invented and the offer stays dropped.";
             return false;
+        }
+
+        private static bool IsYardUnitAliasPair(string storeUnit, string householdUnit)
+        {
+            return IsYardUnitLabel(storeUnit) && IsYardUnitLabel(householdUnit);
+        }
+
+        private static bool IsYardUnitLabel(string unit)
+        {
+            return string.Equals(unit, "yard", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(unit, "yd", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

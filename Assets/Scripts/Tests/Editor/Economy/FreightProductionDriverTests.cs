@@ -237,6 +237,18 @@ namespace LandLedgers.Editor.Economy
                 driver.AdvanceTick(3600f, hooks, handler, diag);
         }
 
+        private bool HasFreightReservation(string label)
+        {
+            if (hooks?.Schedules == null) return false;
+            foreach (LandLedgers.Population.PersonActivityReservation reservation
+                in hooks.Schedules.ActiveFor(handler.Id, Day))
+            {
+                if (string.Equals(reservation.Label, label, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
+
         [Test]
         public void ArrivedShipmentReportsUnchangedHandlingRefusalOnceAndKeepsCargo()
         {
@@ -300,6 +312,128 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(shipment.PlannedQuantityUnits, shipment.RemainingQuantityUnits,
                 "retrying the start does not deliver or consume cargo");
             Assert.IsFalse(shipment.deliveryApplied);
+        }
+
+        [Test]
+        public void CancelledLoadTask_DefersWithoutConsumingCargo_ThenCreatesOneReplacement()
+        {
+            hooks.Schedules = new LandLedgers.Population.PersonScheduleTracker();
+            FreightProductionDriver driver = NewDriverWithCarrier(out _);
+            LogisticsShipmentState shipment = CreateViaDriver(driver, "cancelled-load", "wagon-1");
+            var diagnostics = new List<string>();
+
+            driver.AdvanceTick(3600f, hooks, handler, diagnostics);
+            Assert.AreEqual(LogisticsShipmentStatus.Loading, shipment.Status);
+            List<WorkTask> open = tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3));
+            Assert.AreEqual(1, open.Count, "one physical load task owns this shipment");
+            EntityId taskId = open[0].TaskId;
+            Assert.IsTrue(HasFreightReservation("freight:load:cancelled-load"));
+            Assert.IsTrue(tasks.CancelTask(taskId, budgets));
+
+            driver.AdvanceTick(3600f, hooks, handler, diagnostics);
+            Assert.AreEqual(LogisticsShipmentStatus.Delayed, shipment.Status,
+                "a terminal task must move the same shipment into bounded recovery");
+            Assert.IsFalse(shipment.loadApplied);
+            Assert.IsFalse(shipment.sourceLotDebitApplied);
+            Assert.IsFalse(HasFreightReservation("freight:load:cancelled-load"),
+                "the cancelled handler reservation is released");
+            Assert.IsEmpty(tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)));
+
+            FreightShipmentService.FreightServiceSaveDto checkpoint = driver.CaptureSaveDto();
+            var restoredService = new FreightShipmentService();
+            restoredService.RegisterWagon(Wagon("wagon-1"));
+            restoredService.RegisterWagon(Wagon("wagon-2"));
+            var restoredDriver = new FreightProductionDriver(restoredService);
+            var restoredCarrier = new BusinessRuntimeState();
+            restoredCarrier.BindBusinessIdentity("biz-freight-1");
+            restoredDriver.EnsureCompany("biz-freight-1", restoredCarrier);
+            List<LogisticsShipmentState> restored = restoredDriver.RestoreSaveDto(checkpoint, hooks, diagnostics);
+            Assert.AreEqual(1, restored.Count);
+            Assert.AreEqual("cancelled-load", restored[0].ShipmentId);
+            Assert.AreEqual(LogisticsShipmentStatus.Delayed, restored[0].Status);
+            Assert.AreEqual(shipment.DelayCycles, restored[0].DelayCycles,
+                "save/continue preserves bounded recovery progress");
+            driver = restoredDriver;
+            shipment = restored[0];
+
+            driver.AdvanceTick(3600f, hooks, handler, diagnostics);
+            Assert.AreEqual(LogisticsShipmentStatus.Planned, shipment.Status);
+            driver.AdvanceTick(3600f, hooks, handler, diagnostics);
+            Assert.AreEqual(LogisticsShipmentStatus.Loading, shipment.Status);
+            Assert.AreEqual(1, tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count,
+                "retry recreates only the handling task for this shipment");
+            Assert.IsFalse(shipment.loadApplied, "task recreation is not cargo loading");
+        }
+
+        [Test]
+        public void CancelledUnloadTask_PreservesWagonCargo_AndRetrySettlesOnce()
+        {
+            hooks.Schedules = new LandLedgers.Population.PersonScheduleTracker();
+            FreightProductionDriver driver = NewDriverWithCarrier(out BusinessRuntimeState carrier);
+            var diagnostics = new List<string>();
+            LogisticsShipmentState shipment = CreateViaDriver(driver, "cancelled-unload", "wagon-1");
+            TickUntil(driver, () => shipment.Status == LogisticsShipmentStatus.Arrived, diagnostics);
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.Status, string.Join("; ", diagnostics));
+            driver.AdvanceTick(3600f, hooks, handler, diagnostics);
+            Assert.AreEqual(LogisticsShipmentStatus.Unloading, shipment.Status);
+            Assert.AreEqual(1, tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3)).Count);
+            Assert.IsTrue(HasFreightReservation("freight:unload:cancelled-unload"));
+            EntityId taskId = tasks.GetOpenTasks(EntityId.For(EntityKind.Business, 3))[0].TaskId;
+            Assert.IsTrue(tasks.CancelTask(taskId, budgets));
+
+            int carrierBefore = carrier.CurrentCashCents;
+            BusinessRuntimeState payer = driver.ResolvePayerRuntime("biz-store-1");
+            int payerBefore = payer.CurrentCashCents;
+            driver.AdvanceTick(3600f, hooks, handler, diagnostics);
+            Assert.AreEqual(LogisticsShipmentStatus.Delayed, shipment.Status);
+            Assert.IsTrue(shipment.loadApplied);
+            Assert.IsFalse(shipment.deliveryApplied);
+            Assert.AreEqual(50, shipment.RemainingQuantityUnits,
+                "interrupted unloading leaves the entire undelivered cargo in wagon custody");
+            Assert.IsFalse(HasFreightReservation("freight:unload:cancelled-unload"));
+            Assert.IsFalse(recipientStock.ContainsKey("store-1"));
+            Assert.AreEqual(carrierBefore, carrier.CurrentCashCents);
+            Assert.AreEqual(payerBefore, payer.CurrentCashCents);
+
+            TickUntil(driver, () => shipment.Status == LogisticsShipmentStatus.Completed, diagnostics);
+            Assert.AreEqual(LogisticsShipmentStatus.Completed, shipment.Status, string.Join("; ", diagnostics));
+            Assert.AreEqual(50, recipientStock["store-1"]);
+            Assert.AreEqual(carrierBefore + 500, carrier.CurrentCashCents);
+            Assert.AreEqual(payerBefore - 500, payer.CurrentCashCents);
+            TickUntil(driver, () => false, diagnostics);
+            Assert.AreEqual(50, recipientStock["store-1"], "later callbacks cannot duplicate receipt");
+            Assert.AreEqual(carrierBefore + 500, carrier.CurrentCashCents, "carrier revenue posts once");
+            Assert.AreEqual(payerBefore - 500, payer.CurrentCashCents, "payer debit posts once");
+        }
+
+        [Test]
+        public void MissingHandler_AbandonsAfterBound_PreservingLoadedCargoAndNoPayment()
+        {
+            FreightProductionDriver driver = NewDriverWithCarrier(out BusinessRuntimeState carrier);
+            var diagnostics = new List<string>();
+            LogisticsShipmentState shipment = CreateViaDriver(driver, "missing-handler", "wagon-1");
+            TickUntil(driver, () => shipment.Status == LogisticsShipmentStatus.Arrived, diagnostics);
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.Status);
+            BusinessRuntimeState payer = driver.ResolvePayerRuntime("biz-store-1");
+            int carrierBefore = carrier.CurrentCashCents;
+            int payerBefore = payer.CurrentCashCents;
+
+            int guard = 0;
+            while (shipment.Status != LogisticsShipmentStatus.Failed && guard++ < 10)
+                driver.AdvanceTick(86400f, hooks, EntityId.Invalid, diagnostics);
+
+            Assert.AreEqual(LogisticsShipmentStatus.Failed, shipment.Status,
+                "handler loss must not strand a loaded shipment beyond bounded retries");
+            Assert.IsTrue(shipment.loadApplied);
+            Assert.IsFalse(shipment.physicalTransportBound);
+            Assert.AreEqual(50, shipment.RemainingQuantityUnits,
+                "failure records all loaded cargo rather than destroying it");
+            StringAssert.Contains("STRANDED CARGO", shipment.BlockedReason);
+            Assert.IsFalse(shipment.deliveryApplied);
+            Assert.IsFalse(shipment.FreightRevenueCollected);
+            Assert.IsFalse(recipientStock.ContainsKey("store-1"));
+            Assert.AreEqual(carrierBefore, carrier.CurrentCashCents);
+            Assert.AreEqual(payerBefore, payer.CurrentCashCents);
         }
 
         [Test]

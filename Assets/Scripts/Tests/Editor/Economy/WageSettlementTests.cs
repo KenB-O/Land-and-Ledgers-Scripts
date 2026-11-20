@@ -18,6 +18,17 @@ namespace LandLedgers.Editor.Economy
     [TestFixture]
     public sealed class WageSettlementTests
     {
+        [Test]
+        public void EmptyWeekSettlement_IsRoutineButAccountingFailuresAreNot()
+        {
+            Assert.IsTrue(WageSettlementService.IsRoutineEmptyWeekSettlement(
+                "WageSettlementService: week 1 for 'biz_Generic_006' settled - paid 0c across 0 employments."));
+            Assert.IsFalse(WageSettlementService.IsRoutineEmptyWeekSettlement(
+                "WageSettlementService: payroll replay mismatch for 'store-1' week 1 (replay 10c vs observed cash delta 0c)."));
+            Assert.IsFalse(WageSettlementService.IsRoutineEmptyWeekSettlement(
+                "WageSettlementService.SettleWeeklyPayroll: a business runtime is required."));
+        }
+
         private sealed class Fixture
         {
             public BusinessRuntimeState Business;

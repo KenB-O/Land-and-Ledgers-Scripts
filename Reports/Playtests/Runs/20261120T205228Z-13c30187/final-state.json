@@ -1,0 +1,15 @@
+{
+    "runId": "20261120T205228Z-13c30187",
+    "result": "CALENDAR_COMPLETE_REQUIRES_REVIEW",
+    "economicAssessment": "NOT_EVALUATED: requested calendar interval completed; inspect daily activity, transactions, warnings and invariants before judging economic health.",
+    "daysCompleted": 5,
+    "calendarIntervalCompleted": true,
+    "finalInvariant": "CALENDAR COMPLETE: authoritative clock crossed the configured interval; no economic success is implied.",
+    "missingDailySnapshotOffsets": [],
+    "unavailableDetails": [
+        "Physical movement outcomes: authoritative per-day route success/failure aggregate is not currently exposed.",
+        "Freight settlement and construction stage aggregates: subsystem-owned records are not yet captured by this runner.",
+        "Cancellation lacks a day stamp in WorkTask; task snapshots report retained cancellation count rather than a daily count.",
+        "Untracked working-tree entries are not enumerated because the project contains large owner-local asset packs."
+    ]
+}

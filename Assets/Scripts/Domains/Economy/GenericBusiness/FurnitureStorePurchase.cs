@@ -30,12 +30,11 @@
 // - FurnitureStorePurchase.TryQuoteDeliveryCharge: the C-6 cargo-aware
 //   delivery quote for one furniture kind (FurnitureCargoSpecs + the
 //   carrier's configured rate card + the production wagon's capacity).
-// - FurnitureStorePurchaseDriver: one day's bindings (store, carrier,
-//   freight, crew, scene seams, hooks template) driving one purchase per
-//   household through the F4 service — Quote, Order, Pay, Ship, Deliver,
-//   Install — plus the custody-piece install leg. The driver completes
-//   each purchase within one day, so no mid-purchase state persists (F4
-//   purchase records are runtime-only, a known F4 gap).
+// - FurnitureStorePurchaseDriver: binds the store, carrier, freight,
+//   crew and scene seams. Production uses its staged mode to persist the
+//   paid order, then lets the shared freight authority deliver it over
+//   game time. Receipt adds real assets to household custody. Installation
+//   is not automatic: a furnishing task outcome resolver remains required.
 
 using System;
 using System.Collections.Generic;
@@ -315,6 +314,11 @@ namespace LandLedgers.Economy.GenericBusiness
         private readonly Func<string, bool> placementIsBound;
         private readonly FreightShipmentHooks hooksTemplate;
         private readonly int dayIndex;
+        private readonly bool stagedDelivery;
+        private readonly List<FurniturePurchaseOrder> pendingOrders;
+        private readonly FreightProductionDriver freightOwner;
+        private readonly string carrierBusinessId;
+        private readonly BusinessRuntimeState carrierRuntime;
 
         public FurnitureStorePurchaseDriver(
             BusinessRuntimeState storeRuntime,
@@ -328,7 +332,12 @@ namespace LandLedgers.Economy.GenericBusiness
             Func<IEnumerable<BuildingEquipmentPlacement>> scenePlacements,
             Func<string, bool> placementIsBound,
             FreightShipmentHooks hooksTemplate,
-            int dayIndex)
+            int dayIndex,
+            bool stagedDelivery = false,
+            List<FurniturePurchaseOrder> pendingOrders = null,
+            FreightProductionDriver freightOwner = null,
+            string carrierBusinessId = "",
+            BusinessRuntimeState carrierRuntime = null)
         {
             this.storeRuntime = storeRuntime;
             this.sellingPriceCentsForKind = sellingPriceCentsForKind;
@@ -342,11 +351,17 @@ namespace LandLedgers.Economy.GenericBusiness
             this.placementIsBound = placementIsBound;
             this.hooksTemplate = hooksTemplate;
             this.dayIndex = dayIndex;
+            this.stagedDelivery = stagedDelivery;
+            this.pendingOrders = pendingOrders;
+            this.freightOwner = freightOwner;
+            this.carrierBusinessId = carrierBusinessId ?? string.Empty;
+            this.carrierRuntime = carrierRuntime;
         }
 
         /// <summary>
-        /// Drives one household's store purchase end to end through the F4
-        /// service: Quote, Order, Pay, Ship, Deliver, Install. The goods
+        /// Drives one household's store purchase through Quote, Order, Pay
+        /// and Ship. In staged production mode the existing freight authority
+        /// later handles delivery; installation is a separate action. The goods
         /// money goes to the store through RecordRetailItemSettlement and
         /// the fare to the carrier through its cash port — carrier first,
         /// then store: the carrier Credit cannot refuse for a non-negative
@@ -378,12 +393,46 @@ namespace LandLedgers.Economy.GenericBusiness
                 diag.Add("FurnitureStorePurchase: a purchase needs the store runtime, the freight service, and the carrier cash port — refusing a purchase with no seller, no carrier, or no freight.");
                 return null;
             }
+            if (stagedDelivery && pendingOrders == null)
+            {
+                diag.Add("FurnitureStorePurchase: staged delivery requires the Pass 9 durable furniture-order register; purchase was not started.");
+                return null;
+            }
+            if (stagedDelivery && (freightOwner == null || string.IsNullOrWhiteSpace(carrierBusinessId)))
+            {
+                diag.Add("FurnitureStorePurchase: staged delivery requires the existing carrier production authority; purchase was not started.");
+                return null;
+            }
             if (string.IsNullOrWhiteSpace(wagonAssetId))
             {
                 diag.Add("FurnitureStorePurchase: a purchase needs a real wagon — furniture travels by wagon, never by fiat.");
                 return null;
             }
             string purchaseId = "furn-store-" + householdId + "-" + (kind ?? string.Empty).Trim() + "-" + dayIndex;
+            if (stagedDelivery)
+            {
+                FurniturePurchaseOrder existing = null;
+                foreach (FurniturePurchaseOrder pending in pendingOrders)
+                {
+                    if (pending == null || !string.Equals(pending.PurchaseId, purchaseId, StringComparison.Ordinal)) continue;
+                    if (pending.HouseholdId != householdId || pending.BuildingInstanceId != buildingInstanceId)
+                    {
+                        diag.Add($"FurnitureStorePurchase: stable purchase id '{purchaseId}' is already owned by a different household or building; refusing a second obligation.");
+                        return null;
+                    }
+                    existing = pending;
+                    break;
+                }
+                if (existing != null)
+                {
+                    EquipmentPurchaseStage stage = EquipmentPurchaseStage.Quoted;
+                    if (existing.Lines != null)
+                        foreach (FurniturePurchaseLine line in existing.Lines)
+                            if (line != null) { stage = line.Stage; break; }
+                    diag.Add($"FurnitureStorePurchase: purchase '{purchaseId}' already exists at stage {stage}; returning the saved order without another payment, stock debit, or shipment.");
+                    return existing;
+                }
+            }
             string buildRefusal = FurnitureStorePurchase.TryBuildOrder(storeRuntime, sellingPriceCentsForKind,
                 kind, 1, purchaseId, householdId, buildingInstanceId, dayIndex, freightCents, out FurniturePurchaseOrder order);
             if (buildRefusal != null)
@@ -415,14 +464,29 @@ namespace LandLedgers.Economy.GenericBusiness
                 return null;
             };
             var service = new FurniturePurchaseService(ledger,
-                new StoreFurnitureVendorStock(storeRuntime, diag), creditProceeds, handler.Install, null);
+                new StoreFurnitureVendorStock(storeRuntime, diag), creditProceeds, handler.Install, null, handler.RegisterReceived);
             FreightShipmentHooks hooks = CloneHooks();
             string refusal = service.Quote(order)
                 ?? service.TryOrder(order)
-                ?? service.TryPay(order)
-                ?? service.TryShip(order, freight, wagonAssetId, hooks)
-                ?? service.TryDeliver(order, freight, hooks, loader, driver, animals)
-                ?? service.TryInstall(order);
+                ?? service.TryPay(order);
+            if (refusal == null && stagedDelivery)
+            {
+                // Preserve the paid obligation before shipment setup. A
+                // temporary carrier/task refusal must not lose the order.
+                pendingOrders.Add(order);
+                refusal = service.TryShip(order, freight, wagonAssetId, hooks);
+                if (refusal == null) refusal = EnsureCarrierAcceptance(order);
+            }
+            else if (refusal == null)
+            {
+                refusal = service.TryShip(order, freight, wagonAssetId, hooks)
+                    ?? service.TryDeliver(order, freight, hooks, loader, driver, animals)
+                    ?? service.TryInstall(order);
+            }
+            if (refusal == null && stagedDelivery)
+            {
+                diag.Add($"FurnitureStorePurchase: order '{order.PurchaseId}' paid once and accepted for physical freight; delivery and installation remain pending over game time.");
+            }
             diag.AddRange(order.Diagnostics);
             diag.AddRange(hooks.Diagnostics ?? new List<string>());
             if (refusal != null)
@@ -430,8 +494,109 @@ namespace LandLedgers.Economy.GenericBusiness
                 diag.Add($"FurnitureStorePurchase: household {householdId} purchase '{purchaseId}' ({kind}) refused — {refusal}");
                 return null;
             }
-            diag.Add($"FurnitureStorePurchase: day {dayIndex}: household {householdId} bought 1x '{kind}' from the General Store for {order.GoodsTotalCents()}c + {Math.Max(0, freightCents)}c freight, installed in building {buildingInstanceId} — purchase '{purchaseId}' operational.");
+            diag.Add(stagedDelivery
+                ? $"FurnitureStorePurchase: day {dayIndex}: household {householdId} paid for 1x '{kind}' from the General Store ({order.GoodsTotalCents()}c + {Math.Max(0, freightCents)}c freight); order '{purchaseId}' is pending physical delivery."
+                : $"FurnitureStorePurchase: day {dayIndex}: household {householdId} bought 1x '{kind}' from the General Store for {order.GoodsTotalCents()}c + {Math.Max(0, freightCents)}c freight, installed in building {buildingInstanceId} — purchase '{purchaseId}' operational.");
             return order;
+        }
+
+        /// <summary>Reconciles a saved order with the shared daily freight authority; does not advance it independently.</summary>
+        public string ReconcilePendingOrder(FurniturePurchaseOrder order, HouseholdLedger ledger,
+            HouseholdFurnishingRegister register, BuildingFootprintAuthority building,
+            int buildingInstanceId, List<string> diag)
+        {
+            diag = diag ?? new List<string>();
+            if (order == null || ledger == null || register == null || building == null)
+                return "FurnitureStorePurchase: resuming an order needs its household ledger, furnishing register, and building authority.";
+            if (order.IsOperational || order.CancellationRequested || !string.IsNullOrWhiteSpace(order.TerminalReason)) return null;
+            var placements = new List<BuildingEquipmentPlacement>();
+            if (scenePlacements != null)
+                foreach (BuildingEquipmentPlacement placement in scenePlacements()) if (placement != null) placements.Add(placement);
+            var handler = new FurniturePurchaseInstallHandler(register, building, buildingInstanceId,
+                placements, placementIsBound, FurnishingAcquisitionSource.Purchase, null, diag);
+            CreditPurchaseProceedsHandler creditProceeds = (int goodsCents, int fareCents, string id) =>
+            {
+                // Resume never calls TryPay. This delegate exists only to construct
+                // the shared service and cannot be reached from the saved stage.
+                return "FurnitureStorePurchase: an already-paid order cannot be paid again.";
+            };
+            var service = new FurniturePurchaseService(ledger,
+                new StoreFurnitureVendorStock(storeRuntime, diag), creditProceeds, handler.Install,
+                register.FindAsset, handler.RegisterReceived);
+            FreightShipmentHooks hooks = CloneHooks();
+            string refusal;
+            if (order.AllLinesAt(EquipmentPurchaseStage.PaidOrFinanced))
+            {
+                refusal = service.TryShip(order, freight, wagonAssetId, hooks);
+                if (refusal != null) { diag.Add(refusal); return refusal; }
+            }
+            else
+            {
+                refusal = service.RebindShipment(order, freight, hooks);
+                if (refusal != null) { diag.Add(refusal); return refusal; }
+            }
+            FreightShipmentService freightService = freight;
+            LogisticsShipmentState shipment = null;
+            foreach (LogisticsShipmentState tracked in freightService.TrackedShipments)
+                if (tracked != null && tracked.ShipmentId == order.ShipmentId) { shipment = tracked; break; }
+            if (shipment == null) return "FurnitureStorePurchase: saved shipment is missing; paid goods and obligations remain unresolved.";
+            refusal = EnsureCarrierAcceptance(order);
+            if (refusal != null) { diag.Add(refusal); return refusal; }
+            if (shipment.Status == LogisticsShipmentStatus.Failed)
+            {
+                order.TerminalReason = shipment.BlockedReason ?? "Freight shipment failed; custody remains with freight authority.";
+                return null;
+            }
+            if (shipment.Status != LogisticsShipmentStatus.Completed) return null;
+            foreach (FurniturePurchaseLine line in order.Lines)
+            {
+                if (line != null && line.Stage == EquipmentPurchaseStage.Shipped)
+                    line.Stage = EquipmentPurchaseStage.Received;
+                if (line?.AssetIds == null) continue;
+                foreach (string assetId in line.AssetIds)
+                {
+                    EquipmentAsset asset = register.FindAsset(assetId);
+                    if (asset != null && !order.ReceivedAssets.Exists(existing => existing != null && existing.AssetId == asset.AssetId))
+                        order.ReceivedAssets.Add(asset);
+                }
+            }
+            // Receipt is not installation. Keep the item in household custody
+            // until an actual furnishing.install task is executed by a
+            // furnishing outcome authority. This driver may describe a
+            // placement/integration blocker, but must never install by itself.
+            order.InstallationBlockedReason = FindInstallationReadinessReason(
+                order, building, placements, buildingInstanceId);
+            if (string.IsNullOrWhiteSpace(order.InstallationBlockedReason))
+                order.InstallationBlockedReason = "No production furnishing.install task outcome is wired; furniture remains in household custody pending installation integration.";
+            return null;
+        }
+
+        private string EnsureCarrierAcceptance(FurniturePurchaseOrder order)
+        {
+            if (!stagedDelivery || freightOwner == null) return null;
+            LogisticsShipmentState shipment = null;
+            foreach (LogisticsShipmentState tracked in freight.TrackedShipments)
+                if (tracked != null && tracked.ShipmentId == order.ShipmentId) { shipment = tracked; break; }
+            if (shipment == null) return "FurnitureStorePurchase: freight shipment has not yet been created; paid order remains saved for retry.";
+            if (!freightOwner.AdoptConsolidatedShipment(carrierBusinessId, shipment, driver, animals,
+                    carrierRuntime, out string reason))
+                return "FurnitureStorePurchase: existing freight authority has not accepted the shipment — " + reason;
+            return null;
+        }
+
+        private string FindInstallationReadinessReason(FurniturePurchaseOrder order,
+            BuildingFootprintAuthority building, List<BuildingEquipmentPlacement> placements, int buildingInstanceId)
+        {
+            foreach (EquipmentAsset asset in order.ReceivedAssets)
+            {
+                if (asset == null) continue;
+                if (asset.LocationId == HouseholdFurnishingRegister.BuildingLocationId(buildingInstanceId)
+                    && asset.OwnerId == FurniturePurchaseService.HouseholdOwnerId(order.HouseholdId)) continue;
+                if (!FurnitureInstallBinding.TryFindFreePlacement(asset.Kind, building, placements,
+                        placementIsBound, out BuildingEquipmentPlacement _, out string reason))
+                    return reason;
+            }
+            return null;
         }
 
         /// <summary>

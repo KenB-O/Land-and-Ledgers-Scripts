@@ -158,6 +158,253 @@ MonoBehaviour:
     - emma-baldwin-ooms
     homeBuildingOrdinal: 0
     openingCashCents: 40000
+    openingFurnishingVariants:
+    - variantId: settled-table-east
+      weight: 1
+      items:
+      - assetId: h1-a-bed-east
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: 1.25, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 180, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h1-a-bed-east
+        activityPositionLocal: {x: 1.25, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h1-a-bed-west
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: -1.7, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h1-a-bed-west
+        activityPositionLocal: {x: -1.7, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h1-a-stove
+        kind: furniture.cooking-stove
+        displayName: Cooking stove
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: -3.25, y: 0.8, z: 0.25}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 2
+        activityLocationId: stove-h1-a-stove
+        activityPositionLocal: {x: -2.4, y: 0.8, z: 0.8}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 1
+        registerRuntimeActivityLocation: 1
+      - assetId: h1-a-table
+        kind: furniture.table
+        displayName: Dining table
+        prefab: {fileID: 1398192663091276, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
+        localPosition: {x: 0, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 6
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 0}
+        activityType: 0
+        registerRuntimeActivityLocation: 0
+      - assetId: h1-a-chair-left
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h1-a-chair-left
+        activityPositionLocal: {x: -1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: 1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+      - assetId: h1-a-chair-right
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: 1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 270, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h1-a-chair-right
+        activityPositionLocal: {x: 1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+    - variantId: settled-table-west
+      weight: 1
+      items:
+      - assetId: h1-b-bed-east
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: 1.1, y: 0.8, z: -3.4}
+        localEulerAngles: {x: 0, y: 180, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h1-b-bed-east
+        activityPositionLocal: {x: 1.1, y: 0.8, z: -2.3500001}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h1-b-bed-west
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: -3.4}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h1-b-bed-west
+        activityPositionLocal: {x: -1.8, y: 0.8, z: -2.3500001}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h1-b-stove
+        kind: furniture.cooking-stove
+        displayName: Cooking stove
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: -3.25, y: 0.8, z: 0.25}
+        localEulerAngles: {x: 0, y: 180, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 2
+        activityLocationId: stove-h1-b-stove
+        activityPositionLocal: {x: -2.4, y: 0.8, z: 0.8}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 1
+        registerRuntimeActivityLocation: 1
+      - assetId: h1-b-table
+        kind: furniture.table
+        displayName: Dining table
+        prefab: {fileID: 1398192663091276, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
+        localPosition: {x: 0, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 6
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 0}
+        activityType: 0
+        registerRuntimeActivityLocation: 0
+      - assetId: h1-b-chair-left
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h1-b-chair-left
+        activityPositionLocal: {x: -1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: 1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+      - assetId: h1-b-chair-right
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: 1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 270, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h1-b-chair-right
+        activityPositionLocal: {x: 1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
   - key: pierce
     runtimeHouseholdId: 2
     displayName: Pierce Household
@@ -167,6 +414,233 @@ MonoBehaviour:
     - tannis-pierce
     homeBuildingOrdinal: 1
     openingCashCents: 40000
+    openingFurnishingVariants:
+    - variantId: pierce-modest
+      weight: 1
+      items:
+      - assetId: h2-a-bed
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: 0.8, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h2-a-bed
+        activityPositionLocal: {x: 0.8, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h2-a-stove
+        kind: furniture.cooking-stove
+        displayName: Cooking stove
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: -3.25, y: 0.8, z: 0.25}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 2
+        activityLocationId: stove-h2-a-stove
+        activityPositionLocal: {x: -2.4, y: 0.8, z: 0.8}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 1
+        registerRuntimeActivityLocation: 1
+      - assetId: h2-a-table
+        kind: furniture.table
+        displayName: Dining table
+        prefab: {fileID: 1398192663091276, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
+        localPosition: {x: 0, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 6
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 0}
+        activityType: 0
+        registerRuntimeActivityLocation: 0
+      - assetId: h2-a-chair-left
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h2-a-chair-left
+        activityPositionLocal: {x: -1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: 1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+      - assetId: h2-a-chair-right
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: 1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 270, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h2-a-chair-right
+        activityPositionLocal: {x: 1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+    - variantId: pierce-two-beds
+      weight: 1
+      items:
+      - assetId: h2-b-bed-east
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: 1.25, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 180, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h2-b-bed-east
+        activityPositionLocal: {x: 1.25, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h2-b-bed-west
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: -1.7, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h2-b-bed-west
+        activityPositionLocal: {x: -1.7, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h2-b-stove
+        kind: furniture.cooking-stove
+        displayName: Cooking stove
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: -3.25, y: 0.8, z: 0.25}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 2
+        activityLocationId: stove-h2-b-stove
+        activityPositionLocal: {x: -2.4, y: 0.8, z: 0.8}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 1
+        registerRuntimeActivityLocation: 1
+      - assetId: h2-b-table
+        kind: furniture.table
+        displayName: Dining table
+        prefab: {fileID: 1398192663091276, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
+        localPosition: {x: 0, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 6
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 0}
+        activityType: 0
+        registerRuntimeActivityLocation: 0
+      - assetId: h2-b-chair-left
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h2-b-chair-left
+        activityPositionLocal: {x: -1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: 1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+      - assetId: h2-b-chair-right
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: 1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 270, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h2-b-chair-right
+        activityPositionLocal: {x: 1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
   - key: boniecki
     runtimeHouseholdId: 3
     displayName: Boniecki Household
@@ -176,6 +650,153 @@ MonoBehaviour:
     - grace-boniecki
     homeBuildingOrdinal: 2
     openingCashCents: 40000
+    openingFurnishingVariants:
+    - variantId: boniecki-cook
+      weight: 1
+      items:
+      - assetId: h3-a-bed
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: 0.8, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h3-a-bed
+        activityPositionLocal: {x: 0.8, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h3-a-stove
+        kind: furniture.cooking-stove
+        displayName: Cooking stove
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: -3.25, y: 0.8, z: 0.25}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 2
+        activityLocationId: stove-h3-a-stove
+        activityPositionLocal: {x: -2.4, y: 0.8, z: 0.8}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 1
+        registerRuntimeActivityLocation: 1
+    - variantId: boniecki-table
+      weight: 1
+      items:
+      - assetId: h3-b-bed
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: -0.8, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h3-b-bed
+        activityPositionLocal: {x: -0.8, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h3-b-stove
+        kind: furniture.cooking-stove
+        displayName: Cooking stove
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: -3.25, y: 0.8, z: 0.25}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 2
+        activityLocationId: stove-h3-b-stove
+        activityPositionLocal: {x: -2.4, y: 0.8, z: 0.8}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 1
+        registerRuntimeActivityLocation: 1
+      - assetId: h3-b-table
+        kind: furniture.table
+        displayName: Dining table
+        prefab: {fileID: 1398192663091276, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
+        localPosition: {x: 0, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 6
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 0}
+        activityType: 0
+        registerRuntimeActivityLocation: 0
+      - assetId: h3-b-chair-left
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h3-b-chair-left
+        activityPositionLocal: {x: -1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: 1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+      - assetId: h3-b-chair-right
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: 1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 270, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h3-b-chair-right
+        activityPositionLocal: {x: 1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
   - key: ethan-tia
     runtimeHouseholdId: 4
     displayName: ethan-tia Household
@@ -185,6 +806,253 @@ MonoBehaviour:
     - tia-boniecki
     homeBuildingOrdinal: 3
     openingCashCents: 40000
+    openingFurnishingVariants:
+    - variantId: boniecki-family-east
+      weight: 1
+      items:
+      - assetId: h4-a-bed-east
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: 1.25, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 180, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h4-a-bed-east
+        activityPositionLocal: {x: 1.25, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h4-a-bed-west
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: -1.7, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h4-a-bed-west
+        activityPositionLocal: {x: -1.7, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h4-a-stove
+        kind: furniture.cooking-stove
+        displayName: Cooking stove
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: -3.25, y: 0.8, z: 0.25}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 2
+        activityLocationId: stove-h4-a-stove
+        activityPositionLocal: {x: -2.4, y: 0.8, z: 0.8}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 1
+        registerRuntimeActivityLocation: 1
+      - assetId: h4-a-table
+        kind: furniture.table
+        displayName: Dining table
+        prefab: {fileID: 1398192663091276, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
+        localPosition: {x: 0, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 6
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 0}
+        activityType: 0
+        registerRuntimeActivityLocation: 0
+      - assetId: h4-a-chair-left
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h4-a-chair-left
+        activityPositionLocal: {x: -1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: 1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+      - assetId: h4-a-chair-right
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: 1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 270, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h4-a-chair-right
+        activityPositionLocal: {x: 1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+    - variantId: boniecki-family-west
+      weight: 1
+      items:
+      - assetId: h4-b-bed-east
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: 1.1, y: 0.8, z: -3.4}
+        localEulerAngles: {x: 0, y: 180, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h4-b-bed-east
+        activityPositionLocal: {x: 1.1, y: 0.8, z: -2.3500001}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h4-b-bed-west
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: -3.4}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h4-b-bed-west
+        activityPositionLocal: {x: -1.8, y: 0.8, z: -2.3500001}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h4-b-stove
+        kind: furniture.cooking-stove
+        displayName: Cooking stove
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: -3.25, y: 0.8, z: 0.25}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 2
+        activityLocationId: stove-h4-b-stove
+        activityPositionLocal: {x: -2.4, y: 0.8, z: 0.8}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 1
+        registerRuntimeActivityLocation: 1
+      - assetId: h4-b-table
+        kind: furniture.table
+        displayName: Dining table
+        prefab: {fileID: 1398192663091276, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
+        localPosition: {x: 0, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 6
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 0}
+        activityType: 0
+        registerRuntimeActivityLocation: 0
+      - assetId: h4-b-chair-left
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h4-b-chair-left
+        activityPositionLocal: {x: -1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: 1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+      - assetId: h4-b-chair-right
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: 1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 270, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h4-b-chair-right
+        activityPositionLocal: {x: 1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
   - key: shane-bryan
     runtimeHouseholdId: 5
     displayName: Shane Bryan Household
@@ -193,6 +1061,53 @@ MonoBehaviour:
     - shane-bryan
     homeBuildingOrdinal: 4
     openingCashCents: 40000
+    openingFurnishingVariants:
+    - variantId: recently-occupied-sparse-a
+      weight: 1
+      items:
+      - assetId: h5-a-bed
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: 0.1, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h5-a-bed
+        activityPositionLocal: {x: 0.1, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+    - variantId: recently-occupied-sparse-b
+      weight: 1
+      items:
+      - assetId: h5-b-bed
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: -0.7, y: 0.8, z: -3.35}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h5-b-bed
+        activityPositionLocal: {x: -0.7, y: 0.8, z: -2.3}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
   - key: richard-sithole
     runtimeHouseholdId: 6
     displayName: Richard Sithole Household
@@ -201,6 +1116,133 @@ MonoBehaviour:
     - richard-sithole
     homeBuildingOrdinal: 5
     openingCashCents: 40000
+    openingFurnishingVariants:
+    - variantId: single-worker-settled
+      weight: 1
+      items:
+      - assetId: h6-a-bed
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: 0.6, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h6-a-bed
+        activityPositionLocal: {x: 0.6, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h6-a-stove
+        kind: furniture.cooking-stove
+        displayName: Cooking stove
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: -3.25, y: 0.8, z: 0.25}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 2
+        activityLocationId: stove-h6-a-stove
+        activityPositionLocal: {x: -2.4, y: 0.8, z: 0.8}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 1
+        registerRuntimeActivityLocation: 1
+      - assetId: h6-a-table
+        kind: furniture.table
+        displayName: Dining table
+        prefab: {fileID: 1398192663091276, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
+        localPosition: {x: 0, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 6
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 0}
+        activityType: 0
+        registerRuntimeActivityLocation: 0
+      - assetId: h6-a-chair
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h6-a-chair
+        activityPositionLocal: {x: -1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: 1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+    - variantId: single-worker-plain
+      weight: 1
+      items:
+      - assetId: h6-b-bed
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: -0.5, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h6-b-bed
+        activityPositionLocal: {x: -0.5, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h6-b-stove
+        kind: furniture.cooking-stove
+        displayName: Cooking stove
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: -3.25, y: 0.8, z: 0.25}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 2
+        activityLocationId: stove-h6-b-stove
+        activityPositionLocal: {x: -2.4, y: 0.8, z: 0.8}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 1
+        registerRuntimeActivityLocation: 1
   - key: kwindt
     runtimeHouseholdId: 7
     displayName: Kwindt Household
@@ -210,6 +1252,253 @@ MonoBehaviour:
     - josh-saunders
     homeBuildingOrdinal: 6
     openingCashCents: 40000
+    openingFurnishingVariants:
+    - variantId: timber-household-north
+      weight: 1
+      items:
+      - assetId: h7-a-bed-east
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: 1.25, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 180, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h7-a-bed-east
+        activityPositionLocal: {x: 1.25, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h7-a-bed-west
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: -1.7, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h7-a-bed-west
+        activityPositionLocal: {x: -1.7, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h7-a-stove
+        kind: furniture.cooking-stove
+        displayName: Cooking stove
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: -3.25, y: 0.8, z: 0.25}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 2
+        activityLocationId: stove-h7-a-stove
+        activityPositionLocal: {x: -2.4, y: 0.8, z: 0.8}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 1
+        registerRuntimeActivityLocation: 1
+      - assetId: h7-a-table
+        kind: furniture.table
+        displayName: Dining table
+        prefab: {fileID: 1398192663091276, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
+        localPosition: {x: 0, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 6
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 0}
+        activityType: 0
+        registerRuntimeActivityLocation: 0
+      - assetId: h7-a-chair-left
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h7-a-chair-left
+        activityPositionLocal: {x: -1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: 1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+      - assetId: h7-a-chair-right
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: 1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 270, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h7-a-chair-right
+        activityPositionLocal: {x: 1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+    - variantId: timber-household-south
+      weight: 1
+      items:
+      - assetId: h7-b-bed-east
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: 1.1, y: 0.8, z: -3.4}
+        localEulerAngles: {x: 0, y: 180, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h7-b-bed-east
+        activityPositionLocal: {x: 1.1, y: 0.8, z: -2.3500001}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h7-b-bed-west
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: -3.4}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h7-b-bed-west
+        activityPositionLocal: {x: -1.8, y: 0.8, z: -2.3500001}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+      - assetId: h7-b-stove
+        kind: furniture.cooking-stove
+        displayName: Cooking stove
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: -3.25, y: 0.8, z: 0.25}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 2
+        activityLocationId: stove-h7-b-stove
+        activityPositionLocal: {x: -2.4, y: 0.8, z: 0.8}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 1
+        registerRuntimeActivityLocation: 1
+      - assetId: h7-b-table
+        kind: furniture.table
+        displayName: Dining table
+        prefab: {fileID: 1398192663091276, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
+        localPosition: {x: 0, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 6
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 0}
+        activityType: 0
+        registerRuntimeActivityLocation: 0
+      - assetId: h7-b-chair-left
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: -1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h7-b-chair-left
+        activityPositionLocal: {x: -1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: 1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
+      - assetId: h7-b-chair-right
+        kind: furniture.chair
+        displayName: Dining chair
+        prefab: {fileID: 1675969578094684, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
+        localPosition: {x: 1.8, y: 0.8, z: 0}
+        localEulerAngles: {x: 0, y: 270, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: -1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 3
+        activityLocationId: dining-chair-h7-b-chair-right
+        activityPositionLocal: {x: 1.08, y: 0.8, z: 0}
+        activityForwardLocal: {x: -1, y: 0, z: 0}
+        activityType: 14
+        registerRuntimeActivityLocation: 1
   - key: millward
     runtimeHouseholdId: 8
     displayName: Millward Household
@@ -219,6 +1508,53 @@ MonoBehaviour:
     - grace-millward
     homeBuildingOrdinal: 7
     openingCashCents: 40000
+    openingFurnishingVariants:
+    - variantId: newly-occupied-sparse-a
+      weight: 1
+      items:
+      - assetId: h8-a-bed
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: 0.1, y: 0.8, z: -3.45}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h8-a-bed
+        activityPositionLocal: {x: 0.1, y: 0.8, z: -2.4}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
+    - variantId: newly-occupied-sparse-b
+      weight: 1
+      items:
+      - assetId: h8-b-bed
+        kind: furniture.bed
+        displayName: Iron-and-wood bed
+        prefab: {fileID: 1855475746908588, guid: c36c6f5a2f1b81343a4f8c3d71ed5283, type: 3}
+        localPosition: {x: -0.7, y: 0.8, z: -3.35}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        visualForwardAxisLocal: {x: 0, y: 0, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        alignRootToFloor: 1
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        floorIndex: 0
+        capability: 1
+        activityLocationId: bed-h8-b-bed
+        activityPositionLocal: {x: -0.7, y: 0.8, z: -2.3}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 0
+        registerRuntimeActivityLocation: 1
   relationships:
   - firstPersonKey: kennedy-baldwin-ooms
     secondPersonKey: emma-baldwin-ooms
@@ -292,6 +1628,9 @@ MonoBehaviour:
       - itemId: hand_tool
         minimumUnits: 2
         maximumUnits: 4
+      - itemId: nails_hardware_lot
+        minimumUnits: 2
+        maximumUnits: 6
       - itemId: patent_remedy
         minimumUnits: 2
         maximumUnits: 4
@@ -302,6 +1641,75 @@ MonoBehaviour:
         ovens: []
         kitIds: []
         assetEntries: []
+      interiorFixtures:
+      - assetId: general-store-counter-01
+        kind: fixture-counter
+        displayName: General Store Counter
+        prefab: {fileID: 2986641611251337318, guid: 747b02fd9cc266e41ad64514eac0d162, type: 3}
+        localPosition: {x: 0.8, y: 0.8, z: -0.6}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: general-store-counter
+        activityPositionLocal: {x: 0.8, y: 0.8, z: 0.9}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 3
+        functionalSpaceId: 
+      - assetId: general-store-shelving-01
+        kind: fixture-shelving
+        displayName: General Store Shelf
+        prefab: {fileID: 6277833680785220593, guid: 485cbbde0a07edf438dd3fc07559bb52, type: 3}
+        localPosition: {x: 5.5, y: 0.8, z: -4.9}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 8
+        functionalSpaceId: 
+      - assetId: general-store-shelving-02
+        kind: fixture-shelving
+        displayName: General Store Shelf
+        prefab: {fileID: 6277833680785220593, guid: 485cbbde0a07edf438dd3fc07559bb52, type: 3}
+        localPosition: {x: 5.5, y: 0.8, z: -2.6}
+        localEulerAngles: {x: 0, y: 90, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 8
+        functionalSpaceId: 
+      - assetId: general-store-empty-crate-01
+        kind: fixture-handling-crate
+        displayName: Empty Handling Crate
+        prefab: {fileID: 3750476296893148027, guid: f3ef3261f5ac7e04eac113221d1ec727, type: 3}
+        localPosition: {x: -2.8, y: 0.8, z: -4.9}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 8
+        functionalSpaceId: 
       employees: []
       spareBlades: []
       loggingCampProvisionCoverDays: 0
@@ -337,6 +1745,58 @@ MonoBehaviour:
         kitIds:
         - baker-hand-kit
         assetEntries: []
+      interiorFixtures:
+      - assetId: oven-chamber-1
+        kind: oven-chamber
+        displayName: Bakery Range
+        prefab: {fileID: 1273891015847667884, guid: 12ffb9faea77d4f4c8881c365f0fc786, type: 3}
+        localPosition: {x: 4.5, y: 0.8, z: -4.7}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: bakery-oven-approach
+        activityPositionLocal: {x: 3.3, y: 0.8, z: -3.5}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 7
+        functionalSpaceId: 
+      - assetId: bakery-work-counter-01
+        kind: fixture-work-surface
+        displayName: Bakery Work Surface
+        prefab: {fileID: 2986641611251337318, guid: 747b02fd9cc266e41ad64514eac0d162, type: 3}
+        localPosition: {x: 1.3, y: 0.8, z: -4.9}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: bakery-work-surface
+        activityPositionLocal: {x: 1.3, y: 0.8, z: -3.7}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 8
+        functionalSpaceId: 
+      - assetId: bakery-empty-crate-01
+        kind: fixture-handling-crate
+        displayName: Empty Bakery Handling Crate
+        prefab: {fileID: 7764262979555664486, guid: f4ed31d6ae0a7ec448e0742de1656fca, type: 3}
+        localPosition: {x: -2.8, y: 0.8, z: -4.8}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 8
+        functionalSpaceId: 
       employees: []
       spareBlades: []
       loggingCampProvisionCoverDays: 0
@@ -373,6 +1833,58 @@ MonoBehaviour:
         ovens: []
         kitIds: []
         assetEntries: []
+      interiorFixtures:
+      - assetId: fuel-dealer-barrel-01
+        kind: fixture-fuel-vessel
+        displayName: Empty Fuel Dealer Barrel
+        prefab: {fileID: 5097479770136054421, guid: ee65d6e6559cb4846b3c152aa87968e8, type: 3}
+        localPosition: {x: 4.8, y: 0.8, z: -4.8}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 8
+        functionalSpaceId: 
+      - assetId: fuel-dealer-barrel-02
+        kind: fixture-fuel-vessel
+        displayName: Empty Fuel Dealer Barrel
+        prefab: {fileID: 6076020408675102999, guid: f6fdfcdad6edc79458533d1b9b96e7f3, type: 3}
+        localPosition: {x: 3.4, y: 0.8, z: -3.8}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 8
+        functionalSpaceId: 
+      - assetId: fuel-dealer-barrel-03
+        kind: fixture-fuel-vessel
+        displayName: Empty Fuel Dealer Barrel
+        prefab: {fileID: 7641541646828955991, guid: 439011d070de6bb4ba697aeca4d6775d, type: 3}
+        localPosition: {x: 4.8, y: 0.8, z: -2.7}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 8
+        functionalSpaceId: 
       employees: []
       spareBlades: []
       loggingCampProvisionCoverDays: 0
@@ -402,6 +1914,7 @@ MonoBehaviour:
         ovens: []
         kitIds: []
         assetEntries: []
+      interiorFixtures: []
       employees: []
       spareBlades: []
       loggingCampProvisionCoverDays: 0
@@ -443,6 +1956,7 @@ MonoBehaviour:
           kind: log-carriage
         - assetId: drive-system-1
           kind: drive-system
+      interiorFixtures: []
       employees:
       - personKey: richard-sithole
         role: logger
@@ -479,6 +1993,58 @@ MonoBehaviour:
         ovens: []
         kitIds: []
         assetEntries: []
+      interiorFixtures:
+      - assetId: lumberyard-counter-01
+        kind: fixture-counter
+        displayName: Lumberyard Counter
+        prefab: {fileID: 2986641611251337318, guid: 747b02fd9cc266e41ad64514eac0d162, type: 3}
+        localPosition: {x: 0.8, y: 0.8, z: -4.9}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: lumberyard-receiving-approach
+        activityPositionLocal: {x: 0.8, y: 0.8, z: -3.7}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 5
+        functionalSpaceId: 
+      - assetId: lumberyard-empty-crate-01
+        kind: fixture-handling-crate
+        displayName: Empty Lumber Handling Crate
+        prefab: {fileID: 6743079987009820750, guid: 6fb725fabfb47e64c95117ab0fd29e60, type: 3}
+        localPosition: {x: 4.7, y: 0.8, z: -4.8}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 8
+        functionalSpaceId: 
+      - assetId: lumberyard-empty-crate-02
+        kind: fixture-handling-crate
+        displayName: Empty Lumber Handling Crate
+        prefab: {fileID: 4974630893148832216, guid: c56ab4b39bddedf46b4404d6d4ee8c0e, type: 3}
+        localPosition: {x: 4.7, y: 0.8, z: -3.6}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: 
+        activityPositionLocal: {x: 0, y: 0, z: 0}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 8
+        functionalSpaceId: 
       employees: []
       spareBlades: []
       loggingCampProvisionCoverDays: 0
@@ -511,6 +2077,7 @@ MonoBehaviour:
         assetEntries:
         - assetId: carpenter-workbench-1
           kind: workbench
+      interiorFixtures: []
       employees: []
       spareBlades: []
       loggingCampProvisionCoverDays: 0

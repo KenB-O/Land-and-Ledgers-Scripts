@@ -2,6 +2,7 @@ using EntityId = LandLedgers.Primitives.EntityId;
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Primitives;
 using LandLedgers.World.Journeys;
@@ -90,6 +91,52 @@ namespace LandLedgers.Economy.Freight
             if (runtime != null)
                 businessRuntimes[businessInstanceId] = runtime;
             return company;
+        }
+
+        /// <summary>
+        /// Enrolls an already-created consolidated shipment (for example, a
+        /// furniture purchase manifest) in the same carrier company and daily
+        /// freight driver as ordinary detailed shipments. The caller has
+        /// already charged the external customer, so this shipment records no
+        /// second freight receivable. Repeated enrollment is idempotent.
+        /// </summary>
+        public bool AdoptConsolidatedShipment(string businessInstanceId, LogisticsShipmentState shipment,
+            EntityId driverId, List<EntityId> animalIds, BusinessRuntimeState carrierRuntime, out string reason)
+        {
+            reason = string.Empty;
+            if (string.IsNullOrWhiteSpace(businessInstanceId) || shipment == null)
+            {
+                reason = "FreightProductionDriver: carrier identity and existing shipment are required for enrollment.";
+                return false;
+            }
+            FreightCompanyRuntime company = EnsureCompany(businessInstanceId, carrierRuntime);
+            if (company == null)
+            {
+                reason = "FreightProductionDriver: carrier company could not be resolved.";
+                return false;
+            }
+            if (company.ActiveShipments.Any(existing => existing != null && existing.ShipmentId == shipment.ShipmentId))
+            {
+                dispatchPlans[shipment.ShipmentId] = new DispatchPlan
+                {
+                    DriverId = driverId,
+                    AnimalIds = animalIds != null ? new List<EntityId>(animalIds) : new List<EntityId>(),
+                };
+                return true;
+            }
+            shipment.haulingMode = ShipmentHaulingMode.HiredFreight;
+            shipment.freightChargeCents = 0; // purchase service already posted the fare exactly once
+            if (!company.TryAcceptShipment(shipment, new List<string>()))
+            {
+                reason = $"FreightProductionDriver: carrier '{businessInstanceId}' refused existing shipment '{shipment.ShipmentId}'.";
+                return false;
+            }
+            dispatchPlans[shipment.ShipmentId] = new DispatchPlan
+            {
+                DriverId = driverId,
+                AnimalIds = animalIds != null ? new List<EntityId>(animalIds) : new List<EntityId>(),
+            };
+            return true;
         }
 
         /// <summary>R-04: optional external resolver for a freight payer's
@@ -419,6 +466,39 @@ namespace LandLedgers.Economy.Freight
                 // journey returns (the predicate then answers false).
                 if (hooks.IsVehicleOffMap != null && hooks.IsVehicleOffMap(shipment.physicalWagonAssetId))
                     continue;
+
+                // A task can be cancelled by the shared TaskAuthority after
+                // it was created. Recover that shipment before the status
+                // switch so a missing handling callback cannot leave it in
+                // Loading or Unloading forever. Cargo custody is unchanged.
+                if (service.RecoverStaleHandlingTask(shipment, hooks, out string recoveryReason))
+                {
+                    diagnostics.Add(recoveryReason);
+                    advanced++;
+                    continue;
+                }
+
+                // Handler-dependent work cannot make progress without a real
+                // handler. Use the existing bounded retry/abandon path rather
+                // than leaving an accepted shipment and its resources live
+                // indefinitely. This never dispatches, delivers, or settles.
+                bool handlerDependentStage =
+                    (shipment.Status == LogisticsShipmentStatus.Planned && shipment.DelayCycles > 0)
+                    || (shipment.Status == LogisticsShipmentStatus.Loading && !shipment.loadApplied)
+                    || shipment.Status == LogisticsShipmentStatus.Arrived
+                    || shipment.Status == LogisticsShipmentStatus.Unloading
+                    || (shipment.Status == LogisticsShipmentStatus.Partial && !shipment.deliveryApplied);
+                if (!handlerId.IsValid && handlerDependentStage)
+                {
+                    LogisticsShipmentStatus resumeState = shipment.Status;
+                    service.DelayShipment(shipment,
+                        "no freight handler is available for " + resumeState + "; cargo remains in its recorded custody",
+                        hooks, resumeState);
+                    diagnostics.Add($"FreightProductionDriver: shipment '{shipment.ShipmentId}' deferred from {resumeState} because no handler is available; bounded recovery remains active.");
+                    advanced++;
+                    continue;
+                }
+
                 LogisticsShipmentStatus before = shipment.Status;
                 string reason;
                 switch (shipment.Status)
@@ -497,7 +577,9 @@ namespace LandLedgers.Economy.Freight
                         if (shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Planned
                             || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Loading
                             || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.InTransit
-                            || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Arrived)
+                            || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Arrived
+                            || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Unloading
+                            || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Partial)
                         {
                             service.ResumeShipment(shipment, hooks);
                             diagnostics.Add($"FreightProductionDriver: shipment '{shipment.ShipmentId}' resumed from Delayed -> {shipment.Status}.");

@@ -1,0 +1,17 @@
+UTC=2026-11-15T06:36:47.1247401Z
+Editor status=ready, compiling=false, PlayMode=stopped
+Main Scene | Assets/Main Scene.unity | isDirty=false
+Previous Test Runner: completed, 22/30 passed, 8 failed
+Preflight Unity ground truth: compilationFailed=False, compiling=False, consoleErrors=1, consoleWarnings=76, consoleLogs=14
+Editor.log path=C:\Users\kenne\AppData\Local\Unity\Editor\Editor.log length=69724 modified=2026-11-14T13:33:43.3071867-05:00
+Previous completed test failures:
+LandLedgers.Editor.Economy.BakerySuppliesTests.CoverageLine_ReportsBinCustodyInTransit_AndDaysOfCover
+LandLedgers.Editor.Economy.BakerySuppliesTests.ForwardOrder_Flour_DepthCoversFreightLead_SustainsDailyBakes
+LandLedgers.Editor.Economy.BakerySuppliesTests.ForwardOrder_Notions_DepthZero_PreservesCurrentCycle
+LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_FlourBlockedDays_PrimingOrders_EnableEarlyFirstBake
+LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_PrimedWindowBakesThenDrains
+LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_Priming_FourteenOrders_ForFourteenFutureBakes
+LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_SixtyDayCycle_TwoFullPeriods
+LandLedgers.Editor.Economy.BakerySuppliesTests.Sustained_SixtyDays_DailyBakes_ExactlyOnce_AllLegs
+Capture script: 
+AgentScripts/CaptureEconomy60DayIteration05.cs

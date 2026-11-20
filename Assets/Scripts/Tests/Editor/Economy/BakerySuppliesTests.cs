@@ -1031,8 +1031,9 @@ namespace LandLedgers.Editor.Economy
             // Plan 04 Slice 4: the cumulative reconciliation line is now
             // asserted PRESENT, threaded across the five days like the
             // forwarder threads it — day 6 (5th bake) reads flour 174c
-            // (6 sacks, 60 lb), notions 50c, revenue 240c, actual
-            // 44.8c/batch (margin +3.2c/batch actual vs -20c standard).
+            // (6 sacks, 60 lb), notions 50c and wholesale revenue 240c.
+            // Procurement cash outlay is reported separately from
+            // consumed-stock COGS and the standard contribution.
             Slice s = NewSlice();
             Series2CounterpartyRegistration reg = Registration(
                 "test-notions", BakeryFlourSupply.NotionsMaterialId, 10, 0, 50, 1);
@@ -1072,12 +1073,12 @@ namespace LandLedgers.Editor.Economy
                     $"day {day} logs the cumulative reconciliation line; diag: {dayDiag}");
                 if (day == 5)
                 {
-                    Assert.IsTrue(dayDiag.Contains("cumulative actuals: 4 batch(es) baked, flour 145c (5 sacks, 50 lb), notions 40c, revenue 192c"),
+                    Assert.IsTrue(dayDiag.Contains("cumulative actuals: 4 batch(es) baked, flour purchases 145c (5 sacks, 50 lb), notions purchases 40c, wholesale revenue 192c"),
                         $"day 5 cumulative after 4 bakes; diag: {dayDiag}");
                 }
                 if (day == 6)
                 {
-                    Assert.IsTrue(dayDiag.Contains("cumulative actuals: 5 batch(es) baked, flour 174c (6 sacks, 60 lb), notions 50c, revenue 240c, actual 44.8c/batch vs standard 68c/batch (margin 3.2c/batch actual vs -20c standard)"),
+                    Assert.IsTrue(dayDiag.Contains("cumulative actuals: 5 batch(es) baked, flour purchases 174c (6 sacks, 60 lb), notions purchases 50c, wholesale revenue 240c, ingredient-purchase cash outlay 44.8c/produced batch (cash timing, not consumed-stock COGS); standard direct-material cost 68c/batch (standard contribution -20c/batch before wages, fuel, freight, and overhead)"),
                         $"day 6 cumulative after 5 bakes; diag: {dayDiag}");
                     Assert.AreEqual(5, r.CumulativeBatchesBaked, "cumulative batches baked");
                     Assert.AreEqual(174, r.CumulativeFlourCashSpentCents, "cumulative flour cash");
@@ -1095,12 +1096,19 @@ namespace LandLedgers.Editor.Economy
                 "bakery 2,000 - 174c flour - 50c notions + 240c wholesale");
             Assert.AreEqual(4934, s.StoreRuntime.CurrentCashCents,
                 "store 5,000 - 50c notions arrival + 174c flour - 240c wholesale + 50c notions feeds");
-            // Actual per-batch: flour 174/5 = 34.8c + notions 10c = 44.8c
-            // vs 48c revenue = +3.2c/batch actual (vs -20c standard).
-            Assert.IsTrue(Math.Abs(44.8 - (174.0 / 5.0 + 10.0)) < 0.001, "actual cost 44.8c/batch");
-            Assert.IsTrue(Math.Abs(3.2 - (48.0 - (174.0 / 5.0 + 10.0))) < 0.001, "actual margin +3.2c/batch");
-            Assert.IsTrue(string.Join(" | ", s.Diag).Contains("cumulative actuals: 5 batch(es) baked, flour 174c (6 sacks, 60 lb), notions 50c, revenue 240c, actual 44.8c/batch"),
+            // The 44.8c figure is purchase cash divided by output, not
+            // actual consumed-stock COGS: opening stock has no authored
+            // acquisition cost and a new lot is not expensed on purchase.
+            Assert.IsTrue(Math.Abs(44.8 - (174.0 / 5.0 + 10.0)) < 0.001,
+                "ingredient-purchase cash outlay is 44.8c per produced batch");
+            Assert.IsTrue(string.Join(" | ", s.Diag).Contains("cumulative actuals: 5 batch(es) baked, flour purchases 174c (6 sacks, 60 lb), notions purchases 50c, wholesale revenue 240c, ingredient-purchase cash outlay 44.8c/produced batch"),
                 "the cumulative reconciliation line is present across the run");
+            string actualsLine = s.Diag.Find(line => line != null && line.StartsWith("[BakeryProduction] cumulative actuals:", StringComparison.Ordinal));
+            Assert.IsNotNull(actualsLine, "the cumulative actuals line is present");
+            StringAssert.Contains("cash timing, not consumed-stock COGS", actualsLine);
+            StringAssert.Contains("standard contribution -20c/batch", actualsLine);
+            StringAssert.DoesNotContain("actual margin", actualsLine,
+                "purchase timing must not be presented as realized profit or loss");
         }
 
         [Test]

@@ -16,8 +16,10 @@ namespace LandLedgers.Population
     /// validates the arrival path and moves the diner to their reserved
     /// seat, holds them through the meal, and releases the reservation
     /// at the window end so the seat can be re-reserved for the next
-    /// meal. A Fallback meal validates standing room instead and eats
-    /// in place — there is no seat to move to.
+    /// meal. If a seated arrival cannot be made, it changes the live
+    /// reservation to the existing no-chair fallback and releases the
+    /// unused seat claim; it never records that diner as seated. A
+    /// Fallback meal validates standing room and eats in place.
     ///
     /// Meal preparation is NOT this driver: DomesticLaborDriver
     /// already plans meal-prep tasks (MealsAtHomeCount trigger,
@@ -89,6 +91,7 @@ namespace LandLedgers.Population
         {
             public MealPhase Phase = MealPhase.Travelling;
             public bool ArrivalChecked;
+            public bool FallbackChecked;
         }
 
         private readonly Dictionary<string, MealState> meals =
@@ -216,7 +219,8 @@ namespace LandLedgers.Population
                 {
                     LogOnce(diag, "seat-gone:" + key,
                         $"[Meal] Seat '{reservation.SeatId}' no longer derives for P{reservation.PersonId} (household {registry.HouseholdId}, meal day {reservation.DayIndex} at {reservation.MealStartMinute}): " +
-                        $"the chair was sold, removed, made unusable, or its table is gone — the diner eats the Fallback at home and the reservation still releases at the window end.");
+                        $"the chair was sold, removed, made unusable, or its table is gone — the diner uses the Fallback at home and the unavailable seat is released now.");
+                    DemoteSeatReservationToFallback(reservation);
                     seated = false;
                 }
             }
@@ -234,7 +238,8 @@ namespace LandLedgers.Population
                 {
                     LogOnce(diag, "no-authority:" + key,
                         $"[Meal] No building authority for P{reservation.PersonId} (household {registry.HouseholdId}, meal day {reservation.DayIndex} at {reservation.MealStartMinute}): " +
-                        $"the arrival path to '{seat.SeatId}' cannot be validated and no movement can be requested — the diner eats in place and the reservation still releases at the window end.");
+                        $"the arrival path to '{seat.SeatId}' cannot be validated and no movement can be requested — the diner eats in place without a seated claim.");
+                    DemoteSeatReservationToFallback(reservation);
                     state.Phase = MealPhase.Eating;
                     return;
                 }
@@ -245,8 +250,9 @@ namespace LandLedgers.Population
                 if (failure != null)
                 {
                     LogOnce(diag, "arrival-failed:" + key,
-                        $"[Meal] Arrival to '{seat.SeatId}' failed for P{reservation.PersonId} (household {registry.HouseholdId}, meal day {reservation.DayIndex} at {reservation.MealStartMinute}): {failure} — the diner eats in place and the reservation still releases at the window end.");
-                    state.Phase = MealPhase.Eating;
+                        $"[Meal] Arrival to '{seat.SeatId}' failed for P{reservation.PersonId} (household {registry.HouseholdId}, meal day {reservation.DayIndex} at {reservation.MealStartMinute}): {failure} — the diner uses the standing fallback and the unused seat is released now.");
+                    DemoteSeatReservationToFallback(reservation);
+                    EatFallback(reservation, registry.HouseholdId, key, authority, fallbackCheck, state, diag);
                     return;
                 }
             }
@@ -255,8 +261,9 @@ namespace LandLedgers.Population
             {
                 LogOnce(diag, "no-movement:" + key,
                     $"[Meal] No movement resolver for P{reservation.PersonId} (household {registry.HouseholdId}, meal day {reservation.DayIndex} at {reservation.MealStartMinute}): " +
-                    $"the diner cannot be moved to '{seat.SeatId}' — eating in place and the reservation still releases at the window end.");
-                state.Phase = MealPhase.Eating;
+                    $"the diner cannot be moved to '{seat.SeatId}' — the diner eats in place and the unused seat is released now.");
+                DemoteSeatReservationToFallback(reservation);
+                EatFallback(reservation, registry.HouseholdId, key, authority, fallbackCheck, state, diag);
                 return;
             }
 
@@ -269,14 +276,30 @@ namespace LandLedgers.Population
                 case DomesticActivityMovementResult.Unsupported:
                     LogOnce(diag, "movement-unsupported:" + key,
                         $"[Meal] Movement to '{seat.SeatId}' is unsupported for P{reservation.PersonId} (household {registry.HouseholdId}, meal day {reservation.DayIndex} at {reservation.MealStartMinute}): " +
-                        $"no route reaches the seat — the diner eats in place and the reservation still releases at the window end.");
-                    state.Phase = MealPhase.Eating;
+                        $"no route reaches the seat — the diner eats in place and the unused seat is released now.");
+                    DemoteSeatReservationToFallback(reservation);
+                    EatFallback(reservation, registry.HouseholdId, key, authority, fallbackCheck, state, diag);
                     break;
                 default:
                     // Travelling: keep requesting each tick until the
                     // resolver reports Arrived (or Unsupported).
                     break;
             }
+        }
+
+        /// <summary>
+        /// A failed physical arrival may use the existing no-chair meal
+        /// fallback, but it must not keep a dining seat reserved for a diner
+        /// who never reached it. Preserve the meal reservation while
+        /// releasing the physical seat claim so another household member can
+        /// use that chair in the same window.
+        /// </summary>
+        private static void DemoteSeatReservationToFallback(DiningSeatReservation reservation)
+        {
+            if (reservation == null || reservation.Mode != DiningMode.Seated) return;
+            reservation.Mode = DiningMode.Fallback;
+            reservation.SeatId = string.Empty;
+            reservation.AssetId = string.Empty;
         }
 
         /// <summary>
@@ -295,12 +318,12 @@ namespace LandLedgers.Population
             MealState state,
             List<string> diag)
         {
-            if (state.ArrivalChecked)
+            if (state.FallbackChecked)
             {
                 state.Phase = MealPhase.Eating;
                 return;
             }
-            state.ArrivalChecked = true;
+            state.FallbackChecked = true;
 
             if (authority == null)
             {

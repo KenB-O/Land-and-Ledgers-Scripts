@@ -170,19 +170,24 @@ namespace LandLedgers.Editor.Economy
             Assert.Null(runtime.SetProofingRackSlots(1, diag));
             Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.BreadLoafId, 2, 300, diag));
             WorkDay(runtime, 300, diag); // one baked, one waiting on the rack
+            string waitingBatchId = runtime.Batches[1].BatchId;
 
             var dto = runtime.CaptureSaveDto();
             var revived = new BakeryShopRuntime("bakery-biz-1");
             revived.LoadFromSaveDto(dto);
 
             Assert.AreEqual(1, revived.ProofingRackSlots);
-            var waiting = revived.Batches[1];
+            Assert.AreEqual(1, revived.Batches.Count,
+                "the completed batch is represented by its persisted bread lot; only active work is restored");
+            var waiting = revived.Batches[0];
+            Assert.AreEqual(waitingBatchId, waiting.BatchId,
+                "the in-progress proof task keeps its durable batch identity across Save/Continue");
             Assert.AreEqual(BakeryBatchStage.Proofing, waiting.Stage);
             Assert.Greater(waiting.ProofMinutesRemaining, 0);
 
             // The revived shop's rack still schedules: the waiter proofs and bakes.
             Assert.AreEqual(1, WorkDay(revived, 301, new List<string>()));
-            Assert.AreEqual(BakeryBatchStage.Baked, revived.Batches[1].Stage);
+            Assert.AreEqual(BakeryBatchStage.Baked, revived.Batches[0].Stage);
         }
     }
 }

@@ -200,6 +200,61 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void OpeningStapleLotsCoverSevenDaysAtActualHouseholdMealDemand()
+        {
+            foreach (int consumerCount in new[] { 2, 4 })
+            {
+                var household = new HouseholdState
+                {
+                    id = 700 + consumerCount,
+                    memberIds = new List<int>(),
+                };
+                for (int personId = 1; personId <= consumerCount; personId++)
+                    household.memberIds.Add(personId);
+
+                household.EnsureHouseholdReservesInitialized(fillMissingToTarget: true);
+                HouseholdReserveState reserve = household.GetReserve(HouseholdReserveCatalog.StapleFoodCategoryId);
+                HouseholdItemDefinition unspecifiedStaple = HouseholdItemCatalog.Get(
+                    HouseholdItemCatalog.UnspecifiedStapleFoodId);
+                int dailyMealSlots = MealSchedulingPolicy.Default.ExpectedMealsPerDay;
+                int expectedServings = consumerCount * dailyMealSlots * 7;
+                int expectedOpeningUnits = expectedServings * unspecifiedStaple.MealServingUnits;
+
+                Assert.AreEqual(expectedOpeningUnits, reserve.currentUnits,
+                    $"Opening provisions for {consumerCount} consumers should cover seven days without inventing a specific SKU.");
+                float replenishmentDays = reserve.lowThresholdUnits
+                    / (float)(consumerCount * dailyMealSlots * unspecifiedStaple.MealServingUnits);
+                Assert.That(replenishmentDays, Is.InRange(3f, 3.1f),
+                    "The scaled low-stock threshold should prompt replenishment after three days of food remain.");
+
+                var inventory = new HouseholdInventory(household.id);
+                household.GetReserve("meat").currentUnits = 0;
+                HouseholdInventoryReserveBridge.SeedLotsFromReserves(
+                    household, inventory, 0, new List<string>());
+                Assert.AreEqual(reserve.currentUnits,
+                    inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
+                    "The opening reserve must become the same finite physical lot quantity exactly once.");
+
+                // Exercise the actual meal authority against only the seeded
+                // staple lot. Its lot consumption must cover seven full days
+                // at the same units-per-serving rule used by the reserve.
+                HouseholdMealService meals = new HouseholdMealService(new HouseholdMealLogRegistry());
+                List<int> memberIds = new List<int>(household.memberIds);
+                for (int day = 0; day < 7; day++)
+                {
+                    MealDayResult result = meals.ServeHouseholdDay(
+                        household, memberIds, inventory, MealSchedulingPolicy.Default, day, null);
+                    Assert.AreEqual(consumerCount * dailyMealSlots, result.MealsServed,
+                        $"Day {day + 1} should serve all ordinary meal slots for {consumerCount} consumers.");
+                    Assert.AreEqual(0, result.MealsMissed);
+                }
+
+                Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
+                    "Exactly seven days of opening food is consumed; no meals or inventory are added.");
+            }
+        }
+
+        [Test]
         public void MedicineNeedsSurfaceBeforeFullDepletionForLargerHouseholds()
         {
             HouseholdState household = CreateHousehold();
@@ -363,10 +418,14 @@ namespace LandLedgers.EditorTests.Population
 
                 InvokeResolveHouseholdReserveNeeds(manager, household, 100000);
 
-                Assert.AreEqual(staple.targetUnits, staple.currentUnits);
-                Assert.AreEqual(stockBefore - staple.targetUnits, stock.CurrentStockUnits);
+                int unitsPurchased = staple.currentUnits;
+                Assert.Greater(unitsPurchased, 0);
+                Assert.LessOrEqual(unitsPurchased, staple.targetUnits);
+                Assert.AreEqual(stockBefore - unitsPurchased, stock.CurrentStockUnits,
+                    "Partial service efficiency must credit exactly the units removed from the physical shelf.");
                 Assert.Greater(runtime.CurrentCashCents, cashBefore);
-                Assert.AreEqual(staple.targetUnits, runtime.GetCategoryStock("staple_food").LastDailyUnitsSold);
+                Assert.AreEqual(unitsPurchased, runtime.GetCategoryStock("staple_food").LastDailyUnitsSold,
+                    "The store's recorded sale must match the household's finite reserve receipt.");
             }
             finally
             {
@@ -899,6 +958,50 @@ namespace LandLedgers.EditorTests.Population
                     }
                 }
                 Assert.IsTrue(!hasStapleNeed, "No staple_food need remains after a credited loop receipt.");
+            }
+            finally
+            {
+                fixture.Destroy();
+            }
+        }
+
+        [Test]
+        public void PhysicalFoodAuthoritySkipsLegacyReserveConsumptionAndSales()
+        {
+            ReservePurchaseFixture fixture = CreateReservePurchaseFixture("staple_food");
+            try
+            {
+                fixture.Manager.PhysicalHouseholdFoodAuthorityEnabled = true;
+                HouseholdReserveState staple = fixture.Household.GetReserve("staple_food");
+                HouseholdReserveState meat = fixture.Household.GetReserve("meat");
+                Assert.NotNull(staple);
+                Assert.NotNull(meat);
+                staple.currentUnits = 0;
+                meat.currentUnits = 0;
+                HouseholdInventory inventory = fixture.Inventories.GetOrCreate(fixture.Household.id);
+                Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.BreadId, 3, 0, "physical household stock"));
+                int cashBefore = fixture.Household.spendingMoneyCents;
+                int breadBefore = inventory.GetAvailableUnits(HouseholdItemCatalog.BreadId);
+                int stapleStockBefore = fixture.Runtime.GetCategoryStock("staple_food").CurrentStockUnits;
+
+                fixture.Manager.ResolveDailySales();
+
+                Assert.AreEqual(0, staple.currentUnits,
+                    "The legacy reserve calendar must not also consume meals already governed by physical food lots.");
+                Assert.AreEqual(0, meat.currentUnits,
+                    "Both edible reserve categories are owned by the physical food authority.");
+                Assert.AreEqual(cashBefore, fixture.Household.spendingMoneyCents,
+                    "The legacy category route must not charge an overlapping food purchase.");
+                Assert.AreEqual(breadBefore, inventory.GetAvailableUnits(HouseholdItemCatalog.BreadId),
+                    "The daily legacy pass must leave physical item lots for actual meal consumption.");
+                Assert.AreEqual(stapleStockBefore, fixture.Runtime.GetCategoryStock("staple_food").CurrentStockUnits,
+                    "The legacy pooled staple shelf must not sell while item-level physical shopping is active.");
+                Assert.AreEqual(0, fixture.Manager.LastDailyReserveLocalUnits);
+                Assert.AreEqual(0, fixture.Manager.LastDailyReserveOffMapUnits);
+                FieldInfo walletSpendField = typeof(GeneralStoreRuntimeManager).GetField(
+                    "lastDailyWalletSpendCents", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.NotNull(walletSpendField, "Daily wallet spend diagnostic field must remain available to the focused regression.");
+                Assert.AreEqual(0, walletSpendField.GetValue(fixture.Manager));
             }
             finally
             {

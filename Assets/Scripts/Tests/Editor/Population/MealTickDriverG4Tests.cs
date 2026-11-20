@@ -13,7 +13,9 @@ namespace LandLedgers.Editor.Population
     /// G-4 (Agent G, expanded campaign 2026-11-16): the meal tick
     /// driver. Proves the driver moves a diner to their reserved seat
     /// at the meal window, holds them through the meal, releases at
-    /// the window end so the seat can be re-reserved, drives both
+    /// the window end so the seat can be re-reserved, demotes failed
+    /// seated arrivals to the standing fallback and frees the unused
+    /// seat for another diner, drives both
     /// daily meals, validates standing room for Fallback meals without
     /// requesting movement, eats in place (loudly, once) when the
     /// arrival path fails, the authority is missing, movement is
@@ -460,11 +462,27 @@ namespace LandLedgers.Editor.Population
                 Reserve(fixture.Registry, 1, Day, MorningMeal);
                 var driver = new MealTickDriver();
                 var diag = new List<string>();
+                int fallbackValidations = 0;
 
                 Advance(driver, Day, MorningMeal, fixture.Registry, fixture.Authority, diag,
-                    null, null, (personId, seat, auth) => DomesticActivityMovementResult.Unsupported);
+                    null, auth =>
+                    {
+                        fallbackValidations++;
+                        return null;
+                    }, (personId, seat, auth) => DomesticActivityMovementResult.Unsupported);
                 Assert.AreEqual(1, diag.Count, "Unsupported movement is loud once.");
+                Assert.AreEqual(1, fallbackValidations,
+                    "After the chair route is refused, the standing fallback is checked once.");
                 Assert.AreEqual(1, fixture.Registry.LiveReservations.Count);
+                DiningSeatReservation failedSeatReservation = fixture.Registry.LiveReservationFor(1, Day, MorningMeal);
+                Assert.AreEqual(DiningMode.Fallback, failedSeatReservation.Mode,
+                    "A diner who did not reach the chair must not retain a seated reservation.");
+                Assert.IsEmpty(failedSeatReservation.SeatId);
+                Assert.IsEmpty(failedSeatReservation.AssetId);
+
+                DiningSeatReservation nextDiner = Reserve(fixture.Registry, 2, Day, MorningMeal);
+                Assert.AreEqual("chair:chair-1", nextDiner.SeatId,
+                    "The chair becomes available for another diner after the first route is refused.");
 
                 Advance(driver, Day, MorningMeal + MealDuration, fixture.Registry, fixture.Authority, diag,
                     null, null, (personId, seat, auth) => DomesticActivityMovementResult.Unsupported);
@@ -583,6 +601,11 @@ namespace LandLedgers.Editor.Population
                 Assert.AreEqual(0, moves, "A gone seat falls back — no movement to a seat that no longer exists.");
                 Assert.AreEqual(1, diag.Count, "The lost seat is loud once.");
                 Assert.AreEqual(1, fixture.Registry.LiveReservations.Count);
+                DiningSeatReservation fallback = fixture.Registry.LiveReservationFor(1, Day, MorningMeal);
+                Assert.AreEqual(DiningMode.Fallback, fallback.Mode,
+                    "A removed chair cannot remain represented as a live seated reservation.");
+                Assert.IsEmpty(fallback.SeatId);
+                Assert.IsEmpty(fallback.AssetId);
 
                 Advance(driver, Day, MorningMeal + MealDuration, fixture.Registry, fixture.Authority, diag,
                     null, null, (personId, seat, auth) =>

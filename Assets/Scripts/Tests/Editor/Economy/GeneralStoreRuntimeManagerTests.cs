@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Storage;
 using LandLedgers.FirstLedger;
 using LandLedgers.Persistence;
@@ -173,6 +174,74 @@ namespace LandLedgers.EditorTests.Economy
                 Assert.AreEqual(0, manager.RuntimeState != null
                     ? manager.RuntimeState.RetailItemLots.Count
                     : 0, "Offer construction must not create free retail inventory.");
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void IdentifiedSkuBinding_CreatesOnlyAggregateCapacityForRealFurnitureLotReceipt()
+        {
+            GeneralStoreBusinessDefinition definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(DefinitionPath);
+            Assert.NotNull(definition, "Authored General Store definition missing");
+            GameObject root = new("GeneralStoreRuntimeManager_FurnitureReceivingCapacity");
+            try
+            {
+                GeneralStoreRuntimeManager manager = NewManager(root);
+                FieldInfo definitionField = typeof(GeneralStoreRuntimeManager).GetField(
+                    "storeDefinition", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.NotNull(definitionField, "GeneralStoreRuntimeManager.storeDefinition field missing");
+                definitionField.SetValue(manager, definition);
+                BusinessInstanceState store = BusinessInstanceState.Create(
+                    "general_store_receipt_test", definition, 61,
+                    BusinessOwnerIdentity.Npc(1, "Kennedy Baldwin-Ooms", "Baldwin-Ooms"));
+
+                Assert.IsNull(store.RuntimeState.GetCategoryStock("furniture"),
+                    "The authored profile intentionally has no legacy furniture category row before the identified assortment is bound.");
+                GeneralStoreTradingPort port = manager.BuildHouseholdTradingPort(store);
+
+                int expectedAggregateTarget = 0;
+                string receiptItemId = null;
+                foreach (GeneralStoreCategoryOffer offer in port.CategoryOffers)
+                {
+                    if (offer == null || !offer.UsesItemLevelInventory
+                        || !string.Equals(offer.CategoryId, "furniture", StringComparison.OrdinalIgnoreCase)
+                        || offer.OfferedItemIds == null) continue;
+                    foreach (string itemId in offer.OfferedItemIds)
+                    {
+                        ItemDefinition item = definition.FindItem(itemId);
+                        if (item == null || item.ReorderTargetUnits <= 0) continue;
+                        expectedAggregateTarget = checked(expectedAggregateTarget + item.ReorderTargetUnits);
+                        if (receiptItemId == null) receiptItemId = itemId;
+                    }
+                }
+
+                Assert.Greater(expectedAggregateTarget, 0, "At least one furniture SKU has an authored reorder target.");
+                Assert.IsNotNull(receiptItemId, "A receivable named furniture SKU is available.");
+                CategoryStockState furnitureStock = store.RuntimeState.GetCategoryStock("furniture");
+                Assert.NotNull(furnitureStock, "Binding identified furniture SKUs establishes their shared aggregate receiving ledger.");
+                Assert.AreEqual(0, furnitureStock.CurrentStockUnits,
+                    "Creating category capacity must not create or seed furniture inventory.");
+                Assert.AreEqual(expectedAggregateTarget, furnitureStock.TargetStockUnits,
+                    "Aggregate category capacity is derived from the offered SKUs' actual authored reorder targets.");
+                Assert.AreEqual(expectedAggregateTarget, port.CategoryReceivableUnits("furniture"));
+
+                ItemDefinition receiptItem = definition.FindItem(receiptItemId);
+                store.RuntimeState.AddCashCents(500);
+                string receiptProblem = port.ReceivePaidStock("test:furniture:1", receiptItemId,
+                    "furniture", receiptItem.Unit, 1, 75, "test supplier receipt", 0);
+
+                Assert.IsNull(receiptProblem, receiptProblem);
+                Assert.AreEqual(1, store.RuntimeState.GetRetailItemStockUnits(receiptItemId, "furniture"),
+                    "The real BusinessRuntimeState accepts the identified item lot after the offer binding establishes capacity.");
+                Assert.AreEqual(1, store.RuntimeState.GetCategoryStock("furniture").CurrentStockUnits,
+                    "The aggregate category ledger counts the received lot once.");
+                Assert.AreEqual(1, store.RuntimeState.RetailItemLots.Count,
+                    "No duplicate physical item lot is created by capacity registration.");
+                Assert.AreEqual(425, store.RuntimeState.CurrentCashCents,
+                    "The received SKU is paid for once through the store's atomic paid-receipt port.");
             }
             finally
             {

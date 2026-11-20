@@ -85,6 +85,23 @@ namespace LandLedgers.Tasks
             string taskReservationLabel,
             bool isArrivalDrivenTravel)
         {
+            // Preserve the point-in-time seam for callers without an elapsed
+            // interval. The live driver supplies the full interval below so
+            // in-tick work is not discarded by an end-boundary check.
+            return Decide(task, reservations, dayIndex,
+                Math.Max(0, minuteOfDay - 1), minuteOfDay,
+                taskReservationLabel, isArrivalDrivenTravel);
+        }
+
+        public static StaleInProgressVerdict Decide(
+            WorkTask task,
+            IReadOnlyList<PersonActivityReservation> reservations,
+            int dayIndex,
+            int tickStartMinute,
+            int tickEndMinute,
+            string taskReservationLabel,
+            bool isArrivalDrivenTravel)
+        {
             if (task == null)
             {
                 return new StaleInProgressVerdict(
@@ -149,12 +166,11 @@ namespace LandLedgers.Tasks
                     "task '" + task.TaskId + "' has 0 minutes remaining; work is fully recorded");
             }
 
-            // 3. Staleness: is there an unreleased reservation for this
-            // person, today, under this task's label, whose window reaches
-            // the current tick boundary? A matching reservation ending
-            // exactly at now is still healthy because this sweep runs before
-            // the current tick's elapsed minutes are accrued. It becomes
-            // stale on the following tick if still unfinished.
+            // 3. Staleness is evaluated against the interval about to be
+            // accrued, not merely its end. A reservation can end before
+            // tickEnd while still covering real work earlier in the tick.
+            // Releasing it at the end boundary would discard that overlap on
+            // every accelerated tick and keep the task permanently open.
             // Released reservations are invisible, same as no window.
             PersonActivityReservation stale = null;
             if (reservations != null)
@@ -166,7 +182,7 @@ namespace LandLedgers.Tasks
                     if (reservation.DayIndex != dayIndex) continue;
                     if (reservation.PersonId != task.AssigneeId.Id) continue;
                     if (!string.Equals(reservation.Label, taskReservationLabel, StringComparison.Ordinal)) continue;
-                    if (reservation.EndMinuteOfDay >= minuteOfDay)
+                    if (reservation.EndMinuteOfDay > tickStartMinute)
                     {
                         return new StaleInProgressVerdict(
                             StaleInProgressDecision.UntouchedHealthy, PersonActivityKind.Work,
@@ -185,16 +201,16 @@ namespace LandLedgers.Tasks
 
             // 4. Day-fit, exactly as the F2 catch-up does: if the remainder
             // does not fit before midnight, defer and retry tomorrow at a
-            // small minuteOfDay. The stale window stays in place, harmless
+            // small tickEndMinute. The stale window stays in place, harmless
             // — it ends before now, so it can only collide with windows
             // starting in the past.
             int remaining = Math.Max(1, task.MinutesRemaining);
-            if (minuteOfDay + remaining > 1440)
+            if (tickEndMinute + remaining > 1440)
             {
                 return new StaleInProgressVerdict(
                     StaleInProgressDecision.DeferNoFitToday, PersonActivityKind.Work,
                     "task '" + task.TaskId + "' needs " + remaining
-                    + " minutes but only " + (1440 - minuteOfDay) + " remain today");
+                    + " minutes but only " + (1440 - tickEndMinute) + " remain today");
             }
 
             // 5. Rescue in place. Activity is the stale reservation's when
@@ -207,8 +223,8 @@ namespace LandLedgers.Tasks
                 : FallbackActivity(task);
             return new StaleInProgressVerdict(
                 StaleInProgressDecision.RescueReDerive, activity,
-                "task '" + task.TaskId + "' window expired; re-derive [" + minuteOfDay
-                + ", " + (minuteOfDay + remaining) + "] as " + activity);
+                "task '" + task.TaskId + "' window expired; re-derive [" + tickEndMinute
+                + ", " + (tickEndMinute + remaining) + "] as " + activity);
         }
 
         private static PersonActivityKind FallbackActivity(WorkTask task)
@@ -232,6 +248,21 @@ namespace LandLedgers.Tasks
 
             // Hitch/dispatch start site (:5763) reserves Work.
             return PersonActivityKind.Work;
+        }
+    }
+
+    /// <summary>
+    /// A completion due event is a wake-up/backstop, not evidence that work
+    /// occurred. Only minutes recorded by the task authority may authorize
+    /// the due-event completion path.
+    /// </summary>
+    public static class TaskCompletionDuePolicy
+    {
+        public static bool CanCompleteFromDueEvent(WorkTask task)
+        {
+            return task != null
+                && task.Status == TaskStatus.InProgress
+                && task.MinutesRemaining <= 0;
         }
     }
 }

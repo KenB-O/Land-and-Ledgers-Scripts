@@ -278,6 +278,37 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void BakeryAdapter_AdvertisesOnlyStockTheCounterCanActuallySell()
+        {
+            BakerySetup s = BakeOneBatch(bakeryCash: 2000, bakeDay: 2);
+            Assert.IsNull(s.Bakery.AddWholesaleAccount(new BakeryWholesaleAccount
+            {
+                AccountId = "standing-store-account",
+                BuyerBusinessId = "general-store-1",
+                ProductId = BakeryBreadCatalog.BreadLoafId,
+                UnitsPerDelivery = 24,
+                DeliveryCadenceDays = 1,
+                NextDeliveryDayIndex = 2,
+                PricePerUnitCents = 4,
+            }, s.Diag));
+
+            var adapter = new Series2BakerySupplierAdapter(
+                s.Bakery, new RuntimeCashPort(s.BakeryRuntime),
+                "pierce-bakery-1", "Pierce Bakery", "bakery") { DayIndex = 2 };
+
+            Assert.AreEqual(0, adapter.ItemStockUnits("bread"),
+                "protected contract stock is not presented to household shopping as available retail bread");
+            Assert.AreEqual(0, adapter.SellItem("bread", 1, 2, CashSettlement(), s.Diag),
+                "the sale authority independently enforces the same protection");
+            Assert.AreEqual(2000, s.BakeryRuntime.CurrentCashCents, "a refused retail attempt moves no cash");
+            Assert.AreEqual(24, s.Bakery.BreadShelf[0].UnitCount, "a refused retail attempt consumes no bread");
+
+            s.Bakery.SupplyProtection = BakerySupplyProtectionPolicy.ProtectRetailCounter;
+            Assert.AreEqual(24, adapter.ItemStockUnits("bread"),
+                "when the configured policy permits counter sales, the same identified stock is visible");
+        }
+
+        [Test]
         public void BakeryAdapter_DayOldSale_PricesAtDiscount_NotFresh()
         {
             BakerySetup s = BakeOneBatch(bakeryCash: 2000, bakeDay: 2);

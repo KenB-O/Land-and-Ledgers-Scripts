@@ -12,11 +12,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using LandLedgers.Economy;
 using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Economy.Retail;
 using LandLedgers.FirstLedger;
+using LandLedgers.Persistence;
 using LandLedgers.Population;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
@@ -504,8 +506,121 @@ namespace LandLedgers.Editor.Population
         public void Binding_LoopBuild_BindsCustomerQueue()
         {
             string text = ReadRepoFile(SimulationDriversPath);
-            Assert.IsTrue(text.Contains("personHandSave.Series2Pass9State.CustomerQueue = storeManager.CustomerQueue"),
+            Assert.IsTrue(text.Contains("personHandSave.Series2Pass9State.CustomerQueue = queueStoreManager.CustomerQueue"),
                 "BuildHouseholdShoppingLoop must bind the live store queue into the Pass 9 save state so New Game saves capture the waiting line");
+            Assert.IsTrue(text.Contains("personHandSave.Series2Pass9State.BakeryCustomerQueue = bakeryCustomerQueue"),
+                "BuildHouseholdShoppingLoop must bind the live bakery counter queue into the Pass 9 save state");
+        }
+
+        [Test]
+        public void BakeryCounterQueue_SaveRestoreBeforeRuntimeBinding_PreservesWaitingAndPatience()
+        {
+            var source = new Series2Pass9SaveState();
+            var liveQueue = new CustomerQueue
+            {
+                MerchantBusinessId = "bakery-1",
+                MerchantName = "Glenn's Bakery",
+            };
+            Assert.IsTrue(liveQueue.Enqueue("shop:7:15", 1, "bakery_goods", 2, 35, 4, patienceMinutes: 20));
+            liveQueue.Tick(7, 4);
+            source.BakeryCustomerQueue = liveQueue;
+
+            var diagnostics = new List<string>();
+            var dto = source.Capture(diagnostics);
+            var restored = new Series2Pass9SaveState();
+            restored.Restore(dto, null, diagnostics);
+            Assert.IsTrue(restored.HasPendingBakeryCustomerQueue,
+                "Continue may restore before the bakery runtime has recreated its physical service queue");
+
+            var reboundQueue = new CustomerQueue();
+            restored.BakeryCustomerQueue = reboundQueue;
+
+            Assert.IsFalse(restored.HasPendingBakeryCustomerQueue);
+            Assert.AreEqual("bakery-1", reboundQueue.MerchantBusinessId);
+            Assert.AreEqual("Glenn's Bakery", reboundQueue.MerchantName);
+            Assert.AreEqual(1, reboundQueue.WaitingCount);
+            Assert.AreEqual("shop:7:15", reboundQueue.Waiting[0].CustomerRef);
+            Assert.AreEqual(13, reboundQueue.Waiting[0].PatienceMinutesRemaining);
+        }
+
+        [Test]
+        public void FuelDealerCounterQueues_SaveRestoreBeforeBinding_PreservesWaitersAndSeparatesBusinesses()
+        {
+            var source = new Series2Pass9SaveState();
+            CustomerQueue first = source.GetOrCreateFuelDealerCustomerQueue("fuel-yard-1", "Town Fuel Yard");
+            CustomerQueue second = source.GetOrCreateFuelDealerCustomerQueue("fuel-yard-2", "North Fuel Yard");
+            Assert.IsTrue(first.Enqueue("shop:7:15", 1, "fuel_wood", 2, 30, 4, patienceMinutes: 20));
+            Assert.IsTrue(second.Enqueue("shop:8:16", 2, "fuel_wood", 1, 30, 4, patienceMinutes: 20));
+            first.Tick(7, 4);
+            second.Tick(3, 4);
+
+            var diagnostics = new List<string>();
+            Series2Pass9SaveDto dto = source.Capture(diagnostics);
+            Assert.AreEqual(2, dto.FuelDealerCustomerQueues.Count);
+
+            var restored = new Series2Pass9SaveState();
+            restored.Restore(dto, null, diagnostics);
+            Assert.AreEqual(2, restored.PendingFuelDealerCustomerQueueCount);
+
+            CustomerQueue reboundFirst = restored.GetOrCreateFuelDealerCustomerQueue("fuel-yard-1", "Town Fuel Yard");
+            Assert.AreEqual(1, reboundFirst.WaitingCount);
+            Assert.AreEqual(13, reboundFirst.Waiting[0].PatienceMinutesRemaining);
+            Assert.AreEqual("fuel-yard-1", reboundFirst.MerchantBusinessId);
+            Assert.AreEqual(1, restored.PendingFuelDealerCustomerQueueCount);
+
+            CustomerQueue reboundFirstAgain = restored.GetOrCreateFuelDealerCustomerQueue("fuel-yard-1", "Town Fuel Yard");
+            Assert.AreSame(reboundFirst, reboundFirstAgain);
+            Assert.AreEqual(1, reboundFirstAgain.WaitingCount, "A repeated bind must not duplicate a restored customer.");
+
+            // Re-saving before the second dealer runtime binds must keep its
+            // waiting customer pending rather than dropping it.
+            Series2Pass9SaveDto intermediate = restored.Capture(diagnostics);
+            Assert.AreEqual(2, intermediate.FuelDealerCustomerQueues.Count);
+            CustomerQueue reboundSecond = restored.GetOrCreateFuelDealerCustomerQueue("fuel-yard-2", "North Fuel Yard");
+            Assert.AreEqual(1, reboundSecond.WaitingCount);
+            Assert.AreEqual(17, reboundSecond.Waiting[0].PatienceMinutesRemaining);
+            Assert.AreNotSame(reboundFirst, reboundSecond);
+            Assert.AreEqual(0, restored.PendingFuelDealerCustomerQueueCount);
+        }
+
+        [Test]
+        public void FuelDealerCounterQueueRestore_UsesOwningEntryIdentity_WhenNestedDtoDisagrees()
+        {
+            var dto = new Series2Pass9SaveDto();
+            var queue = new CustomerQueue
+            {
+                MerchantBusinessId = "wrong-dealer",
+                MerchantName = "Wrong Dealer",
+            };
+            Assert.IsTrue(queue.Enqueue("shop:7:15", 1, "fuel_wood", 1, 30, 4, patienceMinutes: 18));
+            dto.FuelDealerCustomerQueues.Add(new Pass9FuelDealerCustomerQueueEntryDto
+            {
+                BusinessInstanceId = "fuel-yard-1",
+                Queue = queue.CaptureSaveDto(),
+            });
+
+            var restored = new Series2Pass9SaveState();
+            var diagnostics = new List<string>();
+            restored.Restore(dto, null, diagnostics);
+            CustomerQueue rebound = restored.GetOrCreateFuelDealerCustomerQueue("fuel-yard-1", "Town Fuel Yard");
+
+            Assert.AreEqual("fuel-yard-1", rebound.MerchantBusinessId,
+                "the durable enclosing business identity must own the queue after restoration");
+            Assert.AreEqual("shop:7:15", rebound.Waiting.Single().CustomerRef,
+                "identity repair must preserve the legitimate waiting customer");
+            Assert.IsTrue(diagnostics.Any(line => line.Contains("disagrees with owning entry 'fuel-yard-1'")),
+                "malformed cross-business queue state must remain diagnostically visible");
+        }
+
+        [Test]
+        public void FuelDealerCounterService_BindsRetailQueueAndPhysicalWorkers()
+        {
+            string text = ReadRepoFile(SimulationDriversPath);
+            StringAssert.Contains("FindFuelDealerSupplierAdapter(businessId)", text);
+            StringAssert.Contains("GetOrCreateFuelDealerCustomerQueue(", text);
+            StringAssert.Contains("FuelDealerServiceCandidatePersonIds(fuelDealerBusiness)", text);
+            StringAssert.Contains("IsPersonPhysicallyAtBuilding(candidatePersonId, fuelDealerBusiness.AssignedBuildingId)", text);
+            StringAssert.Contains("FuelDealerServiceCandidatePersonIds(fuelDealerBusiness).Contains(personId)", text);
         }
 
         [Test]

@@ -207,7 +207,7 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
-        public void BakeryRequiresFuelAsSecondaryInput()
+        public void BakeryWeeklyCategoryConversionIsDisabledUntilTaskBackedProductionIsConnected()
         {
             GameObject runtimeObject = new("Bakery Secondary Input Test");
             try
@@ -221,7 +221,12 @@ namespace LandLedgers.EditorTests.Economy
                 InvokeBusinessOperation(manager, bakery);
 
                 Assert.AreEqual(0, bakery.LastWeeklyThroughputUnits);
-                StringAssert.Contains("input shortage: fuel_wood", bakery.LastWeeklyBlockedReason);
+                Assert.AreEqual(20, bakery.RuntimeState.GetCategoryStock("flour").CurrentStockUnits,
+                    "the unsupported weekly category path cannot consume bakery flour");
+                Assert.AreEqual(0, bakery.RuntimeState.GetCategoryStock("bread").CurrentStockUnits,
+                    "the unsupported weekly category path cannot fabricate bread");
+                StringAssert.Contains("Task-backed production driver is not connected", bakery.LastWeeklyBlockedReason);
+                StringAssert.Contains("weekly category conversion is disabled", bakery.LastWeeklyBlockedReason);
             }
             finally
             {

@@ -1,0 +1,146 @@
+
+## Man
+IMPORT Assets/Asset Packs/western-cowboy-rigged/source/PlayerRigged (2).fbx globalScale=1 fileScale=0.01 useFileScale=True
+
+## Woman
+IMPORT Assets/Asset Packs/Bandit/Mesh/BanditMain.fbx globalScale=1 fileScale=0.01 useFileScale=True
+
+## Horse
+HorseWorldView.riderMount -> RiderMount rootLocal=(0.000, 1.450, -0.150)
+HorseWorldView.dismountLeft -> DismountLeft rootLocal=(-0.650, 0.050, 0.000)
+HorseWorldView.dismountRight -> DismountRight rootLocal=(0.650, 0.050, 0.000)
+HorseWorldView.hitchAnchor -> HitchAnchorBack rootLocal=(0.000, 0.800, -1.200)
+IMPORT Assets/Asset Packs/GameDevHQ/FileBase/3D/Characters/Animals/Horse_09/Fbx/Horse.fbx globalScale=1 fileScale=0.01 useFileScale=True
+HORSEBONE Neck_4 rootLocal=(0.0000, 1.5836, 0.5516)
+HORSEBONE Neck_5 rootLocal=(0.0000, 1.7922, 0.7432)
+HORSEBONE HitchAnchorFront rootLocal=(0.0000, 0.8000, 0.8200)
+
+## Wagon
+WagonWorldView.driverSeat -> DriverSeat rootLocal=(1.625, 1.250, 0.441)
+WagonWorldView.hitchPoint -> HitchPoint rootLocal=(0.000, 0.650, -1.500)
+WagonWorldView.cargoRoot -> CargoRoot rootLocal=(0.000, 0.850, 0.000)
+WagonWorldView.loadBounds -> LoadBounds rootLocal=(0.000, 0.850, 0.000)
+IMPORT Assets/Asset Packs/western-cowboy-rigged/source/PlayerRigged (2).fbx globalScale=1 fileScale=0.01 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Carriage_a.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/NatureManufacture Assets/Forest Environment Dynamic Nature/Small Architecture/Bridge/wood_beam_01.FBX globalScale=1 fileScale=0.001 useFileScale=True
+
+## Barrel01
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Barrel01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+
+## Can02
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Can02.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+
+## Fence01
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Fence01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+
+## HandWaterPump
+IMPORT Assets/Asset Packs/Western/Models/Interrior Propses/HandWaterPump.fbx globalScale=1 fileScale=0.01 useFileScale=True
+
+## LanternHang
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Lantern.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Wire04.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+
+## Showel
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Showel.FBX globalScale=0.5 fileScale=0.0254 useFileScale=True
+
+## WaterTank
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/WaterTank.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+
+## WindPump
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/WindPump.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+
+## Package01
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Package01.FBX globalScale=1 fileScale=0.01 useFileScale=True
+
+## House Natural Wood
+BuildingFootprintAuthority.frontLeftCornerLocal local=(-4.789, 0.000, 4.182) world=(489.253, 0.270, 274.554)
+BuildingFootprintAuthority.frontRightCornerLocal local=(4.899, 0.000, 4.182) world=(494.097, 0.270, 274.554)
+BuildingFootprintAuthority.backRightCornerLocal local=(4.899, 0.000, -5.287) world=(494.097, 0.270, 269.819)
+BuildingFootprintAuthority.backLeftCornerLocal local=(-4.789, 0.000, -5.287) world=(489.253, 0.270, 269.819)
+BuildingFootprintAuthority.frontDoorLocalPoint local=(0.055, 0.000, 4.532) world=(491.675, 0.270, 274.729)
+IMPORT Assets/Asset Packs/Western/Models/Buildings/House04.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Bucket02.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Basin.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/HorseStand03.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Lantern.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/MetalBucket01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Sack02.FBX globalScale=1 fileScale=0.01 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/sack03.FBX globalScale=1 fileScale=0.01 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Barrel02.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Crate05.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Package01.FBX globalScale=1 fileScale=0.01 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Package02.FBX globalScale=1 fileScale=0.01 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Crate04.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Sack01.FBX globalScale=1 fileScale=0.01 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Can01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Barrel01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+
+## Single Story Business Building White Plaster
+BuildingFootprintAuthority.frontLeftCornerLocal local=(-4.478, 0.000, 5.310) world=(501.286, 0.276, 275.109)
+BuildingFootprintAuthority.frontRightCornerLocal local=(4.591, 0.000, 5.310) world=(505.820, 0.276, 275.109)
+BuildingFootprintAuthority.backRightCornerLocal local=(4.591, 0.000, -4.868) world=(505.820, 0.276, 270.020)
+BuildingFootprintAuthority.backLeftCornerLocal local=(-4.478, 0.000, -4.868) world=(501.286, 0.276, 270.020)
+BuildingFootprintAuthority.frontDoorLocalPoint local=(0.057, 0.000, 5.660) world=(503.553, 0.276, 275.284)
+IMPORT Assets/Asset Packs/Western/Models/Buildings/House03_bank.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+
+## Double Story Business Building Green Wood
+BuildingFootprintAuthority.frontLeftCornerLocal local=(-4.892, 0.000, 7.816) world=(512.330, 0.000, 273.491)
+BuildingFootprintAuthority.frontRightCornerLocal local=(4.328, 0.000, 7.816) world=(516.940, 0.000, 273.491)
+BuildingFootprintAuthority.backRightCornerLocal local=(4.328, 0.000, -6.607) world=(516.940, 0.000, 266.279)
+BuildingFootprintAuthority.backLeftCornerLocal local=(-4.892, 0.000, -6.607) world=(512.330, 0.000, 266.279)
+BuildingFootprintAuthority.frontDoorLocalPoint local=(-0.282, 0.000, 8.166) world=(514.635, 0.000, 273.666)
+IMPORT Assets/Asset Packs/Western/Models/Buildings/House02.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Buildings/GeneralStore.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Crate01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Crate04.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Sack01.FBX globalScale=1 fileScale=0.01 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Can01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Barrel01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/HorseStand03.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+
+## Double Story Business Building Natural Wood
+BuildingFootprintAuthority.frontLeftCornerLocal local=(-7.087, 0.000, 10.860) world=(479.285, 0.284, 275.329)
+BuildingFootprintAuthority.frontRightCornerLocal local=(3.129, 0.000, 10.860) world=(484.393, 0.284, 275.329)
+BuildingFootprintAuthority.backRightCornerLocal local=(3.129, 0.000, -6.552) world=(484.393, 0.284, 266.623)
+BuildingFootprintAuthority.backLeftCornerLocal local=(-7.087, 0.000, -6.552) world=(479.285, 0.284, 266.623)
+BuildingFootprintAuthority.frontDoorLocalPoint local=(-1.979, 0.000, 11.210) world=(481.839, 0.284, 275.504)
+IMPORT Assets/Asset Packs/Western/Models/Buildings/House05.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Buildings/House02.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Crate01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Crate04.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Can01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Barrel01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/HorseStand02.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+
+## Double Story Business Building Red Wood
+BuildingFootprintAuthority.frontLeftCornerLocal local=(-9.018, 0.000, 9.022) world=(555.291, 0.284, 273.883)
+BuildingFootprintAuthority.frontRightCornerLocal local=(8.624, 0.000, 9.022) world=(564.112, 0.284, 273.883)
+BuildingFootprintAuthority.backRightCornerLocal local=(8.624, 0.000, -8.255) world=(564.112, 0.284, 265.245)
+BuildingFootprintAuthority.backLeftCornerLocal local=(-9.018, 0.000, -8.255) world=(555.291, 0.284, 265.245)
+BuildingFootprintAuthority.frontDoorLocalPoint local=(-0.197, 0.000, 9.372) world=(559.701, 0.284, 274.058)
+IMPORT Assets/Asset Packs/Western/Models/Buildings/GeneralStore.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Crate01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Crate04.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Sack01.FBX globalScale=1 fileScale=0.01 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Can01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Barrel01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/HorseStand01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/HorseStand02.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+
+## Townhall
+BuildingFootprintAuthority.frontLeftCornerLocal local=(-7.417, 0.000, 15.591) world=(-3.708, 0.000, 7.796)
+BuildingFootprintAuthority.frontRightCornerLocal local=(17.364, 0.000, 15.591) world=(8.682, 0.000, 7.796)
+BuildingFootprintAuthority.backRightCornerLocal local=(17.364, 0.000, -9.888) world=(8.682, 0.000, -4.944)
+BuildingFootprintAuthority.backLeftCornerLocal local=(-7.417, 0.000, -9.888) world=(-3.708, 0.000, -4.944)
+BuildingFootprintAuthority.frontDoorLocalPoint local=(4.974, 0.000, 15.941) world=(2.487, 0.000, 7.971)
+IMPORT Assets/Asset Packs/Western/Models/Buildings/Church.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Wheel.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Crate03.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Trough.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/HorseStand01.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/HorseStand02.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/HorseStand03.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Carriage_b.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Crate02.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Barrel02.FBX globalScale=1 fileScale=0.0254 useFileScale=True
+IMPORT Assets/Asset Packs/Western/Models/Propses/Models/Barrel01.FBX globalScale=1 fileScale=0.0254 useFileScale=True

@@ -554,15 +554,23 @@ namespace LandLedgers.Tasks
         public Func<int, int, List<TaskDurationSleepWindow>> ScheduleLookup { get; set; }
 
         /// <summary>
-        /// The log sink warnings and summaries are emitted through (Slice 3, plan §4.2).
-        /// Defaults to <see cref="Debug.LogWarning"/>; tests bind a capturing
-        /// <see cref="Action{T}"/>. Assigning null restores the default. The service
-        /// never calls <see cref="Debug"/> directly except through this sink.
+        /// Warnings and summaries are emitted through this sink. Expected bounded-store
+        /// turnover is informational and uses <see cref="InfoSink"/>.
+        /// Defaults to <see cref="Debug.LogWarning"/>; tests may bind a capturing sink.
         /// </summary>
         public Action<string> LogSink
         {
             get { return logSink ?? (message => Debug.LogWarning(message)); }
             set { logSink = value; }
+        }
+
+        private Action<string> infoSink;
+
+        /// <summary>Expected diagnostic-store maintenance; defaults to the informational Unity Console channel.</summary>
+        public Action<string> InfoSink
+        {
+            get { return infoSink ?? (message => Debug.Log(message)); }
+            set { infoSink = value; }
         }
 
         /// <summary>Records evicted by the store bound so far.</summary>
@@ -583,8 +591,8 @@ namespace LandLedgers.Tasks
         /// most once per day, and only when at least one overrun is open or a terminal
         /// overrun was warned that day; excess warnings are counted in its omitted
         /// count, never silently dropped — and the omitted tasks' identities are
-        /// emitted on a following "[TaskDuration] omitted" line, with evicted
-        /// records' identities on a "[TaskDuration] evicted" line when any were
+        /// emitted on a following "[TaskDuration] omitted" warning line, with evicted
+        /// records' identities on an informational "[TaskDuration] evicted" line when any were
         /// evicted since the last summary (CAMPAIGN-C, DEF-063).
         ///
         /// Evaluation points only (§4.2): this is called once per day by the day drive
@@ -750,7 +758,7 @@ namespace LandLedgers.Tasks
                 int evictedSinceLastSummary = EvictedRecordCount - evictedCountAtLastSummary;
                 if (evictedSinceLastSummary > 0)
                 {
-                    Emit(FormatEvictedLine(nowDay, evictedSinceLastSummary, evictedSinceLastSummaryIdentities));
+                    EmitInfo(FormatEvictedLine(nowDay, evictedSinceLastSummary, evictedSinceLastSummaryIdentities));
                 }
                 lastSummaryDay = nowDay;
                 evictedCountAtLastSummary = EvictedRecordCount;
@@ -992,10 +1000,16 @@ namespace LandLedgers.Tasks
             }
         }
 
-        /// <summary>Emits one line through the injected sink (Debug.LogWarning by default).</summary>
+        /// <summary>Emits one actionable warning line through the injected warning sink.</summary>
         private void Emit(string line)
         {
             LogSink(line);
+        }
+
+        /// <summary>Emits expected diagnostic-store maintenance without classifying it as a warning.</summary>
+        private void EmitInfo(string line)
+        {
+            InfoSink(line);
         }
 
         public int RecordCount

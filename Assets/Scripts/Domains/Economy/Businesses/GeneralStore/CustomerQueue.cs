@@ -18,6 +18,10 @@ namespace LandLedgers.Economy.GeneralStore
         /// balk diag can state the true minutes waited (initial minus remaining).</summary>
         public int PatienceMinutesInitial;
         public int QueuedDayIndex;
+        /// <summary>Absolute game clock when this person joined; older saves use -1.</summary>
+        public float QueuedGameSeconds = -1f;
+        /// <summary>Per-entry patience watermark prevents pre-arrival time being charged.</summary>
+        public float LastPatienceTickGameSeconds = -1f;
 
         public WaitingCustomer() { }
     }
@@ -61,6 +65,9 @@ namespace LandLedgers.Economy.GeneralStore
         public LostSaleLog LostSales => lostSales;
         public int WaitingCount => waiting.Count;
 
+        private static bool IsFiniteNonNegative(float value) =>
+            !float.IsNaN(value) && !float.IsInfinity(value) && value >= 0f;
+
         /// <summary>
         /// A customer arrives. Returns false when the line is too long: the customer
         /// balks immediately and a QueueBalk lost sale is recorded.
@@ -72,7 +79,8 @@ namespace LandLedgers.Economy.GeneralStore
             int unitsWanted,
             int priceCentsPerUnit,
             int dayIndex,
-            int patienceMinutes = DefaultPatienceMinutes)
+            int patienceMinutes = DefaultPatienceMinutes,
+            float queuedGameSeconds = float.NaN)
         {
             if (waiting.Count >= MaxToleratedQueueLength)
             {
@@ -94,6 +102,8 @@ namespace LandLedgers.Economy.GeneralStore
                 PatienceMinutesRemaining = Math.Max(1, patienceMinutes),
                 PatienceMinutesInitial = Math.Max(1, patienceMinutes),
                 QueuedDayIndex = dayIndex,
+                QueuedGameSeconds = IsFiniteNonNegative(queuedGameSeconds) ? queuedGameSeconds : -1f,
+                LastPatienceTickGameSeconds = IsFiniteNonNegative(queuedGameSeconds) ? queuedGameSeconds : -1f,
             });
             return true;
         }
@@ -115,6 +125,46 @@ namespace LandLedgers.Economy.GeneralStore
                 {
                     continue;
                 }
+
+                waiting.RemoveAt(i);
+                balkedCustomers.Add(customer);
+                balked++;
+                lostSales.Record(
+                    dayIndex, MerchantBusinessId, MerchantName, customer.ActingPersonId,
+                    customer.CategoryId, customer.UnitsWanted, customer.PriceCentsPerUnit,
+                    LostSaleReason.QueueBalk,
+                    $"Patience exhausted after waiting (wanted {customer.UnitsWanted}u {customer.CategoryId}).");
+            }
+
+            return balked;
+        }
+
+        /// <summary>
+        /// Advances patience against absolute simulated time while respecting
+        /// each customer's own arrival time. The driver's last tick watermark
+        /// prevents double-decay; QueuedGameSeconds prevents charging a
+        /// customer for a long journey that happened before they reached the
+        /// counter.
+        /// </summary>
+        public int TickAt(float currentGameSeconds, float previousGameSeconds, int dayIndex)
+        {
+            if (!IsFiniteNonNegative(currentGameSeconds)) return 0;
+            int balked = 0;
+            for (int i = waiting.Count - 1; i >= 0; i--)
+            {
+                WaitingCustomer customer = waiting[i];
+                float start = IsFiniteNonNegative(previousGameSeconds) ? previousGameSeconds : currentGameSeconds;
+                if (IsFiniteNonNegative(customer.QueuedGameSeconds))
+                    start = Math.Max(start, customer.QueuedGameSeconds);
+                if (IsFiniteNonNegative(customer.LastPatienceTickGameSeconds))
+                    start = Math.Max(start, customer.LastPatienceTickGameSeconds);
+                float elapsed = currentGameSeconds - start;
+                int minutes = elapsed > 0f ? (int)Math.Floor(elapsed / 60f) : 0;
+                if (minutes <= 0) continue;
+
+                customer.LastPatienceTickGameSeconds = start + minutes * 60f;
+                customer.PatienceMinutesRemaining -= minutes;
+                if (customer.PatienceMinutesRemaining > 0) continue;
 
                 waiting.RemoveAt(i);
                 balkedCustomers.Add(customer);
@@ -222,6 +272,8 @@ namespace LandLedgers.Economy.GeneralStore
                     // entry's balk diag states the true minutes waited.
                     PatienceMinutesInitial = customer.PatienceMinutesInitial,
                     QueuedDayIndex = customer.QueuedDayIndex,
+                    QueuedGameSeconds = customer.QueuedGameSeconds,
+                    LastPatienceTickGameSeconds = customer.LastPatienceTickGameSeconds,
                 });
             }
             return dto;
@@ -247,6 +299,8 @@ namespace LandLedgers.Economy.GeneralStore
                     PatienceMinutesRemaining = customer.PatienceMinutesRemaining,
                     PatienceMinutesInitial = customer.PatienceMinutesInitial,
                     QueuedDayIndex = customer.QueuedDayIndex,
+                    QueuedGameSeconds = customer.QueuedGameSeconds,
+                    LastPatienceTickGameSeconds = customer.LastPatienceTickGameSeconds,
                 });
             }
         }

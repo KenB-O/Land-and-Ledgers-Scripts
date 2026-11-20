@@ -403,16 +403,14 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(!string.IsNullOrWhiteSpace(breadLot.SourceLabel) && breadLot.SourceLabel.Contains("carried home"),
                 "the lot carries the purchase provenance; source: " + breadLot.SourceLabel);
 
-            // Leg 3 — meal: the next day, the bought loaf is eaten. Two
-            // substantial slots (morning + evening; the midday slot needs
-            // 3+ staple days of supply and 6 loaves is ~1 day), BreadId
-            // first in priority, one serving per slot.
+            // Leg 3 — meal: breakfast, lunch and supper the next day each
+            // consume one actual unit from the carried household bread lot.
             MealDayResult meals = ServeMeals(s, 3);
-            Assert.AreEqual(2, meals.MealsServed, "both substantial slots served");
+            Assert.AreEqual(3, meals.MealsServed, "breakfast, lunch and supper are served from actual household bread");
             Assert.AreEqual(0, meals.MealsMissed);
-            Assert.AreEqual(4, inventory.GetAvailableUnits(HouseholdItemCatalog.BreadId), "bread 6 -> 4 after two meals");
+            Assert.AreEqual(3, inventory.GetAvailableUnits(HouseholdItemCatalog.BreadId), "bread 6 -> 3 after three meals");
             IReadOnlyList<HouseholdMealRecord> records = s.MealLog.GetMeals(HouseholdId);
-            Assert.AreEqual(2, records.Count, "two meal records");
+            Assert.AreEqual(3, records.Count, "three chronological meal records");
             foreach (HouseholdMealRecord record in records)
             {
                 Assert.AreEqual(1, record.ItemsConsumed.Count, "each meal consumes one item");
@@ -577,9 +575,9 @@ namespace LandLedgers.Editor.Economy
 
             MealDayResult meals = ServeMeals(s, 3);
             Assert.AreEqual(0, meals.MealsServed, "no meal is served from an empty larder");
-            Assert.AreEqual(2, meals.MealsMissed, "both substantial slots are missed — and logged, not faked");
+            Assert.AreEqual(3, meals.MealsMissed, "all three scheduled meals are missed and logged, not faked");
             Assert.AreEqual(0, s.MealLog.GetMeals(HouseholdId).Count);
-            Assert.AreEqual(2, s.MealLog.GetMissedMeals(HouseholdId).Count);
+            Assert.AreEqual(3, s.MealLog.GetMissedMeals(HouseholdId).Count);
         }
 
         [Test]

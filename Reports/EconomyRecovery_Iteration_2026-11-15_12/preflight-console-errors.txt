@@ -1,0 +1,1 @@
+Prior Console sample before clearing for this run: repeated Failed to load Single Story Business Building White Plaster Animation 1.anim (6 captured entries, timestamps 09:32-09:39 UTC); one Pipeline command-not-found error from an invalid command-list invocation during this setup. Ground-truth Console reported 2 current errors, 48 warnings. Compilation was clean.

@@ -98,6 +98,7 @@ namespace LandLedgers.Economy.Businesses.Bakery
         }
 
         public IReadOnlyList<string> Log => log;
+        public BakeryShopRuntime Bakery => bakery;
 
         /// <summary>Simulation day the driver has set for pricing. -1 = unset: trading refused.</summary>
         public int DayIndex { get; set; } = -1;
@@ -158,19 +159,13 @@ namespace LandLedgers.Economy.Businesses.Bakery
         public int ItemStockUnits(string itemId)
         {
             if (!OffersItem(itemId) || bakery == null) return 0;
-            // Sellability is judged at the adapter day, not from the lot's
-            // stored Condition field, which SellBread only refreshes when
-            // it runs (AgeShelf). A lot baked two days ago must not count
-            // as sellable just because nobody aged it yet.
+            // The inquiry surface must match the actual sale gate. In
+            // particular, stock reserved by the bakery's current wholesale
+            // protection policy cannot be advertised as retail-available.
+            // The runtime also ages lots before calculating sellability, so a
+            // stale lot is not exposed simply because no sale call aged it.
             int day = DayIndex >= 0 ? DayIndex : 0;
-            int total = 0;
-            foreach (BakeryBreadLot lot in bakery.BreadShelf)
-            {
-                if (lot != null && lot.UnitCount > 0 && ConditionAtDay(lot, day) != BakeryGoodsCondition.Stale
-                    && string.Equals(lot.ProductId, BakeryBreadCatalog.BreadLoafId, StringComparison.Ordinal))
-                    total += Math.Max(0, lot.UnitCount);
-            }
-            return total;
+            return bakery.RetailUnitsAvailableForSale(BakeryBreadCatalog.BreadLoafId, day, log);
         }
 
         public int ItemPricePerUnitCents(string itemId)

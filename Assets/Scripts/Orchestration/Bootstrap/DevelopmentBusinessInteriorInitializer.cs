@@ -259,6 +259,9 @@ namespace LandLedgers.Orchestration
             instance.transform.localRotation = Quaternion.Euler(fixture.localEulerAngles);
             instance.transform.localScale = FurnishingPresentationCalibration.ApplyScale(
                 instance.transform.localScale, fixture.visualScaleMultiplier);
+            float floorHeight = authority.InteriorFloors?.FirstOrDefault(floor =>
+                floor != null && floor.floorIndex == fixture.floorIndex)?.floorHeightLocal ?? fixture.localPosition.y;
+            FurnishingPresentationCalibration.AlignRenderedBottomToFloor(instance.transform, floorHeight);
 
             BuildingEquipmentPlacement placement = instance.GetComponent<BuildingEquipmentPlacement>();
             if (placement == null) placement = instance.AddComponent<BuildingEquipmentPlacement>();

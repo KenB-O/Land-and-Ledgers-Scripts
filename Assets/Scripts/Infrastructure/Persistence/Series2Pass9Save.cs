@@ -93,6 +93,7 @@ using LandLedgers.Economy.FreightFuel;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Ordering;
+using LandLedgers.Economy.GenericBusiness;
 using LandLedgers.Economy.Storage;
 using LandLedgers.Orchestration.Player;
 using LandLedgers.Population;
@@ -351,6 +352,44 @@ namespace LandLedgers.Persistence
     /// bookkeeping for future passes, not a format-version claim.
     /// </summary>
     [Serializable]
+    public sealed class Pass9FuelDealerCustomerQueueEntryDto
+    {
+        public string BusinessInstanceId = string.Empty;
+        public LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto Queue;
+    }
+
+    [Serializable]
+    public sealed class Pass9FurniturePurchaseLineDto
+    {
+        public string ItemId = string.Empty;
+        public int Units;
+        public string SourceLotId = string.Empty;
+        public int UnitPriceCents;
+        public int Stage;
+        public List<string> AssetIds = new List<string>();
+    }
+
+    [Serializable]
+    public sealed class Pass9FurniturePurchaseOrderDto
+    {
+        public string PurchaseId = string.Empty;
+        public int Kind;
+        public int HouseholdId = -1;
+        public int SellerHouseholdId = -1;
+        public string VendorId = string.Empty;
+        public string VendorName = string.Empty;
+        public int BuildingInstanceId = -1;
+        public int DayIndex;
+        public int FreightCents;
+        public string ShipmentId = string.Empty;
+        public string InstallationBlockedReason = string.Empty;
+        public bool CancellationRequested;
+        public string TerminalReason = string.Empty;
+        public List<Pass9FurniturePurchaseLineDto> Lines = new List<Pass9FurniturePurchaseLineDto>();
+        public List<string> Diagnostics = new List<string>();
+    }
+
+    [Serializable]
     public sealed class Series2Pass9SaveDto
     {
         public int SectionVersion = 1;
@@ -408,6 +447,10 @@ namespace LandLedgers.Persistence
         public LandLedgers.Economy.Businesses.LumberYard.LumberYardShopRuntime.LumberYardShopRuntimeSaveDto LumberYard;
         public LandLedgers.Economy.Businesses.Logging.LoggingCampSite.LoggingCampSiteSaveDto LoggingCamp;
         public LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto CustomerQueue;
+        /// <summary>Additive physical bakery counter line; old saves have no waiting customers.</summary>
+        public LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto BakeryCustomerQueue;
+        /// <summary>Additive, business-keyed fuel-dealer counter lines; old saves restore no waiting customers.</summary>
+        public List<Pass9FuelDealerCustomerQueueEntryDto> FuelDealerCustomerQueues = new List<Pass9FuelDealerCustomerQueueEntryDto>();
 
         /// <summary>
         /// Slice S2: per-business equipment registers (ovens' component
@@ -425,6 +468,8 @@ namespace LandLedgers.Persistence
         /// unless the scenario explicitly authors an endowment (O-2).
         /// </summary>
         public List<HouseholdFurnishingRegister> HouseholdFurnishingRegisters = new List<HouseholdFurnishingRegister>();
+        /// <summary>Durable furniture orders; freight remains in FreightServiceSaveDto and custody remains in household registers.</summary>
+        public List<Pass9FurniturePurchaseOrderDto> FurniturePurchaseOrders = new List<Pass9FurniturePurchaseOrderDto>();
 
         /// <summary>
         /// B2 (Agent B, expanded campaign 2026-11-16): stove fuel
@@ -563,9 +608,16 @@ namespace LandLedgers.Persistence
         /// </summary>
         private LandLedgers.Economy.GeneralStore.CustomerQueue customerQueue;
         private LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto pendingCustomerQueue;
+        private LandLedgers.Economy.GeneralStore.CustomerQueue bakeryCustomerQueue;
+        private LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto pendingBakeryCustomerQueue;
+        private readonly Dictionary<string, LandLedgers.Economy.GeneralStore.CustomerQueue> fuelDealerCustomerQueues =
+            new Dictionary<string, LandLedgers.Economy.GeneralStore.CustomerQueue>(StringComparer.Ordinal);
+        private readonly Dictionary<string, LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto> pendingFuelDealerCustomerQueues =
+            new Dictionary<string, LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto>(StringComparer.Ordinal);
 
         /// <summary>Campaign C (DEF-028): true while a queue section recovered by Restore waits for a queue to bind.</summary>
         public bool HasPendingCustomerQueue => pendingCustomerQueue != null;
+        public bool HasPendingBakeryCustomerQueue => pendingBakeryCustomerQueue != null;
 
         public LandLedgers.Economy.GeneralStore.CustomerQueue CustomerQueue
         {
@@ -583,12 +635,68 @@ namespace LandLedgers.Persistence
         }
 
         /// <summary>
+        /// Live bakery waiting line. Kept distinct from the General Store
+        /// queue so service ownership and customer patience cannot cross
+        /// between merchants. A queue restored before bakery bootstrap is
+        /// held pending and applied when its runtime binds.
+        /// </summary>
+        public LandLedgers.Economy.GeneralStore.CustomerQueue BakeryCustomerQueue
+        {
+            get => bakeryCustomerQueue;
+            set
+            {
+                bakeryCustomerQueue = value;
+                if (bakeryCustomerQueue != null && pendingBakeryCustomerQueue != null)
+                {
+                    var deferred = pendingBakeryCustomerQueue;
+                    pendingBakeryCustomerQueue = null;
+                    bakeryCustomerQueue.LoadFromSaveDto(deferred);
+                }
+            }
+        }
+
+        public int PendingFuelDealerCustomerQueueCount => pendingFuelDealerCustomerQueues.Count;
+
+        /// <summary>
+        /// Returns the live physical counter queue for one formed fuel dealer.
+        /// A queue restored before the dealer's retail adapter exists is held
+        /// by business identity and drained exactly once when this method binds it.
+        /// </summary>
+        public LandLedgers.Economy.GeneralStore.CustomerQueue GetOrCreateFuelDealerCustomerQueue(
+            string businessInstanceId, string merchantName)
+        {
+            if (string.IsNullOrWhiteSpace(businessInstanceId)) return null;
+            if (!fuelDealerCustomerQueues.TryGetValue(businessInstanceId, out var queue) || queue == null)
+            {
+                queue = new LandLedgers.Economy.GeneralStore.CustomerQueue
+                {
+                    MerchantBusinessId = businessInstanceId,
+                    MerchantName = merchantName ?? string.Empty,
+                };
+                fuelDealerCustomerQueues[businessInstanceId] = queue;
+            }
+
+            if (pendingFuelDealerCustomerQueues.TryGetValue(businessInstanceId, out var pending))
+            {
+                pendingFuelDealerCustomerQueues.Remove(businessInstanceId);
+                queue.LoadFromSaveDto(pending);
+            }
+            else
+            {
+                queue.MerchantBusinessId = businessInstanceId;
+                queue.MerchantName = merchantName ?? string.Empty;
+            }
+            return queue;
+        }
+
+        /// <summary>
         /// Slice S2: live per-business equipment registers, held here so
         /// the Pass 9 seam persists them. The hub owns the live
         /// dictionary; the bootstrap registers these instances into it
         /// on NewGame seeding and re-registers restored ones after a load.
         /// </summary>
         public List<BusinessEquipmentRegister> EquipmentRegisters = new List<BusinessEquipmentRegister>();
+        public List<FurniturePurchaseOrder> FurniturePurchaseOrders = new List<FurniturePurchaseOrder>();
 
         /// <summary>
         /// B0 (Agent B): live per-household furnishing registers, held
@@ -1240,6 +1348,31 @@ namespace LandLedgers.Persistence
                 diag.Add("Series2Pass9Save: no customer queue supplied; queue saved empty.");
             }
 
+            if (BakeryCustomerQueue != null)
+                dto.BakeryCustomerQueue = BakeryCustomerQueue.CaptureSaveDto();
+
+            var fuelDealerQueueIds = new List<string>();
+            foreach (string businessId in fuelDealerCustomerQueues.Keys)
+                if (!string.IsNullOrWhiteSpace(businessId)) fuelDealerQueueIds.Add(businessId);
+            foreach (string businessId in pendingFuelDealerCustomerQueues.Keys)
+                if (!string.IsNullOrWhiteSpace(businessId) && !fuelDealerQueueIds.Contains(businessId))
+                    fuelDealerQueueIds.Add(businessId);
+            fuelDealerQueueIds.Sort(StringComparer.Ordinal);
+            foreach (string businessId in fuelDealerQueueIds)
+            {
+                LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto queueDto = null;
+                if (fuelDealerCustomerQueues.TryGetValue(businessId, out var liveQueue) && liveQueue != null)
+                    queueDto = liveQueue.CaptureSaveDto();
+                else if (pendingFuelDealerCustomerQueues.TryGetValue(businessId, out var pendingQueue))
+                    queueDto = pendingQueue;
+                if (queueDto == null) continue;
+                dto.FuelDealerCustomerQueues.Add(new Pass9FuelDealerCustomerQueueEntryDto
+                {
+                    BusinessInstanceId = businessId,
+                    Queue = queueDto,
+                });
+            }
+
             // Slice S2: equipment registers. Deep-copied, so later live
             // mutation cannot rewrite the saved section; a register with
             // no business id is skipped, never invented.
@@ -1265,6 +1398,12 @@ namespace LandLedgers.Persistence
                     if (register == null) continue;
                     dto.HouseholdFurnishingRegisters.Add(CopyHouseholdFurnishingRegister(register));
                 }
+            }
+
+            foreach (FurniturePurchaseOrder order in FurniturePurchaseOrders ?? new List<FurniturePurchaseOrder>())
+            {
+                if (order == null) continue;
+                dto.FurniturePurchaseOrders.Add(CaptureFurniturePurchase(order));
             }
             else if (diag != null)
             {
@@ -1797,6 +1936,70 @@ namespace LandLedgers.Persistence
                 diag.Add("Series2Pass9Save: customer queue present in save but no customer queue supplied yet; queue held pending the queue bind (DEF-028), not dropped.");
             }
 
+            if (BakeryCustomerQueue != null)
+                BakeryCustomerQueue.LoadFromSaveDto(dto.BakeryCustomerQueue);
+            else if (dto.BakeryCustomerQueue != null
+                && dto.BakeryCustomerQueue.Waiting != null
+                && dto.BakeryCustomerQueue.Waiting.Count > 0)
+            {
+                pendingBakeryCustomerQueue = dto.BakeryCustomerQueue;
+                diag.Add("Series2Pass9Save: bakery counter queue present before bakery service binding; waiting line held pending, not dropped.");
+            }
+
+            pendingFuelDealerCustomerQueues.Clear();
+            var savedFuelDealerQueues = new Dictionary<string, LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto>(StringComparer.Ordinal);
+            foreach (Pass9FuelDealerCustomerQueueEntryDto entry in dto.FuelDealerCustomerQueues
+                ?? new List<Pass9FuelDealerCustomerQueueEntryDto>())
+            {
+                if (entry == null || string.IsNullOrWhiteSpace(entry.BusinessInstanceId) || entry.Queue == null)
+                {
+                    diag.Add("Series2Pass9Save: invalid fuel-dealer customer queue entry ignored; no business identity or queue data.");
+                    continue;
+                }
+                if (savedFuelDealerQueues.ContainsKey(entry.BusinessInstanceId))
+                {
+                    diag.Add($"Series2Pass9Save: duplicate fuel-dealer customer queue for '{entry.BusinessInstanceId}' ignored; first entry retained.");
+                    continue;
+                }
+                // The wrapper identity is the durable owner. A malformed or
+                // older nested DTO must not bind this waiting line to a
+                // different dealer after Continue. Normalize into a fresh
+                // queue snapshot so restore never aliases the caller's DTO.
+                var normalizedQueue = new LandLedgers.Economy.GeneralStore.CustomerQueue();
+                normalizedQueue.LoadFromSaveDto(entry.Queue);
+                if (!string.IsNullOrWhiteSpace(entry.Queue.MerchantBusinessId)
+                    && !string.Equals(entry.BusinessInstanceId, entry.Queue.MerchantBusinessId, StringComparison.Ordinal))
+                {
+                    diag.Add($"Series2Pass9Save: fuel-dealer queue identity '{entry.Queue.MerchantBusinessId}' disagrees with owning entry '{entry.BusinessInstanceId}'; entry identity retained.");
+                }
+                normalizedQueue.MerchantBusinessId = entry.BusinessInstanceId;
+                savedFuelDealerQueues.Add(entry.BusinessInstanceId, normalizedQueue.CaptureSaveDto());
+            }
+
+            foreach (KeyValuePair<string, LandLedgers.Economy.GeneralStore.CustomerQueue> pair in fuelDealerCustomerQueues)
+            {
+                if (pair.Value == null) continue;
+                if (savedFuelDealerQueues.TryGetValue(pair.Key, out var savedQueue))
+                {
+                    pair.Value.LoadFromSaveDto(savedQueue);
+                    savedFuelDealerQueues.Remove(pair.Key);
+                }
+                else
+                {
+                    pair.Value.LoadFromSaveDto(new LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto
+                    {
+                        MerchantBusinessId = pair.Key,
+                        MerchantName = pair.Value.MerchantName ?? string.Empty,
+                    });
+                }
+            }
+
+            foreach (KeyValuePair<string, LandLedgers.Economy.GeneralStore.CustomerQueue.CustomerQueueSaveDto> pair in savedFuelDealerQueues)
+            {
+                pendingFuelDealerCustomerQueues[pair.Key] = pair.Value;
+                diag.Add($"Series2Pass9Save: fuel-dealer queue for '{pair.Key}' restored before service binding; queue held pending, not dropped.");
+            }
+
             // Slice S2: equipment registers — clear-then-load, idempotent.
             // Old saves carry no section and restore as empty registers;
             // restoring twice rebuilds the same registers, never duplicates.
@@ -1818,6 +2021,28 @@ namespace LandLedgers.Persistence
             {
                 if (saved == null) continue;
                 HouseholdFurnishingRegisters.Add(CopyHouseholdFurnishingRegister(saved));
+            }
+
+            FurniturePurchaseOrders.Clear();
+            foreach (Pass9FurniturePurchaseOrderDto saved in dto.FurniturePurchaseOrders ?? new List<Pass9FurniturePurchaseOrderDto>())
+            {
+                if (saved == null || string.IsNullOrWhiteSpace(saved.PurchaseId)) continue;
+                FurniturePurchaseOrder order = RestoreFurniturePurchase(saved);
+                foreach (HouseholdFurnishingRegister register in HouseholdFurnishingRegisters)
+                {
+                    if (register == null || register.HouseholdId != order.HouseholdId) continue;
+                    foreach (FurniturePurchaseLine line in order.Lines)
+                    {
+                        if (line?.AssetIds == null) continue;
+                        foreach (string assetId in line.AssetIds)
+                        {
+                            EquipmentAsset asset = register.FindAsset(assetId);
+                            if (asset != null && !order.ReceivedAssets.Any(existing => existing != null && existing.AssetId == asset.AssetId))
+                                order.ReceivedAssets.Add(asset);
+                        }
+                    }
+                }
+                FurniturePurchaseOrders.Add(order);
             }
 
             // B2: stove fuel stores — clear-then-load, idempotent. Old
@@ -2313,6 +2538,79 @@ namespace LandLedgers.Persistence
                 MissedReason = saved.MissedReason ?? string.Empty,
                 DutyAssigned = saved.DutyAssigned,
             };
+        }
+
+        private static Pass9FurniturePurchaseOrderDto CaptureFurniturePurchase(FurniturePurchaseOrder order)
+        {
+            var saved = new Pass9FurniturePurchaseOrderDto
+            {
+                PurchaseId = order.PurchaseId ?? string.Empty,
+                Kind = (int)order.Kind,
+                HouseholdId = order.HouseholdId,
+                SellerHouseholdId = order.SellerHouseholdId,
+                VendorId = order.VendorId ?? string.Empty,
+                VendorName = order.VendorName ?? string.Empty,
+                BuildingInstanceId = order.BuildingInstanceId,
+                DayIndex = order.DayIndex,
+                FreightCents = order.FreightCents,
+                ShipmentId = order.ShipmentId ?? string.Empty,
+                InstallationBlockedReason = order.InstallationBlockedReason ?? string.Empty,
+                CancellationRequested = order.CancellationRequested,
+                TerminalReason = order.TerminalReason ?? string.Empty,
+                Diagnostics = new List<string>(order.Diagnostics ?? new List<string>()),
+            };
+            foreach (FurniturePurchaseLine line in order.Lines ?? new List<FurniturePurchaseLine>())
+            {
+                if (line == null) continue;
+                saved.Lines.Add(new Pass9FurniturePurchaseLineDto
+                {
+                    ItemId = line.ItemId ?? string.Empty,
+                    Units = line.Units,
+                    SourceLotId = line.SourceLotId ?? string.Empty,
+                    UnitPriceCents = line.UnitPriceCents,
+                    Stage = (int)line.Stage,
+                    AssetIds = new List<string>(line.AssetIds ?? new List<string>()),
+                });
+            }
+            return saved;
+        }
+
+        private static FurniturePurchaseOrder RestoreFurniturePurchase(Pass9FurniturePurchaseOrderDto saved)
+        {
+            var order = new FurniturePurchaseOrder
+            {
+                PurchaseId = saved.PurchaseId ?? string.Empty,
+                Kind = Enum.IsDefined(typeof(FurniturePurchaseKind), saved.Kind)
+                    ? (FurniturePurchaseKind)saved.Kind : FurniturePurchaseKind.New,
+                HouseholdId = saved.HouseholdId,
+                SellerHouseholdId = saved.SellerHouseholdId,
+                VendorId = saved.VendorId ?? string.Empty,
+                VendorName = saved.VendorName ?? string.Empty,
+                BuildingInstanceId = saved.BuildingInstanceId,
+                DayIndex = saved.DayIndex,
+                FreightCents = Math.Max(0, saved.FreightCents),
+                ShipmentId = saved.ShipmentId ?? string.Empty,
+                InstallationBlockedReason = saved.InstallationBlockedReason ?? string.Empty,
+                CancellationRequested = saved.CancellationRequested,
+                TerminalReason = saved.TerminalReason ?? string.Empty,
+                Diagnostics = new List<string>(saved.Diagnostics ?? new List<string>()),
+            };
+            foreach (Pass9FurniturePurchaseLineDto line in saved.Lines ?? new List<Pass9FurniturePurchaseLineDto>())
+            {
+                if (line == null) continue;
+                int stage = line.Stage;
+                if (!Enum.IsDefined(typeof(EquipmentPurchaseStage), stage)) stage = (int)EquipmentPurchaseStage.Quoted;
+                order.Lines.Add(new FurniturePurchaseLine
+                {
+                    ItemId = line.ItemId ?? string.Empty,
+                    Units = Math.Max(0, line.Units),
+                    SourceLotId = line.SourceLotId ?? string.Empty,
+                    UnitPriceCents = Math.Max(0, line.UnitPriceCents),
+                    Stage = (EquipmentPurchaseStage)stage,
+                    AssetIds = new List<string>(line.AssetIds ?? new List<string>()),
+                });
+            }
+            return order;
         }
     }
 }

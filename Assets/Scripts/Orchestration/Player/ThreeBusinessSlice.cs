@@ -186,6 +186,17 @@ namespace LandLedgers.Orchestration.Player
             return dealerCoverable + onHand;
         }
 
+        /// <summary>
+        /// Dealer-owned intake expressed in bakery fuel units. Unlike
+        /// FuelUnitsOnHand, this excludes fuel already received by the
+        /// bakery and is intended for diagnostics that report dealer stock.
+        /// </summary>
+        public int DealerFuelUnitsOnHand()
+        {
+            if (intake == null || intakeUnitsPerBakeryUnit <= 0) return 0;
+            return intake.TotalFuelWoodUnitsFor(dealerBusinessId) / intakeUnitsPerBakeryUnit;
+        }
+
         public string SupplyTo(BakeryShopRuntime target, int unitsNeeded, int dayIndex, List<string> diag)
         {
             diag ??= new List<string>();

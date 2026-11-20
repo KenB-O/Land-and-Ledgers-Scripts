@@ -791,7 +791,8 @@ namespace LandLedgers.UI
                     // ordinary selector or silently changing a restored speed.
                     selectableSpeeds.Add(speed);
                     speedSelector.options.Add(new TMP_Dropdown.OptionData($"Legacy {(int)speed}× Normal"));
-                    speedSelector.template.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, selectableSpeeds.Count * 32f + 12f);
+                    if (speedSelector.template != null)
+                        speedSelector.template.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, selectableSpeeds.Count * 32f + 12f);
                     selected = selectableSpeeds.Count - 1;
                 }
                 speedSelector.SetValueWithoutNotify(selected);
@@ -1041,6 +1042,14 @@ namespace LandLedgers.UI
                 layout.preferredWidth = 400f;
                 layout.preferredHeight = 34f;
                 speedSelector = dropdownObject.GetComponent<TMP_Dropdown>();
+                // TMP_Dropdown initializes its AlphaTweenRunner in Start, not
+                // Awake. Runtime-created HUDs can be enabled after the scene's
+                // initial Start phase, so keep this control non-interactable for
+                // one frame to prevent a first-click Show() from invoking a null
+                // fade runner.
+                speedSelector.interactable = false;
+                speedSelector.enabled = false;
+                StartCoroutine(EnableSpeedSelectorAfterDropdownStart(speedSelector));
                 speedSelector.ClearOptions();
                 speedSelector.AddOptions(new System.Collections.Generic.List<string>(SpeedOptions));
                 TMP_Text sourceLabel = speed1xButton.GetComponentInChildren<TMP_Text>(true);
@@ -1083,7 +1092,8 @@ namespace LandLedgers.UI
                     arrowLabel.raycastTarget = false;
                 }
                 RectTransform template = speedSelector.template;
-                template.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, selectableSpeeds.Count * 32f + 12f);
+                if (template != null)
+                    template.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, selectableSpeeds.Count * 32f + 12f);
                 UnityEngine.UI.Image panelImage = template.GetComponent<UnityEngine.UI.Image>();
                 if (panelImage != null) panelImage.color = panel;
                 UnityEngine.UI.Toggle item = template.GetComponentInChildren<UnityEngine.UI.Toggle>(true);
@@ -1112,6 +1122,23 @@ namespace LandLedgers.UI
             foreach (Button legacy in new[] { realTimeButton, speed1xButton, speed2xButton, speed5xButton,
                 speed10xButton, speed50xButton, speed100xButton, speed250xButton })
                 if (legacy != null) legacy.gameObject.SetActive(false);
+        }
+
+        private IEnumerator EnableSpeedSelectorAfterDropdownStart(TMP_Dropdown dropdown)
+        {
+            // Keep the handler disabled while the dynamically added component
+            // passes through Start. TMP_Dropdown initializes its fade runner
+            // there; its pointer-click override does not itself test the
+            // Selectable.interactable flag before calling Show().
+            yield return null;
+            if (this == null || dropdown == null || dropdown != speedSelector) yield break;
+            dropdown.enabled = true;
+            // On enabling a component at runtime, Unity invokes Start before
+            // its first Update. Keep it non-interactable through that frame so
+            // the EventSystem cannot dispatch a click before initialization.
+            yield return null;
+            if (this != null && dropdown != null && dropdown == speedSelector)
+                dropdown.interactable = true;
         }
 
         private void ConfigureSpeedButtonsForCurrentHierarchy()

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Reflection;
+using LandLedgers.FirstLedger;
 using LandLedgers.Pathing;
 using LandLedgers.World;
 using NUnit.Framework;
@@ -108,6 +109,79 @@ namespace LandLedgers.EditorTests.Pathing
                 Assert.That(route.Path.Count, Is.GreaterThan(7), "A legal route must go around the solid footprint.");
                 foreach (GridCoord point in route.Path)
                     Assert.IsFalse(grid.GetCell(point).HasBuilding, $"Route crossed building cell {point}.");
+            }
+            finally { DestroyAll(cleanup); }
+        }
+
+        [Test]
+        public void AuthoredEntranceCanReconcileWhenCoarseDoorCellIsNotTraversable()
+        {
+            List<Object> cleanup = new();
+            try
+            {
+                CreateHarness(7, 5, cleanup, out TownGrid grid, out PathingManager pathing, out _);
+                FillBuildable(grid, 0f);
+
+                GridCoord authoredDoorCell = new(3, 2);
+                TownCell footprint = BuildableCell(0f);
+                footprint.occupancy = CellOccupancy.Building | CellOccupancy.Blocked;
+                footprint.buildingId = 0;
+                footprint.blocked = true;
+                grid.SetCell(authoredDoorCell, footprint);
+
+                GameObject buildingObject = new("Blocked coarse storefront door");
+                cleanup.Add(buildingObject);
+                buildingObject.transform.position = grid.CoordToWorldCenter(authoredDoorCell);
+                BuildingFootprintAuthority authority = buildingObject.AddComponent<BuildingFootprintAuthority>();
+                typeof(BuildingFootprintAuthority)
+                    .GetField("entrancePairs", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.SetValue(authority, new List<BuildingEntrancePairAuthoring>
+                    {
+                        new()
+                        {
+                            id = "main-entrance",
+                            indoorPositionLocal = Vector3.zero,
+                            outdoorApproachLocal = new Vector3(0f, 0f, 2f),
+                            clearWidthMeters = 1.1f
+                        }
+                    });
+
+                PlacedBuilding placed = new()
+                {
+                    id = 0,
+                    runtimeFootprintAuthority = authority
+                };
+                placed.anchors.Add(new BuildingAnchor { type = AnchorType.FrontDoor, coord = authoredDoorCell });
+                List<PlacedBuilding> buildings = (List<PlacedBuilding>)typeof(TownWorldController)
+                    .GetField("buildings", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.GetValue(pathing.WorldController);
+                Assert.IsNotNull(buildings);
+                buildings.Add(placed);
+
+                Assert.IsFalse(pathing.TryFindAnchorByBuildingId(0, AnchorType.FrontDoor, out _, out _),
+                    "Normal route lookup must reject the non-traversable authored marker cell.");
+
+                GameObject directorObject = new("Entrance route test director");
+                cleanup.Add(directorObject);
+                PopulationPathingDirector director = directorObject.AddComponent<PopulationPathingDirector>();
+                typeof(PopulationPathingDirector)
+                    .GetField("pathingManager", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.SetValue(director, pathing);
+                MethodInfo resolveDoor = typeof(PopulationPathingDirector).GetMethod("TryGetDoorAnchor",
+                    BindingFlags.Instance | BindingFlags.NonPublic, null,
+                    new[] { typeof(int), typeof(BuildingAnchor).MakeByRefType(), typeof(PlacedBuilding).MakeByRefType() }, null);
+                Assert.IsNotNull(resolveDoor);
+
+                object[] args = { 0, default(BuildingAnchor), null };
+                bool resolved = (bool)resolveDoor.Invoke(director, args);
+                BuildingAnchor routeAnchor = (BuildingAnchor)args[1];
+
+                Assert.IsTrue(resolved, "The authored entrance should be projected to a physically walkable exterior cell.");
+                Assert.IsTrue(routeAnchor.wasReconciledToExteriorAccess);
+                Assert.AreNotEqual(authoredDoorCell, routeAnchor.coord);
+                Assert.IsFalse(grid.GetCell(routeAnchor.coord).HasBuilding);
+                Assert.IsTrue(pathing.TryGetMovementCost(routeAnchor.coord, out _),
+                    "Reconciliation must return a real traversable path cell, not waive movement validation.");
             }
             finally { DestroyAll(cleanup); }
         }

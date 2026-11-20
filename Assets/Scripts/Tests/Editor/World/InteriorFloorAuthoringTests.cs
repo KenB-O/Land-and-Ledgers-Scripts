@@ -154,6 +154,113 @@ namespace LandLedgers.Editor.World
         }
 
         [Test]
+        public void CleaningActivityResolvesNearbyClearPointWhenFurnitureBlocksAuthoredAnchor()
+        {
+            GameObject building = new("Cleaning approach fallback test");
+            try
+            {
+                BuildingFootprintAuthority authority = building.AddComponent<BuildingFootprintAuthority>();
+                InteriorFloorAuthoring floor = new() { floorIndex = 0, floorHeightLocal = 0f };
+                floor.walkableAreas.Add(Rectangle("Floor", -2f, -2f, 2f, 2f));
+                GetInteriorFloors(authority).Add(floor);
+                GetEntrancePairs(authority).Add(new BuildingEntrancePairAuthoring
+                {
+                    id = "entry", indoorPositionLocal = new Vector3(-1.5f, 0f, 1f),
+                    outdoorApproachLocal = new Vector3(-1.5f, 0f, 2f), clearWidthMeters = 1.1f
+                });
+                GetActivityLocations(authority).Add(new BuildingActivityLocationAuthoring
+                {
+                    id = "cleaning", displayName = "Cleaning", type = BuildingActivityLocationType.Cleaning,
+                    positionLocal = Vector3.zero, forwardLocal = Vector3.forward, requiresWalkableInterior = true
+                });
+                GetActivityLocations(authority).Add(new BuildingActivityLocationAuthoring
+                {
+                    id = "bed", displayName = "Bed access", type = BuildingActivityLocationType.Bed,
+                    positionLocal = Vector3.zero, forwardLocal = Vector3.forward, requiresWalkableInterior = true
+                });
+
+                GameObject chair = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                chair.name = "Dining chair";
+                chair.transform.SetParent(building.transform, false);
+                BuildingEquipmentPlacement placement = chair.AddComponent<BuildingEquipmentPlacement>();
+                placement.Configure("chair-asset", "furniture.chair", "Dining chair", 0);
+                placement.ConfigureNavigationFootprint(true, Vector2.zero, new Vector2(0.8f, 0.8f));
+                placement.AssociateWithBuilding(authority);
+
+                Assert.IsFalse(authority.TryEvaluateInteriorLocalPoint(Vector3.zero, 0, null, out string blocked));
+                StringAssert.Contains("Dining chair", blocked);
+                Assert.IsTrue(authority.TryGetActivityLocation("cleaning", 4,
+                    out ResolvedBuildingActivityLocation cleaning, out string cleaningError), cleaningError);
+                Assert.That(Vector3.Distance(Vector3.zero, cleaning.WorldPosition), Is.GreaterThan(0.6f));
+                Assert.That(Vector3.Distance(Vector3.zero, cleaning.WorldPosition), Is.LessThanOrEqualTo(0.8f));
+                Assert.IsFalse(authority.TryGetActivityLocation("bed", 4, out _, out string bedError));
+                StringAssert.Contains("Dining chair", bedError,
+                    "Furniture-specific sleeping positions must remain strict.");
+
+                Assert.IsTrue(authority.TryBuildInteriorActivityRoute("entry", "cleaning",
+                    out List<Vector3> route, out string routeError), routeError);
+                Assert.That(route.Count, Is.GreaterThan(1));
+                Assert.That(Vector3.Distance(route[^1], cleaning.WorldPosition), Is.LessThan(0.001f));
+
+                placement.ConfigureNavigationFootprint(true, Vector2.zero, new Vector2(10f, 10f));
+                Assert.IsFalse(authority.TryGetActivityLocation("cleaning", 4, out _, out string stillBlocked),
+                    "The fallback must not claim a usable activity point when the surrounding floor is fully obstructed.");
+                StringAssert.Contains("installed equipment", stillBlocked);
+            }
+            finally
+            {
+                Object.DestroyImmediate(building);
+            }
+        }
+
+        [Test]
+        public void CleaningActivitySearchesWalkableFloorWhenNearbyFallbackIsFullyBlocked()
+        {
+            GameObject building = new("Cleaning floor search test");
+            try
+            {
+                BuildingFootprintAuthority authority = building.AddComponent<BuildingFootprintAuthority>();
+                InteriorFloorAuthoring floor = new() { floorIndex = 0, floorHeightLocal = 0f };
+                floor.walkableAreas.Add(Rectangle("Floor", -3f, -3f, 3f, 3f));
+                GetInteriorFloors(authority).Add(floor);
+                GetEntrancePairs(authority).Add(new BuildingEntrancePairAuthoring
+                {
+                    id = "entry", indoorPositionLocal = new Vector3(-2.5f, 0f, 2.5f),
+                    outdoorApproachLocal = new Vector3(-2.5f, 0f, 3f), clearWidthMeters = 1.1f
+                });
+                GetActivityLocations(authority).Add(new BuildingActivityLocationAuthoring
+                {
+                    id = "cleaning", displayName = "Cleaning", type = BuildingActivityLocationType.Cleaning,
+                    positionLocal = Vector3.zero, forwardLocal = Vector3.forward, requiresWalkableInterior = true
+                });
+
+                GameObject table = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                table.name = "Dining table";
+                table.transform.SetParent(building.transform, false);
+                BuildingEquipmentPlacement placement = table.AddComponent<BuildingEquipmentPlacement>();
+                placement.Configure("table-asset", "furniture.table", "Dining table", 0);
+                placement.ConfigureNavigationFootprint(true, Vector2.zero, new Vector2(2.2f, 2.2f));
+                placement.AssociateWithBuilding(authority);
+
+                Assert.IsFalse(authority.TryEvaluateInteriorLocalPoint(Vector3.zero, 0, null, out string blocked));
+                StringAssert.Contains("Dining table", blocked);
+                Assert.IsTrue(authority.TryGetActivityLocation("cleaning", 4,
+                    out ResolvedBuildingActivityLocation cleaning, out string cleaningError), cleaningError);
+                Vector3 localCleaning = building.transform.InverseTransformPoint(cleaning.WorldPosition);
+                Assert.That(Vector2.Distance(new Vector2(localCleaning.x, localCleaning.z), Vector2.zero),
+                    Is.GreaterThan(0.8f), "The local fallback radius is obstructed; use a clear point from authored floor geometry.");
+                Assert.IsTrue(authority.TryBuildInteriorActivityRoute("entry", "cleaning",
+                    out List<Vector3> route, out string routeError), routeError);
+                Assert.That(route.Count, Is.GreaterThan(1));
+                Assert.That(Vector3.Distance(route[^1], cleaning.WorldPosition), Is.LessThan(0.001f));
+            }
+            finally
+            {
+                Object.DestroyImmediate(building);
+            }
+        }
+
+        [Test]
         public void RuntimeActivityLocation_CanBeRegisteredUpdatedAndRemovedWithItsFurniture()
         {
             GameObject building = new("Runtime furnishing activity test");

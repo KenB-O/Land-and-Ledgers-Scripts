@@ -260,6 +260,8 @@ namespace LandLedgers.Editor.Population
                 intake, "fuel-dealer-1", dealer, bakery, bakeryBusiness, ids,
                 intakeUnitsPerBakeryUnit: 2, priceCentsPerBakeryUnit: 28);
             Assert.AreEqual(7, source.FuelUnitsOnHand());
+            Assert.AreEqual(4, source.DealerFuelUnitsOnHand(),
+                "dealer diagnostic stock excludes the 3 units already received by the bakery");
             Assert.IsNull(source.SupplyTo(bakery, 5, 4, new List<string>()));
             Assert.AreEqual(4, intake.TotalFuelWoodUnitsFor("fuel-dealer-1"));
             Assert.AreEqual(5, bakery.FuelStock.UnitsOnHand(

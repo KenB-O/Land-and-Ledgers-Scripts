@@ -28,17 +28,107 @@ namespace LandLedgers.EditorTests.Orchestration
         }
 
         [Test]
-        public void StagedBakeryBatch_DoesNotStartWithoutDistinctDemandOrAlongsideActiveBatch()
+        public void WorkAssignmentDiagnosticClassifier_KeepsSuccessfulSchedulingInformationalAndRefusalsLoud()
+        {
+            var successfulScheduling = new List<string>
+            {
+                "WorkScheduler: 1 open item(s), 1 worker(s), day 1",
+                "assigned T3 (Travel, 2m) to P3",
+                "Day 1: P3 work released rest Resting [480-510] for the window from minute 480."
+            };
+            Assert.IsFalse(ClassifyWorkAssignmentDiagnostic(successfulScheduling),
+                "open counts, a real assignment, and explicit rest preemption are successful scheduling outcomes.");
+
+            Assert.IsTrue(ClassifyWorkAssignmentDiagnostic(new List<string>
+            {
+                "T3 unassigned: unassignable: P3 has no available time window"
+            }), "an unassigned task remains warning-worthy.");
+            Assert.IsTrue(ClassifyWorkAssignmentDiagnostic(new List<string>
+            {
+                "task T3: start refused (person already occupied)"
+            }), "a task-start refusal remains warning-worthy.");
+            Assert.IsTrue(ClassifyWorkAssignmentDiagnostic(new List<string>
+            {
+                "new unclassified scheduler diagnostic"
+            }), "unknown diagnostic forms default to warning rather than being hidden.");
+        }
+
+        [Test]
+        public void DailyNeedsDiagnosticClassifier_DropsRoutineNoObligationSummariesButKeepsFailuresLoud()
+        {
+            Assert.IsTrue(SimulationDrivers.IsRoutineDailyNeedsDiagnostic(
+                "[FoodEconomy] shopping plan day 4: 0 physical trip(s) pending; no purchase is recorded until confirmed Store arrival; "
+                + "needs without a settled receipt remain open: none", 4));
+            Assert.IsTrue(SimulationDrivers.IsRoutineDailyNeedsDiagnostic(
+                "HouseholdAutonomy: household 3 -> NoAction (NoAction: no obligations due (reserves 40000c))", 4));
+
+            Assert.IsFalse(SimulationDrivers.IsRoutineDailyNeedsDiagnostic(
+                "DailyNeedsService: P7 is off-map, needs stay open for return.", 4));
+            Assert.IsFalse(SimulationDrivers.IsRoutineDailyNeedsDiagnostic(
+                "Day 4: rejected 'Glen Pierce Bakery' for 'bread': no available stock (real lots exhausted).", 4));
+            Assert.IsFalse(SimulationDrivers.IsRoutineDailyNeedsDiagnostic(
+                "Day 4: shopping trip trip-4-0 planned — P1 → 'General Store' (1 min out, 15 min in store, 1 min back).", 4));
+        }
+
+        [Test]
+        public void StagedBakeryBatch_UsesUncoveredHouseholdDemandWithoutDuplicatingActiveWork()
         {
             Assert.IsFalse(
-                SimulationDrivers.ShouldBeginStagedBakeryBatch(false, false),
-                "The live wholesale plan is not a second staged order; no distinct demand means no extra 24-loaf batch.");
+                SimulationDrivers.ShouldBeginStagedBakeryBatch(0, 0, false, false),
+                "No open household bread need means no retail batch.");
             Assert.IsFalse(
-                SimulationDrivers.ShouldBeginStagedBakeryBatch(true, true),
-                "A second staged batch cannot overlap one already in progress.");
+                SimulationDrivers.ShouldBeginStagedBakeryBatch(8, 8, false, false),
+                "The bakery's saleable retail stock already covers the open need.");
+            Assert.IsFalse(
+                SimulationDrivers.ShouldBeginStagedBakeryBatch(24, 0, true, false),
+                "An active conventional wholesale batch already occupies the production pipeline.");
             Assert.IsTrue(
-                SimulationDrivers.ShouldBeginStagedBakeryBatch(true, false),
-                "A future explicitly authorized, distinct staged order may use the existing staged driver.");
+                SimulationDrivers.ShouldBeginStagedBakeryBatch(24, 0, false, false),
+                "An uncovered real household need authorizes one staged retail batch.");
+            Assert.IsFalse(
+                SimulationDrivers.ShouldBeginStagedBakeryBatch(48, 0, false, true),
+                "An active staged batch or output awaiting shelf transfer prevents duplicate production.");
+        }
+
+        [Test]
+        public void StagedBakeryPlanning_DoesNotCompeteWithAnActiveWholesaleAccount()
+        {
+            Assert.IsFalse(SimulationDrivers.ShouldBeginStagedBakeryBatch(
+                    24, 0, false, false, hasActiveWholesaleAccount: true),
+                "an active wholesale commitment remains with the conventional account planner; the staged retail path cannot consume the same bakery inputs concurrently");
+            Assert.IsTrue(SimulationDrivers.ShouldBeginStagedBakeryBatch(
+                    24, 0, false, false, hasActiveWholesaleAccount: false),
+                "with no wholesale commitments, uncovered actual household need can still use staged physical production");
+        }
+
+        [Test]
+        public void StagedBakeryRetailDemand_UsesOnlyOpenHouseholdBreadNeeds()
+        {
+            var needs = new HouseholdNeedRegistry();
+            HouseholdPurchasingNeed openBread = needs.CreateNeed(1, HouseholdItemCatalog.BreadId, 2);
+            openBread.UnitsNeeded = 9;
+            HouseholdPurchasingNeed otherNeed = needs.CreateNeed(1, "beef", 2);
+            otherNeed.UnitsNeeded = 40;
+            HouseholdPurchasingNeed fulfilledBread = needs.CreateNeed(2, HouseholdItemCatalog.BreadId, 1);
+            fulfilledBread.UnitsNeeded = 50;
+            fulfilledBread.Status = PurchasingNeedStatus.Fulfilled;
+
+            Assert.AreEqual(9, SimulationDrivers.CountOpenHouseholdBreadNeedUnits(needs),
+                "Retail production demand comes from actual open bread needs, not other goods or historical fulfilled needs.");
+        }
+
+        [Test]
+        public void StagedBakeryWorkerSelection_SkipsBusyOwnerAndUsesFirstEligibleActiveEmployee()
+        {
+            int selected = SimulationDrivers.FirstEligibleStagedBakeryWorkerId(
+                new[] { 2, 7, 7, -1, 9 },
+                personId => personId == 7 || personId == 9);
+
+            Assert.AreEqual(7, selected,
+                "An unavailable owner must not hide the first eligible employee, and duplicate/invalid identities are ignored.");
+            Assert.AreEqual(-1, SimulationDrivers.FirstEligibleStagedBakeryWorkerId(
+                new[] { 2, 7 }, personId => false),
+                "No worker candidate may be fabricated when every legitimate candidate is occupied or unavailable.");
         }
 
         private static bool ClassifyDueEventDiagnostic(string message)
@@ -47,6 +137,14 @@ namespace LandLedgers.EditorTests.Orchestration
                 "IsDueEventFailureDiagnostic", BindingFlags.NonPublic | BindingFlags.Static);
             Assert.IsNotNull(classifier, "The due-event diagnostic classifier must remain present.");
             return (bool)classifier.Invoke(null, new object[] { message });
+        }
+
+        private static bool ClassifyWorkAssignmentDiagnostic(List<string> diagnostics)
+        {
+            MethodInfo classifier = typeof(SimulationDrivers).GetMethod(
+                "HasActionableWorkAssignmentDiagnostics", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.IsNotNull(classifier, "The work-assignment diagnostic classifier must remain present.");
+            return (bool)classifier.Invoke(null, new object[] { diagnostics });
         }
 
         private sealed class StorePort : IGeneralStoreTradingPort

@@ -534,6 +534,39 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void DriverRegistersShortfallAfterPartialPaidNotionsFeed()
+        {
+            // One actual notion arrives from the named supplier for a
+            // two-batch obligation. The supply step pays for and receives
+            // that one unit into the bakery bin before production checks
+            // run. The remaining need is one physical unit, not zero from
+            // subtracting the feed a second time.
+            var s = NewSetup();
+            var reg = Registration("test-notions", "notions", 10, 0, 50, 1);
+            Assert.IsNull(reg.RegisterInto(s.Market, s.Diag));
+            Assert.IsNotNull(s.Notions.PlaceNotionsOrder(
+                reg, 1, 1, NamedSkuPaymentMode.CashOnArrival, null, s.Diag));
+            SeedInputs(s, 0, 0, 2);
+            SeedStoreFlour(s, 2);
+            BookAccount(s, 48, 1, 2, 2);
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(
+                DriverInputsFor(s, reg, 2), s.Diag);
+
+            Assert.AreEqual(2, result.BatchesPlanned);
+            Assert.AreEqual(1, result.NotionsUnitsFed,
+                "one arrived, paid unit is physically transferred into Bakery custody");
+            Assert.AreEqual(1, result.NotionsNeedUnits,
+                "two batches need two units; the one unit now in the bin covers exactly one");
+            Assert.AreEqual(1, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId),
+                "a refused two-batch production attempt preserves its one real notion");
+            Assert.AreEqual(0, result.BatchesBaked,
+                "the two-batch attempt cannot complete without the second physical notion");
+            Assert.AreEqual(1932, s.BakeryRuntime.CurrentCashCents,
+                "Bakery pays 58c flour plus 10c for the one notion actually fed");
+        }
+
+        [Test]
         public void DriverSecondSameDayCall_BuysNothingTwice()
         {
             // The bake refuses on fuel, so the fed notion stays in the

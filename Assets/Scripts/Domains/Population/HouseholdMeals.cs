@@ -104,24 +104,25 @@ namespace LandLedgers.Population
     }
 
     /// <summary>
-    /// Phase B: the meal scheduling policy. Two substantial meals daily plus
-    /// an optional/flexible midday meal — CONFIGURABLE per scenario, never a
-    /// universal constant. The midday meal is circumstance-sensitive: it is
-    /// served only when staple days-of-supply meet the threshold.
+    /// Phase B: the meal scheduling policy. The ordinary household schedule
+    /// provides breakfast, lunch and supper. The midday slot remains
+    /// configurable for scenarios, but food scarcity does not erase the need
+    /// from nutrition or missed-meal accounting.
     /// </summary>
     public sealed class MealSchedulingPolicy
     {
-        /// <summary>Slots served as substantial meals (default: morning + evening).</summary>
+        /// <summary>Configured substantial meal slots (default: morning + evening).</summary>
         public List<MealSlot> SubstantialMealSlots { get; set; } = new List<MealSlot> { MealSlot.Morning, MealSlot.Evening };
 
         /// <summary>Whether the flexible midday meal is enabled at all.</summary>
         public bool MiddayMealEnabled { get; set; } = true;
 
         /// <summary>
-        /// Circumstance sensitivity: the midday meal is served only when the
-        /// household's staple days-of-supply is at or above this threshold.
+        /// Legacy authoring field retained for save/source compatibility.
+        /// Scarcity no longer removes the midday meal slot; it creates a
+        /// traceable missed meal when the household lacks edible food.
         /// </summary>
-        public float MiddayMealSupplyThresholdDays { get; set; } = 3f;
+        public float MiddayMealSupplyThresholdDays { get; set; } = 0f;
 
         /// <summary>Item priority for meal serving (first available wins).</summary>
         public List<string> MealItemPriority { get; set; } = new List<string>
@@ -134,7 +135,6 @@ namespace LandLedgers.Population
             HouseholdItemCatalog.UnspecifiedMeatId,
             HouseholdItemCatalog.PreservedFoodId,
             HouseholdItemCatalog.PotatoesId,
-            HouseholdItemCatalog.FlourId,
             HouseholdItemCatalog.UnspecifiedStapleFoodId,
         };
 
@@ -142,7 +142,7 @@ namespace LandLedgers.Population
         public Dictionary<string, int> ServingSizeOverride { get; set; } = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Expected daily meals per person under this policy (nutrition denominator).</summary>
-        public int ExpectedMealsPerDay => (SubstantialMealSlots != null ? SubstantialMealSlots.Count : 0) + (MiddayMealEnabled ? 1 : 0);
+        public int ExpectedMealsPerDay => GetSlotsForDay(0f).Count;
 
         public static MealSchedulingPolicy Default => new MealSchedulingPolicy();
 
@@ -166,14 +166,18 @@ namespace LandLedgers.Population
             var slots = new List<MealSlot>();
             if (SubstantialMealSlots != null)
             {
-                slots.AddRange(SubstantialMealSlots);
+                foreach (MealSlot slot in SubstantialMealSlots)
+                {
+                    if (!slots.Contains(slot)) slots.Add(slot);
+                }
             }
 
-            if (MiddayMealEnabled && stapleDaysOfSupply >= MiddayMealSupplyThresholdDays && !slots.Contains(MealSlot.Midday))
+            if (MiddayMealEnabled && !slots.Contains(MealSlot.Midday))
             {
                 slots.Add(MealSlot.Midday);
             }
 
+            slots.Sort();
             return slots;
         }
     }
@@ -184,9 +188,8 @@ namespace LandLedgers.Population
         public Dictionary<int, int> MealsServedPerPerson = new Dictionary<int, int>();
         /// <summary>
         /// Number of meal slots actually scheduled per member for this day.
-        /// The flexible midday slot is excluded when the supply policy skips
-        /// it, so nutrition does not count a deliberately unscheduled meal as
-        /// a deprivation event.
+        /// Food scarcity does not remove a required slot; an unserved slot is
+        /// recorded as a missed meal.
         /// </summary>
         public int MealsRequiredPerPerson;
         public int MealsServed;
@@ -406,6 +409,69 @@ namespace LandLedgers.Population
             return result;
         }
 
+        /// <summary>
+        /// Resolve one real meal at its scheduled time. The meal log is the
+        /// durable idempotency key: after Save/Continue, an already served or
+        /// missed person/day/slot is not charged or consumed again. Flour is
+        /// deliberately not directly edible; raw ingredients must first be
+        /// converted by the domestic preparation authority.
+        /// </summary>
+        public bool ServeHouseholdMealSlot(
+            HouseholdState household,
+            int personId,
+            HouseholdInventory inventory,
+            MealSchedulingPolicy policy,
+            int dayIndex,
+            MealSlot slot,
+            bool alreadyAteAwayFromHome = false,
+            MealSourceKind awayMealSource = MealSourceKind.PurchasedMeal,
+            string missedReasonOverride = null)
+        {
+            if (household == null || personId < 0 || inventory == null)
+            {
+                diagnostics.Add("ServeHouseholdMealSlot: household, person, or received household inventory is missing; no meal was created.");
+                return false;
+            }
+
+            policy ??= MealSchedulingPolicy.Default;
+            if (!policy.GetSlotsForDay(EstimateStapleDaysOfSupply(inventory, 1, policy)).Contains(slot))
+                return false;
+            if (log.HasResolution(household.id, personId, dayIndex, slot))
+                return false;
+
+            lastMealLotIdentities.Clear();
+            if (alreadyAteAwayFromHome)
+            {
+                log.RecordMeal(new HouseholdMealRecord
+                {
+                    PersonId = personId,
+                    HouseholdId = household.id,
+                    DayIndex = Math.Max(0, dayIndex),
+                    Slot = slot,
+                    SourceKind = awayMealSource == MealSourceKind.Unspecified
+                        ? MealSourceKind.PurchasedMeal : awayMealSource,
+                    Adequacy = slot == MealSlot.Midday ? MealAdequacy.Light : MealAdequacy.Substantial,
+                });
+                return true;
+            }
+
+            if (string.IsNullOrWhiteSpace(missedReasonOverride)
+                && TryServeFromInventory(household, personId, inventory, policy, slot, dayIndex))
+                return true;
+
+            log.RecordMissedMeal(new MissedMealRecord
+            {
+                PersonId = personId,
+                HouseholdId = household.id,
+                DayIndex = Math.Max(0, dayIndex),
+                Slot = slot,
+                Reason = string.IsNullOrWhiteSpace(missedReasonOverride)
+                    ? DescribeMealInventoryFailure(inventory, policy)
+                    : missedReasonOverride,
+            });
+            return true;
+        }
+
         private bool TryServeFromInventory(
             HouseholdState household,
             int personId,
@@ -589,6 +655,17 @@ namespace LandLedgers.Population
             }
 
             list.Add(record);
+        }
+
+        public bool HasResolution(int householdId, int personId, int dayIndex, MealSlot slot)
+        {
+            if (mealsByHousehold.TryGetValue(householdId, out List<HouseholdMealRecord> meals)
+                && meals.Exists(meal => meal != null && meal.PersonId == personId
+                    && meal.DayIndex == dayIndex && meal.Slot == slot))
+                return true;
+            return missedByHousehold.TryGetValue(householdId, out List<MissedMealRecord> missed)
+                && missed.Exists(meal => meal != null && meal.PersonId == personId
+                    && meal.DayIndex == dayIndex && meal.Slot == slot);
         }
 
         public void RecordMissedMeal(MissedMealRecord record)

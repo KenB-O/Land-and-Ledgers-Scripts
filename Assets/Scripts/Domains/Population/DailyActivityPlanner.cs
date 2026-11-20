@@ -45,7 +45,9 @@ namespace LandLedgers.Population
         public const int DefaultSleepEndMinute = 420;
 
         /// <summary>Default meals: 07:30 and 18:30, 30 min each.</summary>
-        public static readonly int[] DefaultMealMinutes = { 450, 1110 };
+        // Breakfast, lunch and supper are ordinary daily activities. Their
+        // reservations remain flexible around work, sleep and travel.
+        public static readonly int[] DefaultMealMinutes = { 450, 720, 1110 };
         public const int DefaultMealDurationMinutes = 30;
         public const int MealWindowFlexMinutes = 60;
         private static readonly int[] MealSearchOffsets = { 0, 15, -15, 30, -30, 45, -45, 60, -60 };

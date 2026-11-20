@@ -1,0 +1,1069 @@
+Focused EditMode Test Results
+{
+  "Summary": {
+    "Total": 7,
+    "Passed": 7,
+    "Failed": 0,
+    "Skipped": 0,
+    "Inconclusive": 0
+  },
+  "Results": [
+    {
+      "FullName": "LandLedgers.EditorTests.Economy.CoupledTransportMovementControllerTests.ActiveRegionalReturn_IsRecognizedForItsJourneyAndDriverOnly",
+      "Status": "Passed",
+      "Duration": 0.0183873,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Economy.CoupledTransportMovementControllerTests.ActiveRoute_AdvancesFromSuppliedSimulationSecondsWithoutViews(1.0f,3)",
+      "Status": "Passed",
+      "Duration": 0.029569,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Economy.CoupledTransportMovementControllerTests.ActiveRoute_AdvancesFromSuppliedSimulationSecondsWithoutViews(10.0f,2)",
+      "Status": "Passed",
+      "Duration": 0.0009876,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Economy.CoupledTransportMovementControllerTests.ActiveRoute_AdvancesFromSuppliedSimulationSecondsWithoutViews(500.0f,1)",
+      "Status": "Passed",
+      "Duration": 0.0008231,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Economy.CoupledTransportMovementControllerTests.MovingTransportUsesAuthoredTerrainInsteadOfDebugRoadHeight",
+      "Status": "Passed",
+      "Duration": 0.0117005,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Economy.CoupledTransportMovementControllerTests.PresentationRecognizesActivePhysicalJourneyAndDriverForReturnDiagnostics",
+      "Status": "Passed",
+      "Duration": 0.0012554,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Economy.CoupledTransportMovementControllerTests.StartLeg_RefusesWhenAssignedRiderIsUnresolved",
+      "Status": "Passed",
+      "Duration": 0.0014207,
+      "Message": null,
+      "StackTrace": null
+    }
+  ],
+  "Duration": 5.52,
+  "StatusPath": null,
+  "Mode": "EditMode",
+  "FilterApplied": "testname: CoupledTransportMovementControllerTests",
+  "success": true,
+  "result": null
+}
+CoupledTransportMovementControllerTests : total=7 passed=7 failed=0 skipped=0 exit=0
+{
+  "Summary": {
+    "Total": 12,
+    "Passed": 12,
+    "Failed": 0,
+    "Skipped": 0,
+    "Inconclusive": 0
+  },
+  "Results": [
+    {
+      "FullName": "LandLedgers.Editor.Economy.FreightProductionDriverTests.ArrivedShipmentReportsUnchangedHandlingRefusalOnceAndKeepsCargo",
+      "Status": "Passed",
+      "Duration": 0.0117513,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.FreightProductionDriverTests.ArrivedUnloadRetriesAfterSameDayReservationIsReleased",
+      "Status": "Passed",
+      "Duration": 0.0013936,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.FreightProductionDriverTests.CreateShipment_RefusesChargeThatDiffersFromAcceptedAgreement",
+      "Status": "Passed",
+      "Duration": 0.0018465,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.FreightProductionDriverTests.Dispatch_AuthorizesExactlyOnce_AcrossDoubleHandlerInvocation",
+      "Status": "Passed",
+      "Duration": 0.0034146,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.FreightProductionDriverTests.Dispatch_SaveBoundary_CompletedTaskAuthorizesAfterRestore",
+      "Status": "Passed",
+      "Duration": 0.0140905,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.FreightProductionDriverTests.Exclusivity_CompletedShipmentFreesWagonDriverAndAnimals",
+      "Status": "Passed",
+      "Duration": 0.006353,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.FreightProductionDriverTests.Exclusivity_DriverAndAnimal_DoubleBooking_RefusedAtDispatch",
+      "Status": "Passed",
+      "Duration": 0.0005245,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.FreightProductionDriverTests.Exclusivity_ReservationAuthority_HoldsDuringHaul_ReleasesOnCompletion",
+      "Status": "Passed",
+      "Duration": 0.0008273,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.FreightProductionDriverTests.Exclusivity_SecondLiveShipmentOnSameWagon_Refused",
+      "Status": "Passed",
+      "Duration": 0.0008523,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.FreightProductionDriverTests.FullLifecycle_ThroughProductionDriver_SettlesOnlyOnAcceptance",
+      "Status": "Passed",
+      "Duration": 0.002369,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.FreightProductionDriverTests.RejectedDelivery_StaysInCustody_NoRevenue_ThenRetryCompletes",
+      "Status": "Passed",
+      "Duration": 0.0019671,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.FreightProductionDriverTests.SaveLoad_MidTransport_RestoresExactlyOnce_CargoIntact",
+      "Status": "Passed",
+      "Duration": 0.001122,
+      "Message": null,
+      "StackTrace": null
+    }
+  ],
+  "Duration": 2.31,
+  "StatusPath": null,
+  "Mode": "EditMode",
+  "FilterApplied": "testname: FreightProductionDriverTests",
+  "success": true,
+  "result": null
+}
+FreightProductionDriverTests : total=12 passed=12 failed=0 skipped=0 exit=0
+{
+  "Summary": {
+    "Total": 30,
+    "Passed": 30,
+    "Failed": 0,
+    "Skipped": 0,
+    "Inconclusive": 0
+  },
+  "Results": [
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteBatch_UnstockedKnownSeller_ExplainsShortageWithoutCreatingSale",
+      "Status": "Passed",
+      "Duration": 0.0217519,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_AffordabilityDownsized_ReportsPartialFillReason",
+      "Status": "Passed",
+      "Duration": 0.004465,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_AfterReceipt_HouseholdKeepsConsumingPurchasedGoods",
+      "Status": "Passed",
+      "Duration": 0.0045425,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_AuthoredNine_ResolvesRealShopperPerHousehold",
+      "Status": "Passed",
+      "Duration": 0.003085,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_BlockedJourney_NoViableSeller",
+      "Status": "Passed",
+      "Duration": 0.0004063,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_DeliveryAffordable_ArrangedDeliveryExecutes",
+      "Status": "Passed",
+      "Duration": 0.001983,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_DoubleBookedShopper_RefusedLoudly",
+      "Status": "Passed",
+      "Duration": 0.0008599,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_FailedAttempts_NeverMoveMoneyOrGoods",
+      "Status": "Passed",
+      "Duration": 0.0006752,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_FullLoop_CompletesAllSeventeenStepsWithConservation",
+      "Status": "Passed",
+      "Duration": 0.0031147,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_FullPurchase_PartialFillReasonEmpty",
+      "Status": "Passed",
+      "Duration": 0.0005112,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_InsufficientFunds_NoSaleNeedStaysOpen",
+      "Status": "Passed",
+      "Duration": 0.0004401,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_KnownSellerWithNoAvailableStock_ReportsOfferBlockerSeparately",
+      "Status": "Passed",
+      "Duration": 0.000452,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_MidTrip_HouseholdInventoryUnchangedUntilPhysicalReceipt",
+      "Status": "Passed",
+      "Duration": 0.0008327,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_NoKnownSeller_UnavailableSellerFailure",
+      "Status": "Passed",
+      "Duration": 0.0002466,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_OnlyChildMember_UnavailableShopper",
+      "Status": "Passed",
+      "Duration": 0.0125329,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_PartialStock_PartialFillNeedStaysOpen",
+      "Status": "Passed",
+      "Duration": 0.0006906,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_StockLimited_ReportsPartialFillReason",
+      "Status": "Passed",
+      "Duration": 0.000472,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_StoreClosed_ReschedulesWithoutSale",
+      "Status": "Passed",
+      "Duration": 0.0004773,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_TradeCredit_CreatesRealObligationNoInformalDebt",
+      "Status": "Passed",
+      "Duration": 0.0074917,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_UnaffordableFreight_BuysOnlyWhatShopperCanCarry",
+      "Status": "Passed",
+      "Duration": 0.0008831,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ExecuteNeed_UnstaffedStore_CannotTrade",
+      "Status": "Passed",
+      "Duration": 0.0003305,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.PersonScheduleTracker_DescribeActivity_AnswersWhatPersonIsDoing",
+      "Status": "Passed",
+      "Duration": 0.0009013,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.PersonScheduleTracker_OverlappingWindows_Refused",
+      "Status": "Passed",
+      "Duration": 0.0001972,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.RebindPopulationAuthorities_ContinuesWithRestoredPersonAndMembership",
+      "Status": "Passed",
+      "Duration": 0.0007998,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.SettledPurchaseAndDeliveryDiagnosticsAreRoutineInfo_NotWarnings",
+      "Status": "Passed",
+      "Duration": 0.0001475,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ShopperAssignment_UsesActualScheduleLoadWithoutSexPreference",
+      "Status": "Passed",
+      "Duration": 0.0004043,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ShoppingReadModel_AnswersWhoWhatWhereWhy",
+      "Status": "Passed",
+      "Duration": 0.0015034,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.ShortageMonitor_CreatingNeeds_PostsNoMoneyAnywhere",
+      "Status": "Passed",
+      "Duration": 0.0007112,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.StoreRestock_LowStock_OrdersShipsReceivesWithProvenance",
+      "Status": "Passed",
+      "Duration": 0.0034145,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Population.HouseholdShoppingLoopTests.StoreRestock_UnaffordableDelivery_WaitsWithoutInvisibleStock",
+      "Status": "Passed",
+      "Duration": 0.0009471,
+      "Message": null,
+      "StackTrace": null
+    }
+  ],
+  "Duration": 4.48,
+  "StatusPath": null,
+  "Mode": "EditMode",
+  "FilterApplied": "testname: HouseholdShoppingLoopTests",
+  "success": true,
+  "result": null
+}
+HouseholdShoppingLoopTests : total=30 passed=30 failed=0 skipped=0 exit=0
+{
+  "Summary": {
+    "Total": 53,
+    "Passed": 53,
+    "Failed": 0,
+    "Skipped": 0,
+    "Inconclusive": 0
+  },
+  "Results": [
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.ActiveOrUnknownOutboundRouteCanContinuePastExpectedArrival(True)",
+      "Status": "Passed",
+      "Duration": 0.0076469,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.ActiveOrUnknownOutboundRouteCanContinuePastExpectedArrival(null)",
+      "Status": "Passed",
+      "Duration": 0.0002256,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.Arrival_EnqueuesShopperInStoreQueue",
+      "Status": "Passed",
+      "Duration": 0.0048823,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.AssignRefusedTask_IsCancelled_CustomerStaysQueued",
+      "Status": "Passed",
+      "Duration": 0.0013328,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.BalkRelease_AwaitingServiceCustomer_ReturnsEmpty",
+      "Status": "Passed",
+      "Duration": 0.0033626,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.FailedOutboundRouteAbortsWithoutPaymentAndReleasesWindows",
+      "Status": "Passed",
+      "Duration": 0.0007249,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.FailedReturnRecoversPaidCustodyOnlyAfterPhysicalHomeArrival",
+      "Status": "Passed",
+      "Duration": 0.0024181,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.FailedTripPlanningCancelsAssignedAndQueuedLegsAndReturnsBudget",
+      "Status": "Passed",
+      "Duration": 0.0008465,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.FullTripThroughRealTime_SettlesAndReceives",
+      "Status": "Passed",
+      "Duration": 0.00079,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.Hub_SaveLoad_ShoppingTripsSurviveProductionOrder",
+      "Status": "Passed",
+      "Duration": 0.0124332,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.LegCompletion_RemovesStaleEntry_Silently",
+      "Status": "Passed",
+      "Duration": 0.0009639,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.MissedDepartureExpiresPlanAndReleasesItsReservations",
+      "Status": "Passed",
+      "Duration": 0.0025264,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.NoClerk_EnqueuesWithoutTask",
+      "Status": "Passed",
+      "Duration": 0.0007105,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.NoClerk_SettlesAtArrivalAsToday",
+      "Status": "Passed",
+      "Duration": 0.0006005,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.NonProgressingAuthoritativeRouteEventuallyFailsAndCancelsWithoutArrival",
+      "Status": "Passed",
+      "Duration": 0.0037791,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.NoTeleport_MidTripInventoryUntouched",
+      "Status": "Passed",
+      "Duration": 0.0015654,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.NullResolvers_BehaveAsToday",
+      "Status": "Passed",
+      "Duration": 0.000922,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.PatienceTick_DecaysByElapsedMinutes",
+      "Status": "Passed",
+      "Duration": 0.0012739,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.PhysicalArrivalGate_PreventsCounterSettlementUntilStoreArrival",
+      "Status": "Passed",
+      "Duration": 0.001152,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.PlannedRouteTravelReservationAdvancesItsTaskProgress",
+      "Status": "Passed",
+      "Duration": 0.0005963,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.PlanTrip_PlansWithoutExecuting",
+      "Status": "Passed",
+      "Duration": 0.0008643,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.PlanTrip_SearchesLaterFreeWindowInsteadOfRejectingTheNeed",
+      "Status": "Passed",
+      "Duration": 0.0009313,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.ProgressingLongRouteIsNotFailedForExceedingInitialEstimate",
+      "Status": "Passed",
+      "Duration": 0.0010173,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.QueueFull_SkipsEnqueueWithoutLostSale",
+      "Status": "Passed",
+      "Duration": 0.0007887,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.RehydratePendingFlag_Lifecycle",
+      "Status": "Passed",
+      "Duration": 0.001795,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.SaveLoad_AwaitingService_ResumesWait",
+      "Status": "Passed",
+      "Duration": 0.0028824,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.SaveLoad_AwaitingService_ServiceDueCompletesAfterRestore",
+      "Status": "Passed",
+      "Duration": 0.0032561,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.SaveLoad_AwaitingService_TaskGone_SettlesOnRestore",
+      "Status": "Passed",
+      "Duration": 0.002359,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.SaveLoad_MidTrip_NeedReunifiedWithRegistry_DeliveryDecrementsRegistryNeed",
+      "Status": "Passed",
+      "Duration": 0.0016298,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.SaveLoad_MidTrip_ResumesToSameOutcome",
+      "Status": "Passed",
+      "Duration": 0.0015097,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.SaveLoad_OldSave_NullTripList_LoadsEmpty_And_DoubleRestoreIsIdempotent",
+      "Status": "Passed",
+      "Duration": 0.0013699,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.SaveLoad_ProductionRestore_RefusalAndMissingBehaviour",
+      "Status": "Passed",
+      "Duration": 0.0025149,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.SaveLoad_QueueEntry_PatienceInitialTravels",
+      "Status": "Passed",
+      "Duration": 0.00089,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.SaveLoad_RehydrateOrder_TasksBeforeDriver",
+      "Status": "Passed",
+      "Duration": 0.0009542,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.ServedEntry_LingersAfterFrontPop_SweptSilently",
+      "Status": "Passed",
+      "Duration": 0.0027767,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.ServiceCompletion_SettlesAfterService",
+      "Status": "Passed",
+      "Duration": 0.0007757,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.ServiceCompletionFailure_SettlesAnyway",
+      "Status": "Passed",
+      "Duration": 0.0007263,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.ServiceCompletionRefusal_SettlesAnywayAndPopsQueue",
+      "Status": "Passed",
+      "Duration": 0.00139,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.ServiceTaskCompletion_PopsQueue",
+      "Status": "Passed",
+      "Duration": 0.0007242,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.SettledEntry_SweptSilently_NoLostSale",
+      "Status": "Passed",
+      "Duration": 0.0008629,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.SettleFailure_RemovesEntry_Silently",
+      "Status": "Passed",
+      "Duration": 0.0006799,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.SettleFailureAfterService_ReturnsEmpty",
+      "Status": "Passed",
+      "Duration": 0.0007613,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.StartRefusedTask_IsCancelled_AndBudgetReleased",
+      "Status": "Passed",
+      "Duration": 0.0008017,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.StockoutAtCounter_ReturnsEmpty_NeedStaysOpen",
+      "Status": "Passed",
+      "Duration": 0.0020544,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.StoreBusinessEntityId_NeverFreightThree",
+      "Status": "Passed",
+      "Duration": 0.0007041,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.StoreClosedAtArrival_ReturnsEmpty_NeedStaysOpen",
+      "Status": "Passed",
+      "Duration": 0.000808,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.TickSizeIndependence_SettledSweep",
+      "Status": "Passed",
+      "Duration": 0.0010813,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.TickSizeIndependence_SmallVsLargeSteps",
+      "Status": "Passed",
+      "Duration": 0.0009719,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.TripSequence_PersistedAcrossCustodySaveLoad_DoesNotReissuePreSaveIds",
+      "Status": "Passed",
+      "Duration": 0.0094878,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.TripSequence_PersistedAcrossDriverAndCustodySaveLoad_DoesNotReissuePreSaveIds",
+      "Status": "Passed",
+      "Duration": 0.0015562,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.TripSequence_RestoredActiveTrips_SeedPastThemOnOldSave",
+      "Status": "Passed",
+      "Duration": 0.0009053,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.UnresolvableCategory_SkipsEnqueue",
+      "Status": "Passed",
+      "Duration": 0.0021536,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Population.ShoppingTripDriverTests.ZeroDurationRoute_WaitsForPhysicalArrivalBeforePurchase",
+      "Status": "Passed",
+      "Duration": 0.0015191,
+      "Message": null,
+      "StackTrace": null
+    }
+  ],
+  "Duration": 4.47,
+  "StatusPath": null,
+  "Mode": "EditMode",
+  "FilterApplied": "testname: ShoppingTripDriverTests",
+  "success": true,
+  "result": null
+}
+ShoppingTripDriverTests : total=53 passed=53 failed=0 skipped=0 exit=0
+{
+  "Summary": {
+    "Total": 15,
+    "Passed": 15,
+    "Failed": 0,
+    "Skipped": 0,
+    "Inconclusive": 0
+  },
+  "Results": [
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.CancelledJourney_CargoReturnedOnce_TravelerFree",
+      "Status": "Passed",
+      "Duration": 0.0045127,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.Departure_RefusedWhenCargoInsufficient_NothingTaken",
+      "Status": "Passed",
+      "Duration": 0.0002963,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.Departure_WithoutGatewayRoute_IsRefused",
+      "Status": "Passed",
+      "Duration": 0.0002404,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.DepartVehicle_DuplicateSameDay_Refuses",
+      "Status": "Passed",
+      "Duration": 0.0016376,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.DepartVehicle_EmptyCargo_DepartsWithoutCallbacks",
+      "Status": "Passed",
+      "Duration": 0.0006204,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.PersonMigration_OneWay_IdentityPreserved_ObligationsKept",
+      "Status": "Passed",
+      "Duration": 0.0004829,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.ReturnDiag_WithCallback_DeliversManifestOnce",
+      "Status": "Passed",
+      "Duration": 0.0020153,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.ReturnDiag_WithNullCallback_DoesNotClaimDelivery",
+      "Status": "Passed",
+      "Duration": 0.000739,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.ReturnSnapshot_PreservesReturnedStateAndManifest",
+      "Status": "Passed",
+      "Duration": 0.0007165,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.SaveLoad_ClearThenLoad_PreservesActiveJourneys",
+      "Status": "Passed",
+      "Duration": 0.0009561,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.TryResolveDepartureGateway_AgreesWithDepartRecord",
+      "Status": "Passed",
+      "Duration": 0.0011105,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.TryResolveDepartureGateway_Millbrook_ReturnsAshfordGateway",
+      "Status": "Passed",
+      "Duration": 0.0004926,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.TryResolveDepartureGateway_NoGateway_Refuses",
+      "Status": "Passed",
+      "Duration": 0.000226,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.TryResolveDepartureGateway_UnknownOrigin_Refuses",
+      "Status": "Passed",
+      "Duration": 0.0002328,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.PassV.OffMapJourneyAuthorityTests.WagonExternalRoute_SameEntityReturns_NoDuplicatedInventory",
+      "Status": "Passed",
+      "Duration": 0.001314,
+      "Message": null,
+      "StackTrace": null
+    }
+  ],
+  "Duration": 3.52,
+  "StatusPath": null,
+  "Mode": "EditMode",
+  "FilterApplied": "testname: OffMapJourneyAuthorityTests",
+  "success": true,
+  "result": null
+}
+OffMapJourneyAuthorityTests : total=15 passed=15 failed=0 skipped=0 exit=0
+{
+  "Summary": {
+    "Total": 3,
+    "Passed": 3,
+    "Failed": 0,
+    "Skipped": 0,
+    "Inconclusive": 0
+  },
+  "Results": [
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakeryDriverFuelWiringTests.InStockSource_WithCoveringInputs_PassesPrecheck",
+      "Status": "Passed",
+      "Duration": 0.0035485,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakeryDriverFuelWiringTests.NullFuelSource_PrecheckRefusesAndRunBakesNothing",
+      "Status": "Passed",
+      "Duration": 0.0004871,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakeryDriverFuelWiringTests.NullFuelSource_RefusalPrecedesFlourAndNotionShortfalls",
+      "Status": "Passed",
+      "Duration": 0.0002365,
+      "Message": null,
+      "StackTrace": null
+    }
+  ],
+  "Duration": 3.45,
+  "StatusPath": null,
+  "Mode": "EditMode",
+  "FilterApplied": "testname: BakeryDriverFuelWiringTests",
+  "success": true,
+  "result": null
+}
+BakeryDriverFuelWiringTests : total=3 passed=3 failed=0 skipped=0 exit=0
+{
+  "Summary": {
+    "Total": 5,
+    "Passed": 5,
+    "Failed": 0,
+    "Skipped": 0,
+    "Inconclusive": 0
+  },
+  "Results": [
+    {
+      "FullName": "LandLedgers.EditorTests.Economy.FuelDealerSupplyTransferTests.Transfer_BlankDealerId_RefusesWhole_NothingMoves",
+      "Status": "Passed",
+      "Duration": 0.0076272,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Economy.FuelDealerSupplyTransferTests.Transfer_DuplicateLotHeldBack_OtherLotsMove",
+      "Status": "Passed",
+      "Duration": 0.0016394,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Economy.FuelDealerSupplyTransferTests.Transfer_EmptyMill_TransfersZero_NoIntakeChange",
+      "Status": "Passed",
+      "Duration": 0.0002295,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Economy.FuelDealerSupplyTransferTests.Transfer_MovesMillLotsToDealerIntake_ExactUnitsAndProvenance",
+      "Status": "Passed",
+      "Duration": 0.0004714,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.EditorTests.Economy.FuelDealerSupplyTransferTests.Transfer_NullIntake_TransfersZero_MillStockIntact",
+      "Status": "Passed",
+      "Duration": 0.0002976,
+      "Message": null,
+      "StackTrace": null
+    }
+  ],
+  "Duration": 3.32,
+  "StatusPath": null,
+  "Mode": "EditMode",
+  "FilterApplied": "testname: FuelDealerSupplyTransferTests",
+  "success": true,
+  "result": null
+}
+FuelDealerSupplyTransferTests : total=5 passed=5 failed=0 skipped=0 exit=0
+{
+  "Summary": {
+    "Total": 7,
+    "Passed": 7,
+    "Failed": 0,
+    "Skipped": 0,
+    "Inconclusive": 0
+  },
+  "Results": [
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakeryFuelBlockerDiagnosticsTests.AllPresentButShort_NamesOnlyTheShortfall",
+      "Status": "Passed",
+      "Duration": 0.0005078,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakeryFuelBlockerDiagnosticsTests.ConfigDefault_FuelDealerFactorIsUnset",
+      "Status": "Passed",
+      "Duration": 0.0002401,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakeryFuelBlockerDiagnosticsTests.FactorAuthored_NoIntake_StillRefusesToClaimSupply",
+      "Status": "Passed",
+      "Duration": 0.0002456,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakeryFuelBlockerDiagnosticsTests.FactorZero_TreatedAsUnset_NeverAsOne",
+      "Status": "Passed",
+      "Duration": 0.0002022,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakeryFuelBlockerDiagnosticsTests.NoBatchesPlanned_NoFuelNeeded",
+      "Status": "Passed",
+      "Duration": 0.0001674,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakeryFuelBlockerDiagnosticsTests.NoFactor_NoIntake_NoDealer_NamesEveryMissingPiece",
+      "Status": "Passed",
+      "Duration": 0.0003075,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakeryFuelBlockerDiagnosticsTests.StockPresent_NamesNoBlocker",
+      "Status": "Passed",
+      "Duration": 0.0002001,
+      "Message": null,
+      "StackTrace": null
+    }
+  ],
+  "Duration": 3.3,
+  "StatusPath": null,
+  "Mode": "EditMode",
+  "FilterApplied": "testname: BakeryFuelBlockerDiagnosticsTests",
+  "success": true,
+  "result": null
+}
+BakeryFuelBlockerDiagnosticsTests : total=7 passed=7 failed=0 skipped=0 exit=0

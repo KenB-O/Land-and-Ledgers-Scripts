@@ -1,0 +1,105 @@
+{
+  "success": true,
+  "command": "command console",
+  "data": {
+    "command": "console",
+    "parameters": {
+      "level": "error",
+      "tail": "20"
+    },
+    "result": {
+      "entries": [
+        {
+          "seq": 70367,
+          "timestampUtc": "2026-11-15T09:43:47.2773908Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "ExecuteCommandByName: No command named 'editor.playmode status' is available. Did you mean 'editor.playmode start'?",
+          "stackTrace": "UnityEngine.Debug:LogError (object)\nUnity.Pipeline.BasePipelineServer:CommandNotFound (Unity.Pipeline.BasePipelineServer/RawCommandMiss) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Runtime/Common/BasePipelineServer.cs:3107)\nUnity.Pipeline.BasePipelineServer:ResolveRawCommand (System.Collections.Generic.IReadOnlyList`1<string>,Unity.Pipeline.Commands.CommandIndex) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Runtime/Common/BasePipelineServer.cs:3034)\nUnity.Pipeline.Commands.DefaultCommandExecutor:Bind (Unity.Pipeline.Commands.CommandRequest,Newtonsoft.Json.Linq.JObject&,string&) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Runtime/CommandExecution/CommandExecutor/DefaultCommandExecutor.cs:73)\nUnity.Pipeline.Commands.DefaultCommandExecutor:Execute (Unity.Pipeline.Commands.CommandRequest) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Runtime/CommandExecution/CommandExecutor/DefaultCommandExecutor.cs:27)\nUnity.Pipeline.BasePipelineServer/<HandleExecRequest>d__160:MoveNext () (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Runtime/Common/BasePipelineServer.cs:2490)\nSystem.Runtime.CompilerServices.AsyncTaskMethodBuilder`1<int>:SetResult (int)\nUnity.Pipeline.MaxLengthStream/<ReadAsync>d__6:MoveNext () (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Runtime/Common/MaxLengthStream.cs:46)\nSystem.Threading._ThreadPoolWaitCallback:PerformWaitCallback ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 71608,
+          "timestampUtc": "2026-11-15T09:59:32.4002021Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "Failed to handle /api/exec request: Cannot be changed after headers are sent.",
+          "stackTrace": "UnityEngine.Debug:LogError (object)\nUnity.Pipeline.BasePipelineServer/<HandleExecRequest>d__160:MoveNext () (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Runtime/Common/BasePipelineServer.cs:2618)\nSystem.Threading._ThreadPoolWaitCallback:PerformWaitCallback ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 71619,
+          "timestampUtc": "2026-11-15T10:00:37.6721747Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 71653,
+          "timestampUtc": "2026-11-15T10:00:50.3929841Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 71659,
+          "timestampUtc": "2026-11-15T10:01:10.9274741Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 71665,
+          "timestampUtc": "2026-11-15T10:01:23.6535007Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 71671,
+          "timestampUtc": "2026-11-15T10:01:35.2492943Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        }
+      ],
+      "cursor": 71671,
+      "session": "d022c2a3090e4762bfd305c366a1102d",
+      "returned": 7,
+      "dropped": false,
+      "reset": false,
+      "counts": {
+        "error": 7,
+        "warn": 1200,
+        "log": 647
+      },
+      "groundTruth": {
+        "sampledUtc": "2026-11-15T10:07:11.1913716Z",
+        "ageMs": 218,
+        "compilationFailed": false,
+        "compiling": false,
+        "consoleErrors": 3,
+        "consoleWarnings": 88,
+        "consoleLogs": 28,
+        "seeded": true
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 7801,
+      "projectPath": "F:\\Land & Ledgers"
+    }
+  },
+  "errors": [],
+  "warnings": []
+}

@@ -1,0 +1,9 @@
+EditorLog=C:\Users\kenne\AppData\Local\Temp\ll-rebuild-library-20261114.log
+StartByteOffset=95015144
+LastWriteUtc=2026-11-15T09:05:47.3130060Z
+UnityPid=8564
+Project=F:\Land & Ledgers
+PlayMode=stopped
+Compiling=false
+PreviousTestStatus=completed
+

@@ -294,6 +294,79 @@ namespace LandLedgers.Editor.Economy
             StringAssert.Contains("millbrook-fuel", assessment.Reason);
         }
 
+        [Test]
+        public void Assess_OffMapProcurementSubtractsPlacedOrdersFromTargetGap()
+        {
+            FuelDealerRuntime runtime = StockedRuntime(10, 500, out _, out _);
+            var diag = new List<string>();
+            Assert.IsNull(runtime.RegisterOffMapSupplier("millbrook-fuel", "cordwood", 2, 0.5, diag));
+            FuelDealerRuntime.FuelDealerOrder order = runtime.PlaceOffMapOrder("millbrook-fuel", 100, 3, diag);
+            Assert.NotNull(order);
+
+            FuelDealerRuntime.FuelDealerProcurementAssessment assessment =
+                runtime.AssessLocalPurchase(4, 0, false);
+
+            Assert.AreEqual(FuelDealerRuntime.FuelDealerProcurementDecision.OffMapAvailable, assessment.Decision,
+                "50 expected fuel units leave projected stock exactly at the 60-unit reorder trigger, so procurement may begin.");
+            Assert.AreEqual(140, assessment.WantIntakeUnits,
+                "the 50-unit order already in transit reduces the 190-unit target gap.");
+            Assert.AreEqual(10, runtime.StockIntakeUnits,
+                "planning incoming stock must not create saleable physical inventory.");
+            StringAssert.Contains("50u expected from placed orders", assessment.Reason);
+        }
+
+        [Test]
+        public void Assess_ProjectedStockExactlyAtReorderPoint_BeginsRestock()
+        {
+            FuelDealerRuntime runtime = StockedRuntime(60, 500, out _, out _);
+            var diag = new List<string>();
+            Assert.IsNull(runtime.RegisterOffMapSupplier("millbrook-fuel", "cordwood", 2, 1.0, diag));
+
+            FuelDealerRuntime.FuelDealerProcurementAssessment assessment =
+                runtime.AssessLocalPurchase(4, 0, false);
+
+            Assert.AreEqual(FuelDealerRuntime.FuelDealerProcurementDecision.OffMapAvailable, assessment.Decision);
+            Assert.AreEqual(140, assessment.WantIntakeUnits);
+            StringAssert.Contains("at or below reorder 60u", assessment.Reason);
+        }
+
+        [Test]
+        public void Assess_ExistingPlacedOrderPreventsDuplicateOffMapOrderDecision()
+        {
+            FuelDealerRuntime runtime = StockedRuntime(10, 500, out _, out _);
+            var diag = new List<string>();
+            Assert.IsNull(runtime.RegisterOffMapSupplier("millbrook-fuel", "cordwood", 2, 1.0, diag));
+            FuelDealerRuntime.FuelDealerOrder order = runtime.PlaceOffMapOrder("millbrook-fuel", 190, 3, diag);
+            Assert.NotNull(order);
+
+            FuelDealerRuntime.FuelDealerProcurementAssessment assessment =
+                runtime.AssessLocalPurchase(4, 0, false);
+
+            Assert.AreEqual(FuelDealerRuntime.FuelDealerProcurementDecision.Sufficient, assessment.Decision);
+            Assert.AreEqual(0, assessment.WantIntakeUnits);
+            Assert.AreEqual(10, runtime.StockIntakeUnits,
+                "a placed order is an estimate only; no goods arrive before receipt.");
+        }
+
+        [Test]
+        public void Assess_CancelledOrderStopsCoveringTheReorderGap()
+        {
+            FuelDealerRuntime runtime = StockedRuntime(10, 500, out _, out _);
+            var diag = new List<string>();
+            Assert.IsNull(runtime.RegisterOffMapSupplier("millbrook-fuel", "cordwood", 2, 1.0, diag));
+            FuelDealerRuntime.FuelDealerOrder order = runtime.PlaceOffMapOrder("millbrook-fuel", 190, 3, diag);
+            Assert.NotNull(order);
+            Assert.IsNull(runtime.CancelOffMapOrder(order.OrderId, 4, diag));
+
+            FuelDealerRuntime.FuelDealerProcurementAssessment assessment =
+                runtime.AssessLocalPurchase(5, 0, false);
+
+            Assert.AreEqual(FuelDealerRuntime.FuelDealerProcurementDecision.OffMapAvailable, assessment.Decision);
+            Assert.AreEqual(190, assessment.WantIntakeUnits,
+                "a cancelled shipment is no longer forecast as incoming stock.");
+            Assert.AreEqual(10, runtime.StockIntakeUnits);
+        }
+
         // --- Local purchase recording ---------------------------------------
 
         [Test]

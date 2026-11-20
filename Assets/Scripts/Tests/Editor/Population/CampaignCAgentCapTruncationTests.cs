@@ -1,8 +1,6 @@
-// Campaign C (DEF-021) — the PopulationPathingDirector agent cap truncates
-// silently: the code default is still 14 (scene override 50) and residents
-// past the cap never get a visual agent, with no log when the cut happens.
-// This package makes the cut visible (count, cap value, resident ids) without
-// changing the cap number or any scheduling/pathing behaviour.
+// PopulationPathingDirector's cap diagnostic must count only actor-eligible
+// local residents; an unexamined serialized-record suffix is not necessarily
+// a set of residents. The cap remains unchanged.
 //
 // Two test kinds, same file:
 //  (1) Real unit tests for the pure AgentCapTruncation rule (zero Unity deps).
@@ -28,79 +26,30 @@ namespace LandLedgers.Editor.Population
         private const string DirectorPath =
             "Assets/Scripts/Domains/Population/PopulationPathingDirector.cs";
 
-        // ---------- (1) AgentCapTruncation rule ----------
+        // ---------- (1) AgentCapTruncation eligibility rule ----------
 
         [Test]
-        public void NoCut_WhenWalkExaminedEveryone()
+        public void EligibleResidentIsCut_WhenNoActorSlotRemains()
         {
-            Assert.AreEqual(0, AgentCapTruncation.CutCount(9, 9));
-            Assert.AreEqual(0, AgentCapTruncation.CutIndices(9, 9).Length);
+            Assert.IsTrue(AgentCapTruncation.IsEligibleResidentCut(true, true, 14, 14));
         }
 
         [Test]
-        public void NoCut_WhenAgentCountLandsExactlyOnCapWithNobodyLeft()
+        public void EligibleResidentIsNotCut_WhenAnActorSlotRemains()
         {
-            // 14 people, cap 14: every resident was examined, so nothing is
-            // cut even though agents.Count == cap. The cut is the unexamined
-            // tail, not "agents hit the cap".
-            Assert.AreEqual(0, AgentCapTruncation.CutCount(14, 14));
-            Assert.AreEqual(0, AgentCapTruncation.CutIndices(14, 14).Length);
+            Assert.IsFalse(AgentCapTruncation.IsEligibleResidentCut(true, true, 13, 14));
         }
 
         [Test]
-        public void CutOne_WhenOnePersonUnexamined()
+        public void NonResidentRecordIsNotMisclassifiedAsCapCut()
         {
-            Assert.AreEqual(1, AgentCapTruncation.CutCount(15, 14));
-            int[] indices = AgentCapTruncation.CutIndices(15, 14);
-            Assert.AreEqual(1, indices.Length);
-            Assert.AreEqual(14, indices[0]);
+            Assert.IsFalse(AgentCapTruncation.IsEligibleResidentCut(false, true, 14, 14));
         }
 
         [Test]
-        public void CutMany_ReturnsOrderedTailIndices()
+        public void ResidentWithoutHomeAnchorIsNotMisclassifiedAsCapCut()
         {
-            // 60 residents, walk stopped after 50 examined (scene cap 50).
-            Assert.AreEqual(10, AgentCapTruncation.CutCount(60, 50));
-            int[] indices = AgentCapTruncation.CutIndices(60, 50);
-            Assert.AreEqual(10, indices.Length);
-            for (int i = 0; i < 10; i++) Assert.AreEqual(50 + i, indices[i]);
-        }
-
-        [Test]
-        public void NoCut_WhenNoPeople()
-        {
-            Assert.AreEqual(0, AgentCapTruncation.CutCount(0, 0));
-            Assert.AreEqual(0, AgentCapTruncation.CutIndices(0, 0).Length);
-        }
-
-        [Test]
-        public void OutOfRangeInputs_ClampToZeroNeverNegative()
-        {
-            Assert.AreEqual(0, AgentCapTruncation.CutCount(5, 9));
-            Assert.AreEqual(0, AgentCapTruncation.CutIndices(5, 9).Length);
-            Assert.AreEqual(0, AgentCapTruncation.CutCount(-3, 0));
-        }
-
-        [Test]
-        public void NegativeExamined_ClampsToZeroAndCutsFromStart()
-        {
-            Assert.AreEqual(5, AgentCapTruncation.CutCount(5, -1));
-            int[] indices = AgentCapTruncation.CutIndices(5, -1);
-            Assert.AreEqual(5, indices.Length);
-            for (int i = 0; i < 5; i++) Assert.AreEqual(i, indices[i]);
-        }
-
-        [Test]
-        public void CutCount_MatchesCutIndicesLength()
-        {
-            int[][] pairs = { new[] { 9, 9 }, new[] { 15, 14 }, new[] { 60, 50 },
-                              new[] { 1, 0 }, new[] { 0, 0 }, new[] { 51, 50 } };
-            foreach (int[] pair in pairs)
-            {
-                Assert.AreEqual(AgentCapTruncation.CutCount(pair[0], pair[1]),
-                    AgentCapTruncation.CutIndices(pair[0], pair[1]).Length,
-                    "people=" + pair[0] + ", examined=" + pair[1]);
-            }
+            Assert.IsFalse(AgentCapTruncation.IsEligibleResidentCut(true, false, 14, 14));
         }
 
         // ---------- (2) Director wiring ----------
@@ -120,10 +69,12 @@ namespace LandLedgers.Editor.Population
         {
             string body = MethodBody(ReadRepoFile(DirectorPath), "private void PopulateManagedAgents()");
             string code = StripNonCode(body);
-            Assert.IsTrue(code.Contains("AgentCapTruncation.CutIndices"),
-                "Campaign C (DEF-021): PopulateManagedAgents must derive the cut set via AgentCapTruncation.CutIndices.");
-            Assert.IsTrue(code.Contains("residentsCutByAgentCap = cutIndices.Length"),
-                "Campaign C (DEF-021): PopulateManagedAgents must record the cut count.");
+            Assert.IsTrue(code.Contains("AgentCapTruncation.IsEligibleResidentCut"),
+                "PopulateManagedAgents must gate cap counts on valid local residents and home anchors.");
+            Assert.IsTrue(code.Contains("residentsCutByAgentCap++"),
+                "PopulateManagedAgents must count each eligible resident skipped by the cap.");
+            Assert.IsTrue(code.Contains("i < state.people.Count; i++"),
+                "PopulateManagedAgents must inspect the full registry rather than label its suffix as residents.");
             Assert.IsTrue(code.Contains("lastAgentCapApplied = maxActiveAgents"),
                 "Campaign C (DEF-021): PopulateManagedAgents must record the cap value in effect.");
             Assert.IsTrue(code.Contains("cutResidentIds.Add"),

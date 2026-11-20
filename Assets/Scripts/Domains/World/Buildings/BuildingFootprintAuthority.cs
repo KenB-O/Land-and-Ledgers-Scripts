@@ -129,6 +129,10 @@ namespace LandLedgers.World
     [AddComponentMenu("Land & Ledgers/World/Building Footprint Authority")]
     public sealed class BuildingFootprintAuthority : MonoBehaviour
     {
+        private const float CleaningActivityFallbackRadiusMeters = 0.8f;
+        private const float CleaningActivityFallbackStepMeters = 0.2f;
+        private static readonly Vector2[] CleaningActivityFallbackOffsets = BuildCleaningActivityFallbackOffsets();
+
         [Header("Authoring Mode")]
         [SerializeField]
         [Tooltip("When enabled, the footprint is resolved from the four authored corner points instead of the legacy width/depth integers.")]
@@ -553,11 +557,28 @@ namespace LandLedgers.World
                 reason = $"Activity location '{id}' references an object outside building '{name}'.";
                 return false;
             }
+            Vector3 resolvedLocalPosition = match.positionLocal;
             if (match.requiresWalkableInterior
-                && !TryEvaluateInteriorLocalPoint(match.positionLocal, match.floorIndex, match.functionalSpaceId, out reason))
+                && !TryEvaluateInteriorLocalPoint(resolvedLocalPosition, match.floorIndex, match.functionalSpaceId, out reason))
             {
-                reason = $"Activity location '{id}' is unreachable: {reason}";
-                return false;
+                // Cleaning is a general household task, not a workstation
+                // that requires one exact physical fixture. If installed
+                // furniture happens to overlap its authored floor approach,
+                // resolve a nearby clear point in the same walkable space.
+                // Beds, stoves, dining seats, storage, and all non-furniture
+                // authoring failures remain strict.
+                if (match.type == BuildingActivityLocationType.Cleaning
+                    && reason.IndexOf("Point is blocked by installed equipment", StringComparison.Ordinal) >= 0
+                    && TryResolveNearbyWalkableCleaningPoint(match, out Vector3 nearby))
+                {
+                    resolvedLocalPosition = nearby;
+                    reason = string.Empty;
+                }
+                else
+                {
+                    reason = $"Activity location '{id}' is unreachable: {reason}";
+                    return false;
+                }
             }
 
             Vector3 worldForward = transform.TransformDirection(match.forwardLocal).normalized;
@@ -571,13 +592,104 @@ namespace LandLedgers.World
                 match.id,
                 match.displayName,
                 match.type,
-                transform.TransformPoint(match.positionLocal),
+                transform.TransformPoint(resolvedLocalPosition),
                 worldForward,
                 match.floorIndex,
                 match.functionalSpaceId,
                 match.requiresWalkableInterior,
                 match.optionalRequirements);
             return true;
+        }
+
+        private bool TryResolveNearbyWalkableCleaningPoint(BuildingActivityLocationAuthoring activity,
+            out Vector3 resolvedLocalPosition)
+        {
+            resolvedLocalPosition = default;
+            if (activity == null) return false;
+            foreach (Vector2 offset in CleaningActivityFallbackOffsets)
+            {
+                Vector3 candidate = activity.positionLocal + new Vector3(offset.x, 0f, offset.y);
+                if (!TryEvaluateInteriorLocalPoint(candidate, activity.floorIndex,
+                        activity.functionalSpaceId, out _)) continue;
+                resolvedLocalPosition = candidate;
+                return true;
+            }
+
+            // A house can have its small neighbourhood around the authored
+            // cleaning anchor fully covered by legitimate furniture (for
+            // example, a chair beside the dining table). Cleaning is a room
+            // activity rather than a fixture interaction, so search the
+            // actual authored walkable floor before declaring the task
+            // unsupported. This uses existing floor geometry/polygons and
+            // still rejects every candidate blocked by installed equipment.
+            InteriorFloorAuthoring floor = FindInteriorFloor(activity.floorIndex);
+            if (floor == null) return false;
+            List<InteriorPolygonAuthoring> matchingAreas = (floor.walkableAreas ?? new List<InteriorPolygonAuthoring>())
+                .Where(area => area != null && MatchesSpace(area.functionalSpaceId, activity.functionalSpaceId))
+                .ToList();
+            if (!TryGetInteriorQueryBounds(floor, activity.functionalSpaceId, matchingAreas,
+                    out float minX, out float maxX, out float minZ, out float maxZ))
+                return false;
+
+            float width = Mathf.Max(0f, maxX - minX);
+            float depth = Mathf.Max(0f, maxZ - minZ);
+            float step = CleaningActivityFallbackStepMeters;
+            float estimatedSamples = Mathf.Ceil(width / step) * Mathf.Ceil(depth / step);
+            if (estimatedSamples > 10000f)
+                step *= Mathf.Sqrt(estimatedSamples / 10000f);
+
+            var clearCandidates = new List<Vector3>();
+            for (float x = minX + step * 0.5f; x < maxX; x += step)
+            {
+                for (float z = minZ + step * 0.5f; z < maxZ; z += step)
+                {
+                    float y = floor.floorHeightLocal;
+                    if (TrySampleInteriorFloorMesh(floor, x, z, out float sampledY, out _))
+                        y = sampledY;
+                    Vector3 candidate = new(x, y, z);
+                    if (Vector2.Distance(new Vector2(candidate.x, candidate.z),
+                            new Vector2(activity.positionLocal.x, activity.positionLocal.z)) < CleaningActivityFallbackRadiusMeters)
+                        continue;
+                    if (TryEvaluateInteriorLocalPoint(candidate, activity.floorIndex,
+                            activity.functionalSpaceId, out _))
+                        clearCandidates.Add(candidate);
+                }
+            }
+
+            if (clearCandidates.Count == 0) return false;
+            clearCandidates.Sort((left, right) =>
+            {
+                float leftDistance = (left - activity.positionLocal).sqrMagnitude;
+                float rightDistance = (right - activity.positionLocal).sqrMagnitude;
+                int distance = leftDistance.CompareTo(rightDistance);
+                if (distance != 0) return distance;
+                int x = left.x.CompareTo(right.x);
+                return x != 0 ? x : left.z.CompareTo(right.z);
+            });
+            resolvedLocalPosition = clearCandidates[0];
+            return true;
+        }
+
+        private static Vector2[] BuildCleaningActivityFallbackOffsets()
+        {
+            int steps = Mathf.FloorToInt(CleaningActivityFallbackRadiusMeters / CleaningActivityFallbackStepMeters);
+            List<Vector2> offsets = new();
+            for (int z = -steps; z <= steps; z++)
+                for (int x = -steps; x <= steps; x++)
+                {
+                    if (x == 0 && z == 0) continue;
+                    Vector2 offset = new(x * CleaningActivityFallbackStepMeters, z * CleaningActivityFallbackStepMeters);
+                    if (offset.sqrMagnitude <= CleaningActivityFallbackRadiusMeters * CleaningActivityFallbackRadiusMeters + 0.0001f)
+                        offsets.Add(offset);
+                }
+            offsets.Sort((left, right) =>
+            {
+                int distance = left.sqrMagnitude.CompareTo(right.sqrMagnitude);
+                if (distance != 0) return distance;
+                int x = left.x.CompareTo(right.x);
+                return x != 0 ? x : left.y.CompareTo(right.y);
+            });
+            return offsets.ToArray();
         }
 
         /// <summary>

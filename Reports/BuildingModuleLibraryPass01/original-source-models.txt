@@ -1,0 +1,12 @@
+﻿Assets/Asset Packs/Western/Models/Buildings/Church.FBX
+Assets/Asset Packs/Western/Models/Buildings/Doctor.FBX
+Assets/Asset Packs/Western/Models/Buildings/GeneralStore.FBX
+Assets/Asset Packs/Western/Models/Buildings/Hanger.FBX
+Assets/Asset Packs/Western/Models/Buildings/House01.FBX
+Assets/Asset Packs/Western/Models/Buildings/House02.FBX
+Assets/Asset Packs/Western/Models/Buildings/House03_bank.FBX
+Assets/Asset Packs/Western/Models/Buildings/House04.FBX
+Assets/Asset Packs/Western/Models/Buildings/House05.FBX
+Assets/Asset Packs/Western/Models/Buildings/House06.FBX
+Assets/Asset Packs/Western/Models/Buildings/Saloon.FBX
+Assets/Asset Packs/Western/Models/Buildings/Sheriff.FBX

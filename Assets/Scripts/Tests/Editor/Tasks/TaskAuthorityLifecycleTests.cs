@@ -135,6 +135,47 @@ namespace LandLedgers.EditorTests.Tasks
         }
 
         [Test]
+        public void DailyLifecycleSnapshot_ReportsAuthoritativeOpenAndCompletedStates()
+        {
+            TaskAuthority authority = CreateAuthority();
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+            WorkTask completed = CreateAssignedStarted(authority, budgets);
+            WorkTask queued = authority.CreateTask("test.sweep", Business(2), 1);
+
+            Assert.IsTrue(authority.CompleteTask(completed.TaskId, TaskOutcome.Success, 1, budgets));
+
+            DailyTaskLifecycleSnapshot dayOne = authority.CaptureDailyLifecycleSnapshot(1);
+            Assert.AreEqual(1, dayOne.Queued);
+            Assert.AreEqual(1, dayOne.CompletedOnDay);
+            Assert.AreEqual(0, dayOne.FailedOnDay);
+            Assert.AreEqual(TaskStatus.Queued, queued.Status);
+
+            DailyTaskLifecycleSnapshot dayTwo = authority.CaptureDailyLifecycleSnapshot(2);
+            Assert.AreEqual(0, dayTwo.CompletedOnDay, "Completion is attributed to the authoritative day index.");
+            Assert.AreEqual(1, dayTwo.Queued);
+        }
+
+        [Test]
+        public void DailyLifecycleSnapshot_ReportsRetainedCancellationSeparatelyFromDatedCompletion()
+        {
+            TaskAuthority authority = CreateAuthority();
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+            WorkTask cancelled = CreateAssignedStarted(authority, budgets);
+            WorkTask completed = authority.CreateTask("test.sweep", Business(2), 1);
+            Assert.IsTrue(authority.AssignTask(completed.TaskId, Person(2), budgets, out string reason), reason);
+            Assert.IsTrue(authority.StartTask(completed.TaskId, 1, out reason), reason);
+
+            Assert.IsTrue(authority.CancelTask(cancelled.TaskId, budgets));
+            Assert.IsTrue(authority.CompleteTask(completed.TaskId, TaskOutcome.Success, 1, budgets));
+
+            DailyTaskLifecycleSnapshot snapshot = authority.CaptureDailyLifecycleSnapshot(1);
+            Assert.AreEqual(1, snapshot.CancelledRetained);
+            Assert.AreEqual(1, snapshot.CompletedOnDay);
+        }
+
+        [Test]
         public void StartTask_RefusesSecondExclusiveTaskForPersonUntilCurrentTaskCompletes()
         {
             TaskAuthority authority = CreateAuthority();

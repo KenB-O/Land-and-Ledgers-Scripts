@@ -1,0 +1,941 @@
+{
+  "success": true,
+  "command": "command console",
+  "data": {
+    "command": "console",
+    "parameters": {
+      "tail": "100"
+    },
+    "result": {
+      "entries": [
+        {
+          "seq": 63769,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Orchestration\\Systems\\SimulationDrivers.cs(4889,34): warning CS0618: 'Object.GetInstanceID()' is obsolete: 'GetInstanceID is deprecated. Use GetEntityId instead. This will be removed in a future version.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63770,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Orchestration\\Systems\\SimulationDrivers.cs(4903,258): warning CS0618: 'Object.GetInstanceID()' is obsolete: 'GetInstanceID is deprecated. Use GetEntityId instead. This will be removed in a future version.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63771,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Orchestration\\Scenarios\\SaloonCircuit\\SaloonCircuitBootstrap.cs(324,118): warning CS0618: 'FindObjectsSortMode' is obsolete: 'FindObjectsSortMode has been deprecated. Use the FindObjectsByType overloads that do not take a FindObjectsSortMode parameter.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63772,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Orchestration\\Scenarios\\SaloonCircuit\\SaloonCircuitBootstrap.cs(324,49): warning CS0618: 'Object.FindObjectsByType<T>(FindObjectsInactive, FindObjectsSortMode)' is obsolete: 'FindObjectsByType with FindObjectsSortMode parameter has been deprecated. Use FindObjectsByType<T>() or FindObjectsByType<T>(FindObjectsInactive) instead. InstanceID will be replaced in the future with EntityId and previous sort order cannot be maintained.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63773,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Orchestration\\Scenarios\\SaloonCircuit\\SaloonCircuitBootstrap.cs(353,82): warning CS0618: 'FindObjectsSortMode' is obsolete: 'FindObjectsSortMode has been deprecated. Use the FindObjectsByType overloads that do not take a FindObjectsSortMode parameter.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63774,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Orchestration\\Scenarios\\SaloonCircuit\\SaloonCircuitBootstrap.cs(353,32): warning CS0618: 'Object.FindObjectsByType<T>(FindObjectsInactive, FindObjectsSortMode)' is obsolete: 'FindObjectsByType with FindObjectsSortMode parameter has been deprecated. Use FindObjectsByType<T>() or FindObjectsByType<T>(FindObjectsInactive) instead. InstanceID will be replaced in the future with EntityId and previous sort order cannot be maintained.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63775,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Orchestration\\HouseholdSlice\\HouseholdVerticalSlicePhaseH.cs(2018,17): warning CS0219: The variable 'stoneConsumed' is assigned but its value is never used",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63776,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Orchestration\\HouseholdSlice\\HouseholdVerticalSlicePhaseH.cs(2018,36): warning CS0219: The variable 'lumberConsumed' is assigned but its value is never used",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63777,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Orchestration\\HouseholdSlice\\HouseholdVerticalSlicePhaseH.cs(2395,18): warning CS0219: The variable 'businessEventsStable' is assigned but its value is never used",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63778,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Domains\\World\\TownWorldController.cs(10128,32): warning CS0618: 'Object.GetInstanceID()' is obsolete: 'GetInstanceID is deprecated. Use GetEntityId instead. This will be removed in a future version.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63779,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Domains\\World\\TownWorldController.cs(10145,94): warning CS0618: 'Object.GetInstanceID()' is obsolete: 'GetInstanceID is deprecated. Use GetEntityId instead. This will be removed in a future version.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63780,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Orchestration\\Systems\\SimulationDrivers.cs(10231,74): warning CS0618: 'Object.GetInstanceID()' is obsolete: 'GetInstanceID is deprecated. Use GetEntityId instead. This will be removed in a future version.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63781,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Orchestration\\Systems\\SimulationDrivers.cs(10254,78): warning CS0618: 'Object.GetInstanceID()' is obsolete: 'GetInstanceID is deprecated. Use GetEntityId instead. This will be removed in a future version.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63782,
+          "timestampUtc": "2026-11-15T08:13:21.8385125Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Orchestration\\Systems\\SimulationDrivers.cs(10295,50): warning CS0618: 'Object.GetInstanceID()' is obsolete: 'GetInstanceID is deprecated. Use GetEntityId instead. This will be removed in a future version.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63783,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Domains\\World\\PreAuthoredTerrainWorldProfile.cs(202,87): warning CS0618: 'FindObjectsSortMode' is obsolete: 'FindObjectsSortMode has been deprecated. Use the FindObjectsByType overloads that do not take a FindObjectsSortMode parameter.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63784,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Domains\\World\\PreAuthoredTerrainWorldProfile.cs(202,31): warning CS0618: 'Object.FindObjectsByType<T>(FindObjectsInactive, FindObjectsSortMode)' is obsolete: 'FindObjectsByType with FindObjectsSortMode parameter has been deprecated. Use FindObjectsByType<T>() or FindObjectsByType<T>(FindObjectsInactive) instead. InstanceID will be replaced in the future with EntityId and previous sort order cannot be maintained.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63785,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Domains\\World\\PreAuthoredTerrainWorldProfile.cs(215,92): warning CS0618: 'FindObjectsSortMode' is obsolete: 'FindObjectsSortMode has been deprecated. Use the FindObjectsByType overloads that do not take a FindObjectsSortMode parameter.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63786,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Domains\\World\\PreAuthoredTerrainWorldProfile.cs(215,19): warning CS0618: 'Object.FindObjectsByType<T>(FindObjectsInactive, FindObjectsSortMode)' is obsolete: 'FindObjectsByType with FindObjectsSortMode parameter has been deprecated. Use FindObjectsByType<T>() or FindObjectsByType<T>(FindObjectsInactive) instead. InstanceID will be replaced in the future with EntityId and previous sort order cannot be maintained.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63787,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Domains\\Economy\\Businesses\\Construction\\Presentation\\ConstructionStagePresentation.cs(88,107): warning CS0618: 'FindObjectsSortMode' is obsolete: 'FindObjectsSortMode has been deprecated. Use the FindObjectsByType overloads that do not take a FindObjectsSortMode parameter.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63788,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Domains\\Economy\\Businesses\\Construction\\Presentation\\ConstructionStagePresentation.cs(88,58): warning CS0618: 'Object.FindObjectsByType<T>(FindObjectsSortMode)' is obsolete: 'FindObjectsByType with FindObjectsSortMode parameter has been deprecated. Use FindObjectsByType<T>() or FindObjectsByType<T>(FindObjectsInactive) instead. InstanceID will be replaced in the future with EntityId and previous sort order cannot be maintained.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63789,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Domains\\Economy\\Businesses\\Construction\\NpcConstructionDriver.cs(487,18): warning CS0219: The variable 'alreadyThere' is assigned but its value is never used",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63790,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Orchestration\\SimulatedScenarioWorld.cs(5,7): warning CS0105: The using directive for 'LandLedgers.Economy' appeared previously in this namespace",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63791,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Economy\\RepairQueueEconomyTests.cs(65,13): warning CS0618: 'SkillService.GrantPractice(EntityId, string, int)' is obsolete: 'Use RecordTaskExperience from a completed Task.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63792,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Editor\\PersistentRuntimeHierarchyAuthoring.cs(223,113): warning CS0618: 'FindObjectsSortMode' is obsolete: 'FindObjectsSortMode has been deprecated. Use the FindObjectsByType overloads that do not take a FindObjectsSortMode parameter.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63793,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Editor\\PersistentRuntimeHierarchyAuthoring.cs(223,39): warning CS0618: 'Object.FindObjectsByType<T>(FindObjectsInactive, FindObjectsSortMode)' is obsolete: 'FindObjectsByType with FindObjectsSortMode parameter has been deprecated. Use FindObjectsByType<T>() or FindObjectsByType<T>(FindObjectsInactive) instead. InstanceID will be replaced in the future with EntityId and previous sort order cannot be maintained.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63794,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Editor\\PersistentRuntimeHierarchyAuthoring.cs(374,92): warning CS0618: 'FindObjectsSortMode' is obsolete: 'FindObjectsSortMode has been deprecated. Use the FindObjectsByType overloads that do not take a FindObjectsSortMode parameter.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63795,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Editor\\PersistentRuntimeHierarchyAuthoring.cs(374,23): warning CS0618: 'Object.FindObjectsByType<T>(FindObjectsInactive, FindObjectsSortMode)' is obsolete: 'FindObjectsByType with FindObjectsSortMode parameter has been deprecated. Use FindObjectsByType<T>() or FindObjectsByType<T>(FindObjectsInactive) instead. InstanceID will be replaced in the future with EntityId and previous sort order cannot be maintained.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63796,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Domains\\World\\Editor\\PersonInspectionPanelAuthoring.cs(112,95): warning CS0618: 'FindObjectsSortMode' is obsolete: 'FindObjectsSortMode has been deprecated. Use the FindObjectsByType overloads that do not take a FindObjectsSortMode parameter.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63797,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Domains\\World\\Editor\\PersonInspectionPanelAuthoring.cs(112,33): warning CS0618: 'Object.FindObjectsByType<T>(FindObjectsInactive, FindObjectsSortMode)' is obsolete: 'FindObjectsByType with FindObjectsSortMode parameter has been deprecated. Use FindObjectsByType<T>() or FindObjectsByType<T>(FindObjectsInactive) instead. InstanceID will be replaced in the future with EntityId and previous sort order cannot be maintained.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63798,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\World\\PreAuthoredTerrainStartupTests.cs(137,17): warning CS0618: 'FindObjectsSortMode' is obsolete: 'FindObjectsSortMode has been deprecated. Use the FindObjectsByType overloads that do not take a FindObjectsSortMode parameter.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63799,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\World\\PreAuthoredTerrainStartupTests.cs(135,40): warning CS0618: 'Object.FindObjectsByType<T>(FindObjectsInactive, FindObjectsSortMode)' is obsolete: 'FindObjectsByType with FindObjectsSortMode parameter has been deprecated. Use FindObjectsByType<T>() or FindObjectsByType<T>(FindObjectsInactive) instead. InstanceID will be replaced in the future with EntityId and previous sort order cannot be maintained.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63800,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\World\\PreAuthoredTerrainStartupTests.cs(180,17): warning CS0618: 'FindObjectsSortMode' is obsolete: 'FindObjectsSortMode has been deprecated. Use the FindObjectsByType overloads that do not take a FindObjectsSortMode parameter.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63801,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\World\\PreAuthoredTerrainStartupTests.cs(178,41): warning CS0618: 'Object.FindObjectsByType<T>(FindObjectsInactive, FindObjectsSortMode)' is obsolete: 'FindObjectsByType with FindObjectsSortMode parameter has been deprecated. Use FindObjectsByType<T>() or FindObjectsByType<T>(FindObjectsInactive) instead. InstanceID will be replaced in the future with EntityId and previous sort order cannot be maintained.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63802,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Economy\\WheelwrightTests.cs(64,13): warning CS0618: 'SkillService.GrantPractice(EntityId, string, int)' is obsolete: 'Use RecordTaskExperience from a completed Task.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63803,
+          "timestampUtc": "2026-11-15T08:13:21.8395144Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Economy\\WheelwrightDepth3ATests.cs(61,13): warning CS0618: 'SkillService.GrantPractice(EntityId, string, int)' is obsolete: 'Use RecordTaskExperience from a completed Task.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63804,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Orchestration\\HouseholdVerticalSliceTests.cs(133,32): warning CS0618: 'ScriptedPurchaseExecutor' is obsolete: 'Use EmbodiedPurchaseExecutor (T1A): the real Person -> journey -> supplier -> transaction chain.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63805,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Orchestration\\Pass11Ws1ScenarioStartTests.cs(32,35): warning CS0618: 'ScenarioObjectiveService.FirstLedgerScenarioId' is obsolete: 'Use FirstLedgerScenario.ScenarioId (\"first-ledger\"). This constant held a stale id.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63806,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Economy\\BlacksmithTests.cs(44,13): warning CS0618: 'SkillService.GrantPractice(EntityId, string, int)' is obsolete: 'Use RecordTaskExperience from a completed Task.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63807,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Orchestration\\Pass9ReviewFixScenarioLatchTests.cs(29,35): warning CS0618: 'ScenarioObjectiveService.FirstLedgerScenarioId' is obsolete: 'Use FirstLedgerScenario.ScenarioId (\"first-ledger\"). This constant held a stale id.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63808,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Orchestration\\Pass9ReviewFixScenarioLatchTests.cs(49,35): warning CS0618: 'ScenarioObjectiveService.FirstLedgerScenarioId' is obsolete: 'Use FirstLedgerScenario.ScenarioId (\"first-ledger\"). This constant held a stale id.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63809,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Orchestration\\Pass9ReviewFixScenarioLatchTests.cs(70,35): warning CS0618: 'ScenarioObjectiveService.FirstLedgerScenarioId' is obsolete: 'Use FirstLedgerScenario.ScenarioId (\"first-ledger\"). This constant held a stale id.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63810,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Orchestration\\Pass9ScenarioBootstrapTests.cs(209,35): warning CS0618: 'ScenarioObjectiveService.FirstLedgerScenarioId' is obsolete: 'Use FirstLedgerScenario.ScenarioId (\"first-ledger\"). This constant held a stale id.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63811,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Orchestration\\FirstLedgerScenarioAssetDateTests.cs(26,96): warning CS0618: 'Object.GetInstanceID()' is obsolete: 'GetInstanceID is deprecated. Use GetEntityId instead. This will be removed in a future version.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63812,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Orchestration\\Pass9ScenarioBootstrapTests.cs(253,35): warning CS0618: 'ScenarioObjectiveService.FirstLedgerScenarioId' is obsolete: 'Use FirstLedgerScenario.ScenarioId (\"first-ledger\"). This constant held a stale id.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63813,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Economy\\ConstructionFullChainTests.cs(882,35): warning CS0168: The variable 'record' is declared but never used",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63814,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Time\\Pass8TickSizeConsistencyTests.cs(143,25): warning CS0219: The variable 'interval' is assigned but its value is never used",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63815,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Tasks\\TaskDurationDiagnosticsTests.cs(1880,20): warning CS0168: The variable 'reason' is declared but never used",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63816,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Tasks\\TaskAuthorityLifecycleTests.cs(409,20): warning CS0168: The variable 'reason' is declared but never used",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63817,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Tasks\\TaskAuthorityLifecycleTests.cs(724,20): warning CS0168: The variable 'reason' is declared but never used",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63818,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Economy\\GeneralStoreTaskCatalogTests.cs(87,48): warning CS0618: 'SkillTaskDurationEstimator' is obsolete: 'Use CausalTaskDurationEstimator for new production scheduling.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63819,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Economy\\GeneralStoreTaskCatalogTests.cs(93,13): warning CS0618: 'SkillService.GrantPractice(EntityId, string, int)' is obsolete: 'Use RecordTaskExperience from a completed Task.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63820,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Economy\\GeneralStoreEconomyRepairTests.cs(729,17): warning CS0618: 'BusinessRuntimeState.ResolveDailySalesPlaceholder(string, int, int)' is obsolete: 'Buyerless revenue is manufactured. Use ResolveSettledSale with a real buyer principal.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63821,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Economy\\GeneralStoreEconomyRepairTests.cs(730,17): warning CS0618: 'BusinessRuntimeState.ResolveDailySalesPlaceholder(string, int, int)' is obsolete: 'Buyerless revenue is manufactured. Use ResolveSettledSale with a real buyer principal.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63822,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Economy\\HarnessMakerTests.cs(31,13): warning CS0618: 'SkillService.GrantPractice(EntityId, string, int)' is obsolete: 'Use RecordTaskExperience from a completed Task.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63823,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Economy\\GenericBusinessEconomyTests.cs(898,13): warning CS0618: 'SkillService.GrantPractice(EntityId, string, int)' is obsolete: 'Use RecordTaskExperience from a completed Task.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63824,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Economy\\GenericBusinessEconomyTests.cs(900,48): warning CS0618: 'SkillTaskDurationEstimator' is obsolete: 'Use CausalTaskDurationEstimator for new production scheduling.'",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63825,
+          "timestampUtc": "2026-11-15T08:13:21.8405145Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Assets\\Scripts\\Tests\\Editor\\Population\\Pass8ProviderLossTests.cs(89,25): warning CS0414: The field 'Pass8ProviderLossTests.World.nextId' is assigned but its value is never used",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63826,
+          "timestampUtc": "2026-11-15T08:14:14.8298239Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[PipelineTestRunner] Running 1 tests (explicit tests excluded)",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.PipelineTestRunner/<>c__DisplayClass8_0:<ExecuteTestsInternal>b__0 (UnityEditor.TestTools.TestRunner.Api.ITestAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/PipelineTestRunner.cs:357)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63827,
+          "timestampUtc": "2026-11-15T08:14:16.3457827Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Executing IPrebuildSetup for: Unity.PerformanceTesting.Editor.TestRunBuilder.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63828,
+          "timestampUtc": "2026-11-15T08:14:16.4510508Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TestResultCollector] Run started: 6666 test(s)",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.TestResultCollector:RunStarted (UnityEditor.TestTools.TestRunner.Api.ITestAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/TestResultCollector.cs:58)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63829,
+          "timestampUtc": "2026-11-15T08:14:16.8820871Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Saving results to: C:/Users/kenne/AppData/LocalLow/DefaultCompany/Land & Ledgers\\TestResults.xml",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63830,
+          "timestampUtc": "2026-11-15T08:14:16.9616814Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TestResultCollector] Run finished: 1 total, 1 passed, 0 failed",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.TestResultCollector:RunFinished (UnityEditor.TestTools.TestRunner.Api.ITestResultAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/TestResultCollector.cs:110)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63831,
+          "timestampUtc": "2026-11-15T08:14:17.1188444Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Executing IPostBuildCleanup for: Unity.PerformanceTesting.Editor.TestRunBuilder.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63832,
+          "timestampUtc": "2026-11-15T08:14:18.8658405Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63833,
+          "timestampUtc": "2026-11-15T08:14:24.2294239Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[PipelineTestRunner] Running 29 tests (explicit tests excluded)",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.PipelineTestRunner/<>c__DisplayClass8_0:<ExecuteTestsInternal>b__0 (UnityEditor.TestTools.TestRunner.Api.ITestAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/PipelineTestRunner.cs:357)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63834,
+          "timestampUtc": "2026-11-15T08:14:25.6929211Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Executing IPrebuildSetup for: Unity.PerformanceTesting.Editor.TestRunBuilder.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63835,
+          "timestampUtc": "2026-11-15T08:14:25.7720776Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TestResultCollector] Run started: 6666 test(s)",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.TestResultCollector:RunStarted (UnityEditor.TestTools.TestRunner.Api.ITestAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/TestResultCollector.cs:58)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63836,
+          "timestampUtc": "2026-11-15T08:14:26.1760616Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "PopulationPathingDirector blocked a scheduled population route. MissingStartAnchor while sending   toward ReturningHome: start -1, target -1.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.FirstLedger.PopulationPathingDirector:RecordScheduledRouteFailure (LandLedgers.FirstLedger.PopulationPathingDirector/ScheduledRouteFailureKind,LandLedgers.Population.PersonState,int,LandLedgers.Population.PopulationScheduleState) (at Assets/Scripts/Domains/Population/PopulationPathingDirector.cs:2235)\nLandLedgers.FirstLedger.PopulationPathingDirector:SendRouteForState (LandLedgers.Population.PopulationScheduleState,System.Predicate`1<LandLedgers.Population.PersonState>,System.Func`2<LandLedgers.Population.PersonState, int>) (at Assets/Scripts/Domains/Population/PopulationPathingDirector.cs:927)\nSystem.Reflection.MethodBase:Invoke (object,object[])\nLandLedgers.EditorTests.Population.PopulationPathingProfessionRhythmTests:ShoppingOwnershipProtectsArrivalUntilTheTripReleasesThePerson () (at Assets/Scripts/Tests/Editor/Population/PopulationPathingProfessionRhythmTests.cs:41)\nSystem.Reflection.MethodBase:Invoke (object,object[])\nNUnit.Framework.Internal.Reflect:InvokeMethod (System.Reflection.MethodInfo,object,object[])\nNUnit.Framework.Internal.MethodWrapper:Invoke (object,object[])\nNUnit.Framework.Internal.Commands.TestMethodCommand:RunNonAsyncTestMethod (NUnit.Framework.Internal.ITestExecutionContext)\nNUnit.Framework.Internal.Commands.TestMethodCommand:RunTestMethod (NUnit.Framework.Internal.ITestExecutionContext)\nNUnit.Framework.Internal.Commands.TestMethodCommand:Execute (NUnit.Framework.Internal.ITestExecutionContext)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63837,
+          "timestampUtc": "2026-11-15T08:14:26.2240572Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Saving results to: C:/Users/kenne/AppData/LocalLow/DefaultCompany/Land & Ledgers\\TestResults.xml",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63838,
+          "timestampUtc": "2026-11-15T08:14:26.2460967Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TestResultCollector] Run finished: 29 total, 29 passed, 0 failed",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.TestResultCollector:RunFinished (UnityEditor.TestTools.TestRunner.Api.ITestResultAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/TestResultCollector.cs:110)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63839,
+          "timestampUtc": "2026-11-15T08:14:26.7825266Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Executing IPostBuildCleanup for: Unity.PerformanceTesting.Editor.TestRunBuilder.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63840,
+          "timestampUtc": "2026-11-15T08:14:28.8128668Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63841,
+          "timestampUtc": "2026-11-15T08:14:29.2344846Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[PipelineTestRunner] Running 12 tests (explicit tests excluded)",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.PipelineTestRunner/<>c__DisplayClass8_0:<ExecuteTestsInternal>b__0 (UnityEditor.TestTools.TestRunner.Api.ITestAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/PipelineTestRunner.cs:357)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63842,
+          "timestampUtc": "2026-11-15T08:14:34.2389427Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Executing IPrebuildSetup for: Unity.PerformanceTesting.Editor.TestRunBuilder.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63843,
+          "timestampUtc": "2026-11-15T08:14:34.4087872Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TestResultCollector] Run started: 6666 test(s)",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.TestResultCollector:RunStarted (UnityEditor.TestTools.TestRunner.Api.ITestAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/TestResultCollector.cs:58)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63844,
+          "timestampUtc": "2026-11-15T08:14:34.7074513Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Saving results to: C:/Users/kenne/AppData/LocalLow/DefaultCompany/Land & Ledgers\\TestResults.xml",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63845,
+          "timestampUtc": "2026-11-15T08:14:34.7209634Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TestResultCollector] Run finished: 12 total, 12 passed, 0 failed",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.TestResultCollector:RunFinished (UnityEditor.TestTools.TestRunner.Api.ITestResultAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/TestResultCollector.cs:110)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63846,
+          "timestampUtc": "2026-11-15T08:14:35.122692Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Executing IPostBuildCleanup for: Unity.PerformanceTesting.Editor.TestRunBuilder.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63847,
+          "timestampUtc": "2026-11-15T08:14:36.7196292Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63848,
+          "timestampUtc": "2026-11-15T08:14:37.1938955Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[PipelineTestRunner] Running 22 tests (explicit tests excluded)",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.PipelineTestRunner/<>c__DisplayClass8_0:<ExecuteTestsInternal>b__0 (UnityEditor.TestTools.TestRunner.Api.ITestAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/PipelineTestRunner.cs:357)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63849,
+          "timestampUtc": "2026-11-15T08:14:41.6568819Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Executing IPrebuildSetup for: Unity.PerformanceTesting.Editor.TestRunBuilder.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63850,
+          "timestampUtc": "2026-11-15T08:14:41.7127172Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TestResultCollector] Run started: 6666 test(s)",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.TestResultCollector:RunStarted (UnityEditor.TestTools.TestRunner.Api.ITestAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/TestResultCollector.cs:58)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63851,
+          "timestampUtc": "2026-11-15T08:14:41.9340442Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Saving results to: C:/Users/kenne/AppData/LocalLow/DefaultCompany/Land & Ledgers\\TestResults.xml",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63852,
+          "timestampUtc": "2026-11-15T08:14:41.9485804Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TestResultCollector] Run finished: 22 total, 22 passed, 0 failed",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.TestResultCollector:RunFinished (UnityEditor.TestTools.TestRunner.Api.ITestResultAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/TestResultCollector.cs:110)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63853,
+          "timestampUtc": "2026-11-15T08:14:42.350103Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Executing IPostBuildCleanup for: Unity.PerformanceTesting.Editor.TestRunBuilder.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63854,
+          "timestampUtc": "2026-11-15T08:14:43.7081487Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63855,
+          "timestampUtc": "2026-11-15T08:14:49.194818Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[PipelineTestRunner] Running 53 tests (explicit tests excluded)",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.PipelineTestRunner/<>c__DisplayClass8_0:<ExecuteTestsInternal>b__0 (UnityEditor.TestTools.TestRunner.Api.ITestAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/PipelineTestRunner.cs:357)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63856,
+          "timestampUtc": "2026-11-15T08:14:50.7483607Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Executing IPrebuildSetup for: Unity.PerformanceTesting.Editor.TestRunBuilder.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63857,
+          "timestampUtc": "2026-11-15T08:14:50.9716973Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TestResultCollector] Run started: 6666 test(s)",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.TestResultCollector:RunStarted (UnityEditor.TestTools.TestRunner.Api.ITestAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/TestResultCollector.cs:58)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63858,
+          "timestampUtc": "2026-11-15T08:14:51.446095Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Saving results to: C:/Users/kenne/AppData/LocalLow/DefaultCompany/Land & Ledgers\\TestResults.xml",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63859,
+          "timestampUtc": "2026-11-15T08:14:51.4680309Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TestResultCollector] Run finished: 53 total, 53 passed, 0 failed",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.TestResultCollector:RunFinished (UnityEditor.TestTools.TestRunner.Api.ITestResultAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/TestResultCollector.cs:110)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63860,
+          "timestampUtc": "2026-11-15T08:14:52.0371687Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Executing IPostBuildCleanup for: Unity.PerformanceTesting.Editor.TestRunBuilder.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63861,
+          "timestampUtc": "2026-11-15T08:14:53.9453891Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63862,
+          "timestampUtc": "2026-11-15T08:14:54.3942265Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[PipelineTestRunner] Running 30 tests (explicit tests excluded)",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.PipelineTestRunner/<>c__DisplayClass8_0:<ExecuteTestsInternal>b__0 (UnityEditor.TestTools.TestRunner.Api.ITestAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/PipelineTestRunner.cs:357)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63863,
+          "timestampUtc": "2026-11-15T08:14:59.1915444Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Executing IPrebuildSetup for: Unity.PerformanceTesting.Editor.TestRunBuilder.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63864,
+          "timestampUtc": "2026-11-15T08:14:59.2685519Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TestResultCollector] Run started: 6666 test(s)",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.TestResultCollector:RunStarted (UnityEditor.TestTools.TestRunner.Api.ITestAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/TestResultCollector.cs:58)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63865,
+          "timestampUtc": "2026-11-15T08:14:59.557902Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Saving results to: C:/Users/kenne/AppData/LocalLow/DefaultCompany/Land & Ledgers\\TestResults.xml",
+          "stackTrace": "",
+          "seeded": false
+        },
+        {
+          "seq": 63866,
+          "timestampUtc": "2026-11-15T08:14:59.5759234Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TestResultCollector] Run finished: 30 total, 30 passed, 0 failed",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nUnity.Pipeline.Editor.Testing.TestResultCollector:RunFinished (UnityEditor.TestTools.TestRunner.Api.ITestResultAdaptor) (at ./Library/PackageCache/com.unity.pipeline@303cb578aa66/Editor/Testing/TestResultCollector.cs:110)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63867,
+          "timestampUtc": "2026-11-15T08:14:59.9993114Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "Executing IPostBuildCleanup for: Unity.PerformanceTesting.Editor.TestRunBuilder.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 63868,
+          "timestampUtc": "2026-11-15T08:15:01.4137026Z",
+          "level": "error",
+          "logType": "Error",
+          "message": "Failed to load 'F:/Land & Ledgers/Assets/Environment/Buildings/Building Animations/Single Story Business Building White Plaster Animation 1.anim'. File may be corrupted or was serialized with a newer version of Unity.",
+          "stackTrace": "UnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        }
+      ],
+      "cursor": 63868,
+      "session": "d022c2a3090e4762bfd305c366a1102d",
+      "returned": 100,
+      "dropped": false,
+      "reset": false,
+      "counts": {
+        "error": 12,
+        "warn": 1206,
+        "log": 731
+      },
+      "groundTruth": {
+        "sampledUtc": "2026-11-15T08:16:26.0920867Z",
+        "ageMs": 248,
+        "compilationFailed": false,
+        "compiling": false,
+        "consoleErrors": 1,
+        "consoleWarnings": 77,
+        "consoleLogs": 16,
+        "seeded": true
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 7800,
+      "projectPath": "F:\\Land & Ledgers"
+    }
+  },
+  "errors": [],
+  "warnings": []
+}

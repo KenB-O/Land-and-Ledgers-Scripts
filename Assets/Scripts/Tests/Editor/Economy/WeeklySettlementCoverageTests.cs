@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using LandLedgers.Economy;
 using NUnit.Framework;
+using UnityEditor;
 
 namespace LandLedgers.EditorTests.Economy
 {
@@ -52,6 +53,25 @@ namespace LandLedgers.EditorTests.Economy
             int enumCount = Enum.GetValues(typeof(BusinessType)).Length;
             Assert.AreEqual(enumCount - 1, SharedBusinessRuntimeManager.WeeklySettlementBusinessTypes.Length,
                 "Exactly one type (GeneralStore) is excluded; every other enum value must be present.");
+        }
+
+        [Test]
+        public void DedicatedStoreWeeklyPath_SelectsNpcStoreAndLeavesPlayerStoreToStoreManager()
+        {
+            BusinessProfileDefinition profile = AssetDatabase.LoadAssetAtPath<BusinessProfileDefinition>(
+                "Assets/Resources/Core/Economy/BusinessProfiles/GeneralStoreProfile.asset");
+            Assert.IsNotNull(profile, "The current authored General Store profile is required for this ownership regression.");
+
+            BusinessInstanceState npcStore = BusinessInstanceState.Create(
+                "npc_store_weekly_test", profile, 1, BusinessOwnerIdentity.Npc(17, "Test Owner", "Store"));
+            BusinessInstanceState playerStore = BusinessInstanceState.Create(
+                "player_store_weekly_test", profile, 2, BusinessOwnerIdentity.Player());
+
+            Assert.IsTrue(SharedBusinessRuntimeManager.IsNpcGeneralStoreWeeklySettlementTarget(npcStore),
+                "The separate NPC store needs the shared weekly expense/payroll writer.");
+            Assert.IsFalse(SharedBusinessRuntimeManager.IsNpcGeneralStoreWeeklySettlementTarget(playerStore),
+                "The player store remains on GeneralStoreRuntimeManager's existing weekly settlement path.");
+            Assert.IsFalse(SharedBusinessRuntimeManager.IsNpcGeneralStoreWeeklySettlementTarget(null));
         }
     }
 }

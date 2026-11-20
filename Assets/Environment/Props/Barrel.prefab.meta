@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 9bd3026d1a5529a43aa9d937348a2a9d
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 100100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 151648
+  packageName: Western Town Environment
+  packageVersion: 1.1
+  assetPath: Assets/Western/Prefabs/Interior/Barrel.prefab
+  uploadId: 359150

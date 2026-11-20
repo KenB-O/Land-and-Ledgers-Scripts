@@ -123,6 +123,8 @@ namespace LandLedgers.CameraSystem
         [Min(0f)] public float cameraObstructionPadding = 0.12f;
         [Tooltip("Ignore obstructions very near the focus point.")]
         [Min(0f)] public float cameraObstructionStartOffset = 0.35f;
+        [Tooltip("Maximum outward camera-arm recovery speed after an obstruction clears, in metres per second. Inward collision correction remains immediate to prevent clipping.")]
+        [Min(0.1f)] public float cameraObstructionRecoverySpeed = 24f;
 
         [Header("Zoom")]
         [Tooltip("Closest camera distance from the focus point.")]
@@ -168,6 +170,10 @@ namespace LandLedgers.CameraSystem
         [Tooltip("Distance-based wheel scale at the maximum zoom distance, allowing faster travel across the town at very large views.")]
         [Min(0.01f)]
         public float maximumWheelZoomScale = 4f;
+
+        [Tooltip("Maximum camera distance change from one wheel input event. This prevents a high zoom multiplier or large device delta from causing a jump.")]
+        [Min(0.1f)]
+        public float maximumWheelZoomStepPerInput = 6f;
 
         [Tooltip("When enabled, wheel zoom preserves the player's current final pitch instead of re-deriving a new one from zoom.")]
         public bool preserveAbsolutePitchWhileZooming = true;
@@ -365,6 +371,10 @@ namespace LandLedgers.CameraSystem
             return Mathf.Lerp(farWheelZoomScale, maximumWheelZoomScale, Mathf.SmoothStep(0f, 1f, farT));
         }
 
+        public float LimitWheelZoomStep(float zoomInput) =>
+            Mathf.Clamp(zoomInput, -Mathf.Max(0.1f, maximumWheelZoomStepPerInput),
+                Mathf.Max(0.1f, maximumWheelZoomStepPerInput));
+
         public float ClampManualPitchOffset(float manualPitchOffset, float zoomDistance)
         {
             float basePitch = EvaluateBasePitch(zoomDistance);
@@ -411,6 +421,7 @@ namespace LandLedgers.CameraSystem
             cameraObstructionRadius = Mathf.Max(0f, cameraObstructionRadius);
             cameraObstructionPadding = Mathf.Max(0f, cameraObstructionPadding);
             cameraObstructionStartOffset = Mathf.Max(0f, cameraObstructionStartOffset);
+            cameraObstructionRecoverySpeed = Mathf.Max(0.1f, cameraObstructionRecoverySpeed);
             defaultZoomDistance = Mathf.Clamp(defaultZoomDistance, minZoomDistance, maxZoomDistance);
             wheelZoomSensitivity = Mathf.Max(0f, wheelZoomSensitivity);
             closeZoomWheelMultiplier = Mathf.Max(0.1f, closeZoomWheelMultiplier);
@@ -421,6 +432,7 @@ namespace LandLedgers.CameraSystem
             preciseWheelZoomScale = Mathf.Max(closeWheelZoomScale, preciseWheelZoomScale);
             farWheelZoomScale = Mathf.Max(preciseWheelZoomScale, farWheelZoomScale);
             maximumWheelZoomScale = Mathf.Max(farWheelZoomScale, maximumWheelZoomScale);
+            maximumWheelZoomStepPerInput = Mathf.Max(0.1f, maximumWheelZoomStepPerInput);
             zoomSmoothing = Mathf.Max(0.001f, zoomSmoothing);
             closePitch = Mathf.Clamp(closePitch, 5f, 85f);
             farPitch = Mathf.Clamp(farPitch, 5f, 85f);

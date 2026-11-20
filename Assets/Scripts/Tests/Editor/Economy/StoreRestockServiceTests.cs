@@ -275,6 +275,80 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void CategoryRestock_ReordersOnlySalesCreatedShortfallBesideExistingIncomingOrder()
+        {
+            var port = StoreWith("staple_food", 50, 100, 120);
+            var upstream = new FakeUpstreamSupplier();
+            upstream.Stock["staple_food"] = 500;
+            upstream.Quotes["staple_food"] = 80;
+            var service = new StoreRestockService();
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 0, 0.5f);
+            Assert.AreEqual(50, service.Orders[0].UnitsOrdered);
+
+            // Actual retail sales consume 50 units while that first order is
+            // still in its lead time. Replenishment should cover the new
+            // fifty-unit gap (target 100 - stock 0 - incoming 50), without
+            // pretending the original order covers the units sold later.
+            port.Stock["staple_food"] = 0;
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 1, 0.5f);
+
+            Assert.AreEqual(2, service.Orders.Count,
+                "A pending order must not suppress replenishment for later real sales.");
+            Assert.AreEqual(50, service.Orders[1].UnitsOrdered,
+                "Only the uncovered demand is ordered, not another full target quantity.");
+            Assert.AreEqual(100, service.Orders[0].UnitsOrdered + service.Orders[1].UnitsOrdered,
+                "Current stock plus incoming orders restores the target after the additional sale.");
+            Assert.AreEqual(500, upstream.AvailableUnits("staple_food"),
+                "Ordering records obligations but does not remove supplier goods before shipment.");
+        }
+
+        [Test]
+        public void IdentifiedSkuRestock_ReordersSalesShortfallButDoesNotOverbookFiniteSupplierStock()
+        {
+            var port = new FakeIdentifiedSkuStore();
+            port.OfferList.Add(new GeneralStoreCategoryOffer
+            {
+                CategoryId = "staple_food",
+                OfferedItemIds = new List<string> { "bread" },
+                UsesItemLevelInventory = true,
+            });
+            port.ItemStock["bread"] = 50;
+            port.Stock["staple_food"] = 50;
+            port.ItemTargets["bread"] = 100;
+            port.ItemLots["bread"] = 1;
+            port.ItemUnits["bread"] = "loaf";
+            port.Prices["bread"] = 5;
+            var supplier = new FakeIdentifiedItemSupplier();
+            supplier.Stock["bread"] = 500;
+            var service = new StoreRestockService();
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { supplier }, 0, 0.5f);
+            Assert.AreEqual(50, service.Orders[0].UnitsOrdered);
+            Assert.IsTrue(port.TryConsumeItemStockUnits("bread", 50, out int sold));
+            Assert.AreEqual(50, sold);
+
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { supplier }, 1, 0.5f);
+            Assert.AreEqual(2, service.Orders.Count,
+                "Actual SKU sales after an order create an incremental, identity-preserving replenishment order.");
+            Assert.AreEqual("bread", service.Orders[1].ItemId);
+            Assert.AreEqual(54, service.Orders[1].UnitsOrdered,
+                "The 50-unit shortfall rounds to the authored six-unit procurement lot.");
+
+            // A separate order cannot claim stock already committed by this
+            // service to an earlier order for the same finite upstream SKU.
+            port.ItemTargets["bread"] = 600;
+            service.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { supplier }, 2, 0.5f);
+            int totalOrdered = 0;
+            foreach (StoreProcurementOrder order in service.Orders)
+                if (order != null && order.Stage == StoreProcurementStage.Ordered
+                    && order.UpstreamSupplierId == supplier.SupplierId && order.ItemId == "bread")
+                    totalOrdered += order.UnitsOrdered;
+            Assert.AreEqual(500, totalOrdered,
+                "The store must not promise more from the supplier than its 500 real units, even when demand rises again.");
+        }
+
+        [Test]
         public void Consolidation_SameDaySameSupplierOrders_ShareOneShipmentGroup()
         {
             var port = StoreWith("staple_food", 20, 100, 120);

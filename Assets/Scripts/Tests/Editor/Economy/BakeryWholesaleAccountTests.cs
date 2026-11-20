@@ -2,6 +2,7 @@ using EntityId = LandLedgers.Primitives.EntityId;
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Equipment;
@@ -126,6 +127,99 @@ namespace LandLedgers.Editor.Economy
             Assert.Greater(record.ProvenanceLines.Count, 0, "flour provenance rides to the buyer");
             Assert.AreEqual(301, runtime.WholesaleAccounts[0].NextDeliveryDayIndex,
                 "the account advances to its next delivery day");
+        }
+
+        [Test]
+        public void PlanWholesaleBatches_AllocatesActiveBatchOnlyOnceAcrossDueAccounts()
+        {
+            var diag = new List<string>();
+            var runtime = StockedShop(diag);
+            var later = BoardingHouseAccount(units: 24, dueDay: 301);
+            later.AccountId = "account-b";
+            var earlier = BoardingHouseAccount(units: 24, dueDay: 300);
+            earlier.AccountId = "account-a";
+            earlier.BuyerBusinessId = "earlier-buyer";
+            Assert.IsNull(runtime.AddWholesaleAccount(later, diag));
+            Assert.IsNull(runtime.AddWholesaleAccount(earlier, diag));
+
+            Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.BreadLoafId, 1, 300, diag),
+                "the pre-existing active batch is finite pipeline output");
+            List<string> planned = runtime.PlanWholesaleBatches(300, diag);
+
+            Assert.AreEqual(1, planned.Count,
+                "the one existing batch covers the earlier account once; the later account still needs its own batch");
+            Assert.AreEqual(2, runtime.Batches.Count(b => b != null && b.IsActive));
+            Assert.AreEqual(0, runtime.PlanWholesaleBatches(300, diag).Count,
+                "replanning sees both account obligations covered without duplicating work");
+
+            var restored = new BakeryShopRuntime("bakery-biz-1");
+            restored.LoadFromSaveDto(runtime.CaptureSaveDto());
+            Assert.AreEqual(0, restored.PlanWholesaleBatches(300, diag).Count,
+                "save/restore keeps stable batch identities and shared coverage");
+            Assert.AreEqual(2, restored.Batches.Count(b => b != null && b.IsActive));
+        }
+
+        [Test]
+        public void PlanWholesaleBatches_CountsFinishedStockSeparatelyFromWorkInProgress()
+        {
+            var diag = new List<string>();
+            var runtime = StockedShop(diag);
+            Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.BreadLoafId, 1, 300, diag));
+            Assert.AreEqual(1, WorkDay(runtime, 300, diag));
+            Assert.IsNull(runtime.AddWholesaleAccount(BoardingHouseAccount(units: 24, dueDay: 300), diag));
+
+            List<string> planned = runtime.PlanWholesaleBatches(300, diag);
+
+            Assert.AreEqual(0, planned.Count, "the existing 24-loaf finished lot fulfills one account; it is not counted as WIP");
+            Assert.AreEqual(24, runtime.BreadShelf.Sum(lot => lot != null ? lot.UnitCount : 0));
+            Assert.AreEqual(0, runtime.Batches.Count(batch => batch != null && batch.IsActive));
+        }
+
+        [Test]
+        public void PlanWholesaleBatches_DoesNotTreatRetailProtectedStockAsReservedForWholesale()
+        {
+            var diag = new List<string>();
+            var runtime = StockedShop(diag);
+            Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.BreadLoafId, 1, 300, diag));
+            Assert.AreEqual(1, WorkDay(runtime, 300, diag));
+            runtime.SupplyProtection = BakerySupplyProtectionPolicy.ProtectRetailCounter;
+            Assert.IsNull(runtime.AddWholesaleAccount(BoardingHouseAccount(units: 24, dueDay: 300), diag));
+
+            List<string> planned = runtime.PlanWholesaleBatches(300, diag);
+
+            Assert.AreEqual(1, planned.Count,
+                "a lot the configured policy explicitly makes available to retail cannot also be promised as wholesale coverage");
+        }
+
+        [Test]
+        public void PlanRetailBatches_RequiresRecordedDemandAndNetsFinishedStock()
+        {
+            var diag = new List<string>();
+            var runtime = StockedShop(diag);
+
+            Assert.AreEqual(0, runtime.PlanRetailBatches(300, diag).Count,
+                "no observed customer demand does not create speculative stock");
+            Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.BreadLoafId, 1, 300, diag));
+            Assert.AreEqual(1, WorkDay(runtime, 300, diag));
+            Assert.AreEqual(24, runtime.SellBread(BakeryBreadCatalog.BreadLoafId, 24, 300, diag)[0].Units,
+                "the demand signal is an actual recorded retail sale");
+
+            List<string> planned = runtime.PlanRetailBatches(301, diag);
+            Assert.AreEqual(1, planned.Count, "recent actual sales create a conservative next-day batch plan");
+            Assert.AreEqual(0, runtime.PlanRetailBatches(301, diag).Count,
+                "the same active batch covers the same observed demand on a repeated planning pass");
+        }
+
+        [Test]
+        public void PlanRetailBatches_OpenHouseholdNeedProvidesOneBoundedDemandSignal()
+        {
+            var diag = new List<string>();
+            var runtime = StockedShop(diag);
+
+            Assert.AreEqual(1, runtime.PlanRetailBatches(300, 140, diag).Count,
+                "open purchasing needs are legitimate demand, but one daily planning pass never creates an unbounded town-sized batch stack");
+            Assert.AreEqual(0, runtime.PlanRetailBatches(300, 140, diag).Count,
+                "the active batch covers this bounded signal; repeated same-day review cannot duplicate it");
         }
 
         [Test]

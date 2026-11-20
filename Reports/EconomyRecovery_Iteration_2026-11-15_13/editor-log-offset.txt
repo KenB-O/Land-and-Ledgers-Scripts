@@ -1,0 +1,3 @@
+Source=C:\Users\kenne\AppData\Local\Temp\ll-rebuild-library-20261114.log
+StartBytes=105119345
+StartUtc=2026-11-15T10:04:06.6957859Z

@@ -268,12 +268,15 @@ namespace LandLedgers.EditorTests.Tasks
         }
 
         /// <summary>Builds the eviction scenario from the existing bounded-store test: a store of 5 holding 5 terminal records, then 2 open stuck tasks evict the 2 oldest terminals.</summary>
-        private static void BuildEvictionScenario(out TaskDurationDiagnostics diagnostics, out List<string> lines, out List<EntityId> terminalIds)
+        private static void BuildEvictionScenario(out TaskDurationDiagnostics diagnostics, out List<string> lines,
+            out List<string> infoLines, out List<EntityId> terminalIds)
         {
             var clock = new FakeClock { Now = Day(10, 28800) };
             TaskAuthority authority = CreateAuthorityWithDiagnostics(out diagnostics, clock);
             diagnostics.MaxTrackedRecords = 5;
             lines = CaptureLines(diagnostics);
+            infoLines = new List<string>();
+            diagnostics.InfoSink = infoLines.Add;
             var budgets = new WorkTimeBudgetStore();
             budgets.EnsureDay(10);
 
@@ -308,8 +311,9 @@ namespace LandLedgers.EditorTests.Tasks
         {
             TaskDurationDiagnostics diagnostics;
             List<string> lines;
+            List<string> infoLines;
             List<EntityId> terminalIds;
-            BuildEvictionScenario(out diagnostics, out lines, out terminalIds);
+            BuildEvictionScenario(out diagnostics, out lines, out infoLines, out terminalIds);
 
             diagnostics.Evaluate(Day(12, 28800), 12);
 
@@ -317,9 +321,11 @@ namespace LandLedgers.EditorTests.Tasks
             Assert.IsNotNull(summary);
             StringAssert.Contains("evicted 2 record(s)", summary,
                 "the eviction count is reported on the summary line (§4.2)");
-            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] evicted"),
-                "exactly one evicted-identities line");
-            string evicted = FindLine(lines, "[TaskDuration] evicted");
+            Assert.AreEqual(0, CountLinesStartingWith(lines, "[TaskDuration] evicted"),
+                "routine terminal-record retention is not a warning");
+            Assert.AreEqual(1, CountLinesStartingWith(infoLines, "[TaskDuration] evicted"),
+                "the complete eviction evidence remains available in the informational channel");
+            string evicted = FindLine(infoLines, "[TaskDuration] evicted");
             Assert.IsNotNull(evicted);
             Assert.IsTrue(evicted.StartsWith("[TaskDuration] evicted day 12: 2 evicted: ", StringComparison.Ordinal),
                 "the evicted line carries the day and the evicted count: " + evicted);
@@ -343,17 +349,18 @@ namespace LandLedgers.EditorTests.Tasks
         {
             TaskDurationDiagnostics diagnostics;
             List<string> lines;
+            List<string> infoLines;
             List<EntityId> terminalIds;
-            BuildEvictionScenario(out diagnostics, out lines, out terminalIds);
+            BuildEvictionScenario(out diagnostics, out lines, out infoLines, out terminalIds);
 
             diagnostics.Evaluate(Day(12, 28800), 12);
-            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] evicted"),
+            Assert.AreEqual(1, CountLinesStartingWith(infoLines, "[TaskDuration] evicted"),
                 "day 12 names the evicted records once");
 
             diagnostics.Evaluate(Day(13, 28800), 13);
             Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] summary day 13"),
                 "day 13 still earns a summary (the 2 open overruns persist)");
-            Assert.AreEqual(1, CountLinesStartingWith(lines, "[TaskDuration] evicted"),
+            Assert.AreEqual(1, CountLinesStartingWith(infoLines, "[TaskDuration] evicted"),
                 "no second evicted line: the retained list was cleared at the day-12 summary and nothing new was evicted");
             Assert.AreEqual(0, CountLinesStartingWith(lines, "[TaskDuration] omitted"),
                 "no warning was omitted on either day, so no omitted line at all");

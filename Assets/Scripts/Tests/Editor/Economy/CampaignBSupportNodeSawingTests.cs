@@ -187,6 +187,33 @@ namespace LandLedgers.EditorTests.Economy
                 "The local fallback plan must come after the shared-path attempt, not before it.");
         }
 
+        [Test]
+        public void WeeklySupportProductionYieldsOnlyToTheMatchingPhysicalMill()
+        {
+            Assert.IsTrue(SharedBusinessRuntimeManager.ShouldYieldWeeklyProductionToPhysicalProducer(
+                "sawmill_small_sawmill_004", "sawmill_small_sawmill_004"));
+            Assert.IsFalse(SharedBusinessRuntimeManager.ShouldYieldWeeklyProductionToPhysicalProducer(
+                "sawmill_small_sawmill_004", "sawmill_other_005"));
+            Assert.IsFalse(SharedBusinessRuntimeManager.ShouldYieldWeeklyProductionToPhysicalProducer(
+                string.Empty, "sawmill_small_sawmill_004"));
+        }
+
+        [Test]
+        public void SharedSawmillPathChecksPhysicalOwnerBeforeMirroringOrProducing()
+        {
+            string body = StripNonCode(MethodBody(ReadRepoFile(
+                    "Assets/Scripts/Domains/Economy/Core/SharedBusinessRuntimeManager.cs"),
+                "public bool TryResolveWeeklySawmillProduction("));
+            int authorityCheck = body.IndexOf("HasMatchingPhysicalSawmillProducer(business.InstanceId)", StringComparison.Ordinal);
+            int supportMirror = body.IndexOf("SyncLinkedSawmillSupportFromBusiness(business)", StringComparison.Ordinal);
+            int produce = body.IndexOf("ResolveSawmillBusinessProduction(business, sawmill, weekKey, null)", StringComparison.Ordinal);
+            Assert.GreaterOrEqual(authorityCheck, 0);
+            Assert.Greater(supportMirror, authorityCheck,
+                "The physical production owner must be checked before synchronizing or consuming compatibility stock.");
+            Assert.Greater(produce, authorityCheck,
+                "The weekly producer must be unreachable when the matching physical producer owns the mill.");
+        }
+
         // ---------- repo-file helpers (package-5 / C-4 precedent) ----------
 
         private static string FindRepoRoot()

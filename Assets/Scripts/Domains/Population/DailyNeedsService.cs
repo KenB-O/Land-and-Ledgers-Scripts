@@ -21,7 +21,12 @@ namespace LandLedgers.Population
     /// </summary>
     public sealed class DailyNeedsService
     {
-        /// <summary>Meals per person per day (calibration).</summary>
+        /// <summary>
+        /// Legacy reserve-only fallback meal cadence. The production lot-backed
+        /// path uses MealSchedulingPolicy (breakfast, lunch and supper); keep
+        /// this two-meal compatibility path isolated until its callers are
+        /// retired rather than changing unrelated reserve-only simulations.
+        /// </summary>
         public const int MealsPerPersonPerDay = 2;
         /// <summary>Reserve category that feeds meals.</summary>
         public const string MealCategoryId = "staple_food";
@@ -125,7 +130,8 @@ namespace LandLedgers.Population
             MealSchedulingPolicy mealPolicy = null,
             HouseholdMembershipRegistry memberships = null,
             bool conditionDebuffsSuppressed = false,
-            OffMapJourneyAuthority offMapJourneys = null)
+            OffMapJourneyAuthority offMapJourneys = null,
+            bool deferLotBasedMealsToClock = false)
         {
             diag = diag ?? diagnostics;
             var report = new DayReport { DayIndex = dayIndex };
@@ -148,7 +154,7 @@ namespace LandLedgers.Population
             foreach (HouseholdState household in population.households)
             {
                 if (household == null) continue;
-                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals, boardingMeals, hotelMeals, inventories, mealLog, mealPolicy, memberships, conditionDebuffsSuppressed, offMapJourneys);
+                ExecuteHousehold(population, household, planner, executor, dayIndex, report, diag, budgetStore, restaurantMeals, boardingMeals, hotelMeals, inventories, mealLog, mealPolicy, memberships, conditionDebuffsSuppressed, offMapJourneys, deferLotBasedMealsToClock);
             }
             return report;
         }
@@ -166,7 +172,8 @@ namespace LandLedgers.Population
             MealSchedulingPolicy mealPolicy,
             HouseholdMembershipRegistry memberships,
             bool conditionDebuffsSuppressed,
-            OffMapJourneyAuthority offMapJourneys = null)
+            OffMapJourneyAuthority offMapJourneys = null,
+            bool deferLotBasedMealsToClock = false)
         {
             int actingPersonId = FindActingAdult(population, household, memberships, offMapJourneys, diag);
             if (actingPersonId < 0)
@@ -193,14 +200,14 @@ namespace LandLedgers.Population
             // Phase B (Real People): when the lot inventory + meal log are
             // wired, meals consume real lots and record traceable records;
             // otherwise the legacy reserve-unit path runs unchanged.
-            if (inventories != null && mealLog != null)
+            if (inventories != null && mealLog != null && !deferLotBasedMealsToClock)
             {
                 ExecuteLotBasedMeals(
                     household, members, actingPersonId, dayIndex, report, diag,
                     budgetStore, restaurantMeals, boardingMeals, hotelMeals,
                     inventories, mealLog, mealPolicy, conditionDebuffsSuppressed);
             }
-            else
+            else if (inventories == null || mealLog == null)
             {
                 ExecuteReserveBasedMeals(
                     population, household, members, actingPersonId, planner, executor,

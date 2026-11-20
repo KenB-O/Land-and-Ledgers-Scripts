@@ -29,6 +29,16 @@ namespace LandLedgers.EditorTests.Core
     [TestFixture]
     public sealed class BusinessTaskStartWindowTests
     {
+        [Test]
+        public void TemporaryOccupancyConflict_IsRecognizedForInformationalDeferral()
+        {
+            Assert.IsTrue(BusinessTaskStartRefusal.IsTemporaryOccupancyConflict(
+                "Cannot start task T5: P7 is already occupied by task T36 (in-progress)."));
+            Assert.IsFalse(BusinessTaskStartRefusal.IsTemporaryOccupancyConflict(
+                "Cannot start task T5: the destination has no route."));
+            Assert.IsFalse(BusinessTaskStartRefusal.IsTemporaryOccupancyConflict(null));
+        }
+
         // T44 (day 6): 10-minute hitch reservation [521, 531].
         private const int HitchStart = 521;
         private const int HitchEnd = 531;
@@ -46,14 +56,32 @@ namespace LandLedgers.EditorTests.Core
         private const int TickWidth = 15;
 
         [Test]
-        public void Resolve_OverlappingWindow_Starts()
+        public void Resolve_ReservationStillLiveAtTickBoundary_Starts()
         {
             Assert.AreEqual(BusinessTaskStartDecision.Start,
-                BusinessTaskStartWindow.Resolve(HitchStart, HitchEnd, 520, 535));
-            // Tick window ending exactly on the reservation start does not
-            // overlap; the next minute does.
+                BusinessTaskStartWindow.Resolve(HitchStart, HitchEnd, 510, 525));
+            // At minute 525 the callback occurs while [521, 531] is live.
             Assert.AreEqual(BusinessTaskStartDecision.Start,
-                BusinessTaskStartWindow.Resolve(HitchStart, HitchEnd, 521, 536));
+                BusinessTaskStartWindow.Resolve(HitchStart, HitchEnd, 524, 525));
+        }
+
+        [Test]
+        public void Resolve_ReservationEndingAtTickBoundary_CatchesUp()
+        {
+            Assert.AreEqual(BusinessTaskStartDecision.CatchUp,
+                BusinessTaskStartWindow.Resolve(525, 540, 525, 540),
+                "the callback occurs at minute 540, after the [525, 540) reservation expires");
+            Assert.AreEqual(BusinessTaskStartDecision.CatchUp,
+                BusinessTaskStartWindow.Resolve(HitchStart, HitchEnd, 520, 535),
+                "overlap earlier in a tick cannot authorize starting after minute 531");
+        }
+
+        [Test]
+        public void Resolve_TickBoundaryAtReservationStart_Starts()
+        {
+            Assert.AreEqual(BusinessTaskStartDecision.Start,
+                BusinessTaskStartWindow.Resolve(HitchStart, HitchEnd, 506, 521),
+                "the reservation start is inclusive, so a callback exactly there may begin work");
         }
 
         [Test]
@@ -61,10 +89,10 @@ namespace LandLedgers.EditorTests.Core
         {
             Assert.AreEqual(BusinessTaskStartDecision.Wait,
                 BusinessTaskStartWindow.Resolve(HitchStart, HitchEnd, 400, 415));
-            // Tick ending exactly on the reservation start has not reached
-            // the window yet.
+            // Tick ending strictly before the reservation start has not
+            // reached the window yet.
             Assert.AreEqual(BusinessTaskStartDecision.Wait,
-                BusinessTaskStartWindow.Resolve(HitchStart, HitchEnd, 506, 521));
+                BusinessTaskStartWindow.Resolve(HitchStart, HitchEnd, 505, 520));
         }
 
         [Test]

@@ -590,6 +590,143 @@ namespace LandLedgers.Editor.Economy
             Assert.IsNull(freshRefusal);
         }
 
+        [Test]
+        public void C5_UnaffordablePurchaseDoesNotQueueOrStrandLot_AndRecoversWhenCashReturns()
+        {
+            World world = NewWorld();
+            ReceiveMillLot(world, DocumentedMillLot(9301, 40));
+            const int fullPriceCents = 40 * 85;
+
+            Assert.IsNull(world.YardCash.TryDebit(999000, "simulate yard cash shortage"));
+            Assert.AreEqual(1000, world.YardCash.BalanceCents);
+            SawmillToYardTransferJob unaffordable = world.Driver.BeginTransfer(
+                LotId(9301), "merchantable", 85, Day, out string beginRefusal);
+
+            Assert.IsNull(unaffordable);
+            Assert.IsNotNull(beginRefusal);
+            Assert.AreEqual(0, world.Driver.TransferJobCount, "An unpayable purchase must not become a persistent open job.");
+            Assert.AreEqual(40, world.Mill.LumberStock.TotalLumberUnits, "The mill retains ownership while the yard cannot pay.");
+            Assert.AreEqual(0, world.Yard.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(1000, world.YardCash.BalanceCents);
+            Assert.AreEqual(0, world.MillCash.BalanceCents);
+
+            Assert.IsNull(world.YardCash.Credit(fullPriceCents, "restore yard purchase cash"));
+            SawmillToYardTransferJob job = world.Driver.BeginTransfer(
+                LotId(9301), "merchantable", 85, Day, out string affordableBeginRefusal);
+            Assert.IsNotNull(job);
+            Assert.IsNull(affordableBeginRefusal);
+
+            // Cash can change between the attempt being created and its
+            // settlement. A rejected payment closes this attempt without
+            // moving lumber; it does not leave a daily retry behind.
+            Assert.IsNull(world.YardCash.TryDebit(fullPriceCents, "cash became unavailable before settlement"));
+            int cashBeforeRefusedRun = world.YardCash.BalanceCents;
+            Assert.IsFalse(world.Driver.RunTransfer(job.JobId, TransferDay, out string runRefusal));
+            Assert.IsNotNull(runRefusal);
+            Assert.AreEqual(SawmillToYardTransferJobState.Failed, job.State);
+            Assert.AreEqual(40, world.Mill.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(0, world.Yard.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(cashBeforeRefusedRun, world.YardCash.BalanceCents);
+            Assert.AreEqual(0, world.MillCash.BalanceCents);
+
+            Assert.IsNull(world.YardCash.Credit(fullPriceCents, "yard later has funds"));
+            SawmillToYardTransferJob recovered = world.Driver.BeginTransfer(
+                LotId(9301), "merchantable", 85, TransferDay, out string recoveredBeginRefusal);
+            Assert.IsNotNull(recovered);
+            Assert.IsNull(recoveredBeginRefusal);
+            Assert.IsTrue(world.Driver.RunTransfer(recovered.JobId, TransferDay, out string recoveredRunRefusal));
+            Assert.IsNull(recoveredRunRefusal);
+            Assert.AreEqual(0, world.Mill.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(40, world.Yard.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(fullPriceCents, world.MillCash.BalanceCents);
+            Assert.AreEqual(1000, world.YardCash.BalanceCents,
+                "The yard retains the 1,000c opening balance present before the successful retry.");
+        }
+
+        [Test]
+        public void S5_SaveRestoredUnpayableAttemptClosesAndCanBeReofferedAfterCashRecovery()
+        {
+            World world = NewWorld();
+            ReceiveMillLot(world, DocumentedMillLot(9301, 40));
+
+            // Simulate a Planned purchase saved before the yard's balance
+            // fell below the stored lot price. This is the recovery case
+            // behind old long-run open-job backlogs.
+            var restored = new SawmillToYardTransferDriver(
+                world.Mill, world.Yard, new List<string>());
+            restored.YardCash = world.YardCash;
+            restored.MillCash = world.MillCash;
+            restored.LoadFromSaveDto(LinkDto(
+                "yard-transfer:" + LotId(9301), LotId(9301), "merchantable", 85, 0));
+            SawmillToYardTransferJob job = restored.GetJob("yard-transfer:" + LotId(9301));
+            Assert.IsNotNull(job);
+            Assert.AreEqual(SawmillToYardTransferJobState.Planned, job.State);
+
+            // The saved attempt remains pending while the business spends
+            // its available cash. Recreate that current-world balance before
+            // exercising recovery; the DTO intentionally stores no cash.
+            Assert.IsNull(world.YardCash.TryDebit(999000, "simulate intervening yard expenses"));
+            Assert.AreEqual(1000, world.YardCash.BalanceCents);
+
+            Assert.IsFalse(restored.RunTransfer(job.JobId, TransferDay, out string refusal));
+            Assert.IsNotNull(refusal);
+            Assert.AreEqual(SawmillToYardTransferJobState.Failed, job.State,
+                "An unaffordable restored attempt must not remain in the daily retry set.");
+            Assert.AreEqual(0, restored.JobsInState(SawmillToYardTransferJobState.Planned).Count);
+            Assert.AreEqual(0, restored.ToSaveDto().TransferJobLinks.Count,
+                "A failed attempt must not return as another open job after Save/Continue.");
+            Assert.AreEqual(40, world.Mill.LumberStock.TotalLumberUnits,
+                "The sawmill keeps ownership while the yard cannot pay.");
+            Assert.AreEqual(0, world.Yard.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(1000, world.YardCash.BalanceCents);
+            Assert.AreEqual(0, world.MillCash.BalanceCents);
+
+            Assert.IsNull(world.YardCash.Credit(2400, "restore funds for the lumber purchase"));
+            SawmillToYardTransferJob recovered = restored.BeginTransfer(
+                LotId(9301), "merchantable", 85, TransferDay, out string beginRefusal);
+            Assert.IsNotNull(recovered);
+            Assert.IsNull(beginRefusal);
+            Assert.IsTrue(restored.RunTransfer(recovered.JobId, TransferDay, out string runRefusal));
+            Assert.IsNull(runRefusal);
+            Assert.AreEqual(SawmillToYardTransferJobState.Transferred, recovered.State);
+            Assert.AreEqual(0, world.Mill.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(40, world.Yard.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(3400, world.MillCash.BalanceCents);
+            Assert.AreEqual(0, world.YardCash.BalanceCents);
+        }
+
+        [Test]
+        public void C6_LostSettlementAuthorityClosesAttemptWithoutMovingLot_AndCanRetry()
+        {
+            World world = NewWorld();
+            ReceiveMillLot(world, DocumentedMillLot(9301, 40));
+            SawmillToYardTransferJob job = world.Driver.BeginTransfer(
+                LotId(9301), "merchantable", 85, Day, out string beginRefusal);
+            Assert.IsNotNull(job);
+            Assert.IsNull(beginRefusal);
+
+            world.Driver.YardCash = null;
+            Assert.IsFalse(world.Driver.RunTransfer(job.JobId, TransferDay, out string refusal));
+            Assert.IsNotNull(refusal);
+            Assert.AreEqual(SawmillToYardTransferJobState.Failed, job.State);
+            Assert.AreEqual(40, world.Mill.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(0, world.Yard.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(1000000, world.YardCash.BalanceCents);
+            Assert.AreEqual(0, world.MillCash.BalanceCents);
+
+            world.Driver.YardCash = world.YardCash;
+            SawmillToYardTransferJob retry = world.Driver.BeginTransfer(
+                LotId(9301), "merchantable", 85, TransferDay, out string retryRefusal);
+            Assert.IsNotNull(retry, "A fresh purchase can be attempted after the cash authority is restored.");
+            Assert.IsNull(retryRefusal);
+            Assert.IsTrue(world.Driver.RunTransfer(retry.JobId, TransferDay, out string retryRunRefusal));
+            Assert.IsNull(retryRunRefusal);
+            Assert.AreEqual(0, world.Mill.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(40, world.Yard.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(3400, world.MillCash.BalanceCents);
+            Assert.AreEqual(996600, world.YardCash.BalanceCents);
+        }
+
         // ---- Save round trip (4: S1-S4) ----
 
         [Test]
@@ -719,7 +856,7 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void N3_NullDiagnostics_Tolerated()
+        public void N3_MissingCashAuthoritiesRefuseBeforeCreatingPurchaseJob()
         {
             var mill = new SawmillShopRuntime("mill-1", new EntityIdRegistry());
             var yard = new LumberYardShopRuntime("yard-1", new EntityIdRegistry());
@@ -729,8 +866,10 @@ namespace LandLedgers.Editor.Economy
 
             Assert.IsNotNull(driver.Diagnostics);
             SawmillToYardTransferJob job = driver.BeginTransfer(LotId(9301), "merchantable", 85, Day, out string refusal);
-            Assert.IsNotNull(job);
-            Assert.IsNull(refusal);
+            Assert.IsNull(job, "A purchase attempt without bound buyer/seller cash authority must not enter the persistent job queue.");
+            Assert.IsNotNull(refusal);
+            Assert.AreEqual(0, driver.TransferJobCount);
+            Assert.AreEqual(40, mill.LumberStock.TotalLumberUnits, "Refusal preserves the mill-owned lot.");
         }
     }
 }

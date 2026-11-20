@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 5dde316456027554c84ab941104c9b5f
+timeCreated: 1466163909
+licenseType: Store
+NativeFormatImporter:
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 55272
+  packageName: HD Fruits & Vegetables
+  packageVersion: 1.0
+  assetPath: Assets/BK_Food/Food_Prefabs/Vegetables/Salad_01.prefab
+  uploadId: 123055

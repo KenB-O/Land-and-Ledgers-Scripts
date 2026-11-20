@@ -34,6 +34,17 @@ namespace LandLedgers.EditorTests.Economy
         }
 
         [Test]
+        public void YardAndYd_AreTheSameUnitInEitherPurchaseDirection()
+        {
+            Assert.IsTrue(RetailUnitConversions.TryGetStoreUnitsPerHouseholdUnit(
+                "basic_cloth", "yard", "yd", out int subdivisionFactor, out string subdivisionReason), subdivisionReason);
+            Assert.AreEqual(1, subdivisionFactor);
+            Assert.IsTrue(RetailUnitConversions.TryGetHouseholdUnitsPerStoreUnit(
+                "flannel", "yard", "yd", out int packageSize, out string packageReason), packageReason);
+            Assert.AreEqual(1, packageSize);
+        }
+
+        [Test]
         public void Flour_PackageShape_IsRefusedWithTheMissingMechanismNamed()
         {
             Assert.IsFalse(RetailUnitConversions.TryGetStoreUnitsPerHouseholdUnit(

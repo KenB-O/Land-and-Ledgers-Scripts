@@ -1,0 +1,223 @@
+{
+  "status": "completed",
+  "duration": 0.76,
+  "summary": {
+    "total": 30,
+    "passed": 22,
+    "failed": 8,
+    "skipped": 0,
+    "inconclusive": 0
+  },
+  "results": [
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.BlockedBatch_ThreeDays_LogsBlockedLineDaily_NoDuplicate",
+      "Status": "Passed",
+      "Duration": 0.0122525,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Cap_FiniteNotionsCounterparty_ExhaustsAfterThirtyOrderedUnits",
+      "Status": "Passed",
+      "Duration": 0.0525052,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Cap_Fuel_FortyUnits_StopsBakeDayFortyOne",
+      "Status": "Passed",
+      "Duration": 0.0269938,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Cap_MillbrookWeeklyReplenishment_BelowDailyDemand",
+      "Status": "Passed",
+      "Duration": 0.0041939,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.CoverageLine_BlockedDay_NamesFirstFailingInput_AndNextArrival",
+      "Status": "Passed",
+      "Duration": 0.0034455,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.CoverageLine_ReportsBinCustodyInTransit_AndDaysOfCover",
+      "Status": "Failed",
+      "Duration": 0.0144349,
+      "Message": "  day 2 line carries 2u notions in flight by arrival day; line: [BakeryProduction] pipeline coverage day 2: bin flour 24 lb, flour in custody 0 lb, notions on hand 0u, notions in custody 0u, fuel 40u, Millbrook in transit: none in flight, notions in flight: 1u (day 15: 1u), days-of-cover 1 at 1 batch/day (planned yield 24u/batch, not stock), next arrival day 15, first failing input: notions, producible: no (notions)\r\n  Expected: True\r\n  But was:  False\r\n",
+      "StackTrace": "at LandLedgers.Editor.Economy.BakerySuppliesTests.CoverageLine_ReportsBinCustodyInTransit_AndDaysOfCover () [0x003ac] in F:\\Land & Ledgers\\Assets\\Scripts\\Tests\\Editor\\Economy\\BakerySuppliesTests.cs:2223\r\n"
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Flour_OneSackHaulCannotBake_OneSackRemainderReorderDeliversAndBakes",
+      "Status": "Passed",
+      "Duration": 0.0025236,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Flour_ReorderInTransit_NoDuplicateOrder_WhileOutstanding",
+      "Status": "Passed",
+      "Duration": 0.002588,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Flour_TwoSackDelivery_BakesOnce_LeavesEightLbResidue_BlocksNextBake",
+      "Status": "Passed",
+      "Duration": 0.0032154,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.FlourAndNotions_BlockedCauseWord_MatchesFirstFailingInput",
+      "Status": "Passed",
+      "Duration": 0.0032109,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.ForwardOrder_Flour_DepthCoversFreightLead_SustainsDailyBakes",
+      "Status": "Failed",
+      "Duration": 0.1267024,
+      "Message": "  clamped orders fire on days 51 and 56 (re-simulation prediction, confirmed by the run); clamp days: 34,39,49,56\r\n  Expected: True\r\n  But was:  False\r\n",
+      "StackTrace": "at LandLedgers.Editor.Economy.BakerySuppliesTests.ForwardOrder_Flour_DepthCoversFreightLead_SustainsDailyBakes () [0x00417] in F:\\Land & Ledgers\\Assets\\Scripts\\Tests\\Editor\\Economy\\BakerySuppliesTests.cs:2750\r\n"
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.ForwardOrder_NeverOrdersBeyondCoveredDemand",
+      "Status": "Passed",
+      "Duration": 0.0584964,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.ForwardOrder_Notions_DepthFourteen_SustainsDailyBakes",
+      "Status": "Passed",
+      "Duration": 0.0660857,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.ForwardOrder_Notions_DepthZero_PreservesCurrentCycle",
+      "Status": "Failed",
+      "Duration": 0.0022985,
+      "Message": "  depth 0: one priming notion ordered, day 2\r\n  Expected: 1\r\n  But was:  0\r\n",
+      "StackTrace": "at LandLedgers.Editor.Economy.BakerySuppliesTests.ForwardOrder_Notions_DepthZero_PreservesCurrentCycle () [0x00078] in F:\\Land & Ledgers\\Assets\\Scripts\\Tests\\Editor\\Economy\\BakerySuppliesTests.cs:2466\r\n"
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Fuel_FortyUnits_BakesFortyDays_ThenRefusesWithD2D7Named",
+      "Status": "Passed",
+      "Duration": 0.0821498,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Margin_FiveBakeDays_StandardCostVsActualCash",
+      "Status": "Passed",
+      "Duration": 0.0037422,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_Day1Order_ArrivesDay15_FeedsBakesTransfers_CashReconciles",
+      "Status": "Passed",
+      "Duration": 0.003547,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_FlourBlockedDays_PrimingOrders_EnableEarlyFirstBake",
+      "Status": "Failed",
+      "Duration": 0.0027828,
+      "Message": "  a priming notion is ordered even though the batch is flour-blocked, day 2\r\n  Expected: 1\r\n  But was:  0\r\n",
+      "StackTrace": "at LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_FlourBlockedDays_PrimingOrders_EnableEarlyFirstBake () [0x0009a] in F:\\Land & Ledgers\\Assets\\Scripts\\Tests\\Editor\\Economy\\BakerySuppliesTests.cs:682\r\n"
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_PrimedWindowBakesThenDrains",
+      "Status": "Failed",
+      "Duration": 0.0021722,
+      "Message": "  14 priming orders (1/day) over days 1-14 — one per future daily bake, not one per active batch\r\n  Expected: 14\r\n  But was:  1\r\n",
+      "StackTrace": "at LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_PrimedWindowBakesThenDrains () [0x000ac] in F:\\Land & Ledgers\\Assets\\Scripts\\Tests\\Editor\\Economy\\BakerySuppliesTests.cs:1239\r\n"
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_Priming_FourteenOrders_ForFourteenFutureBakes",
+      "Status": "Failed",
+      "Duration": 0.0019456,
+      "Message": "  one priming notion ordered, day 2\r\n  Expected: 1\r\n  But was:  0\r\n",
+      "StackTrace": "at LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_Priming_FourteenOrders_ForFourteenFutureBakes () [0x000a1] in F:\\Land & Ledgers\\Assets\\Scripts\\Tests\\Editor\\Economy\\BakerySuppliesTests.cs:594\r\n"
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_SixtyDayCycle_TwoFullPeriods",
+      "Status": "Failed",
+      "Duration": 0.0025563,
+      "Message": "  one priming notion ordered, day 2\r\n  Expected: 1\r\n  But was:  0\r\n",
+      "StackTrace": "at LandLedgers.Editor.Economy.BakerySuppliesTests.NotionsPipeline_SixtyDayCycle_TwoFullPeriods () [0x0007b] in F:\\Land & Ledgers\\Assets\\Scripts\\Tests\\Editor\\Economy\\BakerySuppliesTests.cs:1722\r\n"
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.PlannedVsCovered_RefusedBatchStaysPlanned_RetriesWithSameId_NoDuplicate",
+      "Status": "Passed",
+      "Duration": 0.0022424,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Precheck_PlannedBatch_StillChargedFullFlourNeed",
+      "Status": "Passed",
+      "Duration": 0.0017539,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Precheck_PreppedBatchHoldingCustody_NotChargedAgainForFlour",
+      "Status": "Passed",
+      "Duration": 0.00405,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.RefusedFeed_BakeryCashShort_RestoresStoreLotsAndCash",
+      "Status": "Passed",
+      "Duration": 0.0023435,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.SaveLoad_MidFlourPipeline_ReorderLotSurvives_NoDuplicateOrder",
+      "Status": "Passed",
+      "Duration": 0.0023237,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.SaveLoad_MidPipeline_OrderAndBatchRestoreExactlyOnce",
+      "Status": "Passed",
+      "Duration": 0.0066185,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Sustained_SixtyDays_DailyBakes_ExactlyOnce_AllLegs",
+      "Status": "Failed",
+      "Duration": 0.0251151,
+      "Message": "  66 flour sacks ordered over the run\r\n  Expected: 66\r\n  But was:  72\r\n",
+      "StackTrace": "at LandLedgers.Editor.Economy.BakerySuppliesTests.Sustained_SixtyDays_DailyBakes_ExactlyOnce_AllLegs () [0x008f3] in F:\\Land & Ledgers\\Assets\\Scripts\\Tests\\Editor\\Economy\\BakerySuppliesTests.cs:3095\r\n"
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Sustained_SixtyDays_SaveLoadMidRun_ExactlyOnce",
+      "Status": "Passed",
+      "Duration": 0.0401614,
+      "Message": null,
+      "StackTrace": null
+    },
+    {
+      "FullName": "LandLedgers.Editor.Economy.BakerySuppliesTests.Sustained_SixtyDays_VariedDaySteps_SameOutcome",
+      "Status": "Passed",
+      "Duration": 0.0348806,
+      "Message": null,
+      "StackTrace": null
+    }
+  ]
+}

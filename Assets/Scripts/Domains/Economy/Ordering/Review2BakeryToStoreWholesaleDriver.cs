@@ -77,6 +77,8 @@ namespace LandLedgers.Economy.Ordering
     {
         public BakeryShopRuntime Bakery;
         public string BakeryProductId = string.Empty;
+        /// <summary>Optional specific bakery source lot for a multi-lot order transfer.</summary>
+        public string BakerySourceLotId = string.Empty;
         public int Units;
         public int WholesalePriceCents;
         public int RetailPriceCents;
@@ -149,7 +151,9 @@ namespace LandLedgers.Economy.Ordering
                     diag);
             }
 
-            BakeryBreadLot lot = OldestSellableLot(options.Bakery, options.BakeryProductId);
+            BakeryBreadLot lot = string.IsNullOrWhiteSpace(options.BakerySourceLotId)
+                ? OldestSellableLot(options.Bakery, options.BakeryProductId)
+                : FindSellableLot(options.Bakery, options.BakeryProductId, options.BakerySourceLotId);
             if (lot == null)
             {
                 return Refuse(result,
@@ -413,6 +417,19 @@ namespace LandLedgers.Economy.Ordering
                 if (oldest == null || lot.BakedDayIndex < oldest.BakedDayIndex) oldest = lot;
             }
             return oldest;
+        }
+
+        private static BakeryBreadLot FindSellableLot(BakeryShopRuntime bakery, string productId, string lotId)
+        {
+            if (bakery?.BreadShelf == null || string.IsNullOrWhiteSpace(lotId)) return null;
+            foreach (BakeryBreadLot lot in bakery.BreadShelf)
+            {
+                if (lot != null && lot.CanSell
+                    && string.Equals(lot.ProductId, productId, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(lot.LotId.ToString(), lotId.Trim(), StringComparison.OrdinalIgnoreCase))
+                    return lot;
+            }
+            return null;
         }
 
         private static string Validate(Review2WholesaleTransferOptions options)

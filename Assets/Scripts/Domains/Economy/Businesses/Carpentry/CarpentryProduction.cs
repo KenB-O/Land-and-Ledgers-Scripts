@@ -153,6 +153,34 @@ namespace LandLedgers.Economy.Businesses.Carpentry
             out ProductionProcessState process,
             out string reason)
         {
+            return TryBeginFurniture(runtime, workerIds, null, dayIndex, out process, out reason);
+        }
+
+        /// <summary>
+        /// Starts make-to-stock work only for kinds with a real, currently
+        /// affordable household buyer. The business's configured stock policy,
+        /// physical input checks, worker assignment and shared task authority
+        /// remain authoritative after this demand gate.
+        /// </summary>
+        public bool TryBeginDemandedFurniture(
+            GenericProductionRuntime runtime,
+            IEnumerable<EntityId> workerIds,
+            IReadOnlyList<CarpentryFurnitureSaleCandidate> demandCandidates,
+            int dayIndex,
+            out ProductionProcessState process,
+            out string reason)
+        {
+            return TryBeginFurniture(runtime, workerIds, demandCandidates, dayIndex, out process, out reason);
+        }
+
+        private bool TryBeginFurniture(
+            GenericProductionRuntime runtime,
+            IEnumerable<EntityId> workerIds,
+            IReadOnlyList<CarpentryFurnitureSaleCandidate> demandCandidates,
+            int dayIndex,
+            out ProductionProcessState process,
+            out string reason)
+        {
             process = null;
             reason = string.Empty;
             if (business == null || business.GenericConfiguration == null || runtime == null || workerIds == null)
@@ -161,23 +189,53 @@ namespace LandLedgers.Economy.Businesses.Carpentry
                 return false;
             }
             var plans = new List<GenericProductionPlan>();
+            int furniturePolicyCount = 0;
+            string firstInputBlock = string.Empty;
             foreach (GenericProductionPolicy policy in business.GenericConfiguration.ProductionPolicies)
             {
                 if (policy == null) continue;
                 ProductionMethodDefinition method = FindFurnitureMethod(policy.MethodId);
                 if (method == null) continue;
-                plans.Add(GenericProductionPlanner.Plan(
+                furniturePolicyCount++;
+                if (demandCandidates != null
+                    && !CarpentryFurnitureSale.HasAffordableHouseholdDemand(method.OutputProductId, demandCandidates))
+                    continue;
+                // Furniture is represented by EquipmentAssets rather than
+                // generic inventory. Count active runs as committed future
+                // stock as well as pieces already in the register; otherwise
+                // a second worker can start the same make-to-stock policy
+                // while the first batch is still in progress.
+                float currentStock = CountFurnitureOnHand(method.OutputProductId)
+                    + CountFurnitureWorkInProgress(method);
+                GenericProductionPlan plan = GenericProductionPlanner.Plan(
                     policy,
                     method,
-                    CountFurnitureOnHand(method.OutputProductId),
+                    currentStock,
                     0f,
                     input => business.GenericConfiguration.GetAvailableInventoryQuantity(input.ProductId),
-                    _ => 0f));
+                    _ => 0f);
+                plans.Add(plan);
+                if (string.IsNullOrWhiteSpace(firstInputBlock)
+                    && policy.IsEligible(currentStock)
+                    && !string.IsNullOrWhiteSpace(plan.BlockedReason))
+                {
+                    firstInputBlock = plan.BlockedReason;
+                }
             }
             GenericProductionPlan selected = GenericProductionPlanner.ChooseHighestPriority(plans);
             if (selected == null)
             {
-                reason = "Carpentry production refused: no furniture policy is eligible — every method is at target stock, disabled, or short of inputs.";
+                if (furniturePolicyCount == 0)
+                {
+                    reason = "Carpentry production refused: no furniture production policies are configured for this workshop.";
+                }
+                else if (!string.IsNullOrWhiteSpace(firstInputBlock))
+                {
+                    reason = "Carpentry production deferred: " + firstInputBlock;
+                }
+                // All configured policies are disabled, have no order, or
+                // have already reached their stock target. That is normal
+                // idle time, not a production failure worth warning about.
                 return false;
             }
             // One start attempt per call, for the first available worker
@@ -304,10 +362,11 @@ namespace LandLedgers.Economy.Businesses.Carpentry
             }
             if (policy.Mode == GenericProductionPolicyMode.MakeToStock && register != null)
             {
-                int onHand = CountFurnitureOnHand(method.OutputProductId);
-                if (onHand >= policy.MaximumStock)
+                float committedStock = CountFurnitureOnHand(method.OutputProductId)
+                    + CountFurnitureWorkInProgress(method);
+                if (committedStock >= policy.MaximumStock)
                 {
-                    reason = $"Carpentry production refused: the workshop already holds {onHand} {method.OutputProductId} and the policy maximum is {policy.MaximumStock}.";
+                    reason = $"Carpentry production refused: the workshop holds or has in progress {committedStock} {method.OutputProductId} and the policy maximum is {policy.MaximumStock}.";
                     return false;
                 }
             }
@@ -377,6 +436,21 @@ namespace LandLedgers.Economy.Businesses.Carpentry
                     count++;
             }
             return count;
+        }
+
+        private float CountFurnitureWorkInProgress(ProductionMethodDefinition method)
+        {
+            if (business?.GenericConfiguration?.ActiveProcesses == null || method == null) return 0f;
+            float quantity = 0f;
+            foreach (ProductionProcessState active in business.GenericConfiguration.ActiveProcesses)
+            {
+                if (active == null || active.Completed
+                    || !string.Equals(active.MethodId, method.MethodId, StringComparison.OrdinalIgnoreCase)) continue;
+                // One active process represents one recipe run. OutputQuantity
+                // preserves the chair recipe's four-piece batch semantics.
+                quantity += Math.Max(0f, method.OutputQuantity);
+            }
+            return quantity;
         }
 
         /// <summary>

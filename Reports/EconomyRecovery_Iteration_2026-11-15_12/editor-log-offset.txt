@@ -1,0 +1,6 @@
+Source=C:\Users\kenne\AppData\Local\Temp\ll-rebuild-library-20261114.log
+StartLine=1012689
+EndLine=1042571
+ExtractedBytes=3395536
+StartUtcApprox=2026-11-15T09:43Z
+EndUtcApprox=2026-11-15T09:48Z

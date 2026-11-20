@@ -64,6 +64,20 @@ namespace LandLedgers.EditorTests.Tasks
         }
 
         [Test]
+        public void DueEvent_CannotCompleteUnrecordedWork_ButCanWakeRecordedCompletion()
+        {
+            (TaskAuthority authority, WorkTimeBudgetStore budgets, WorkTask task) = StartTask("due-event-work", 10);
+            Assert.IsFalse(TaskCompletionDuePolicy.CanCompleteFromDueEvent(task),
+                "elapsed callback time alone must not authorize unperformed work");
+
+            Assert.IsTrue(authority.RecordWorkProgress(task.TaskId, 10, budgets, 1,
+                out bool reachedCompletion, out string refusal), refusal);
+            Assert.IsTrue(reachedCompletion);
+            Assert.IsTrue(TaskCompletionDuePolicy.CanCompleteFromDueEvent(task),
+                "the due event may complete only after TaskAuthority records all required minutes");
+        }
+
+        [Test]
         public void ExpiredWindow_RescueReDerive_CarriesStaleActivity()
         {
             (_, _, WorkTask task) = StartTask("ordinary-work", 60);
@@ -77,6 +91,30 @@ namespace LandLedgers.EditorTests.Tasks
             Assert.AreEqual(StaleInProgressDecision.RescueReDerive, verdict.Decision);
             Assert.AreEqual(PersonActivityKind.Work, verdict.ActivityToReserve,
                 "the fresh window keeps the stale window's activity");
+        }
+
+        [Test]
+        public void ReservationEndingInsideCurrentTick_IsKeptLongEnoughToCreditActualOverlap()
+        {
+            (TaskAuthority authority, WorkTimeBudgetStore budgets, WorkTask task) = StartTask("short-window-work", 5);
+            var reservations = new List<PersonActivityReservation>
+            {
+                Reservation(PersonActivityKind.Work, 480, 5, task),
+            };
+
+            StaleInProgressVerdict verdict = StaleInProgressSweep.Decide(
+                task, reservations, 1, 480, 495, ReservationLabel(task), false);
+
+            Assert.AreEqual(StaleInProgressDecision.UntouchedHealthy, verdict.Decision,
+                "the reservation ended before tick-end but covered five real minutes in the interval");
+            int scheduledMinutes = AutonomousTaskProgress.ScheduledMinutes(
+                task, reservations, 1, 480, 495, ReservationLabel(task));
+            Assert.AreEqual(5, scheduledMinutes);
+            Assert.IsTrue(authority.RecordWorkProgress(task.TaskId, scheduledMinutes, budgets, 1,
+                out bool reachedCompletion, out string refusal), refusal);
+            Assert.IsTrue(reachedCompletion);
+            Assert.AreEqual(5, task.MinutesWorked,
+                "work equals only the actual reserved interval overlap");
         }
 
         [TestCase("ordinary-work", "", PersonActivityKind.Work)]

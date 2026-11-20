@@ -4,7 +4,9 @@
 // (quote -> order -> pay -> deliver -> receive -> install -> operational)
 // wired to the real authorities: HouseholdLedger (the one cash writer),
 // F3 consolidated freight (one manifest, one wagon, one trip), and the
-// household furnishing register through a caller-supplied install handler.
+// household furnishing register through caller-supplied receipt and install
+// handlers. Production persists orders separately and leaves installation
+// to an explicit furnishing outcome.
 //
 // B0 lives on the B branch, so F4 cannot call the register directly:
 // the install handler is the seam G binds in production (register the
@@ -41,10 +43,9 @@
 // asset, Units must be 1. The commit step verifies the asset is still
 // seller-owned and unreserved; a sale that moved first refuses loudly.
 //
-// Purchase records are runtime-only in F4 (no save DTO): a save/load
-// mid-purchase is a known gap for a later slice. The shipment itself
-// persists via FreightServiceSaveDto; the order would need
-// re-derivation from the shipment + ledgers.
+// Production purchase records are persisted by Series2Pass9Save; transient
+// freight hooks and received object references are reconstructed from stable
+// purchase/shipment ids and the household register after Continue.
 
 using System;
 using System.Collections.Generic;
@@ -106,6 +107,9 @@ namespace LandLedgers.Economy.GenericBusiness
         public int FreightCents; // caller-supplied one-trip fare (DEF-016 prices per trip)
         public string ShipmentId = string.Empty;
         public List<string> Diagnostics = new List<string>();
+        public string InstallationBlockedReason = string.Empty;
+        public bool CancellationRequested;
+        public string TerminalReason = string.Empty;
 
         /// <summary>Assets received for this purchase, in line order. Runtime only.</summary>
         public List<EquipmentAsset> ReceivedAssets = new List<EquipmentAsset>();
@@ -170,17 +174,17 @@ namespace LandLedgers.Economy.GenericBusiness
     public delegate string CreditPurchaseProceedsHandler(int goodsCents, int freightCents, string purchaseId);
 
     /// <summary>
-    /// Installs one received asset in the buyer's building. The B0 seam:
-    /// production binds this to the household furnishing register
-    /// (register the asset, then install it). Returns null on success, a
-    /// refusal reason on failure. F4 calls it exactly once per received
-    /// asset, only after receipt.
+    /// Installs one received asset in the buyer's building. Production binds
+    /// this to the household furnishing register. Receipt registers household
+    /// custody; installation remains a distinct action and is never inferred
+    /// from freight completion.
     /// </summary>
     public delegate string InstallPurchasedFurnitureHandler(EquipmentAsset asset, string purchaseId);
 
     /// <summary>
-    /// Drives one household furniture purchase end to end: quote, order,
-    /// pay, ship (F3 consolidated freight), deliver, receive, install.
+    /// Drives a household furniture purchase through quote, order, payment,
+    /// shipment, delivery, receipt and (when explicitly invoked by a
+    /// furnishing outcome) installation.
     /// One service instance serves one buyer household; the caller
     /// supplies the vendor stock (new kind), the asset lookup (secondhand
     /// kind), the proceeds credit, and the install handler. The service
@@ -197,6 +201,7 @@ namespace LandLedgers.Economy.GenericBusiness
         private readonly CreditPurchaseProceedsHandler creditProceeds;
         private readonly InstallPurchasedFurnitureHandler installHandler;
         private readonly Func<string, EquipmentAsset> findAssetById;
+        private readonly Func<EquipmentAsset, string> receiveAsset;
         private readonly List<string> diagnostics = new List<string>();
         private readonly HashSet<string> seenPurchaseIds = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> committedShipments = new HashSet<string>(StringComparer.Ordinal);
@@ -208,13 +213,15 @@ namespace LandLedgers.Economy.GenericBusiness
             IFurnitureVendorStock vendorStock,
             CreditPurchaseProceedsHandler creditProceeds,
             InstallPurchasedFurnitureHandler installHandler,
-            Func<string, EquipmentAsset> findAssetById)
+            Func<string, EquipmentAsset> findAssetById,
+            Func<EquipmentAsset, string> receiveAsset = null)
         {
             this.buyerLedger = buyerLedger ?? throw new ArgumentNullException(nameof(buyerLedger));
             this.vendorStock = vendorStock;
             this.creditProceeds = creditProceeds ?? throw new ArgumentNullException(nameof(creditProceeds));
             this.installHandler = installHandler ?? throw new ArgumentNullException(nameof(installHandler));
             this.findAssetById = findAssetById;
+            this.receiveAsset = receiveAsset;
         }
 
         public IReadOnlyList<string> Diagnostics => diagnostics;
@@ -405,6 +412,13 @@ namespace LandLedgers.Economy.GenericBusiness
             if (hooks == null) return Reject("FurniturePurchase: a shipment needs the freight hooks.");
             if (string.IsNullOrWhiteSpace(wagonAssetId))
                 return Reject("FurniturePurchase: a shipment needs a real wagon — furniture travels by wagon, never by fiat.");
+            if (order.AllLinesAt(EquipmentPurchaseStage.Shipped))
+            {
+                LogisticsShipmentState existing = FindShipment(order, freight);
+                if (existing == null) return Reject($"FurniturePurchase: shipped order '{order.PurchaseId}' lost its shipment record; no duplicate shipment created.");
+                BindShipmentHooks(order, existing, hooks);
+                return null;
+            }
             if (!order.AllLinesAt(EquipmentPurchaseStage.PaidOrFinanced))
                 return Reject($"FurniturePurchase: purchase '{order.PurchaseId}' is not fully Paid — shipment follows payment.");
             var lines = new List<FreightManifestLine>();
@@ -417,9 +431,9 @@ namespace LandLedgers.Economy.GenericBusiness
             }
 
             hooks.CommitConsolidatedSourceLots = (LogisticsShipmentState shipment, out string reason) =>
-                CommitForOrder(order, shipment, out reason);
+                CommitShipmentForOrder(order, shipment, out reason);
             hooks.ReceiveConsolidatedCargoLots = (LogisticsShipmentState shipment, out string reason) =>
-                ReceiveForOrder(order, shipment, out reason);
+                ReceiveShipmentForOrder(order, shipment, out reason);
             order.FreightHooks = hooks;
             order.ShipmentId = "ship-" + order.PurchaseId.Trim();
             string sourceId = order.Kind == FurniturePurchaseKind.Secondhand
@@ -438,6 +452,127 @@ namespace LandLedgers.Economy.GenericBusiness
 
             order.Diagnostics.Add($"day {order.DayIndex}: purchase '{order.PurchaseId}' shipped as '{order.ShipmentId}' on wagon '{wagonAssetId}' — one manifest, one trip.");
             return null;
+        }
+
+        /// <summary>Rebinds callbacks for an existing saved shipment; it never creates a replacement shipment.</summary>
+        public string RebindShipment(FurniturePurchaseOrder order, FreightShipmentService freight, FreightShipmentHooks hooks)
+        {
+            if (order == null || freight == null || hooks == null || string.IsNullOrWhiteSpace(order.ShipmentId))
+                return Reject("FurniturePurchase: resuming a shipment needs the saved order, freight authority, hooks, and shipment id.");
+            LogisticsShipmentState shipment = FindShipment(order, freight);
+            if (shipment == null)
+                return Reject($"FurniturePurchase: saved shipment '{order.ShipmentId}' is not tracked; no replacement shipment was created.");
+            BindShipmentHooks(order, shipment, hooks);
+            return null;
+        }
+
+        /// <summary>
+        /// Advances at most one shipment stage/work interval. Work is recorded
+        /// by FreightShipmentService against TaskAuthority; transit consumes
+        /// elapsed simulation time. Repeated calls resume from shipment state.
+        /// </summary>
+        public string AdvanceShipmentOneStage(FurniturePurchaseOrder order, FreightShipmentService freight,
+            FreightShipmentHooks hooks, EntityId loader, EntityId driver, List<EntityId> animals,
+            float elapsedGameSeconds, int workMinutes)
+        {
+            if (order == null || freight == null || hooks == null)
+                return Reject("FurniturePurchase: advancing delivery needs the order, freight authority, and current task hooks.");
+            LogisticsShipmentState shipment = FindShipment(order, freight);
+            if (shipment == null)
+                return Reject($"FurniturePurchase: shipment '{order.ShipmentId}' is missing; paid order remains unresolved and no replacement was created.");
+            BindShipmentHooks(order, shipment, hooks);
+            string reason;
+            switch (shipment.Status)
+            {
+                case LogisticsShipmentStatus.Planned:
+                    return freight.BeginLoading(shipment, loader, hooks, out reason) ? null : Reject("FurniturePurchase: loading could not start — " + reason);
+                case LogisticsShipmentStatus.Loading:
+                    if (!freight.WorkLoading(shipment, Math.Max(1, workMinutes), hooks, out reason)) return Reject("FurniturePurchase: loading work was refused — " + reason);
+                    if (shipment.loadApplied && !freight.Dispatch(shipment, driver, animals, hooks, out reason)) return Reject("FurniturePurchase: loaded shipment could not dispatch — " + reason);
+                    return null;
+                case LogisticsShipmentStatus.InTransit:
+                    freight.AdvanceTransit(shipment, Math.Max(0f, elapsedGameSeconds), hooks);
+                    return null;
+                case LogisticsShipmentStatus.Arrived:
+                    return freight.BeginUnloading(shipment, loader, hooks, out reason) ? null : Reject("FurniturePurchase: unloading could not start — " + reason);
+                case LogisticsShipmentStatus.Unloading:
+                case LogisticsShipmentStatus.Partial:
+                    if (shipment.Status == LogisticsShipmentStatus.Partial
+                        && !freight.BeginUnloading(shipment, loader, hooks, out reason)) return Reject("FurniturePurchase: partial delivery could not resume unloading — " + reason);
+                    if (!freight.WorkUnloading(shipment, Math.Max(1, workMinutes), hooks, out reason)) return Reject("FurniturePurchase: unloading work was refused — " + reason);
+                    if (shipment.Status == LogisticsShipmentStatus.Completed) MarkReceived(order);
+                    return null;
+                case LogisticsShipmentStatus.Completed:
+                    MarkReceived(order);
+                    return null;
+                case LogisticsShipmentStatus.Delayed:
+                    return Reject($"FurniturePurchase: shipment '{order.ShipmentId}' remains delayed: {shipment.BlockedReason}");
+                case LogisticsShipmentStatus.Failed:
+                    order.TerminalReason = shipment.BlockedReason ?? "Freight shipment failed.";
+                    return Reject($"FurniturePurchase: shipment '{order.ShipmentId}' failed; cargo disposition remains with freight authority: {order.TerminalReason}");
+                default:
+                    return Reject($"FurniturePurchase: shipment '{order.ShipmentId}' has unsupported state {shipment.Status}.");
+            }
+        }
+
+        public string CancelUnpaidOrder(FurniturePurchaseOrder order)
+        {
+            if (order == null) return Reject("FurniturePurchase: cancellation needs an order.");
+            if (!order.AllLinesAt(EquipmentPurchaseStage.Ordered) && !order.AllLinesAt(EquipmentPurchaseStage.Quoted))
+                return Reject($"FurniturePurchase: paid or shipped order '{order.PurchaseId}' cannot be cancelled as unpaid; obligations must be resolved through payment and freight authorities.");
+            order.CancellationRequested = true;
+            order.TerminalReason = "Cancelled before payment; no goods or money moved.";
+            foreach (FurniturePurchaseLine line in order.Lines) line.Stage = EquipmentPurchaseStage.Operational;
+            return null;
+        }
+
+        private static LogisticsShipmentState FindShipment(FurniturePurchaseOrder order, FreightShipmentService freight)
+        {
+            foreach (LogisticsShipmentState tracked in freight.TrackedShipments)
+                if (tracked != null && string.Equals(tracked.ShipmentId, order.ShipmentId, StringComparison.Ordinal)) return tracked;
+            return null;
+        }
+
+        private void BindShipmentHooks(FurniturePurchaseOrder order, LogisticsShipmentState shipment, FreightShipmentHooks hooks)
+        {
+            hooks.CommitConsolidatedSourceLots = (LogisticsShipmentState tracked, out string reason) =>
+            {
+                return CommitShipmentForOrder(order, tracked, out reason);
+            };
+            hooks.ReceiveConsolidatedCargoLots = (LogisticsShipmentState tracked, out string reason) =>
+            {
+                return ReceiveShipmentForOrder(order, tracked, out reason);
+            };
+        }
+
+        public bool CommitShipmentForOrder(FurniturePurchaseOrder order, LogisticsShipmentState shipment, out string reason)
+        {
+            if (shipment != null && shipment.sourceLotDebitApplied) { reason = string.Empty; return true; }
+            return CommitForOrder(order, shipment, out reason);
+        }
+
+        public bool ReceiveShipmentForOrder(FurniturePurchaseOrder order, LogisticsShipmentState shipment, out string reason)
+        {
+            if (shipment != null && shipment.deliveryApplied)
+            {
+                reason = "FurniturePurchase: shipment already credited household custody.";
+                return false;
+            }
+            if (!ReceiveForOrder(order, shipment, out reason)) return false;
+            MarkReceived(order);
+            return true;
+        }
+
+        private static void MarkReceived(FurniturePurchaseOrder order)
+        {
+            bool advanced = false;
+            foreach (FurniturePurchaseLine line in order.Lines)
+            {
+                if (line == null || line.Stage != EquipmentPurchaseStage.Shipped) continue;
+                AdvanceLine(line);
+                advanced = true;
+            }
+            if (advanced) order.Diagnostics.Add($"day {order.DayIndex}: shipment '{order.ShipmentId}' completed; {order.ReceivedAssets.Count} asset(s) in household custody.");
         }
 
         /// <summary>
@@ -741,7 +876,18 @@ namespace LandLedgers.Economy.GenericBusiness
             receivedShipments.Add(shipment.ShipmentId);
             foreach (EquipmentAsset asset in received)
             {
-                order.ReceivedAssets.Add(asset);
+                if (receiveAsset != null)
+                {
+                    string custodyRefusal = receiveAsset(asset);
+                    if (custodyRefusal != null)
+                    {
+                        receivedShipments.Remove(shipment.ShipmentId);
+                        reason = $"FurniturePurchase: received asset '{asset.AssetId}' could not enter household custody — {custodyRefusal}";
+                        return false;
+                    }
+                }
+                if (!order.ReceivedAssets.Exists(existing => existing != null && existing.AssetId == asset.AssetId))
+                    order.ReceivedAssets.Add(asset);
             }
 
             for (int i = 0; i < order.Lines.Count; i++)

@@ -61,6 +61,28 @@ namespace LandLedgers.Economy.Businesses.Carpentry
     public static class CarpentryFurnitureSale
     {
         /// <summary>
+        /// Returns whether a real household can buy this kind at the authored
+        /// retail price today. The same wants, cash and custody checks used by
+        /// settlement gate make-to-stock production, so the workshop does not
+        /// begin a run solely to satisfy an empty shelf target.
+        /// </summary>
+        public static bool HasAffordableHouseholdDemand(
+            string kind,
+            IReadOnlyList<CarpentryFurnitureSaleCandidate> candidates)
+        {
+            int priceCents = FurnitureValuation.ReplacementCostCentsForKind(kind);
+            if (priceCents <= 0 || candidates == null) return false;
+            foreach (CarpentryFurnitureSaleCandidate candidate in candidates)
+            {
+                if (candidate == null || candidate.Ledger == null || candidate.Furnishings == null
+                    || candidate.Ledger.GetBalanceCents() < priceCents
+                    || HasUsableUninstalledCustodyPiece(candidate, kind)) continue;
+                if (BestWantForKind(candidate.Wants, kind) != null) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Sells the workshop's finished furniture to wanting households.
         /// Returns true when every finished piece was either sold or
         /// legitimately skipped (no wanting buyer, unpriced kind,
@@ -136,6 +158,12 @@ namespace LandLedgers.Economy.Businesses.Carpentry
                 if (candidate == null || candidate.Ledger == null || candidate.Furnishings == null
                     || soldHouseholds.Contains(candidate.HouseholdId)) continue;
                 if (candidate.Ledger.GetBalanceCents() < priceCents) continue;
+                // A previously purchased piece may still be in household
+                // custody while its physical installation is blocked. The
+                // evaluator can continue to report the unmet capability, but
+                // selling another identical asset would charge the household
+                // again without resolving that placement blocker.
+                if (HasUsableUninstalledCustodyPiece(candidate, asset.Kind)) continue;
                 FurnishingWant best = BestWantForKind(candidate.Wants, asset.Kind);
                 if (best == null) continue;
                 if (want == null
@@ -149,6 +177,26 @@ namespace LandLedgers.Economy.Businesses.Carpentry
                 }
             }
             return buyer != null && want != null;
+        }
+
+        private static bool HasUsableUninstalledCustodyPiece(
+            CarpentryFurnitureSaleCandidate candidate, string kind)
+        {
+            HouseholdFurnishingRegister register = candidate?.Furnishings;
+            if (register?.Assets == null || string.IsNullOrWhiteSpace(kind)) return false;
+            string ownerId = HouseholdFurnishingRegister.OwnerIdForHousehold(candidate.HouseholdId);
+            foreach (EquipmentAsset held in register.Assets)
+            {
+                if (held == null
+                    || !string.Equals(held.Kind, kind, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(held.OwnerKind, HouseholdFurnishingRegister.OwnerKindHousehold, StringComparison.Ordinal)
+                    || !string.Equals(held.OwnerId, ownerId, StringComparison.Ordinal)
+                    || register.LiveBindingFor(held.AssetId) != null
+                    || !held.IsUsable || held.IsReserved)
+                    continue;
+                return true;
+            }
+            return false;
         }
 
         private static FurnishingWant BestWantForKind(List<FurnishingWant> wants, string kind)

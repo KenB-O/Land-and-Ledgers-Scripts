@@ -36,6 +36,8 @@ namespace LandLedgers.EditorTests.Economy
                 AddLot(store, definition, "coffee", 4);
                 AddLot(store, definition, "tea", 3);
                 AddLot(store, definition, "salt", 6);
+                AddLot(store, definition, "basic_cloth", 3);
+                AddLot(store, definition, "flannel", 2);
 
                 GeneralStoreSupplierAdapter emptySupplier = new GeneralStoreSupplierAdapter(
                     manager.BuildHouseholdTradingPort(CreateNpcStore(definition)));
@@ -50,8 +52,12 @@ namespace LandLedgers.EditorTests.Economy
                 Assert.IsTrue(supplier.OffersItem("coffee"));
                 Assert.IsTrue(supplier.OffersItem("tea"));
                 Assert.IsTrue(supplier.OffersItem("flour"), "The authored 10 lb sack conversion permits selling a whole sack without presenting it as individual pounds.");
-                Assert.IsFalse(supplier.OffersItem("potatoes"), "Sacks cannot be advertised as pounds without an authored conversion.");
-                Assert.IsFalse(supplier.OffersItem("salt"), "Small bags cannot be advertised as pounds without a conversion.");
+                Assert.IsTrue(supplier.OffersItem("potatoes"), "The authored 50 lb sack conversion permits a whole-package household purchase.");
+                Assert.AreEqual(50, supplier.HouseholdUnitsPerStoreUnit("potatoes"), "One identified potato sack must arrive as its authored 50 lb package.");
+                Assert.IsTrue(supplier.OffersItem("salt"), "The authored 5 lb small-bag conversion permits a whole-package household purchase.");
+                Assert.AreEqual(5, supplier.HouseholdUnitsPerStoreUnit("salt"), "One identified salt bag must arrive as its authored 5 lb package.");
+                Assert.IsTrue(supplier.OffersItem("basic_cloth"), "A store yard and household yd are the same unit and must not hide identified cloth stock.");
+                Assert.IsTrue(supplier.OffersItem("flannel"), "The same exact-yard unit alias applies to flannel.");
                 Assert.IsFalse(supplier.OffersItem("preserved_meat"));
 
                 Assert.AreEqual(14, supplier.ItemStockUnits("bread"));
@@ -102,17 +108,74 @@ namespace LandLedgers.EditorTests.Economy
             Assert.IsTrue(ScenarioOpeningStockEndowment.TryApply(configuration, "general-store", store, definition, 0, 0,
                 out string report, out string error), error);
             Assert.That(report, Does.Contain("general-store"));
-            Assert.AreEqual(7, store.RuntimeState.RetailItemLots.Count);
+            Assert.IsTrue(configuration.TryGetBusiness("general-store", out DevelopmentTownConfiguration.BusinessDefinition configuredStore));
+            int expectedIdentifiedLots = 0;
+            foreach (DevelopmentTownConfiguration.OpeningInventoryItem openingItem in configuredStore.opening.inventory)
+            {
+                if (openingItem != null
+                    && configuration.TryResolveOpeningInventory("general-store", openingItem.itemId, 0, out int units)
+                    && units > 0)
+                {
+                    expectedIdentifiedLots++;
+                }
+            }
+            Assert.Greater(expectedIdentifiedLots, 0, "The authoritative local scenario must configure finite General Store stock.");
+            Assert.AreEqual(expectedIdentifiedLots, store.RuntimeState.RetailItemLots.Count,
+                "Every positive, configured SKU should create exactly one identified opening lot.");
             int firstBread = store.RuntimeState.GetRetailItemPhysicalUnits("bread");
-            Assert.That(firstBread, Is.InRange(12, 24));
+            Assert.IsTrue(configuration.TryResolveOpeningInventory("general-store", "bread", 0, out int expectedBread));
+            Assert.AreEqual(expectedBread, firstBread,
+                "Opening bread stock follows the owner's current finite scenario range and deterministic seed, not an obsolete hard-coded count.");
             Assert.IsTrue(ScenarioOpeningStockEndowment.TryApply(configuration, "general-store", store, definition, 0, 0,
                 out report, out error), error);
             Assert.That(report, Does.Contain("already recorded"));
-            Assert.AreEqual(7, store.RuntimeState.RetailItemLots.Count);
+            Assert.AreEqual(expectedIdentifiedLots, store.RuntimeState.RetailItemLots.Count);
             Assert.AreEqual(firstBread, store.RuntimeState.GetRetailItemPhysicalUnits("bread"));
             Assert.AreEqual(0, store.RuntimeState.CurrentCashCents, "Configured stock does not grant business cash.");
             Assert.IsFalse(configuration.TryResolveOpeningInventory("bakery", "bread", 0, out _),
                 "Unconfigured businesses receive no stock by default.");
+        }
+
+        [Test]
+        public void FallbackPort_DoesNotSellFlourCategoryStockAsBread()
+        {
+            GeneralStoreBusinessDefinition definition = LoadDefinition();
+            GameObject host = new GameObject(nameof(FallbackPort_DoesNotSellFlourCategoryStockAsBread));
+            try
+            {
+                GeneralStoreRuntimeManager manager = ConfigureManager(host, definition);
+                BusinessInstanceState store = CreateNpcStore(definition);
+                AddLot(store, definition, "flour", 1);
+                FieldInfo runtimeStateField = typeof(GeneralStoreRuntimeManager).GetField("runtimeState", BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.IsNotNull(runtimeStateField);
+                runtimeStateField.SetValue(manager, store.RuntimeState);
+
+                var supplier = new GeneralStoreSupplierAdapter(manager.BuildHouseholdTradingPort());
+                Assert.IsTrue(supplier.RecognizesItem("bread"), "Catalog knowledge is distinct from current SKU stock.");
+                Assert.AreEqual(0, supplier.ItemStockUnits("bread"), "The pooled staple-food total cannot identify bread when only a flour lot exists.");
+                Assert.IsFalse(supplier.OffersItem("bread"));
+                Assert.AreEqual(1, supplier.ItemStockUnits("flour"));
+
+                int storeCashBefore = store.RuntimeState.CurrentCashCents;
+                Assert.AreEqual(0, supplier.SellItem("bread", 1, 0,
+                    new ShoppingSettlement { Mode = ShoppingSettlementMode.CashFromLedger }, new List<string>()),
+                    "A bread request must refuse against flour-only identified stock.");
+                Assert.AreEqual(1, store.RuntimeState.GetRetailItemStockUnits("flour"));
+                Assert.AreEqual(storeCashBefore, store.RuntimeState.CurrentCashCents, "A refused SKU sale posts no revenue.");
+
+                AddLot(store, definition, "bread", 2);
+                Assert.AreEqual(2, supplier.ItemStockUnits("bread"), "Only an identified bread lot creates bread availability.");
+                int breadPrice = supplier.ItemPricePerUnitCents("bread");
+                Assert.AreEqual(1, supplier.SellItem("bread", 1, 0,
+                    new ShoppingSettlement { Mode = ShoppingSettlementMode.CashFromLedger }, new List<string>()));
+                Assert.AreEqual(1, store.RuntimeState.GetRetailItemStockUnits("bread"));
+                Assert.AreEqual(1, store.RuntimeState.GetRetailItemStockUnits("flour"), "Bread sale leaves the flour lot untouched.");
+                Assert.AreEqual(storeCashBefore + breadPrice, store.RuntimeState.CurrentCashCents);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
         }
 
         [Test]

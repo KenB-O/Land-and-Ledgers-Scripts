@@ -102,6 +102,7 @@ namespace LandLedgers.Orchestration.Systems
         private const string FreightDispatchTaskId = "freight-dispatch-assignment";
         private const int HouseholdShoppingTraceLimit = 128;
         private const int HouseholdShoppingTraceLogsPerDayLimit = 10;
+        private readonly List<FurniturePurchaseOrder> furniturePurchaseOrders = new List<FurniturePurchaseOrder>();
         private readonly HashSet<string> businessFeedNeedsOpen = new HashSet<string>(StringComparer.Ordinal);
         // W4 (F-1): refused return-leg feed receipts, keyed by TransactionId
         // in the pure BusinessFeedCustodyLedger. The batch's cash already
@@ -366,9 +367,14 @@ namespace LandLedgers.Orchestration.Systems
 
         // NX-2C drive-by: daily-needs execution state (owned by the driver).
         private DailyNeedsService dailyNeedsService;
+        /// <summary>Most recent authoritative household meal resolution, exposed for diagnostics only.</summary>
+        public DailyNeedsService.DayReport LastDailyNeedsReport { get; private set; }
         private HouseholdConsumptionPlanner consumptionPlanner;
         private SupplierDirectory supplierDirectory;
         private Series2BakerySupplierAdapter bakerySupplierAdapter;
+        private LandLedgers.Economy.GeneralStore.CustomerQueue bakeryCustomerQueue;
+        private readonly Dictionary<string, LandLedgers.Economy.GeneralStore.CustomerQueue> fallbackFuelDealerCustomerQueues =
+            new Dictionary<string, LandLedgers.Economy.GeneralStore.CustomerQueue>(StringComparer.Ordinal);
         private readonly HashSet<string> fuelDealerSupplierRegistrationLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> fuelDealerSupplierWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> sawmillTransferWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
@@ -647,6 +653,35 @@ namespace LandLedgers.Orchestration.Systems
         {
             string key = string.IsNullOrWhiteSpace(businessId) ? "<missing>" : businessId;
             if (fuelDealerSupplierWarningsLogged.Add(key)) Debug.LogWarning("[FuelDealerSupplier] " + message, this);
+        }
+
+        private Series2FuelDealerSupplierAdapter FindFuelDealerSupplierAdapter(string businessId)
+        {
+            if (string.IsNullOrWhiteSpace(businessId) || supplierDirectory?.All == null) return null;
+            foreach (IGoodsSupplier supplier in supplierDirectory.All)
+            {
+                if (supplier is Series2FuelDealerSupplierAdapter fuelDealer
+                    && string.Equals(fuelDealer.SupplierBusinessId, businessId, StringComparison.Ordinal))
+                    return fuelDealer;
+            }
+            return null;
+        }
+
+        private static IReadOnlyList<int> FuelDealerServiceCandidatePersonIds(BusinessInstanceState business)
+        {
+            var candidates = new List<int>();
+            if (business?.RuntimeState == null || string.IsNullOrWhiteSpace(business.InstanceId)) return candidates;
+
+            int ownerPersonId = business.Owner != null ? business.Owner.PersonId : -1;
+            if (ownerPersonId >= 0) candidates.Add(ownerPersonId);
+            foreach (EmploymentRelationship relationship in business.RuntimeState.EmploymentRegistry
+                .GetActiveByEmployer(business.InstanceId))
+            {
+                if (relationship != null && relationship.IsActive && relationship.EmployeePersonId >= 0
+                    && !candidates.Contains(relationship.EmployeePersonId))
+                    candidates.Add(relationship.EmployeePersonId);
+            }
+            return candidates;
         }
 
         /// <summary>
@@ -1585,7 +1620,7 @@ namespace LandLedgers.Orchestration.Systems
             // advances, naming the teamster charged and the gate enforced.
             if (dispatched > 0 || advancedMinutes > 0)
             {
-                Debug.LogWarning("[LogHaul] Day " + absoluteDayIndex + ": dispatched " + dispatched + " haul(s), advanced "
+                Debug.Log("[LogHaul] Day " + absoluteDayIndex + ": dispatched " + dispatched + " haul(s), advanced "
                     + advancedMinutes + " wagon-minutes (" + loadingAdvanced + " loading + " + transitAdvanced + " transit); "
                     + "teamster " + teamster + " charged " + advancedMinutes + " worked minute(s) against the mill's log-wagon trips (OD-C3). "
                     + "The Canon 4.1 log-wagon gate was enforced through the installed equipment gate.", this);
@@ -2095,12 +2130,28 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
+            int cashBlockedLotCount = 0;
+            long cashBlockedPurchaseCents = 0;
+            var cashBlockedLotIds = new List<string>();
             foreach (string lotId in transferableLotIds)
             {
                 SawmillLumberLot lot = FindMillLumberLot(mill, lotId);
                 if (lot == null || lot.LumberUnits <= 0)
                 {
                     diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: lot '{lotId}' is no longer in the mill yard — never conjured, skipped.");
+                    continue;
+                }
+                long purchasePriceCents = (long)lot.LumberUnits * SawmillToYardTransferDriver.WholesaleLumberUnitCostCents;
+                if (purchasePriceCents > int.MaxValue)
+                {
+                    diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: lot '{lotId}' price {purchasePriceCents}c exceeds supported settlement limits; mill retains the lot and no job was created.");
+                    continue;
+                }
+                if (yardBusiness.RuntimeState.CurrentCashCents < purchasePriceCents)
+                {
+                    cashBlockedLotCount++;
+                    cashBlockedPurchaseCents += purchasePriceCents;
+                    if (cashBlockedLotIds.Count < 6) cashBlockedLotIds.Add(lotId);
                     continue;
                 }
                 // C-4 (OD-C5): the transfer is a wholesale purchase at
@@ -2119,6 +2170,16 @@ namespace LandLedgers.Orchestration.Systems
                     transferredCount++;
                     if (job.SettledPriceCents >= 0) settledCents += job.SettledPriceCents;
                 }
+            }
+
+            if (cashBlockedLotCount > 0)
+            {
+                string lotSample = string.Join(", ", cashBlockedLotIds);
+                string suffix = cashBlockedLotCount > cashBlockedLotIds.Count ? ", …" : string.Empty;
+                string cashBlock = $"{cashBlockedLotCount} mill lot(s) remain at the sawmill: the yard has {yardBusiness.RuntimeState.CurrentCashCents}c, below the {cashBlockedPurchaseCents}c combined asking amount for these lots (examples: {lotSample}{suffix}); no transfer jobs or payment obligations were created.";
+                diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: {cashBlock}");
+                yardBusiness.RuntimeState.AppendWeeklyBlockedReason("cash-limited lumber yard buying");
+                millBusiness.RuntimeState.AppendWeeklyBlockedReason("lumber yard cash-limited");
             }
 
             // 7. Summary.
@@ -4004,11 +4065,14 @@ namespace LandLedgers.Orchestration.Systems
             // the recorder, and the ctor argument above only applies at
             // construction. Null until the first DriveDailyNeeds runs.
             householdShoppingLoop.ChargeRecorder = foodChargeReconciliation;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            householdShoppingLoop.DevelopmentTraceObserver = shoppingEvent => hub.ActivityTrace?.RecordShoppingEvent(shoppingEvent);
+#endif
 
-            // Plan 16: General Store employee service. The loop resolves the
-            // manager-bound store's live queue and a filled clerk by supplier
-            // business id; any other supplier resolves null / -1 and behaves
-            // exactly as today.
+            // Physical retail service uses a distinct FIFO queue per merchant.
+            // The General Store queue remains owned by its runtime manager;
+            // the authored bakery queue is owned here and persisted through
+            // Pass 9. Neither merchant settles a sale merely on arrival.
             // CAMPAIGN-B (DEF-042): the id matched here must be the store the
             // shopping loop actually uses. In dev/editor builds the registered
             // supplier is the NPC store port (FirstLedgerSliceBootstrapper
@@ -4032,21 +4096,173 @@ namespace LandLedgers.Orchestration.Systems
             householdShoppingLoop.ResolveCustomerQueue = businessId =>
             {
                 var manager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
-                if (manager == null) return null;
-                BusinessInstanceState store = ResolveGeneralStoreBusiness(manager, businessId);
-                if (store != null) return manager.CustomerQueueForBusiness(store);
-                if (string.Equals(businessId, "general-store", StringComparison.Ordinal)) return manager.CustomerQueue;
+                if (manager != null)
+                {
+                    BusinessInstanceState store = ResolveGeneralStoreBusiness(manager, businessId);
+                    if (store != null) return manager.CustomerQueueForBusiness(store);
+                    if (string.Equals(businessId, "general-store", StringComparison.Ordinal)) return manager.CustomerQueue;
+                }
+
+                if (bakerySupplierAdapter != null
+                    && string.Equals(bakerySupplierAdapter.SupplierBusinessId, businessId, StringComparison.Ordinal))
+                {
+                    bakeryCustomerQueue ??= new LandLedgers.Economy.GeneralStore.CustomerQueue();
+                    bakeryCustomerQueue.MerchantBusinessId = bakerySupplierAdapter.SupplierBusinessId;
+                    bakeryCustomerQueue.MerchantName = bakerySupplierAdapter.SupplierName;
+                    return bakeryCustomerQueue;
+                }
+
+                Series2FuelDealerSupplierAdapter fuelDealerAdapter = FindFuelDealerSupplierAdapter(businessId);
+                if (fuelDealerAdapter != null)
+                {
+                    LandLedgers.Persistence.SaveLoadManager saveManager = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+                    Series2Pass9SaveState pass9 = saveManager != null ? saveManager.Series2Pass9State : null;
+                    if (pass9 != null)
+                        return pass9.GetOrCreateFuelDealerCustomerQueue(
+                            fuelDealerAdapter.SupplierBusinessId, fuelDealerAdapter.SupplierName);
+
+                    if (!fallbackFuelDealerCustomerQueues.TryGetValue(fuelDealerAdapter.SupplierBusinessId, out var fuelQueue)
+                        || fuelQueue == null)
+                    {
+                        fuelQueue = new LandLedgers.Economy.GeneralStore.CustomerQueue
+                        {
+                            MerchantBusinessId = fuelDealerAdapter.SupplierBusinessId,
+                            MerchantName = fuelDealerAdapter.SupplierName,
+                        };
+                        fallbackFuelDealerCustomerQueues[fuelDealerAdapter.SupplierBusinessId] = fuelQueue;
+                    }
+                    return fuelQueue;
+                }
                 return null;
+            };
+            householdShoppingLoop.RequirePhysicalCounterService = true;
+            householdShoppingLoop.UsePreferredShoppingWindows = true;
+            householdShoppingLoop.ResolveServiceClerkCandidates = businessId =>
+            {
+                var presentCandidates = new List<int>();
+                var manager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+                LandLedgers.FirstLedger.PopulationPathingDirector pathing =
+                    FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+                if (manager != null)
+                {
+                    BusinessInstanceState store = ResolveGeneralStoreBusiness(manager, businessId);
+                    if (store != null)
+                    {
+                        int clerkPersonId = ReferenceEquals(store, manager.CurrentBusiness)
+                            ? (manager.TryGetServiceClerkPersonId(out int playerStoreClerk) ? playerStoreClerk : -1)
+                            : (manager.TryGetServiceClerkPersonId(store.RuntimeState, out int npcStoreClerk) ? npcStoreClerk : -1);
+                        int generalStoreOwnerPersonId = store.Owner != null ? store.Owner.PersonId : -1;
+                        foreach (int candidatePersonId in GeneralStoreServiceClerkPolicy.CandidatePersonIds(
+                            clerkPersonId, generalStoreOwnerPersonId))
+                        {
+                            if (store.AssignedBuildingId >= 0 && pathing != null
+                                && pathing.IsPersonPhysicallyAtBuilding(candidatePersonId, store.AssignedBuildingId))
+                                presentCandidates.Add(candidatePersonId);
+                        }
+                        return presentCandidates;
+                    }
+                }
+
+                if (FindFuelDealerSupplierAdapter(businessId) != null)
+                {
+                    if (pathing == null || sharedBusinessRuntime == null
+                        || !sharedBusinessRuntime.TryFindByInstanceId(businessId, out BusinessInstanceState fuelDealerBusiness)
+                        || fuelDealerBusiness == null || fuelDealerBusiness.BusinessType != BusinessType.FuelDealer
+                        || fuelDealerBusiness.RuntimeState == null || fuelDealerBusiness.AssignedBuildingId < 0)
+                        return presentCandidates;
+
+                    foreach (int candidatePersonId in FuelDealerServiceCandidatePersonIds(fuelDealerBusiness))
+                    {
+                        if (pathing.IsPersonPhysicallyAtBuilding(candidatePersonId, fuelDealerBusiness.AssignedBuildingId))
+                            presentCandidates.Add(candidatePersonId);
+                    }
+                    return presentCandidates;
+                }
+
+                // Bakery owners and active employees can serve at the actual
+                // bakery premises. Presence is checked here; availability,
+                // work schedule, and competing tasks are still enforced by
+                // TaskAuthority when TendCustomer is assigned.
+                if (bakerySupplierAdapter == null
+                    || !string.Equals(bakerySupplierAdapter.SupplierBusinessId, businessId, StringComparison.Ordinal)
+                    || sharedBusinessRuntime == null || pathing == null
+                    || !sharedBusinessRuntime.TryFindByInstanceId(businessId, out BusinessInstanceState bakeryBusiness)
+                    || bakeryBusiness == null || bakeryBusiness.BusinessType != BusinessType.Bakery
+                    || bakeryBusiness.RuntimeState == null || bakeryBusiness.AssignedBuildingId < 0)
+                    return presentCandidates;
+
+                var candidates = new List<int>();
+                if (bakerySupplierAdapter.Bakery.OwnerPersonId >= 0)
+                    candidates.Add(bakerySupplierAdapter.Bakery.OwnerPersonId);
+                foreach (EmploymentRelationship relationship in bakeryBusiness.RuntimeState.EmploymentRegistry
+                    .GetActiveByEmployer(bakeryBusiness.InstanceId))
+                {
+                    if (relationship != null && relationship.IsActive && relationship.EmployeePersonId >= 0
+                        && !candidates.Contains(relationship.EmployeePersonId))
+                        candidates.Add(relationship.EmployeePersonId);
+                }
+
+                foreach (int personId in candidates)
+                {
+                    if (pathing.IsPersonPhysicallyAtBuilding(personId, bakeryBusiness.AssignedBuildingId))
+                        presentCandidates.Add(personId);
+                }
+                return presentCandidates;
             };
             householdShoppingLoop.ResolveServiceClerkPersonId = businessId =>
             {
+                IReadOnlyList<int> candidates = householdShoppingLoop.ResolveServiceClerkCandidates?.Invoke(businessId);
+                return candidates != null && candidates.Count > 0 ? candidates[0] : -1;
+            };
+            householdShoppingLoop.IsPotentialServiceClerkForBusiness = (businessId, personId) =>
+            {
                 var manager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
-                if (manager == null) return -1;
-                BusinessInstanceState store = ResolveGeneralStoreBusiness(manager, businessId);
-                if (store == null) return -1;
-                if (ReferenceEquals(store, manager.CurrentBusiness))
-                    return manager.TryGetServiceClerkPersonId(out int clerkPersonId) ? clerkPersonId : -1;
-                return manager.TryGetServiceClerkPersonId(store.RuntimeState, out int npcClerkPersonId) ? npcClerkPersonId : -1;
+                if (manager != null)
+                {
+                    BusinessInstanceState store = ResolveGeneralStoreBusiness(manager, businessId);
+                    if (store != null)
+                    {
+                        int configuredClerk = ReferenceEquals(store, manager.CurrentBusiness)
+                            ? (manager.TryGetServiceClerkPersonId(out int playerStoreClerk) ? playerStoreClerk : -1)
+                            : (manager.TryGetServiceClerkPersonId(store.RuntimeState, out int npcStoreClerk) ? npcStoreClerk : -1);
+                        // Only an explicitly assigned clerk is presumed to
+                        // be bound to counter duty for household planning.
+                        // Owner-operator service is opportunistic: the owner
+                        // remains eligible for household activity when their
+                        // actual schedule permits it.
+                        return personId >= 0 && personId == configuredClerk;
+                    }
+                }
+
+                if (FindFuelDealerSupplierAdapter(businessId) != null
+                    && sharedBusinessRuntime != null
+                    && sharedBusinessRuntime.TryFindByInstanceId(businessId, out BusinessInstanceState fuelDealerBusiness)
+                    && fuelDealerBusiness != null && fuelDealerBusiness.BusinessType == BusinessType.FuelDealer
+                    && FuelDealerServiceCandidatePersonIds(fuelDealerBusiness).Contains(personId))
+                    return true;
+
+                if (bakerySupplierAdapter == null
+                    || !string.Equals(bakerySupplierAdapter.SupplierBusinessId, businessId, StringComparison.Ordinal)
+                    || sharedBusinessRuntime == null
+                    || !sharedBusinessRuntime.TryFindByInstanceId(businessId, out BusinessInstanceState bakeryBusiness)
+                    || bakeryBusiness == null || bakeryBusiness.BusinessType != BusinessType.Bakery
+                    || bakeryBusiness.RuntimeState == null)
+                {
+                    return false;
+                }
+
+                int ownerPersonId = bakerySupplierAdapter.Bakery.OwnerPersonId;
+                if (ownerPersonId >= 0 && ownerPersonId == personId) return true;
+                foreach (EmploymentRelationship relationship in bakeryBusiness.RuntimeState.EmploymentRegistry
+                    .GetActiveByEmployer(bakeryBusiness.InstanceId))
+                {
+                    if (relationship != null && relationship.IsActive && relationship.EmployeePersonId >= 0)
+                    {
+                        if (relationship.EmployeePersonId == personId) return true;
+                    }
+                }
+
+                return false;
             };
 
             // Pass 9 person-hand persistence shares the same live authority
@@ -4065,9 +4281,16 @@ namespace LandLedgers.Orchestration.Systems
                 // sessions never run EnsurePass9SaveOwnerForRestore, so
                 // without this the first save would still write an empty
                 // queue section.
-                var storeManager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
-                if (storeManager != null)
-                    personHandSave.Series2Pass9State.CustomerQueue = storeManager.CustomerQueue;
+                var queueStoreManager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+                if (queueStoreManager != null)
+                    personHandSave.Series2Pass9State.CustomerQueue = queueStoreManager.CustomerQueue;
+                if (bakerySupplierAdapter != null)
+                {
+                    // ResolveCustomerQueue above also creates the queue, so
+                    // the persisted instance is exactly the one trips use.
+                    householdShoppingLoop.ResolveCustomerQueue(bakerySupplierAdapter.SupplierBusinessId);
+                    personHandSave.Series2Pass9State.BakeryCustomerQueue = bakeryCustomerQueue;
+                }
             }
 
             // Physical hands P4/P5: seed the hub-owned hand authority from
@@ -4084,6 +4307,14 @@ namespace LandLedgers.Orchestration.Systems
             // authority into the loop. Set once after the if/else so a rebind
             // does not matter; RebindPopulationAuthorities does not touch it.
             householdShoppingLoop.OffMapJourneys = OffMapJourneys;
+            householdShoppingLoop.ShopperMovementBlockReason = personId =>
+            {
+                LandLedgers.FirstLedger.PopulationPathingDirector pathing =
+                    FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+                return pathing != null
+                    ? pathing.GetShopperMovementBlockReason(personId)
+                    : "PopulationPathingDirector is unavailable; physical shopper availability cannot be confirmed";
+            };
 
             // Priority 4 Slice 4: wire the diagnostic into the loop so its
             // leg assign/start refusals feed the L6 streak (the loop may be
@@ -4116,7 +4347,8 @@ namespace LandLedgers.Orchestration.Systems
                     ShoppingRouteRemainingSeconds,
                     CancelShoppingPhysicalRoute,
                     timeManager != null && timeManager.Settings != null
-                        ? timeManager.Settings.ShortTickIntervalGameSeconds : 900f);
+                        ? timeManager.Settings.ShortTickIntervalGameSeconds : 900f,
+                    () => lastPhysicalShoppingRouteRefusal);
             }
 
             // Slice 25: attach the driver beside the loop, same shape —
@@ -4139,6 +4371,15 @@ namespace LandLedgers.Orchestration.Systems
                 hub.Tasks.IsTaskExternallyReferenced = taskId =>
                     shoppingTripDriver != null && shoppingTripDriver.IsTaskReferencedByLiveTrip(taskId);
             }
+
+            // One food transaction authority per production scenario: the
+            // Phase C loop uses identified retail lots and physical trips.
+            // Keep the General Store's legacy reserve cadence for other
+            // categories, but prevent it from separately consuming or
+            // selling food before the physical household path runs.
+            var storeManager = FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+            if (storeManager != null)
+                storeManager.PhysicalHouseholdFoodAuthorityEnabled = householdShoppingLoop != null;
 
         }
 
@@ -4878,7 +5119,6 @@ namespace LandLedgers.Orchestration.Systems
             {
                 return;
             }
-
             NpcBusinessRuntimeCashPort port = new NpcBusinessRuntimeCashPort(sharedBusinessRuntime);
             foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
             {
@@ -6066,6 +6306,12 @@ namespace LandLedgers.Orchestration.Systems
                     // only by HouseholdReserveEvaluator (DEF-019 untouched).
                     FuelHandlingNeeded = DomesticNeedAuthorities.FuelHandlingNeeded(
                         household, absoluteDayIndex),
+                    // A retained fuel trip waits in a capability-blocked
+                    // state while its home lacks a usable Firewood point.
+                    // Recheck the live building authority each day so a
+                    // repaired/updated home can resume the same task.
+                    FirewoodActivityLocationAvailable = ResolveFirewoodActivityLocationAvailability(
+                        household.homeBuildingId),
                     // Campaign C-24 (DEF-010, Decision 6): cleaning comes from
                     // the driver's accumulated-use tracker (one unit per
                     // occupant per day; need at 14 person-days; a completed
@@ -6103,6 +6349,29 @@ namespace LandLedgers.Orchestration.Systems
                 Debug.Log("[SimulationDrivers] domestic labor day " + absoluteDayIndex + ": " +
                     string.Join(" | ", diag));
             }
+        }
+
+        private bool? ResolveFirewoodActivityLocationAvailability(int homeBuildingId)
+        {
+            if (homeBuildingId < 0 || townWorld == null
+                || !townWorld.TryGetBuildingById(homeBuildingId, out PlacedBuilding home)
+                || home?.runtimeFootprintAuthority == null)
+                return null;
+
+            BuildingFootprintAuthority authority = home.runtimeFootprintAuthority;
+            if (authority.ActivityLocations != null)
+            {
+                foreach (BuildingActivityLocationAuthoring location in authority.ActivityLocations)
+                {
+                    if (location == null || location.type != BuildingActivityLocationType.Firewood)
+                        continue;
+
+                    if (authority.TryGetActivityLocation(location.id, home.id, out _, out _))
+                        return true;
+                }
+            }
+
+            return false;
         }
 
         private DomesticActivityMovementResult ResolveDomesticActivityMovement(
@@ -6155,7 +6424,7 @@ namespace LandLedgers.Orchestration.Systems
                     }
                     if (string.IsNullOrWhiteSpace(firewoodLocationId))
                     {
-                        flight.ActivityLocationId = "firewood: no firewood storage is authored on the home.";
+                        flight.ActivityLocationId = DomesticLaborDriver.MissingFirewoodStorageLocationId;
                         return DomesticActivityMovementResult.Unsupported;
                     }
                     activityLocationId = firewoodLocationId;
@@ -7482,12 +7751,16 @@ namespace LandLedgers.Orchestration.Systems
                     }
                 }
             }
+            List<CarpentryFurnitureSaleCandidate> furnitureCandidates = BuildFurnitureSaleCandidates(absoluteDayIndex);
             if (workshop.GenericConfiguration.ActiveProcesses.All(process => process == null || process.Completed))
             {
-                if (!production.TryBeginEligibleFurniture(runtime, workers, absoluteDayIndex, out _, out string startReason))
+                if (!production.TryBeginDemandedFurniture(runtime, workers, furnitureCandidates, absoluteDayIndex, out _, out string startReason))
                 {
-                    LogRefusalDayKeyed("carpentry:start", absoluteDayIndex,
-                        "[SimulationDrivers] carpentry start refused: " + startReason);
+                    if (!string.IsNullOrWhiteSpace(startReason))
+                    {
+                        LogRefusalDayKeyed("carpentry:start", absoluteDayIndex,
+                            "[SimulationDrivers] carpentry start refused: " + startReason);
+                    }
                 }
             }
             if (workshop.GenericConfiguration.ActiveProcesses.Count > 0)
@@ -7500,7 +7773,7 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             // (d) Sell finished pieces to wanting households.
-            DriveCarpentryFurnitureSales(workshop, register, absoluteDayIndex, diag);
+            DriveCarpentryFurnitureSales(workshop, register, absoluteDayIndex, furnitureCandidates, diag);
 
             foreach (string line in diag) Debug.Log(line, this);
         }
@@ -7517,7 +7790,8 @@ namespace LandLedgers.Orchestration.Systems
         /// runs in CarpentryFurnitureSale (cash + title + registers);
         /// a disputed sale is logged day-keyed, never silent.
         /// </summary>
-        private void DriveCarpentryFurnitureSales(BusinessInstanceState workshop, BusinessEquipmentRegister register, int absoluteDayIndex, List<string> diag)
+        private void DriveCarpentryFurnitureSales(BusinessInstanceState workshop, BusinessEquipmentRegister register, int absoluteDayIndex,
+            IReadOnlyList<CarpentryFurnitureSaleCandidate> candidates, List<string> diag)
         {
             if (populationManager == null || populationManager.State == null || populationManager.State.households == null)
             {
@@ -7525,7 +7799,6 @@ namespace LandLedgers.Orchestration.Systems
                     "[SimulationDrivers] carpentry furniture sales skipped: no population state to find buying households in.");
                 return;
             }
-            var candidates = BuildFurnitureSaleCandidates(absoluteDayIndex);
             var workshopCash = new Series2BusinessRuntimeCashPort(workshop.RuntimeState);
             if (!CarpentryFurnitureSale.TrySellFinishedPieces(workshop, register, workshopCash, candidates, absoluteDayIndex, diag, out string saleError))
             {
@@ -7621,6 +7894,13 @@ namespace LandLedgers.Orchestration.Systems
             {
                 LogRefusalDayKeyed("furniture-purchase:no-hub", absoluteDayIndex,
                     "[SimulationDrivers] household furniture purchases skipped: simulation hub or business runtime is missing.");
+                return;
+            }
+            LandLedgers.Persistence.SaveLoadManager furnitureSave = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            if (furnitureSave?.Series2Pass9State == null)
+            {
+                LogRefusalDayKeyed("furniture-purchase:no-save-state", absoluteDayIndex,
+                    "[SimulationDrivers] household furniture orders skipped: Pass 9 durable order state is not bound; a paid order must be recoverable through Save/Continue.");
                 return;
             }
             if (populationManager == null || populationManager.State == null || populationManager.State.households == null)
@@ -7769,7 +8049,12 @@ namespace LandLedgers.Orchestration.Systems
                 () => scenePlacements,
                 placementIsBound,
                 hooksTemplate,
-                absoluteDayIndex);
+                absoluteDayIndex,
+                true,
+                GetFurniturePurchaseOrders(),
+                FreightProduction,
+                carrierBusiness.InstanceId,
+                carrierBusiness.RuntimeState);
             var diag = new List<string>();
             string storeLocationId = TownJourneyNetworkBuilder.LocationIdForBuilding(storeBusiness.AssignedBuildingId);
             foreach (CarpentryFurnitureSaleCandidate candidate in BuildFurnitureSaleCandidates(absoluteDayIndex))
@@ -7789,12 +8074,32 @@ namespace LandLedgers.Orchestration.Systems
                     continue;
                 }
                 BuildingFootprintAuthority building = home.runtimeFootprintAuthority;
+                bool hasPendingFurnitureOrder = false;
+                foreach (FurniturePurchaseOrder pending in GetFurniturePurchaseOrders().ToList())
+                {
+                    if (pending == null || pending.HouseholdId != candidate.HouseholdId || pending.IsOperational
+                        || pending.CancellationRequested) continue;
+                    hasPendingFurnitureOrder = true;
+                    if (!string.IsNullOrWhiteSpace(pending.TerminalReason)) continue;
+                    if (pending.DayIndex >= absoluteDayIndex) continue;
+                    string previousInstallationBlock = pending.InstallationBlockedReason;
+                    var progressionDiag = new List<string>();
+                    string progressionRefusal = purchaseDriver.ReconcilePendingOrder(pending, candidate.Ledger,
+                        candidate.Furnishings, building, candidate.HomeBuildingId, progressionDiag);
+                    foreach (string line in progressionDiag) Debug.Log(line, this);
+                    if (progressionRefusal == null && pending.IsOperational)
+                        Debug.Log($"[SimulationDrivers] furniture order '{pending.PurchaseId}' completed physical delivery and authored installation in building {candidate.HomeBuildingId}.", this);
+                    else if (!string.IsNullOrWhiteSpace(pending.InstallationBlockedReason)
+                        && !string.Equals(previousInstallationBlock, pending.InstallationBlockedReason, StringComparison.Ordinal))
+                        Debug.Log($"[SimulationDrivers] furniture order '{pending.PurchaseId}' retains delivered item(s) in household {candidate.HouseholdId} custody: {pending.InstallationBlockedReason}", this);
+                }
                 int installed = purchaseDriver.TryInstallCustodyPieces(candidate.Furnishings,
                     candidate.HomeBuildingId, building, diag);
                 if (installed > 0)
                 {
                     Debug.Log($"[SimulationDrivers] furniture purchase day {absoluteDayIndex}: household {candidate.HouseholdId} installed {installed} workshop-made custody piece(s) in building {candidate.HomeBuildingId}.", this);
                 }
+                if (hasPendingFurnitureOrder) continue;
                 if (hub.Journeys == null)
                 {
                     LogRefusalDayKeyed("furniture-purchase:no-journeys:" + candidate.HouseholdId, absoluteDayIndex,
@@ -7819,8 +8124,6 @@ namespace LandLedgers.Orchestration.Systems
                         if (want == null || !want.Affordable || want.Channel != FurnishingWantChannel.New) continue;
                         if (string.IsNullOrWhiteSpace(want.ItemKind)) continue;
                         if (HasUninstalledCustodyPiece(candidate.Furnishings, want.ItemKind)) continue;
-                        if (!FurnitureInstallBinding.TryFindFreePlacement(want.ItemKind, building,
-                                scenePlacements, placementIsBound, out BuildingEquipmentPlacement _, out string _)) continue;
                         int priceCents = storeManager.GetItemSellingPriceCents(want.ItemKind);
                         if (priceCents <= 0) continue;
                         if (!FurnitureStorePurchase.TryQuoteDeliveryCharge(1, want.ItemKind, route.TotalMiles,
@@ -7847,9 +8150,16 @@ namespace LandLedgers.Orchestration.Systems
                         "[SimulationDrivers] household " + candidate.HouseholdId + " furniture purchase refused for '" + best.ItemKind + "' (live price " + bestPriceCents + "c + freight " + bestFareCents + "c) — see the diagnostics; the want stays for tomorrow.");
                     continue;
                 }
-                Debug.Log($"[SimulationDrivers] furniture purchase day {absoluteDayIndex}: household {candidate.HouseholdId} bought 1x '{best.ItemKind}' from the General Store for {order.GoodsTotalCents()}c + {bestFareCents}c freight, installed in building {candidate.HomeBuildingId} — purchase '{order.PurchaseId}' operational.", this);
+                Debug.Log($"[SimulationDrivers] furniture purchase day {absoluteDayIndex}: household {candidate.HouseholdId} placed order '{order.PurchaseId}' for 1x '{best.ItemKind}' ({order.GoodsTotalCents()}c goods + {bestFareCents}c freight); physical delivery and installation are pending.", this);
             }
             foreach (string line in diag) Debug.Log(line, this);
+        }
+
+        private List<FurniturePurchaseOrder> GetFurniturePurchaseOrders()
+        {
+            LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
+            List<FurniturePurchaseOrder> saved = save?.Series2Pass9State?.FurniturePurchaseOrders;
+            return saved ?? furniturePurchaseOrders;
         }
 
         /// <summary>
@@ -8268,6 +8578,7 @@ namespace LandLedgers.Orchestration.Systems
                     int quantityUnits, out string reason) =>
                     millbrookCustody.ReceiveCargoLot(shipment, quantityUnits, absoluteDayIndex, out reason);
             }
+            BindFurniturePurchaseFreightHooks(hooks);
             latestFreightHooks = hooks;
             latestFreightHandler = handler;
             RetryPendingFreightShipmentRegistrations(absoluteDayIndex);
@@ -8297,6 +8608,95 @@ namespace LandLedgers.Orchestration.Systems
             }
             DrivePreparedFreightDispatchAssignments(absoluteDayIndex);
             DriveMillbrookFreightNegotiation(absoluteDayIndex);
+        }
+
+        private void BindFurniturePurchaseFreightHooks(FreightShipmentHooks hooks)
+        {
+            if (hooks == null || hub == null || FreightProduction?.Service == null) return;
+            Dictionary<string, FurniturePurchaseOrder> ordersByShipment = new Dictionary<string, FurniturePurchaseOrder>(StringComparer.Ordinal);
+            Dictionary<string, FurniturePurchaseService> servicesByShipment = new Dictionary<string, FurniturePurchaseService>(StringComparer.Ordinal);
+            foreach (FurniturePurchaseOrder order in GetFurniturePurchaseOrders())
+            {
+                if (order == null || string.IsNullOrWhiteSpace(order.ShipmentId)
+                    || order.IsOperational || order.CancellationRequested
+                    || !string.IsNullOrWhiteSpace(order.TerminalReason)) continue;
+                if (!sharedBusinessRuntime.TryFindByInstanceId(order.VendorId, out BusinessInstanceState store)
+                    || store?.RuntimeState == null) continue;
+                HouseholdLedger ledger = hub.HouseholdLedgers.Get(order.HouseholdId);
+                HouseholdFurnishingRegister register = hub.FurnishingRegisterFor(order.HouseholdId);
+                if (ledger == null || register == null) continue;
+                BuildingFootprintAuthority building = null;
+                if (townWorld != null && townWorld.TryGetBuildingById(order.BuildingInstanceId, out PlacedBuilding home))
+                    building = home?.runtimeFootprintAuthority;
+                var placements = new List<BuildingEquipmentPlacement>(
+                    UnityEngine.Object.FindObjectsByType<BuildingEquipmentPlacement>(FindObjectsSortMode.None));
+                Func<string, bool> bound = placementId =>
+                {
+                    foreach (HouseholdFurnishingRegister candidate in hub.AllFurnishingRegisters)
+                        if (candidate?.Bindings != null && candidate.Bindings.Exists(item => item != null && item.BindingId == placementId)) return true;
+                    return false;
+                };
+                var handler = new FurniturePurchaseInstallHandler(register, building, order.BuildingInstanceId,
+                    placements, bound, FurnishingAcquisitionSource.Purchase, null, null);
+                var service = new FurniturePurchaseService(ledger,
+                    new StoreFurnitureVendorStock(store.RuntimeState, null),
+                    (int goods, int fare, string id) => "Paid furniture orders cannot be charged again.",
+                    handler.Install, register.FindAsset, handler.RegisterReceived);
+                ordersByShipment[order.ShipmentId] = order;
+                servicesByShipment[order.ShipmentId] = service;
+            }
+            if (ordersByShipment.Count == 0) return;
+            ConfirmFreightPhysicalHandlingHandler previousPhysicalReceiving = hooks.ConfirmPhysicalReceiving;
+            hooks.ConfirmPhysicalReceiving = (LogisticsShipmentState shipment, EntityId handlerId,
+                out bool physicallyReceived, out string reason) =>
+            {
+                if (shipment != null && ordersByShipment.TryGetValue(shipment.ShipmentId, out FurniturePurchaseOrder order))
+                {
+                    physicallyReceived = false;
+                    reason = string.Empty;
+                    LandLedgers.FirstLedger.PopulationPathingDirector pathing =
+                        FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+                    if (pathing == null)
+                    {
+                        reason = "No population presentation authority is available to carry furniture to the household.";
+                        return false;
+                    }
+                    bool routeUsable = pathing.TryCarryFreightToActivity(handlerId.Id,
+                        order.BuildingInstanceId, "receiving", out physicallyReceived, out reason);
+                    if (!routeUsable) return false;
+                    shipment.physicalLocationId = physicallyReceived
+                        ? "receiving:household:" + order.HouseholdId
+                        : "person:" + handlerId.Id;
+                    if (!physicallyReceived && !reason.StartsWith("Carrying:", StringComparison.Ordinal))
+                        reason = string.IsNullOrWhiteSpace(reason) ? "Carrying: handler is travelling to the household's authored receiving point." : "Carrying: " + reason;
+                    return true;
+                }
+                if (previousPhysicalReceiving != null)
+                    return previousPhysicalReceiving(shipment, handlerId, out physicallyReceived, out reason);
+                physicallyReceived = false;
+                reason = "No physical receiving authority is bound.";
+                return false;
+            };
+            CommitConsolidatedSourceLotsHandler previousCommit = hooks.CommitConsolidatedSourceLots;
+            ReceiveConsolidatedCargoLotsHandler previousReceive = hooks.ReceiveConsolidatedCargoLots;
+            hooks.CommitConsolidatedSourceLots = (LogisticsShipmentState shipment, out string reason) =>
+            {
+                if (shipment != null && ordersByShipment.TryGetValue(shipment.ShipmentId, out FurniturePurchaseOrder order)
+                    && servicesByShipment.TryGetValue(shipment.ShipmentId, out FurniturePurchaseService service))
+                    return service.CommitShipmentForOrder(order, shipment, out reason);
+                if (previousCommit != null) return previousCommit(shipment, out reason);
+                reason = "No consolidated source authority is bound for this shipment.";
+                return false;
+            };
+            hooks.ReceiveConsolidatedCargoLots = (LogisticsShipmentState shipment, out string reason) =>
+            {
+                if (shipment != null && ordersByShipment.TryGetValue(shipment.ShipmentId, out FurniturePurchaseOrder order)
+                    && servicesByShipment.TryGetValue(shipment.ShipmentId, out FurniturePurchaseService service))
+                    return service.ReceiveShipmentForOrder(order, shipment, out reason);
+                if (previousReceive != null) return previousReceive(shipment, out reason);
+                reason = "No consolidated receiving authority is bound for this shipment.";
+                return false;
+            };
         }
 
         /// <summary>Slice S3: release draft-team bindings for detailed shipments
@@ -8346,6 +8746,15 @@ namespace LandLedgers.Orchestration.Systems
                 BusinessInstanceState freight = FindBusiness(agreement.CarrierBusinessId);
                 LogisticsShipmentState shipment = FreightProduction.AllShipments().FirstOrDefault(candidate => candidate != null
                     && string.Equals(candidate.ShipmentId, agreement.ShipmentId, StringComparison.Ordinal));
+                // This scan is only responsible for creating the first
+                // dispatch assignment while an accepted shipment is still
+                // held for authorization. Once the hold is released, the
+                // departure/retry and transit authorities own it. Calling
+                // CreatePrepared again after that transition reports a false
+                // "hold or status did not match" warning on every later day.
+                if (shipment != null && !ShouldScanPreparedFreightDispatchAssignment(
+                        shipment.requiresDispatchAuthorization, shipment.Status))
+                    continue;
                 AnimalState horse = FindOpeningFreightHorse(agreement.CarrierBusinessId);
                 EquipmentAsset wagon = hub?.TransportAssets?.Get("opening-freight-wagon");
                 if (freight == null || shipment == null || horse == null || wagon == null)
@@ -8367,6 +8776,12 @@ namespace LandLedgers.Orchestration.Systems
                 }
                 CreatePreparedFreightDispatchTask(agreement, shipment, freight, horse, wagon, dayIndex);
             }
+        }
+
+        internal static bool ShouldScanPreparedFreightDispatchAssignment(
+            bool requiresDispatchAuthorization, LogisticsShipmentStatus status)
+        {
+            return requiresDispatchAuthorization || status == LogisticsShipmentStatus.Failed;
         }
 
         private void DriveMillbrookFreightNegotiation(int dayIndex)
@@ -8751,6 +9166,16 @@ namespace LandLedgers.Orchestration.Systems
             {
                 return; // no population yet — nothing to feed
             }
+            householdMemberships = populationManager.Memberships;
+            if (absoluteDayIndex > 0)
+            {
+                // Close any meal windows skipped by a save, startup delay or
+                // unusually large clock step before applying the previous
+                // day's nutrition. Never consume current stock retroactively
+                // for a meal whose time has passed.
+                ResolveScheduledHouseholdMeals(absoluteDayIndex - 1, 1440, closeUnresolvedAsMissed: true);
+                FinalizePreviousDayNutrition(absoluteDayIndex - 1);
+            }
             EnsureTownJourneyNetwork();
             // The direct-retail adapter derives price from bread lot age.
             // Refresh its day before supplier search/price checks each day.
@@ -8843,58 +9268,9 @@ namespace LandLedgers.Orchestration.Systems
                 restaurantMeals, boardingMeals, hotelMeals,
                 hub.HouseholdInventories, hub.MealLog, null, populationMemberships,
                 populationManager != null && populationManager.ConditionDebuffsSuppressed,
-                OffMapJourneys);
-            // Emit one compact daily record even when the report is all-zero.
-            // The separate shopping summary can still run when no household
-            // meal was resolved, and suppressing this line made that gap look
-            // like a logging cutoff after the last non-zero meal day.
-            Debug.Log($"[FoodEconomy] meal resolution day {absoluteDayIndex}: " +
-                $"{report.HouseholdsServed} households served, {report.MealsEaten} meals eaten, " +
-                $"{report.MealsMissed} missed; direct meal-path purchases={report.PurchasesMade} " +
-                $"({report.SpendCents}c; excludes the separate physical shopping loop).");
-
-            // Keep missed meals auditable by resident. These are read-only
-            // projections of the meal authority's persisted records; they do
-            // not create meals or affect nutrition. Served meals are no
-            // longer logged one line per person per slot (overnight
-            // 2026-11-04: up to dozens of routine lines a day); the daily
-            // needs summary above counts them and MealLog persists each
-            // record with its consumed items.
-            if (hub.MealLog != null && populationManager.State.households != null)
-            {
-                foreach (HouseholdState household in populationManager.State.households)
-                {
-                    if (household == null) continue;
-                    int cashCents = hub.HouseholdLedgers.Get(household.id)?.GetBalanceCents() ?? 0;
-                    var missedByPerson = hub.MealLog.GetMissedMeals(household.id)
-                        .Where(missed => missed != null && missed.DayIndex == absoluteDayIndex)
-                        .GroupBy(missed => missed.PersonId);
-                    foreach (IGrouping<int, MissedMealRecord> missedGroup in missedByPerson)
-                    {
-                        MissedMealRecord firstMiss = missedGroup.First();
-                        PersonState person = populationManager.State.GetPerson(firstMiss.PersonId);
-                        HouseholdInventory inventory = hub.HouseholdInventories.Get(household.id);
-                        int availableFoodUnits = 0;
-                        if (inventory != null)
-                        {
-                            foreach (string itemId in MealSchedulingPolicy.Default.MealItemPriority)
-                            {
-                                HouseholdItemDefinition definition = HouseholdItemCatalog.Get(itemId);
-                                if (definition != null && definition.IsFood)
-                                    availableFoodUnits += inventory.GetAvailableUnits(itemId);
-                            }
-                        }
-                        string missedSlots = string.Join(", ", missedGroup.Select(missed => missed.Slot.ToString()).Distinct());
-                        string reasons = string.Join("; ", missedGroup.Select(missed => missed.Reason)
-                            .Where(reason => !string.IsNullOrWhiteSpace(reason)).Distinct());
-                        Debug.LogWarning($"[FoodEconomy] meals missed: person='{person?.DisplayName ?? $"P{firstMiss.PersonId}"}', " +
-                            $"household=H{firstMiss.HouseholdId}, missed={missedGroup.Count()} slot(s) [{missedSlots}], reason='{reasons}', " +
-                            $"food stock at meal resolution={availableFoodUnits} units, " +
-                            $"household cash={cashCents}c. Shopping is a separate later step; cash alone does not prove a valid seller or stock.", this);
-                    }
-                }
-            }
-
+                OffMapJourneys,
+                deferLotBasedMealsToClock: hub.HouseholdInventories != null && hub.MealLog != null);
+            LastDailyNeedsReport = report;
             DriveEmbodiedShopping(absoluteDayIndex, diag);
             DriveHouseholdAutonomy(absoluteDayIndex, diag);
             PublishHouseholdShoppingSummariesAndTraces(absoluteDayIndex, diag);
@@ -8916,6 +9292,7 @@ namespace LandLedgers.Orchestration.Systems
                     string message = diag[i];
                     if (!string.IsNullOrWhiteSpace(message)
                         && !IsRoutineHouseholdShoppingSuccess(message, absoluteDayIndex)
+                        && !IsRoutineDailyNeedsDiagnostic(message, absoluteDayIndex)
                         && message.StartsWith("[FoodEconomy] purchase", StringComparison.Ordinal)
                         && !visible.Contains(message))
                         visible.Add(message);
@@ -8924,7 +9301,8 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     string message = diag[i];
                     if (string.IsNullOrWhiteSpace(message) || visible.Contains(message)
-                        || IsRoutineHouseholdShoppingSuccess(message, absoluteDayIndex)) continue;
+                        || IsRoutineHouseholdShoppingSuccess(message, absoluteDayIndex)
+                        || IsRoutineDailyNeedsDiagnostic(message, absoluteDayIndex)) continue;
                     if (message.StartsWith("Day " + absoluteDayIndex + ": batch ", StringComparison.Ordinal)
                         || message.StartsWith("Day " + absoluteDayIndex + ": shopping FAILED", StringComparison.Ordinal)
                         || message.StartsWith("[SimulationDrivers] household errands H", StringComparison.Ordinal))
@@ -8934,12 +9312,14 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     string message = diag[i];
                     if (!string.IsNullOrWhiteSpace(message) && !visible.Contains(message)
-                        && !IsRoutineHouseholdShoppingSuccess(message, absoluteDayIndex))
+                        && !IsRoutineHouseholdShoppingSuccess(message, absoluteDayIndex)
+                        && !IsRoutineDailyNeedsDiagnostic(message, absoluteDayIndex))
                         visible.Add(message);
                 }
 
                 int reportableCount = diag.Count(message => !string.IsNullOrWhiteSpace(message)
                     && !IsRoutineHouseholdShoppingSuccess(message, absoluteDayIndex)
+                    && !IsRoutineDailyNeedsDiagnostic(message, absoluteDayIndex)
                     && !message.StartsWith("[FoodEconomy] shopping summary day ", StringComparison.Ordinal));
                 string omitted = reportableCount > visible.Count
                     ? $" | ... {reportableCount - visible.Count} additional diagnostic(s) omitted"
@@ -8948,6 +9328,121 @@ namespace LandLedgers.Orchestration.Systems
                     Debug.LogWarning($"[SimulationDrivers] household needs day {absoluteDayIndex}: " +
                         string.Join(" | ", visible) + omitted, this);
             }
+        }
+
+        private void ResolveScheduledHouseholdMeals(int dayIndex, int minuteOfDay, bool closeUnresolvedAsMissed)
+        {
+            if (hub?.MealLog == null || hub.HouseholdInventories == null
+                || populationManager?.State?.households == null) return;
+
+            SimulationSystemsHub.BuildMealSourceComposites(
+                hub.RestaurantMealSources, hub.BoardingHouseMealSources, hub.HotelMealSources,
+                out var restaurantMeals, out var boardingMeals, out var hotelMeals);
+
+            MealSchedulingPolicy policy = MealSchedulingPolicy.Default;
+            int expectedMeals = policy.ExpectedMealsPerDay;
+            var diagnostics = new List<string>();
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null) continue;
+                List<int> members = householdMemberships != null
+                    ? householdMemberships.GetActiveMembers(household.id)
+                    : household.memberIds;
+                if (members == null || members.Count == 0) continue;
+
+                HouseholdInventory inventory = hub.HouseholdInventories.GetOrCreate(household.id);
+                HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, dayIndex, diagnostics);
+                var mealService = new HouseholdMealService(hub.MealLog);
+                int[] scheduledMinutes = DailyActivityPlanner.DefaultMealMinutes;
+                for (int memberIndex = 0; memberIndex < members.Count; memberIndex++)
+                {
+                    int personId = members[memberIndex];
+                    int awayRestaurant = restaurantMeals?.MealsEatenAtRestaurant(personId, dayIndex) ?? 0;
+                    int awayBoarding = boardingMeals?.MealsEatenAtBoardingHouse(personId, dayIndex) ?? 0;
+                    int awayHotel = hotelMeals?.MealsEatenAtHotel(personId, dayIndex) ?? 0;
+                    int awayCount = Math.Min(expectedMeals, Math.Max(0, awayRestaurant + awayBoarding + awayHotel));
+                    MealSourceKind awaySource = awayBoarding >= awayRestaurant && awayBoarding >= awayHotel && awayBoarding > 0
+                        ? MealSourceKind.BoardingArrangement
+                        : (awayRestaurant > 0 || awayHotel > 0 ? MealSourceKind.PurchasedMeal : MealSourceKind.Unspecified);
+
+                    for (int slotIndex = 0; slotIndex < scheduledMinutes.Length; slotIndex++)
+                    {
+                        if (minuteOfDay < scheduledMinutes[slotIndex] && !closeUnresolvedAsMissed) continue;
+                        MealSlot slot = (MealSlot)slotIndex;
+                        bool late = closeUnresolvedAsMissed
+                            || minuteOfDay > scheduledMinutes[slotIndex] + DailyActivityPlanner.MealWindowFlexMinutes;
+                        string missedReason = late
+                            ? "The scheduled meal opportunity passed without a household meal tick; no later food was consumed retroactively."
+                            : null;
+                        mealService.ServeHouseholdMealSlot(
+                            household, personId, inventory, policy, dayIndex, slot,
+                            alreadyAteAwayFromHome: slotIndex < awayCount,
+                            awayMealSource: awaySource,
+                            missedReasonOverride: missedReason);
+                    }
+                }
+            }
+        }
+
+        private void FinalizePreviousDayNutrition(int completedDayIndex)
+        {
+            if (completedDayIndex < 0 || populationManager?.State?.households == null || hub?.MealLog == null) return;
+            int requiredMeals = MealSchedulingPolicy.Default.ExpectedMealsPerDay;
+            int totalServed = 0;
+            int totalMissed = 0;
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null) continue;
+                List<int> members = householdMemberships != null
+                    ? householdMemberships.GetActiveMembers(household.id)
+                    : household.memberIds;
+                if (members == null) continue;
+                IReadOnlyList<HouseholdMealRecord> records = hub.MealLog.GetMeals(household.id);
+                foreach (int personId in members)
+                {
+                    PersonState person = populationManager.State.GetPerson(personId);
+                    int eaten = records.Count(record => record != null
+                        && record.PersonId == personId && record.DayIndex == completedDayIndex);
+                    int missed = hub.MealLog.GetMissedMeals(household.id).Count(record => record != null
+                        && record.PersonId == personId && record.DayIndex == completedDayIndex);
+                    totalServed += eaten;
+                    totalMissed += missed;
+                    if (person == null) continue;
+                    person.nutrition ??= new PersonNutritionState();
+                    if (person.nutrition.lastUpdateDayIndex < completedDayIndex)
+                    {
+                        person.nutrition.ApplyDay(eaten, requiredMeals, completedDayIndex);
+                        WorkTimeBudget budget = hub.WorkTimeBudgets?.GetOrCreate(EntityId.For(EntityKind.Person, personId));
+                        budget?.SetCapacityMultiplier(DailyNeedsService.WorkCapacityFactor(
+                            person, populationManager.ConditionDebuffsSuppressed, RestQualityFor(personId)));
+                    }
+
+                    if (missed > 0)
+                    {
+                        MissedMealRecord firstMiss = hub.MealLog.GetMissedMeals(household.id)
+                            .First(record => record != null && record.PersonId == personId && record.DayIndex == completedDayIndex);
+                        HouseholdInventory inventory = hub.HouseholdInventories.Get(household.id);
+                        int availableFoodUnits = inventory == null ? 0 : MealSchedulingPolicy.Default.MealItemPriority
+                            .Select(HouseholdItemCatalog.Get)
+                            .Where(definition => definition != null && definition.IsFood)
+                            .Sum(definition => inventory.GetAvailableUnits(definition.ItemId));
+                        int cashCents = hub.HouseholdLedgers.Get(household.id)?.GetBalanceCents() ?? 0;
+                        Debug.LogWarning($"[FoodEconomy] meals missed: person='{person.DisplayName ?? $"P{personId}"}', " +
+                            $"household=H{household.id}, missed={missed}, first slot={firstMiss.Slot}, " +
+                            $"reason='{firstMiss.Reason}', received food remaining={availableFoodUnits} units, household cash={cashCents}c.", this);
+                    }
+                }
+            }
+            Debug.Log(FormatCompletedMealDaySummary(
+                completedDayIndex, totalServed, totalMissed, populationManager.State, requiredMeals));
+        }
+
+        internal static string FormatCompletedMealDaySummary(
+            int completedDayIndex, int totalServed, int totalMissed, PopulationState population, int requiredMeals)
+        {
+            int livingResidents = population != null ? population.LivingResidentCount : 0;
+            return $"[FoodEconomy] completed meal day {completedDayIndex}: " +
+                $"{totalServed} meals eaten, {totalMissed} missed (out of {livingResidents} residents × {requiredMeals} slots).";
         }
 
         private void PublishHouseholdShoppingSummariesAndTraces(int dayIndex, List<string> diagnostics)
@@ -9035,6 +9530,19 @@ namespace LandLedgers.Orchestration.Systems
         private static bool IsRoutineHouseholdShoppingSuccess(string message, int dayIndex)
         {
             return HouseholdShoppingLoop.IsRoutineSuccessDiagnostic(message, dayIndex);
+        }
+
+        internal static bool IsRoutineDailyNeedsDiagnostic(string message, int dayIndex)
+        {
+            if (string.IsNullOrWhiteSpace(message)) return false;
+            string routineEmptyPlanPrefix = "[FoodEconomy] shopping plan day " + dayIndex
+                + ": 0 physical trip(s) pending; no purchase is recorded until confirmed Store arrival; "
+                + "needs without a settled receipt remain open: none";
+            if (message.StartsWith(routineEmptyPlanPrefix, StringComparison.Ordinal)) return true;
+
+            const string noObligations = " -> NoAction (NoAction: no obligations due (reserves ";
+            return message.StartsWith("HouseholdAutonomy: household ", StringComparison.Ordinal)
+                && message.IndexOf(noObligations, StringComparison.Ordinal) >= 0;
         }
 
         /// <summary>
@@ -9522,7 +10030,10 @@ namespace LandLedgers.Orchestration.Systems
                 ethan.scheduleState = trip?.Stage == "return"
                     ? PopulationScheduleState.ReturningHome : PopulationScheduleState.GoingShopping;
             }
-            int actualStartMinute = Math.Max(active.StartMinuteOfDay, tickStartMinute);
+            // ShortTick handlers execute at the interval end. Report the
+            // same boundary used by TaskAuthority and the start decision;
+            // tickStartMinute would backdate the start into elapsed time.
+            int actualStartMinute = tickEndMinute;
             bool arrivalDrivenTravel = IsArrivalDrivenTravelTask(task);
             Debug.Log($"[BusinessTask] P{ethan.id} started task '{task.TaskId}' ({task.DefinitionId}) " +
                 $"at game minute {actualStartMinute}; " + (arrivalDrivenTravel
@@ -9590,7 +10101,12 @@ namespace LandLedgers.Orchestration.Systems
                 if (!BeginScheduledBusinessPersonTask(task, person, dayIndex, tickStartMinute,
                         tickEndMinute, targetBuildingId, out string startRefusal)
                     && taskStartRefusalAlreadyLogged.Add(task.TaskId.ToString()))
-                    Debug.LogWarning($"[BusinessFeed] Task '{task.TaskId}' could not start at its scheduled time: {startRefusal}", this);
+                {
+                    if (BusinessTaskStartRefusal.IsTemporaryOccupancyConflict(startRefusal))
+                        Debug.Log($"[BusinessFeed] Task '{task.TaskId}' deferred at its scheduled start because its person is completing another task: {startRefusal}", this);
+                    else
+                        Debug.LogWarning($"[BusinessFeed] Task '{task.TaskId}' could not start at its scheduled time: {startRefusal}", this);
+                }
             }
         }
 
@@ -11997,8 +12513,44 @@ namespace LandLedgers.Orchestration.Systems
 
             if (diagnostics.Count > 0)
             {
-                Debug.LogWarning("[SimulationDrivers] work assignment before shopping: " + string.Join(" | ", diagnostics));
+                string message = "[SimulationDrivers] work assignment before shopping: " + string.Join(" | ", diagnostics);
+                if (HasActionableWorkAssignmentDiagnostics(diagnostics))
+                    Debug.LogWarning(message);
+                else
+                    Debug.Log(message);
             }
+        }
+
+        private static bool HasActionableWorkAssignmentDiagnostics(IReadOnlyList<string> diagnostics)
+        {
+            if (diagnostics == null) return false;
+            for (int i = 0; i < diagnostics.Count; i++)
+            {
+                string message = diagnostics[i];
+                if (string.IsNullOrWhiteSpace(message)) continue;
+
+                // Daily queue totals, successful assignments, and explicit
+                // rest preemption describe normal scheduling decisions. They
+                // remain in the Console as informational evidence, but are
+                // not failures. Keep every unrecognized diagnostic loud so
+                // new refusal paths cannot silently become informational.
+                if (message.StartsWith("WorkScheduler:", StringComparison.Ordinal)
+                    && message.IndexOf("open item(s)", StringComparison.Ordinal) >= 0)
+                {
+                    continue;
+                }
+                if (message.StartsWith("assigned ", StringComparison.Ordinal))
+                    continue;
+                if (message.StartsWith("Day ", StringComparison.Ordinal)
+                    && message.IndexOf(" work released rest ", StringComparison.Ordinal) >= 0)
+                {
+                    continue;
+                }
+
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -12015,6 +12567,10 @@ namespace LandLedgers.Orchestration.Systems
             {
                 return;
             }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            hub.ActivityTrace?.RecordNoWorker(taskId, reason, dayIndex);
+#endif
 
             TaskDurationDiagnostics diagnosticsService = hub.DurationDiagnostics;
             if (diagnosticsService == null)
@@ -12815,29 +13371,37 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
-            List<DueEvent> due = hub.DueEvents.PopDue(timeManager.AbsoluteGameSeconds);
-            if (due.Count == 0)
+            var diag = new List<string>();
+            float now = timeManager.AbsoluteGameSeconds;
+            const int maxCatchUpBatchesPerFrame = 1024;
+            int dispatchedCount = 0;
+            int batchCount = 0;
+            while (batchCount < maxCatchUpBatchesPerFrame)
             {
-                return;
+                List<DueEvent> due = hub.DueEvents.PopDue(now);
+                if (due.Count == 0) break;
+                batchCount++;
+                foreach (DueEvent dueEvent in due)
+                {
+                    // ShortTick is emitted immediately before the day rollover.
+                    // A due event exactly at midnight can therefore be dispatched
+                    // while TimeManager still exposes yesterday's calendar date.
+                    // Use the event's own absolute timestamp so date-sensitive
+                    // handlers advance from the date the event actually belongs to.
+                    float secondsPerDay = timeManager.Settings != null
+                        ? Mathf.Max(1f, timeManager.Settings.GameSecondsPerDay)
+                        : 86400f;
+                    int dueDayIndex = dueEvent != null && dueEvent.DueGameSeconds >= 0f
+                        ? Mathf.FloorToInt(dueEvent.DueGameSeconds / secondsPerDay)
+                        : timeManager.CurrentAbsoluteDayIndex;
+                    DispatchDueEvent(dueEvent, dueDayIndex, diag);
+                    dispatchedCount++;
+                }
             }
 
-            var diag = new List<string>();
-            foreach (DueEvent dueEvent in due)
-            {
-                // ShortTick is emitted immediately before the day rollover.
-                // A due event exactly at midnight can therefore be dispatched
-                // while TimeManager still exposes yesterday's calendar date.
-                // Use the event's own absolute timestamp so date-sensitive
-                // handlers (birthdays, deadlines) advance from the date the
-                // event actually belongs to.
-                float secondsPerDay = timeManager.Settings != null
-                    ? Mathf.Max(1f, timeManager.Settings.GameSecondsPerDay)
-                    : 86400f;
-                int dueDayIndex = dueEvent != null && dueEvent.DueGameSeconds >= 0f
-                    ? Mathf.FloorToInt(dueEvent.DueGameSeconds / secondsPerDay)
-                    : timeManager.CurrentAbsoluteDayIndex;
-                DispatchDueEvent(dueEvent, dueDayIndex, diag);
-            }
+            DueEvent overdue = hub.DueEvents.PeekNext();
+            if (batchCount >= maxCatchUpBatchesPerFrame && overdue != null && overdue.DueGameSeconds <= now)
+                diag.Add($"due-event catch-up reached its {maxCatchUpBatchesPerFrame}-batch frame limit after {dispatchedCount} events; next {overdue.Kind} '{overdue.PayloadRef}' remains overdue.");
 
             if (diag.Count > 0)
             {
@@ -12876,7 +13440,7 @@ namespace LandLedgers.Orchestration.Systems
             if (shoppingTripDriver != null && shoppingTripDriver.OwnsDueEvent(dueEvent))
             {
                 shoppingTripDriver.HandleDueEvent(
-                    dueEvent, dayIndex, timeManager != null ? timeManager.AbsoluteGameSeconds : 0f,
+                    dueEvent, dayIndex, dueEvent.DueGameSeconds,
                     hub.DueEvents, diag);
                 return;
             }
@@ -13006,14 +13570,19 @@ namespace LandLedgers.Orchestration.Systems
                 return;
             }
 
-            // Top up any unrecorded minutes so budget accounting stays truthful,
-            // then resolve the outcome exactly like the per-tick driver.
-            if (task.MinutesRemaining > 0)
+            // A due event is only a wake-up/backstop. It cannot stand in for
+            // work: sparse accelerated ticks, an expired schedule window, or
+            // a blocked reservation must never award the remaining minutes.
+            // SyncTaskCompletionDueEvents will schedule another check while
+            // the task remains open; AdvanceAutonomousWork records actual
+            // minutes after the person's exclusive work window is recovered.
+            if (!TaskCompletionDuePolicy.CanCompleteFromDueEvent(task))
             {
-                string progressReason;
-                bool reached;
-                hub.Tasks.RecordWorkProgress(task.TaskId, task.MinutesRemaining, hub.WorkTimeBudgets,
-                    dayIndex, out reached, out progressReason);
+                LogRefusalDayKeyed("completion-due-unrecorded:" + task.TaskId, dayIndex,
+                    "[TaskDuration] TaskCompletionDue could not complete task '" + task.TaskId + "': "
+                    + Math.Max(0, task.MinutesRemaining)
+                    + " work minute(s) remain unrecorded; task stays InProgress for schedule recovery.");
+                return;
             }
 
             CompleteTaskWithCausalOutcome(task, dayIndex, 1);
@@ -13390,17 +13959,19 @@ namespace LandLedgers.Orchestration.Systems
             // DailyNeedsService.WorkCapacityFactor for Glen's live
             // PersonState (nutrition x health, E2-verified math), and the
             // minutes come from BakeryPersonTimeBudget.PersonMinutesPerDay
-            // (600 x capacity). The hub WorkTimeBudget must resolve — it
-            // is the budget the gate guards. Any missing piece logs the
-            // exact gap under [BakeryProduction] and passes null: the gate
-            // is inactive, never defaulted, and the bake proceeds on the
-            // runtime rules exactly as before.
-            int? callerDailyBudgetMinutes = null;
+            // (600 x capacity). A missing worker/person budget resolves to
+            // zero available minutes: a business cannot perform physical
+            // production without a legitimate worker-time authority.
+            // Production must never fail open when its worker binding or
+            // person-time authority is missing. Zero minutes is the truthful
+            // capacity until a real owner/worker budget resolves; the driver
+            // then leaves the planned batches and their inputs untouched.
+            int? callerDailyBudgetMinutes = 0;
             {
                 int ownerPersonId = bakery.OwnerPersonId;
                 if (ownerPersonId < 0)
                 {
-                    diagnostics.Add("DriveBakeryWholesalePlanning: baker owner-person link is unbound (OwnerPersonId -1) — the person-budget gate is inactive; the bake proceeds on runtime rules (Obj 9 seam, B2 booking still owed).");
+                    diagnostics.Add("DriveBakeryWholesalePlanning: baker owner-person link is unbound (OwnerPersonId -1) — no worker time is available; baking is refused until an assigned worker resolves.");
                 }
                 else
                 {
@@ -13409,11 +13980,11 @@ namespace LandLedgers.Orchestration.Systems
                         LandLedgers.Primitives.EntityId.For(LandLedgers.Primitives.EntityKind.Person, ownerPersonId));
                     if (owner == null)
                     {
-                        diagnostics.Add($"DriveBakeryWholesalePlanning: baker owner person P{ownerPersonId} does not resolve — the person-budget gate is inactive; the bake proceeds on runtime rules.");
+                        diagnostics.Add($"DriveBakeryWholesalePlanning: baker owner person P{ownerPersonId} does not resolve — no worker time is available; baking is refused until an assigned worker resolves.");
                     }
                     else if (ownerBudget == null)
                     {
-                        diagnostics.Add($"DriveBakeryWholesalePlanning: no WorkTimeBudget resolves for baker P{ownerPersonId} — the person-budget gate is inactive; the bake proceeds on runtime rules.");
+                        diagnostics.Add($"DriveBakeryWholesalePlanning: no WorkTimeBudget resolves for baker P{ownerPersonId} — no worker time is available; baking is refused until the worker budget resolves.");
                     }
                     else
                     {
@@ -13425,6 +13996,12 @@ namespace LandLedgers.Orchestration.Systems
                 }
             }
 
+            // The flour import catalog currently describes a registered
+            // railhead route, but this vertical slice has no live import
+            // order path. Do not use that dormant route's transit estimate
+            // to trigger advance buying from the same-day local counter.
+            const bool importFlourOrderPathExists = false;
+            int flourCatalogTransitDays = ImportCatalog.Get(BakeryFlourSupply.FlourMaterialId)?.TransitDays ?? 0;
             var inputs = new BakeryWholesaleDailyInputs
             {
                 Bakery = bakery,
@@ -13446,14 +14023,16 @@ namespace LandLedgers.Orchestration.Systems
                 StoreRuntimeState = storeBusiness?.RuntimeState,
                 BakeryRuntimeState = bakeryBusiness?.RuntimeState,
                 StoreFlourUnitPriceCents = storeFlourPriceCents,
+                OpenHouseholdBreadNeedUnits = CountOpenHouseholdBreadNeedUnits(hub?.PurchasingNeeds),
                 MillbrookQuote = millbrookQuote,
                 MillbrookSupplier = millbrookAidRuntime,
                 ImportFlourPricePerLbCents = importFlourPricePerLbCents,
                 ImportTransitDays = importFlourTransitDays,
-                ImportOrderPathExists = false,
+                ImportOrderPathExists = importFlourOrderPathExists,
                 NotionsSupply = notionsSupply,
                 NotionsRegistration = notionsRegistration,
-                FlourPipelineDepthDays = ImportCatalog.Get(BakeryFlourSupply.FlourMaterialId)?.TransitDays ?? 0,
+                FlourPipelineDepthDays = BakeryWholesaleDailyDriver.ResolveCatalogPipelineDepthDays(
+                    importFlourOrderPathExists, flourCatalogTransitDays),
                 NotionsPipelineDepthDays = ImportCatalog.Get(BakeryFlourSupply.NotionsMaterialId)?.TransitDays ?? 0,
                 CallerDailyBudgetMinutes = callerDailyBudgetMinutes,
                 // Plan 04 Slice 4: thread the running actuals in so the
@@ -13520,7 +14099,7 @@ namespace LandLedgers.Orchestration.Systems
                         AuthoredFactor = authoredFactor > 0 ? (int?)authoredFactor : null,
                         YardIntakeExistsInDailyFlow = state.FuelIntake != null,
                         DealerSourceAttached = paidSource != null,
-                        DealerFuelUnitsOnHand = paidSource != null ? paidSource.FuelUnitsOnHand() : 0,
+                        DealerFuelUnitsOnHand = paidSource != null ? paidSource.DealerFuelUnitsOnHand() : 0,
                     }));
             }
 
@@ -13585,26 +14164,75 @@ namespace LandLedgers.Orchestration.Systems
             if (driver == null) return;
             EntityId bakerId = ResolveStagedBakeryBaker(bakery);
             ApplyRestoredStagedBakeryChain(state, driver, dayIndex, bakerId);
-            // No distinct staged-production order authority is wired into
-            // the live daily flow. Wholesale demand is already represented
-            // by the conventional driver's planned batch; starting this
-            // separate chain would create unrequested output from another
-            // set of real inputs. Restored/in-progress batches still advance
-            // in DriveStagedBakeryTick.
-            const bool hasDistinctAuthorizedDemand = false;
-            if (!ShouldBeginStagedBakeryBatch(hasDistinctAuthorizedDemand, driver.HasActiveBatch)) return;
-
             var diag = new List<string>();
+            int openBreadNeedUnits = CountOpenHouseholdBreadNeedUnits(hub?.PurchasingNeeds);
+            int bakeryRetailUnits = bakery.RetailUnitsAvailableForSale(
+                BakeryBreadCatalog.BreadLoafId, dayIndex, diag);
+            bool hasActiveConventionalBatch = false;
+            foreach (BakeryDoughBatch batch in bakery.Batches)
+            {
+                if (batch == null || !batch.IsActive) continue;
+                hasActiveConventionalBatch = true;
+                break;
+            }
+            bool hasActiveWholesaleAccount = false;
+            foreach (BakeryWholesaleAccount account in bakery.WholesaleAccounts)
+            {
+                if (account == null || !account.IsActive) continue;
+                hasActiveWholesaleAccount = true;
+                break;
+            }
+
+            // Retail production is authorized only by an actual open
+            // household bread need not covered by this bakery's saleable
+            // stock. Wholesale batches continue through their existing
+            // driver; either pipeline blocks a second concurrent batch.
+            // A completed staged lot awaiting shelf transfer also holds the
+            // retail pipeline, so a transfer refusal cannot cause duplicate
+            // output on the next daily review.
+            if (!ShouldBeginStagedBakeryBatch(
+                    openBreadNeedUnits, bakeryRetailUnits,
+                    hasActiveConventionalBatch,
+                    driver.HasActiveBatch || driver.Chain.BreadShelf.Count > 0,
+                    hasActiveWholesaleAccount))
+            {
+                if (diag.Count > 0)
+                    Debug.Log("[BakeryProduction] Day " + dayIndex + ": " + string.Join(" | ", diag), this);
+                return;
+            }
+
             driver.TryBeginBatch(dayIndex, bakerId, diag);
             if (diag.Count > 0)
                 Debug.Log("[BakeryProduction] Day " + dayIndex + ": " + string.Join(" | ", diag), this);
         }
 
-        internal static bool ShouldBeginStagedBakeryBatch(
-            bool hasDistinctAuthorizedDemand,
-            bool hasActiveBatch)
+        internal static int CountOpenHouseholdBreadNeedUnits(HouseholdNeedRegistry needs)
         {
-            return hasDistinctAuthorizedDemand && !hasActiveBatch;
+            if (needs == null) return 0;
+            var allNeeds = new List<HouseholdPurchasingNeed>();
+            needs.ExportState(allNeeds);
+            int total = 0;
+            foreach (HouseholdPurchasingNeed need in allNeeds)
+            {
+                if (need == null || need.Status != PurchasingNeedStatus.Open
+                    || !string.Equals(need.ItemId, HouseholdItemCatalog.BreadId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                total += Math.Max(0, need.UnitsNeeded);
+            }
+            return total;
+        }
+
+        internal static bool ShouldBeginStagedBakeryBatch(
+            int openBreadNeedUnits,
+            int bakeryRetailUnits,
+            bool hasActiveConventionalBatch,
+            bool hasActiveStagedBatch,
+            bool hasActiveWholesaleAccount = false)
+        {
+            return openBreadNeedUnits > Math.Max(0, bakeryRetailUnits)
+                && !hasActiveConventionalBatch
+                && !hasActiveStagedBatch
+                && !hasActiveWholesaleAccount;
         }
 
         private void DriveStagedBakeryTick(int wholeMinutes, int dayIndex, int minuteOfDay)
@@ -13649,18 +14277,66 @@ namespace LandLedgers.Orchestration.Systems
                 }
             }
             if (business == null) return EntityId.Invalid;
+
+            // Keep the owner's legitimate founder-operator role, but do not
+            // repeatedly hand new production work to them while another task
+            // owns their time. TaskAuthority remains the assignment authority;
+            // this is only a candidate-selection guard so an available active
+            // employee can be considered before the task is created.
+            var candidates = new List<int>();
             if (business.Owner != null && business.Owner.PersonId >= 0)
-                return EntityId.For(EntityKind.Person, business.Owner.PersonId);
+                candidates.Add(business.Owner.PersonId);
             EmploymentRelationshipRegistry registry = business.RuntimeState?.EmploymentRegistry ?? hub?.Employments;
             if (registry != null)
             {
                 foreach (EmploymentRelationship relationship in registry.GetActiveByEmployer(business.InstanceId))
                 {
-                    if (relationship != null && relationship.EmployeePersonId >= 0)
-                        return EntityId.For(EntityKind.Person, relationship.EmployeePersonId);
+                    if (relationship != null && relationship.EmployeePersonId >= 0
+                        && !candidates.Contains(relationship.EmployeePersonId))
+                        candidates.Add(relationship.EmployeePersonId);
                 }
             }
-            return EntityId.Invalid;
+
+            int selectedPersonId = FirstEligibleStagedBakeryWorkerId(candidates, IsEligibleStagedBakeryWorker);
+            return selectedPersonId >= 0
+                ? EntityId.For(EntityKind.Person, selectedPersonId)
+                : EntityId.Invalid;
+        }
+
+        internal static int FirstEligibleStagedBakeryWorkerId(
+            IReadOnlyList<int> candidatePersonIds,
+            Func<int, bool> isEligible)
+        {
+            if (candidatePersonIds == null || isEligible == null) return -1;
+            var considered = new HashSet<int>();
+            for (int i = 0; i < candidatePersonIds.Count; i++)
+            {
+                int personId = candidatePersonIds[i];
+                if (personId < 0 || !considered.Add(personId)) continue;
+                if (isEligible(personId)) return personId;
+            }
+            return -1;
+        }
+
+        private bool IsEligibleStagedBakeryWorker(int personId)
+        {
+            if (personId < 0 || populationManager?.State?.GetPerson(personId) == null || hub?.Tasks == null)
+                return false;
+
+            EntityId workerId = EntityId.For(EntityKind.Person, personId);
+            try
+            {
+                if (hub.Tasks.IsWorkerUnavailable != null && hub.Tasks.IsWorkerUnavailable(workerId))
+                    return false;
+            }
+            catch
+            {
+                // Fail closed. The actual TaskAuthority assignment remains the
+                // final guard and will preserve a useful refusal diagnostic.
+                return false;
+            }
+
+            return hub.Tasks.FindBlockingTaskForAssignee(workerId) == null;
         }
 
         /// <summary>
@@ -14006,7 +14682,8 @@ namespace LandLedgers.Orchestration.Systems
                     // tick, not this one: the fresh window starts at
                     // minuteOfDay and the current tick window ends there.
                     StaleInProgressVerdict sweepVerdict = StaleInProgressSweep.Decide(
-                        task, activeReservations, dayIndex, minuteOfDay, TaskReservationLabel(task),
+                        task, activeReservations, dayIndex, tickStartMinute, minuteOfDay,
+                        TaskReservationLabel(task),
                         IsArrivalDrivenTravelTask(task));
                     switch (sweepVerdict.Decision)
                     {
@@ -14267,8 +14944,11 @@ namespace LandLedgers.Orchestration.Systems
             }
             if (diag.Count > 0)
             {
-                Debug.LogWarning("[SimulationDrivers] labor-market week " + weekIndex + ": " +
-                    string.Join(" | ", diag));
+                string message = "[SimulationDrivers] labor-market week " + weekIndex + ": " +
+                    string.Join(" | ", diag);
+                bool routineEmptySettlementOnly = diag.All(WageSettlementService.IsRoutineEmptyWeekSettlement);
+                if (routineEmptySettlementOnly) Debug.Log(message);
+                else Debug.LogWarning(message);
             }
         }
 
@@ -14716,6 +15396,8 @@ namespace LandLedgers.Orchestration.Systems
 
             presentation.ShoppingTripOwnsPerson = id => shoppingTripDriver != null
                 && shoppingTripDriver.HasDepartedTripForPerson(id);
+            presentation.ShoppingTripIdentityForPerson = id => shoppingTripDriver?.DepartedTripIdForPerson(id)
+                ?? string.Empty;
 
             PersonState person = populationManager?.State?.GetPerson(personId);
             bool returningHome = person != null && person.homeBuildingId == buildingId;
@@ -15173,6 +15855,10 @@ namespace LandLedgers.Orchestration.Systems
                     Debug.LogWarning("[SimulationDrivers] meal: " +
                         string.Join(" | ", mealDiag.Take(20)));
                 }
+                ResolveScheduledHouseholdMeals(
+                    context.Date.AbsoluteDayIndex,
+                    Mathf.FloorToInt(context.TimeOfDay01 * 1440f),
+                    closeUnresolvedAsMissed: false);
             }
 
             int activityWindowEndMinute = Mathf.FloorToInt(context.TimeOfDay01 * 1440f);

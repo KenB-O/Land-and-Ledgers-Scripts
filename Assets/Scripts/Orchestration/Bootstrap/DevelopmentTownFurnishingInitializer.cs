@@ -21,6 +21,45 @@ namespace LandLedgers.Orchestration
             return authoredPosition;
         }
 
+        /// <summary>
+        /// Aligns the lowest rendered point of a placed prop with its building-local
+        /// floor plane. Prefab pivots vary; using the root pivot as the floor point
+        /// can leave otherwise valid furnishings partly below the floor.
+        /// </summary>
+        public static bool AlignRenderedBottomToFloor(Transform instance, float floorHeightLocal)
+        {
+            if (instance == null || instance.parent == null || float.IsNaN(floorHeightLocal)
+                || float.IsInfinity(floorHeightLocal)) return false;
+
+            Renderer[] renderers = instance.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length == 0) return false;
+
+            Transform floorSpace = instance.parent;
+            float minimumLocalY = float.PositiveInfinity;
+            foreach (Renderer renderer in renderers)
+            {
+                if (renderer == null || !renderer.enabled) continue;
+                Bounds bounds = renderer.localBounds;
+                Vector3 min = bounds.min;
+                Vector3 max = bounds.max;
+                for (int x = 0; x < 2; x++)
+                    for (int y = 0; y < 2; y++)
+                        for (int z = 0; z < 2; z++)
+                        {
+                            Vector3 rendererLocalCorner = new(x == 0 ? min.x : max.x,
+                                y == 0 ? min.y : max.y, z == 0 ? min.z : max.z);
+                            Vector3 worldCorner = renderer.transform.TransformPoint(rendererLocalCorner);
+                            minimumLocalY = Mathf.Min(minimumLocalY, floorSpace.InverseTransformPoint(worldCorner).y);
+                        }
+            }
+
+            if (float.IsInfinity(minimumLocalY)) return false;
+            Vector3 localPosition = instance.localPosition;
+            localPosition.y += floorHeightLocal - minimumLocalY;
+            instance.localPosition = localPosition;
+            return true;
+        }
+
         public static Quaternion FaceDirection(Vector3 prefabForwardLocal, Vector3 desiredDirectionLocal, Quaternion fallback)
         {
             prefabForwardLocal.y = 0f;
@@ -140,7 +179,15 @@ namespace LandLedgers.Orchestration
                         // prefab from a visual name or silently create one.
                         continue;
                     }
-                    if (HasPresentation(home.runtimeFootprintAuthority, binding.AssetId)) continue;
+                    HouseholdFurnishingRuntimePresentation existingPresentation =
+                        FindPresentation(home.runtimeFootprintAuthority, binding.AssetId);
+                    if (existingPresentation != null)
+                    {
+                        string rebindError = RebindPresentationActivityLocation(
+                            home.runtimeFootprintAuthority, item, existingPresentation);
+                        if (rebindError != null) result.Diagnostics.Add(rebindError);
+                        continue;
+                    }
                     string error = CreatePresentation(home.runtimeFootprintAuthority, binding.LocalPosition,
                         binding.LocalRotation, item, binding.AssetId, binding.DefinitionId,
                         binding.CapabilityReferenceId, false, out BuildingEquipmentPlacement placement);
@@ -196,15 +243,36 @@ namespace LandLedgers.Orchestration
                     || existing.OwnerId != HouseholdFurnishingRegister.OwnerIdForHousehold(household.id)
                     || !string.Equals(existing.Kind, item.kind, StringComparison.Ordinal))
                     return $"Opening furnishing identity collision for {item.assetId}: existing asset owner/kind does not match household {household.id} and '{item.kind}'.";
-                if (register.LiveBindingFor(item.assetId) != null)
+                if (register.LiveBindingFor(item.assetId) is FurnishingPlacementBinding existingBinding)
                 {
-                    if (!HasPresentation(home.runtimeFootprintAuthority, item.assetId))
+                    HouseholdFurnishingRuntimePresentation existingPresentation =
+                        FindPresentation(home.runtimeFootprintAuthority, item.assetId);
+                    if (existingPresentation != null)
                     {
-                        FurnishingPlacementBinding binding = register.LiveBindingFor(item.assetId);
-                        string restoreError = CreatePresentation(home.runtimeFootprintAuthority, binding.LocalPosition,
-                            binding.LocalRotation, item, item.assetId, binding.DefinitionId,
-                            binding.CapabilityReferenceId, false, out _);
+                        string restoreError = RebindPresentationActivityLocation(
+                            home.runtimeFootprintAuthority, item, existingPresentation);
                         if (restoreError != null) return restoreError;
+                    }
+                    else
+                    {
+                        string restoreError = CreatePresentation(home.runtimeFootprintAuthority, existingBinding.LocalPosition,
+                            existingBinding.LocalRotation, item, item.assetId, existingBinding.DefinitionId,
+                            existingBinding.CapabilityReferenceId, false, out BuildingEquipmentPlacement restoredPlacement);
+                        if (restoreError != null) return restoreError;
+                        restoreError = register.TryRebindPlacementForRestoration(item.assetId, restoredPlacement,
+                            home.runtimeFootprintAuthority, household.homeBuildingId);
+                        if (restoreError != null)
+                        {
+                            if (item.registerRuntimeActivityLocation)
+                                home.runtimeFootprintAuthority.UnregisterRuntimeActivityLocation(item.activityLocationId);
+                            if (restoredPlacement != null) UnityEngine.Object.Destroy(restoredPlacement.gameObject);
+                            return restoreError;
+                        }
+                        HouseholdFurnishingRuntimePresentation restoredMarker = restoredPlacement.GetComponent<HouseholdFurnishingRuntimePresentation>();
+                        if (restoredMarker == null) restoredMarker = restoredPlacement.gameObject.AddComponent<HouseholdFurnishingRuntimePresentation>();
+                        restoredMarker.Configure(item.assetId, home.runtimeFootprintAuthority,
+                            item.registerRuntimeActivityLocation ? item.activityLocationId : string.Empty,
+                            item.activityPositionLocal, item.activityForwardLocal);
                     }
                     return null;
                 }
@@ -304,6 +372,8 @@ namespace LandLedgers.Orchestration
             instance.transform.localRotation = localRotation;
             instance.transform.localScale = FurnishingPresentationCalibration.ApplyScale(
                 instance.transform.localScale, item.visualScaleMultiplier);
+            FurnishingPresentationCalibration.AlignRenderedBottomToFloor(instance.transform,
+                FloorHeight(authority, item.floorIndex, localPosition.y));
 
             placement = instance.GetComponent<BuildingEquipmentPlacement>();
             if (placement == null) placement = instance.AddComponent<BuildingEquipmentPlacement>();
@@ -351,12 +421,53 @@ namespace LandLedgers.Orchestration
                 && (location.WorldPosition - authority.transform.TransformPoint(position)).sqrMagnitude < 0.0001f;
         }
 
-        private static bool HasPresentation(BuildingFootprintAuthority authority, string assetId)
+        private static HouseholdFurnishingRuntimePresentation FindPresentation(
+            BuildingFootprintAuthority authority, string assetId)
         {
-            if (authority == null || string.IsNullOrWhiteSpace(assetId)) return false;
+            if (authority == null || string.IsNullOrWhiteSpace(assetId)) return null;
             foreach (HouseholdFurnishingRuntimePresentation marker in authority.GetComponentsInChildren<HouseholdFurnishingRuntimePresentation>(true))
-                if (marker != null && string.Equals(marker.AssetId, assetId, StringComparison.Ordinal)) return true;
-            return false;
+                if (marker != null && string.Equals(marker.AssetId, assetId, StringComparison.Ordinal)) return marker;
+            return null;
+        }
+
+        private static string RebindPresentationActivityLocation(
+            BuildingFootprintAuthority authority,
+            DevelopmentTownConfiguration.HouseholdFurnishingItem item,
+            HouseholdFurnishingRuntimePresentation presentation)
+        {
+            if (authority == null || item == null || presentation == null)
+                return "Household furnishing activity restoration is missing its building, item, or presentation.";
+
+            if (item.registerRuntimeActivityLocation)
+            {
+                BuildingEquipmentPlacement placement = presentation.GetComponent<BuildingEquipmentPlacement>();
+                if (!authority.TryGetActivityLocation(item.activityLocationId, 0, out _, out _))
+                {
+                    string registrationError = authority.RegisterRuntimeActivityLocation(
+                        item.activityLocationId, item.displayName + " approach", item.activityType,
+                        item.activityPositionLocal, item.activityForwardLocal, item.floorIndex,
+                        string.Empty, placement);
+                    if (registrationError != null
+                        && !IsSameRuntimeLocation(authority, item.activityLocationId, item.activityPositionLocal))
+                        return $"Furnishing {item.assetId} interaction point could not be restored: {registrationError}";
+                }
+                if (!authority.TryGetActivityLocation(item.activityLocationId, 0,
+                        out ResolvedBuildingActivityLocation resolved, out string resolveError))
+                    return $"Furnishing {item.assetId} interaction point could not be resolved after restoration: {resolveError}";
+
+                // Preserve the currently authoritative point (which may have
+                // moved with the furniture) while rebuilding the marker's
+                // nonserialized tracking state after a reload.
+                Vector3 positionLocal = authority.transform.InverseTransformPoint(resolved.WorldPosition);
+                Vector3 forwardLocal = authority.transform.InverseTransformDirection(resolved.WorldForward);
+                presentation.Configure(item.assetId, authority, item.activityLocationId,
+                    positionLocal, forwardLocal);
+                return null;
+            }
+
+            presentation.Configure(item.assetId, authority, string.Empty,
+                item.activityPositionLocal, item.activityForwardLocal);
+            return null;
         }
 
         private static DevelopmentTownConfiguration.HouseholdFurnishingItem FindItem(

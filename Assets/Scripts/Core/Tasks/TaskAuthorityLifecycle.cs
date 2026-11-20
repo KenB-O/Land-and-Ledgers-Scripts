@@ -9,6 +9,42 @@ using LandLedgers.Time;
 
 namespace LandLedgers.Tasks
 {
+    /// <summary>Read-only aggregate of the task authority at a simulation-day boundary.</summary>
+    public readonly struct DailyTaskLifecycleSnapshot
+    {
+        public readonly int Queued;
+        public readonly int Assigned;
+        public readonly int InProgress;
+        public readonly int Paused;
+        public readonly int WaitingOnDependency;
+        public readonly int WaitingOnPassiveProcess;
+        public readonly int ResourcesReserved;
+        public readonly int ReworkRequired;
+        public readonly int Interrupted;
+        public readonly int CompletedOnDay;
+        public readonly int FailedOnDay;
+        public readonly int CancelledRetained;
+
+        public DailyTaskLifecycleSnapshot(int queued, int assigned, int inProgress, int paused,
+            int waitingOnDependency, int waitingOnPassiveProcess, int resourcesReserved,
+            int reworkRequired, int interrupted, int completedOnDay, int failedOnDay,
+            int cancelledRetained)
+        {
+            Queued = queued;
+            Assigned = assigned;
+            InProgress = inProgress;
+            Paused = paused;
+            WaitingOnDependency = waitingOnDependency;
+            WaitingOnPassiveProcess = waitingOnPassiveProcess;
+            ResourcesReserved = resourcesReserved;
+            ReworkRequired = reworkRequired;
+            Interrupted = interrupted;
+            CompletedOnDay = completedOnDay;
+            FailedOnDay = failedOnDay;
+            CancelledRetained = cancelledRetained;
+        }
+    }
+
     /// <summary>
     /// Pass IV (Living World Foundation): task execution lifecycle on TaskAuthority.
     ///
@@ -36,6 +72,44 @@ namespace LandLedgers.Tasks
     /// </summary>
     public sealed partial class TaskAuthority
     {
+        /// <summary>
+        /// Captures task states without exposing the mutable task collection. Terminal
+        /// complete/fail counts are day-specific; cancellation has no day stamp in the
+        /// existing model, so that field is explicitly a retained-history count.
+        /// </summary>
+        public DailyTaskLifecycleSnapshot CaptureDailyLifecycleSnapshot(int dayIndex)
+        {
+            int queued = 0, assigned = 0, inProgress = 0, paused = 0;
+            int waitingDependency = 0, waitingPassive = 0, resourcesReserved = 0;
+            int reworkRequired = 0, interrupted = 0, completed = 0, failed = 0, cancelled = 0;
+            foreach (WorkTask task in tasks)
+            {
+                if (task == null) continue;
+                switch (task.Status)
+                {
+                    case TaskStatus.Queued: queued++; break;
+                    case TaskStatus.Assigned: assigned++; break;
+                    case TaskStatus.InProgress: inProgress++; break;
+                    case TaskStatus.Paused: paused++; break;
+                    case TaskStatus.WaitingOnDependency: waitingDependency++; break;
+                    case TaskStatus.WaitingOnPassiveProcess: waitingPassive++; break;
+                    case TaskStatus.ResourcesReserved: resourcesReserved++; break;
+                    case TaskStatus.ReworkRequired: reworkRequired++; break;
+                    case TaskStatus.Interrupted: interrupted++; break;
+                    case TaskStatus.Complete:
+                        if (task.CompletedDayIndex == dayIndex) completed++;
+                        break;
+                    case TaskStatus.Failed:
+                        if (task.CompletedDayIndex == dayIndex) failed++;
+                        break;
+                    case TaskStatus.Cancelled: cancelled++; break;
+                }
+            }
+            return new DailyTaskLifecycleSnapshot(queued, assigned, inProgress, paused,
+                waitingDependency, waitingPassive, resourcesReserved, reworkRequired,
+                interrupted, completed, failed, cancelled);
+        }
+
         /// <summary>Pass IV: optional unified reservation authority. Null = no reservation enforcement.</summary>
         private IUnifiedReservationAuthority reservationAuthority;
 

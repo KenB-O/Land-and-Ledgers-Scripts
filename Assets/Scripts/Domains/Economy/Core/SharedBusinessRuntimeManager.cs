@@ -1119,6 +1119,14 @@ namespace LandLedgers.Economy
         };
 
         /// <summary>
+        /// The player General Store remains on its dedicated manager path;
+        /// NPC-owned General Stores are settled here because that manager's
+        /// weekly callback does not operate the development NPC instance.
+        /// </summary>
+        public static bool IsNpcGeneralStoreWeeklySettlementTarget(BusinessInstanceState business) =>
+            BusinessInstanceState.IsDevelopmentNpcGeneralStore(business);
+
+        /// <summary>
         /// Weekly pass order (M2, Plan 04): (1) real-demand collection
         /// (business needs + household needs where registered); (2) weekly
         /// settlement reset; (3) automatic cash transfers (LowerOnly);
@@ -1182,12 +1190,21 @@ namespace LandLedgers.Economy
                 ResetWeeklySettlementForType(settledType);
             }
 
+            // GeneralStore remains excluded from the type-wide loops because
+            // the player store's dedicated runtime owns its full weekly
+            // settlement/reorder path. The development NPC store is a
+            // separate Business instance and is not currentBusiness in that
+            // manager, so it needs its own weekly expense/payroll pass here.
+            ResetNpcGeneralStoreWeeklySettlement();
+
             cashTransferCount += ResolveAutomaticBusinessCashTransfers(BusinessCashAutoTransferMode.LowerOnly, builder);
 
             foreach (BusinessType payrollType in WeeklySettlementBusinessTypes)
             {
                 ResolvePayrollForType(payrollType);
             }
+
+            ResolveNpcGeneralStoreWeeklyPayroll();
 
             // M2 (Plan 04, D-S1 sequencing): REAL TRADE BEFORE FORMULA.
             // Crop transfers, recurring orders, and transfer agreements
@@ -2220,6 +2237,17 @@ namespace LandLedgers.Economy
             if (business == null || business.RuntimeState == null)
             {
                 return false;
+            }
+
+            if (HasMatchingPhysicalSawmillProducer(business.InstanceId))
+            {
+                // The detailed physical driver owns this mill's real logs,
+                // worker time, equipment use, output lots, and byproducts.
+                // Running the weekly compatibility producer as well would
+                // consume the same finite support stock through a second
+                // production authority and mint separate category output.
+                summary = $"Physical sawmill production for '{business.InstanceId}' owns this interval; the weekly support-node producer was not run.";
+                return true;
             }
 
             EnsureSawmillBusinessStockCategories(business.RuntimeState, linkedSawmillSupportNode);
@@ -4239,6 +4267,78 @@ namespace LandLedgers.Economy
             }
         }
 
+        private List<BusinessInstanceState> NpcGeneralStoresPendingWeeklyPayroll()
+        {
+            var stores = new List<BusinessInstanceState>();
+            if (businesses == null) return stores;
+            for (int i = 0; i < businesses.Count; i++)
+            {
+                BusinessInstanceState business = businesses[i];
+                if (IsNpcGeneralStoreWeeklySettlementTarget(business))
+                    stores.Add(business);
+            }
+            return stores;
+        }
+
+        private void ResetNpcGeneralStoreWeeklySettlement()
+        {
+            if (CurrentDayIndex < 0) return;
+            BusinessProfileDefinition profile = FindProfile(BusinessType.GeneralStore);
+            if (profile?.Business == null) return;
+
+            foreach (BusinessInstanceState business in NpcGeneralStoresPendingWeeklyPayroll())
+            {
+                try
+                {
+                    PreWeeklyResetCallback?.Invoke(business);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[Valuation] Pre-weekly-reset callback failed for NPC General Store '{business.InstanceId}': {ex.Message}");
+                }
+
+                business.RuntimeState.ResetWeekToDateSales();
+                business.RuntimeState.BeginWeeklySettlementCadence(
+                    profile.Business,
+                    GetEffectiveReorderThreshold01(business, profile.Business),
+                    false);
+            }
+        }
+
+        private void ResolveNpcGeneralStoreWeeklyPayroll()
+        {
+            if (CurrentDayIndex < 0) return;
+            WireHouseholdCashToBusinesses();
+            WireObligationAuthorityToBusinesses();
+            var diagnostics = new List<string>();
+            foreach (BusinessInstanceState business in NpcGeneralStoresPendingWeeklyPayroll())
+            {
+                BusinessRuntimeState runtime = business.RuntimeState;
+                runtime.SettleEscrowedWagePayables(CurrentDayIndex, diagnostics);
+                runtime.PayrollDayIndex = CurrentDayIndex;
+                if (runtime.TryBeginWeeklyPayroll(CurrentDayIndex))
+                {
+                    runtime.ResolveWeeklyPayroll();
+                    runtime.StampWeeklyPayrollSettled(CurrentDayIndex);
+                    if (runtime.LastSuspendedPayrollWorkerIds.Count > 0)
+                    {
+                        runtime.AppendWeeklyBlockedReason("missed payroll");
+                        ReleaseSuspendedPayrollWorkersFromPopulation(business);
+                    }
+                }
+                else
+                {
+                    runtime.AppendWeeklyBlockedReason(
+                        $"week {CurrentDayIndex / 7} already settled — NPC General Store payroll skipped (idempotency guard).");
+                }
+
+                diagnostics.Add($"NPC General Store '{business.InstanceId}' weekly payroll {runtime.LastWeeklyPayrollCents}c; cash {runtime.CurrentCashCents}c.");
+            }
+
+            if (diagnostics.Count > 0)
+                Debug.Log("[SharedBusinessRuntimeManager] " + string.Join(" | ", diagnostics));
+        }
+
         private int ResolveSawmillOperationsForLinkedSupport(int weekKey, StringBuilder summary)
         {
             if (linkedSawmillSupportNode == null || !linkedSawmillSupportNode.RemoteProductionEnabled)
@@ -4438,6 +4538,29 @@ namespace LandLedgers.Economy
                 weekKey);
             AppendSummarySegment(summary, $"{GetBusinessSummaryLabel(business)} sawmill {lumberProduced} lumber");
             return lumberProduced > 0;
+        }
+
+        private static bool HasMatchingPhysicalSawmillProducer(string businessInstanceId)
+        {
+            if (string.IsNullOrWhiteSpace(businessInstanceId))
+            {
+                return false;
+            }
+
+            SimulationSystemsHub hub = FindAnyObjectByType<SimulationSystemsHub>();
+            var physicalDriver = hub != null ? hub.SawmillProductionDriver : null;
+            return ShouldYieldWeeklyProductionToPhysicalProducer(
+                physicalDriver != null && physicalDriver.Mill != null
+                    ? physicalDriver.Mill.BusinessInstanceId : null,
+                businessInstanceId);
+        }
+
+        internal static bool ShouldYieldWeeklyProductionToPhysicalProducer(
+            string physicalProducerBusinessId, string supportBusinessId)
+        {
+            return !string.IsNullOrWhiteSpace(physicalProducerBusinessId)
+                && !string.IsNullOrWhiteSpace(supportBusinessId)
+                && string.Equals(physicalProducerBusinessId, supportBusinessId, StringComparison.Ordinal);
         }
 
         private int ResolveSawmillHauling(

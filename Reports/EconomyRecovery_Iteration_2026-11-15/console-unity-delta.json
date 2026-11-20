@@ -1,0 +1,941 @@
+{
+  "success": true,
+  "command": "command console",
+  "data": {
+    "command": "console",
+    "parameters": {
+      "since": "4056"
+    },
+    "result": {
+      "entries": [
+        {
+          "seq": 5558,
+          "timestampUtc": "2026-11-15T01:17:33.1065604Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 56: task T274 'travel' owner P7 worker P7 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 45 (917100s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5559,
+          "timestampUtc": "2026-11-15T01:17:33.1065604Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 56: task T275 'travel' owner P1 worker P1 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 47 (746100s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5560,
+          "timestampUtc": "2026-11-15T01:17:33.1075652Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] summary day 56: 0 open overrun(s) (0 new, 0 repeating, 0 omitted by cap); longest open: none",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:673)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5561,
+          "timestampUtc": "2026-11-15T01:17:33.1090685Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[Population] SweepUnledgeredHouseholdCashToLedgers (weekly settlement progression).",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Population.PopulationManager:SweepUnledgeredHouseholdCashToLedgers (string) (at Assets/Scripts/Domains/Population/PopulationManager.cs:397)\nLandLedgers.Population.PopulationManager:ResolveWeeklySettlementProgression () (at Assets/Scripts/Domains/Population/PopulationManager.cs:416)\nLandLedgers.Population.PopulationManager:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Domains/Population/PopulationManager.cs:2079)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5562,
+          "timestampUtc": "2026-11-15T01:17:33.1090685Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[Population] HouseholdLegacyCashMigrator: migrated 0 legacy balances.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Population.PopulationManager:SweepUnledgeredHouseholdCashToLedgers (string) (at Assets/Scripts/Domains/Population/PopulationManager.cs:397)\nLandLedgers.Population.PopulationManager:ResolveWeeklySettlementProgression () (at Assets/Scripts/Domains/Population/PopulationManager.cs:416)\nLandLedgers.Population.PopulationManager:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Domains/Population/PopulationManager.cs:2079)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5563,
+          "timestampUtc": "2026-11-15T01:17:33.1090685Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[SimulationDrivers] entrepreneurship week 56: Entrepreneurship: P2 recorded 5 unfulfilled-demand observation(s). | Entrepreneurship: P4 recorded 5 unfulfilled-demand observation(s). | Entrepreneurship: P6 recorded 5 unfulfilled-demand observation(s). | Entrepreneurship: P8 recorded 5 unfulfilled-demand observation(s). | Entrepreneurship: P9 recorded 5 unfulfilled-demand observation(s).",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEntrepreneurshipWeek (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:2903)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnWeekChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:2863)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:704)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5564,
+          "timestampUtc": "2026-11-15T01:17:33.4819732Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[TownWorld] BuildVisuals timing total 369 ms (ensure visual root 1 ms, clear visuals 1 ms, terrain overlay skipped 0 ms, plot visuals skipped 0 ms, agricultural visuals 1 ms, forest dressing 0 ms, road visuals 0 ms, building visuals 194 ms, detail props 0 ms, building visual repair 164 ms, regional resource visuals 0 ms, anchor visuals skipped 0 ms, interaction proxies 1 ms, terrain conformance 4 ms).",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.World.TownWorldController:BuildVisuals () (at Assets/Scripts/Domains/World/TownWorldController.cs:6220)\nLandLedgers.World.TownWorldController:TrySurfaceExpansionPlotsAfterLandPurchase (int,int&) (at Assets/Scripts/Domains/World/TownWorldController.cs:1578)\nLandLedgers.Economy.AcquisitionMarketManager:ResolvePassiveDevelopmentInventory (bool) (at Assets/Scripts/Domains/Economy/Acquisitions/AcquisitionMarketManager.cs:7468)\nLandLedgers.Economy.AcquisitionMarketManager:ResolveWeeklyTownActionPressure () (at Assets/Scripts/Domains/Economy/Acquisitions/AcquisitionMarketManager.cs:7428)\nLandLedgers.Economy.AcquisitionMarketManager:OnWeekChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Domains/Economy/Acquisitions/AcquisitionMarketManager.cs:7381)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:704)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5565,
+          "timestampUtc": "2026-11-15T01:17:33.4906044Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "Town world validation finished with 0 error(s), 21 warning(s):\nWARNING SUMMARY:\r\n- Land-offer inventory: 8\r\n  - Plot 13 carries a land-sale flag outside the supported town-held vacant parcel lane.\r\n  - Plot 13 is surfaced as land for sale but only has one practical shell fit in the current catalog.\r\n  - Plot 14 carries a land-sale flag outside the supported town-held vacant parcel lane.\r\n- Building anchor/access authoring: 13\r\n  - Building 0 Service anchor at (38, 54) is not adjacent to road or plot access.\r\n  - Building 0 Service anchor at (38, 54) came from legacy fallback rule 'legacy BuildingDefinition anchor rule'. Prefer an authored prefab marker.\r\n  - Building 1 Service anchor at (38, 66) is not adjacent to road or plot access.\r\n\r\nWARNING DETAIL: showing 21/21 warning(s). Increase World Validation Detailed Warning Limit for the full raw list.\r\nWARN: Plot 13 carries a land-sale flag outside the supported town-held vacant parcel lane.\r\nWARN: Plot 13 is surfaced as land for sale but only has one practical shell fit in the current catalog.\r\nWARN: Plot 14 carries a land-sale flag outside the supported town-held vacant parcel lane.\r\nWARN: Plot 14 is surfaced as land for sale but only has one practical shell fit in the current catalog.\r\nWARN: Plot 15 is surfaced as land for sale but only has one practical shell fit in the current catalog.\r\nWARN: Plot 16 is surfaced as land for sale but only has one practical shell fit in the current catalog.\r\nWARN: Plot 17 is surfaced as land for sale but only has one practical shell fit in the current catalog.\r\nWARN: Plot 18 is surfaced as land for sale but only has one practical shell fit in the current catalog.\r\nWARN: Building 0 Service anchor at (38, 54) is not adjacent to road or plot access.\r\nWARN: Building 0 Service anchor at (38, 54) came from legacy fallback rule 'legacy BuildingDefinition anchor rule'. Prefer an authored prefab marker.\r\nWARN: Building 1 Service anchor at (38, 66) is not adjacent to road or plot access.\r\nWARN: Building 1 Service anchor at (38, 66) came from legacy fallback rule 'legacy BuildingDefinition anchor rule'. Prefer an authored prefab marker.\r\nWARN: Building 2 Service anchor at (58, 42) is not adjacent to road or plot access.\r\nWARN: Building 2 Service anchor at (58, 42) came from legacy fallback rule 'legacy BuildingDefinition anchor rule'. Prefer an authored prefab marker.\r\nWARN: Building 3 Service anchor at (58, 53) is not adjacent to road or plot access.\r\nWARN: Building 3 Service anchor at (58, 53) came from legacy fallback rule 'legacy BuildingDefinition anchor rule'. Prefer an authored prefab marker.\r\nWARN: Building 4 Service anchor at (13, 56) came from legacy fallback rule 'legacy BuildingDefinition anchor rule'. Prefer an authored prefab marker.\r\nWARN: Building 5 Service anchor at (81, 40) came from legacy fallback rule 'legacy BuildingDefinition anchor rule'. Prefer an authored prefab marker.\r\nWARN: Building 6 Service anchor at (81, 56) came from legacy fallback rule 'legacy BuildingDefinition anchor rule'. Prefer an authored prefab marker.\r\nWARN: Building 7 Service anchor at (13, 40) came from legacy fallback rule 'legacy BuildingDefinition anchor rule'. Prefer an authored prefab marker.\r\nWARN: Building 8 Service anchor at (40, 3) came from legacy fallback rule 'legacy BuildingDefinition anchor rule'. Prefer an authored prefab marker.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.World.TownWorldController:ValidateWorld () (at Assets/Scripts/Domains/World/TownWorldController.cs:2408)\nLandLedgers.World.TownWorldController:TrySurfaceExpansionPlotsAfterLandPurchase (int,int&) (at Assets/Scripts/Domains/World/TownWorldController.cs:1579)\nLandLedgers.Economy.AcquisitionMarketManager:ResolvePassiveDevelopmentInventory (bool) (at Assets/Scripts/Domains/Economy/Acquisitions/AcquisitionMarketManager.cs:7468)\nLandLedgers.Economy.AcquisitionMarketManager:ResolveWeeklyTownActionPressure () (at Assets/Scripts/Domains/Economy/Acquisitions/AcquisitionMarketManager.cs:7428)\nLandLedgers.Economy.AcquisitionMarketManager:OnWeekChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Domains/Economy/Acquisitions/AcquisitionMarketManager.cs:7381)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:704)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5566,
+          "timestampUtc": "2026-11-15T01:17:34.9936832Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[Economy60Day] checkpoint day=56/60 date=1870-04-26 gameSeconds=4867821 residents=9/9 warnings=827 errors=0",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nCaptureNextEconomy60DayPlaytest:WriteCheckpoint (int) (at AgentScripts/CaptureNextEconomy60DayPlaytest.cs:124)\nCaptureNextEconomy60DayPlaytest:OnUpdate () (at AgentScripts/CaptureNextEconomy60DayPlaytest.cs:90)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 5567,
+          "timestampUtc": "2026-11-15T01:17:38.7867776Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[SimulationDrivers] daily activity plans day 57: DailyActivityPlanner: P1 Sleeping [1320-1440] reserved. | DailyActivityPlanner: P1 Sleeping [0-420] reserved. | DailyActivityPlanner: P1 Eating [450-480] reserved. | DailyActivityPlanner: P1 Eating [1110-1140] reserved. | DailyActivityPlanner: P1 Managing [540-600] reserved. | DailyActivityPlanner: P1 Resting [420-450] reserved. | DailyActivityPlanner: P1 Resting [480-510] reserved. | DailyActivityPlanner: P2 Sleeping [1320-1440] reserved. | DailyActivityPlanner: P2 Sleeping [0-420] reserved. | DailyActivityPlanner: P2 Eating [450-480] reserved. | DailyActivityPlanner: P2 Eating [1110-1140] reserved. | DailyActivityPlanner: P2 JobSeeking [540-720] reserved. | DailyActivityPlanner: P2 Resting [420-450] reserved. | DailyActivityPlanner: P2 Resting [480-510] reserved. | DailyActivityPlanner: P3 Sleeping [1320-1440] reserved. | DailyActivityPlanner: P3 Sleeping [0-420] reserved. | DailyActivityPlanner: P3 Eating [450-480] reserved. | DailyActivityPlanner: P3 Eating [1110-1140] reserved. | DailyActivityPlanner: P3 Managing [540-600] reserved. | DailyActivityPlanner: P3 Resting [420-450] reserved.",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyActivityPlans (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:4235)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3193)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5568,
+          "timestampUtc": "2026-11-15T01:17:38.7893012Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[BakeryProduction] Day 57: Series2BakeryProductionDriver pre-check refused: flour 10 lb on hand, need 12 lb for 1 batch(es); bake nothing, batches stay planned.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveBakeryWholesalePlanning (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:9237)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3227)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5569,
+          "timestampUtc": "2026-11-15T01:17:38.7893012Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[BakeryProduction] BakeryShopRuntime: wholesale account bakery_001-wholesale-0 already covered (24 units in the pipeline). | Series2BakeryProductionDriver: adopted 1 runtime-planned batch(es) for day 57; no batches re-planned. | BakeryWholesaleDailyDriver: flour procurement covered — 10 lb on hand + 10 lb paid and awaiting receipt cover the 12 lb target; baking still requires physical receipt. | Series2FlourProcurementDriver: ReceiveArrivals day 57 created 0 lot(s) for business 'general_store_000'. | BakeryNotionsDailySupply: notions quote 10c/unit via off-map-provision-wholesaler ('bakery-notions'), quoted transit 14d; day 57: need 1u, on hand 20u, sellable 0u, fed 0u, ordered 0u [pipeline depth 14d, forward target 15u, in transit within depth 0u]. | BakeryWholesaleDailyDriver: per-batch economics (standalone-batch standard direct-material cost; not net profit) — flour 58c + notions 10c = 68c/batch vs wholesale revenue 96c/batch (24 loaves x 4c), margin 28c/batch (direct-material contribution before wages, fuel, freight, and overhead); actual flour purchase today: 0 sack(s), 0 lb, 0c spent (cash outlay, not consumed-stock COGS); flour on hand after purchase: 10 lb; no negotiated B2B flour price term exists (Plan 02 §5) — buying at the live retail price. | [BakeryProduction] pipeline coverage day 57: bin flour 10 lb, flour in custody 0 lb, notions on hand 20u, notions in custody 0u, fuel 30u, Millbrook in transit: 1 sack(s) (10 lb), lot 'aidlot-millbrook_grain_co:opening-flour-b1' ordered day 1, arrival unscheduled (freight pipeline), notions in flight: none in flight, days-of-cover 1 at 1 batch/day (planned yield 24u/batch, not stock), next arrival day none in flight, first failing input: flour, producible: no (flour) | Series2BakeryProductionDriver pre-check refused: flour 10 lb on hand, need 12 lb for 1 batch(es); bake nothing, batches stay planned. | [BakeryProduction] batch bakery_001-batch-5 blocked day 57 (flour), planned 6, covered 24u for account bakery_001-wholesale-0, producible: no (flour), retries tomorrow with the same batch id | Review2Wholesale: bakery lot is stale (53 days past baked day) — refused, not converted, nothing moved. | BakeryWholesaleDailyDriver: account bakery_001-wholesale-0 stays due — transfer refused, no cash moved, no bread lost. | DriveBakeryWholesalePlanning: registered bakery input need flour x1 for weekly demand collection. | DriveBakeryWholesalePlanning: registered bakery input need bakery-notions x1 for weekly demand collection.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveBakeryWholesalePlanning (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:9243)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3227)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5570,
+          "timestampUtc": "2026-11-15T01:17:38.7913228Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[BakeryProduction] Day 57: staged batch not begun — StagedBakeryChainDriver: batch refused — flour shortfall: 10 units of 'bakery-flour' on hand, need 12.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveStagedBakeryDay (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:9302)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3228)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5571,
+          "timestampUtc": "2026-11-15T01:17:38.7923277Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[SimulationDrivers] Town journey network: 10 locations, 9 road routes, 9 road-accessible buildings across 1 connected road component(s); 0 building(s) lack connected road access.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:EnsureTownJourneyNetwork () (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10202)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveTravelAndComms (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:4450)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3259)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5572,
+          "timestampUtc": "2026-11-15T01:17:38.8013577Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[FoodEconomy] meal resolution day 57: 5 households served, 27 meals eaten, 0 missed; direct meal-path purchases=0 (0c; excludes the separate physical shopping loop).",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5271)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5573,
+          "timestampUtc": "2026-11-15T01:17:38.8159137Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H1/need/preserved_meat', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'preserved_meat' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5574,
+          "timestampUtc": "2026-11-15T01:17:38.8159137Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H1/need/meat_unspecified', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'meat_unspecified' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5575,
+          "timestampUtc": "2026-11-15T01:17:38.8169178Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H1/need/preserved_food', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'preserved_food' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5576,
+          "timestampUtc": "2026-11-15T01:17:38.8169178Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H1/need/staple_food_unspecified', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'staple_food_unspecified' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5577,
+          "timestampUtc": "2026-11-15T01:17:38.8169178Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H2/need/preserved_meat', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'preserved_meat' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5578,
+          "timestampUtc": "2026-11-15T01:17:38.8169178Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H2/need/meat_unspecified', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'meat_unspecified' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5579,
+          "timestampUtc": "2026-11-15T01:17:38.8179176Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H2/need/preserved_food', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'preserved_food' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5580,
+          "timestampUtc": "2026-11-15T01:17:38.8179176Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H2/need/staple_food_unspecified', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'staple_food_unspecified' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5581,
+          "timestampUtc": "2026-11-15T01:17:38.8184204Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][OPEN] id='H2/need/potatoes', first day=57, cause='trip trip-57-2310 need 87: Planned'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5417)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5582,
+          "timestampUtc": "2026-11-15T01:17:38.8184204Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H3/need/preserved_meat', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'preserved_meat' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5583,
+          "timestampUtc": "2026-11-15T01:17:38.8184204Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H3/need/meat_unspecified', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'meat_unspecified' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5584,
+          "timestampUtc": "2026-11-15T01:17:38.8184204Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H3/need/preserved_food', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'preserved_food' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5585,
+          "timestampUtc": "2026-11-15T01:17:38.8184204Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H3/need/staple_food_unspecified', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'staple_food_unspecified' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5586,
+          "timestampUtc": "2026-11-15T01:17:38.8184204Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H3/need/bread', day=57, open 49d, repeated 50 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5587,
+          "timestampUtc": "2026-11-15T01:17:38.8184204Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H4/need/preserved_meat', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'preserved_meat' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5588,
+          "timestampUtc": "2026-11-15T01:17:38.819924Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H4/need/meat_unspecified', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'meat_unspecified' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5589,
+          "timestampUtc": "2026-11-15T01:17:38.819924Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H4/need/preserved_food', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'preserved_food' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5590,
+          "timestampUtc": "2026-11-15T01:17:38.819924Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H4/need/staple_food_unspecified', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'staple_food_unspecified' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5591,
+          "timestampUtc": "2026-11-15T01:17:38.819924Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H5/need/preserved_meat', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'preserved_meat' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5592,
+          "timestampUtc": "2026-11-15T01:17:38.8209299Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H5/need/meat_unspecified', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'meat_unspecified' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5593,
+          "timestampUtc": "2026-11-15T01:17:38.8209299Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H5/need/preserved_food', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'preserved_food' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5594,
+          "timestampUtc": "2026-11-15T01:17:38.8209299Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H5/need/staple_food_unspecified', day=57, open 56d, repeated 57 observed failure(s), cause='Known seller(s) exist, but none currently advertise a purchasable 'staple_food_unspecified' offer (item mapping, price, or available stock may be missing). Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5595,
+          "timestampUtc": "2026-11-15T01:17:38.8209299Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[Incident][RESOLVED] id='H1/need/potatoes', day=57, open 2d, observed 2 failure(s); the corresponding purchasing need is no longer open.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ResolveHouseholdSupplyIncidentsNotOpen (System.Collections.Generic.HashSet`1<string>,int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5447)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10115)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5596,
+          "timestampUtc": "2026-11-15T01:17:38.8234785Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[SimulationDrivers] household needs day 57: [SimulationDrivers] H1 has an open 'preserved_meat' shortage, but no known seller currently offers it | [SimulationDrivers] H1 has an open 'meat_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H1 has an open 'preserved_food' shortage, but no known seller currently offers it | [SimulationDrivers] H1 has an open 'staple_food_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'preserved_meat' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'meat_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'preserved_food' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'staple_food_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'preserved_meat' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'meat_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'preserved_food' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'staple_food_unspecified' shortage, but no known seller currently offers it | ... 666 additional diagnostic(s) omitted",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5368)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5597,
+          "timestampUtc": "2026-11-15T01:17:38.8373963Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 57: task T277 'travel' owner P1 worker P1 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 47 (830700s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5598,
+          "timestampUtc": "2026-11-15T01:17:38.8373963Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 57: task T278 'travel' owner P3 worker P3 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 49 (659700s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5599,
+          "timestampUtc": "2026-11-15T01:17:38.838444Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 57: task T280 'travel' owner P3 worker P3 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 49 (657900s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5600,
+          "timestampUtc": "2026-11-15T01:17:38.838444Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 57: task T291 'shopping' owner P1 worker P1 expected 15min active 15min (900s, worked 15/15min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 56 (54000s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5601,
+          "timestampUtc": "2026-11-15T01:17:38.838444Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] summary day 57: 0 open overrun(s) (0 new, 0 repeating, 0 omitted by cap); longest open: none",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:673)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5602,
+          "timestampUtc": "2026-11-15T01:17:40.7478013Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[Economy60Day] checkpoint day=57/60 date=1870-04-27 gameSeconds=4954154 residents=9/9 warnings=855 errors=0",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nCaptureNextEconomy60DayPlaytest:WriteCheckpoint (int) (at AgentScripts/CaptureNextEconomy60DayPlaytest.cs:124)\nCaptureNextEconomy60DayPlaytest:OnUpdate () (at AgentScripts/CaptureNextEconomy60DayPlaytest.cs:90)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 5603,
+          "timestampUtc": "2026-11-15T01:17:44.5461903Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[SimulationDrivers] daily activity plans day 58: DailyActivityPlanner: P1 Sleeping [1320-1440] reserved. | DailyActivityPlanner: P1 Sleeping [0-420] reserved. | DailyActivityPlanner: P1 Eating [450-480] reserved. | DailyActivityPlanner: P1 Eating [1110-1140] reserved. | DailyActivityPlanner: P1 Managing [540-600] reserved. | DailyActivityPlanner: P1 Resting [420-450] reserved. | DailyActivityPlanner: P1 Resting [480-510] reserved. | DailyActivityPlanner: P2 Sleeping [1320-1440] reserved. | DailyActivityPlanner: P2 Sleeping [0-420] reserved. | DailyActivityPlanner: P2 Eating [450-480] reserved. | DailyActivityPlanner: P2 Eating [1110-1140] reserved. | DailyActivityPlanner: P2 JobSeeking [540-720] reserved. | DailyActivityPlanner: P2 Resting [420-450] reserved. | DailyActivityPlanner: P2 Resting [480-510] reserved. | DailyActivityPlanner: P3 Sleeping [1320-1440] reserved. | DailyActivityPlanner: P3 Sleeping [0-420] reserved. | DailyActivityPlanner: P3 Eating [450-480] reserved. | DailyActivityPlanner: P3 Eating [1110-1140] reserved. | DailyActivityPlanner: P3 Managing [540-600] reserved. | DailyActivityPlanner: P3 Resting [420-450] reserved.",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyActivityPlans (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:4235)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3193)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5604,
+          "timestampUtc": "2026-11-15T01:17:44.5497119Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[BakeryProduction] Day 58: Series2BakeryProductionDriver pre-check refused: flour 10 lb on hand, need 12 lb for 1 batch(es); bake nothing, batches stay planned.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveBakeryWholesalePlanning (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:9237)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3227)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5605,
+          "timestampUtc": "2026-11-15T01:17:44.550713Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[BakeryProduction] BakeryShopRuntime: wholesale account bakery_001-wholesale-0 already covered (24 units in the pipeline). | Series2BakeryProductionDriver: adopted 1 runtime-planned batch(es) for day 58; no batches re-planned. | BakeryWholesaleDailyDriver: flour procurement covered — 10 lb on hand + 10 lb paid and awaiting receipt cover the 12 lb target; baking still requires physical receipt. | Series2FlourProcurementDriver: ReceiveArrivals day 58 created 0 lot(s) for business 'general_store_000'. | BakeryNotionsDailySupply: notions quote 10c/unit via off-map-provision-wholesaler ('bakery-notions'), quoted transit 14d; day 58: need 1u, on hand 20u, sellable 0u, fed 0u, ordered 0u [pipeline depth 14d, forward target 15u, in transit within depth 0u]. | BakeryWholesaleDailyDriver: per-batch economics (standalone-batch standard direct-material cost; not net profit) — flour 58c + notions 10c = 68c/batch vs wholesale revenue 96c/batch (24 loaves x 4c), margin 28c/batch (direct-material contribution before wages, fuel, freight, and overhead); actual flour purchase today: 0 sack(s), 0 lb, 0c spent (cash outlay, not consumed-stock COGS); flour on hand after purchase: 10 lb; no negotiated B2B flour price term exists (Plan 02 §5) — buying at the live retail price. | [BakeryProduction] pipeline coverage day 58: bin flour 10 lb, flour in custody 0 lb, notions on hand 20u, notions in custody 0u, fuel 30u, Millbrook in transit: 1 sack(s) (10 lb), lot 'aidlot-millbrook_grain_co:opening-flour-b1' ordered day 1, arrival unscheduled (freight pipeline), notions in flight: none in flight, days-of-cover 1 at 1 batch/day (planned yield 24u/batch, not stock), next arrival day none in flight, first failing input: flour, producible: no (flour) | Series2BakeryProductionDriver pre-check refused: flour 10 lb on hand, need 12 lb for 1 batch(es); bake nothing, batches stay planned. | [BakeryProduction] batch bakery_001-batch-5 blocked day 58 (flour), planned 6, covered 24u for account bakery_001-wholesale-0, producible: no (flour), retries tomorrow with the same batch id | Review2Wholesale: bakery lot is stale (54 days past baked day) — refused, not converted, nothing moved. | BakeryWholesaleDailyDriver: account bakery_001-wholesale-0 stays due — transfer refused, no cash moved, no bread lost. | DriveBakeryWholesalePlanning: registered bakery input need flour x1 for weekly demand collection. | DriveBakeryWholesalePlanning: registered bakery input need bakery-notions x1 for weekly demand collection.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveBakeryWholesalePlanning (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:9243)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3227)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5606,
+          "timestampUtc": "2026-11-15T01:17:44.5518313Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[BakeryProduction] Day 58: staged batch not begun — StagedBakeryChainDriver: batch refused — flour shortfall: 10 units of 'bakery-flour' on hand, need 12.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveStagedBakeryDay (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:9302)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3228)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5607,
+          "timestampUtc": "2026-11-15T01:17:44.5613979Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[FoodEconomy] meal resolution day 58: 5 households served, 27 meals eaten, 0 missed; direct meal-path purchases=0 (0c; excludes the separate physical shopping loop).",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5271)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5608,
+          "timestampUtc": "2026-11-15T01:17:44.5760318Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H1/need/beef', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5609,
+          "timestampUtc": "2026-11-15T01:17:44.5760318Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H1/need/bacon', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5610,
+          "timestampUtc": "2026-11-15T01:17:44.5770376Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H1/need/cheese', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5611,
+          "timestampUtc": "2026-11-15T01:17:44.5770376Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H2/need/beef', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5612,
+          "timestampUtc": "2026-11-15T01:17:44.5780375Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H2/need/bacon', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5613,
+          "timestampUtc": "2026-11-15T01:17:44.5780375Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H2/need/cheese', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5614,
+          "timestampUtc": "2026-11-15T01:17:44.5785445Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H3/need/beef', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5615,
+          "timestampUtc": "2026-11-15T01:17:44.5785445Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H3/need/bacon', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5616,
+          "timestampUtc": "2026-11-15T01:17:44.5785445Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H3/need/cheese', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5617,
+          "timestampUtc": "2026-11-15T01:17:44.5785445Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H4/need/beef', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5618,
+          "timestampUtc": "2026-11-15T01:17:44.5785445Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H4/need/bacon', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5619,
+          "timestampUtc": "2026-11-15T01:17:44.5795471Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H4/need/cheese', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5620,
+          "timestampUtc": "2026-11-15T01:17:44.5795471Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H5/need/beef', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5621,
+          "timestampUtc": "2026-11-15T01:17:44.5795471Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H5/need/bacon', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5622,
+          "timestampUtc": "2026-11-15T01:17:44.5795471Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][ESCALATED] id='H5/need/cheese', day=58, open 57d, repeated 58 observed failure(s), cause='Unavailable shopper or trip window: no legitimate seller and free household window were available today. Need stays open.'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5433)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5623,
+          "timestampUtc": "2026-11-15T01:17:44.580547Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[Incident][OPEN] id='H5/need/potatoes', first day=58, cause='trip trip-58-2375 need 88: Planned'.",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ObserveHouseholdSupplyIncident (int,string,int,string) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5417)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10098)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5624,
+          "timestampUtc": "2026-11-15T01:17:44.580547Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[Incident][RESOLVED] id='H2/need/potatoes', day=58, open 1d, observed 1 failure(s); the corresponding purchasing need is no longer open.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ResolveHouseholdSupplyIncidentsNotOpen (System.Collections.Generic.HashSet`1<string>,int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5447)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10115)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5625,
+          "timestampUtc": "2026-11-15T01:17:44.5827553Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[SimulationDrivers] household needs day 58: [SimulationDrivers] H1 has an open 'preserved_meat' shortage, but no known seller currently offers it | [SimulationDrivers] H1 has an open 'meat_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H1 has an open 'preserved_food' shortage, but no known seller currently offers it | [SimulationDrivers] H1 has an open 'staple_food_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'preserved_meat' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'meat_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'preserved_food' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'staple_food_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'preserved_meat' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'meat_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'preserved_food' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'staple_food_unspecified' shortage, but no known seller currently offers it | ... 666 additional diagnostic(s) omitted",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5368)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5626,
+          "timestampUtc": "2026-11-15T01:17:44.597387Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 58: task T281 'travel' owner P9 worker P9 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 50 (659700s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5627,
+          "timestampUtc": "2026-11-15T01:17:44.597387Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 58: task T283 'travel' owner P9 worker P9 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 50 (657900s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5628,
+          "timestampUtc": "2026-11-15T01:17:44.597387Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 58: task T284 'travel' owner P5 worker P5 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 52 (486900s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5629,
+          "timestampUtc": "2026-11-15T01:17:44.5986322Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 58: task T294 'shopping' owner P3 worker P3 expected 15min active 15min (900s, worked 15/15min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 57 (54000s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5630,
+          "timestampUtc": "2026-11-15T01:17:44.5986322Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] summary day 58: 0 open overrun(s) (0 new, 0 repeating, 0 omitted by cap); longest open: none",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:673)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5631,
+          "timestampUtc": "2026-11-15T01:17:46.5064359Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[Economy60Day] checkpoint day=58/60 date=1870-04-28 gameSeconds=5040530 residents=9/9 warnings=877 errors=0",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nCaptureNextEconomy60DayPlaytest:WriteCheckpoint (int) (at AgentScripts/CaptureNextEconomy60DayPlaytest.cs:124)\nCaptureNextEconomy60DayPlaytest:OnUpdate () (at AgentScripts/CaptureNextEconomy60DayPlaytest.cs:90)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 5632,
+          "timestampUtc": "2026-11-15T01:17:50.3094249Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[Population] demographics (day 59): [DevelopmentPopulation] Death suppressed Person=P58 Cause=old age Day=59 Date=1870-04-29 Mortality disabled",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Population.PopulationManager:FlushDemographicDiagnostics (string) (at Assets/Scripts/Domains/Population/PopulationManager.cs:665)\nLandLedgers.Population.PopulationManager:DriveDemographicDay (int) (at Assets/Scripts/Domains/Population/PopulationManager.cs:730)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDemographicDay (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3026)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3161)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5633,
+          "timestampUtc": "2026-11-15T01:17:50.3112617Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[SimulationDrivers] daily activity plans day 59: DailyActivityPlanner: P1 Sleeping [1320-1440] reserved. | DailyActivityPlanner: P1 Sleeping [0-420] reserved. | DailyActivityPlanner: P1 Eating [450-480] reserved. | DailyActivityPlanner: P1 Eating [1110-1140] reserved. | DailyActivityPlanner: P1 Managing [540-600] reserved. | DailyActivityPlanner: P1 Resting [420-450] reserved. | DailyActivityPlanner: P1 Resting [480-510] reserved. | DailyActivityPlanner: P2 Sleeping [1320-1440] reserved. | DailyActivityPlanner: P2 Sleeping [0-420] reserved. | DailyActivityPlanner: P2 Eating [450-480] reserved. | DailyActivityPlanner: P2 Eating [1110-1140] reserved. | DailyActivityPlanner: P2 JobSeeking [540-720] reserved. | DailyActivityPlanner: P2 Resting [420-450] reserved. | DailyActivityPlanner: P2 Resting [480-510] reserved. | DailyActivityPlanner: P3 Sleeping [1320-1440] reserved. | DailyActivityPlanner: P3 Sleeping [0-420] reserved. | DailyActivityPlanner: P3 Eating [450-480] reserved. | DailyActivityPlanner: P3 Eating [1110-1140] reserved. | DailyActivityPlanner: P3 Managing [540-600] reserved. | DailyActivityPlanner: P3 Resting [420-450] reserved.",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyActivityPlans (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:4235)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3193)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5634,
+          "timestampUtc": "2026-11-15T01:17:50.314776Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[BakeryProduction] Day 59: Series2BakeryProductionDriver pre-check refused: flour 10 lb on hand, need 12 lb for 1 batch(es); bake nothing, batches stay planned.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveBakeryWholesalePlanning (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:9237)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3227)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5635,
+          "timestampUtc": "2026-11-15T01:17:50.314776Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[BakeryProduction] BakeryShopRuntime: wholesale account bakery_001-wholesale-0 already covered (24 units in the pipeline). | Series2BakeryProductionDriver: adopted 1 runtime-planned batch(es) for day 59; no batches re-planned. | BakeryWholesaleDailyDriver: flour procurement covered — 10 lb on hand + 10 lb paid and awaiting receipt cover the 12 lb target; baking still requires physical receipt. | Series2FlourProcurementDriver: ReceiveArrivals day 59 created 0 lot(s) for business 'general_store_000'. | BakeryNotionsDailySupply: notions quote 10c/unit via off-map-provision-wholesaler ('bakery-notions'), quoted transit 14d; day 59: need 1u, on hand 20u, sellable 0u, fed 0u, ordered 0u [pipeline depth 14d, forward target 15u, in transit within depth 0u]. | BakeryWholesaleDailyDriver: per-batch economics (standalone-batch standard direct-material cost; not net profit) — flour 58c + notions 10c = 68c/batch vs wholesale revenue 96c/batch (24 loaves x 4c), margin 28c/batch (direct-material contribution before wages, fuel, freight, and overhead); actual flour purchase today: 0 sack(s), 0 lb, 0c spent (cash outlay, not consumed-stock COGS); flour on hand after purchase: 10 lb; no negotiated B2B flour price term exists (Plan 02 §5) — buying at the live retail price. | [BakeryProduction] pipeline coverage day 59: bin flour 10 lb, flour in custody 0 lb, notions on hand 20u, notions in custody 0u, fuel 30u, Millbrook in transit: 1 sack(s) (10 lb), lot 'aidlot-millbrook_grain_co:opening-flour-b1' ordered day 1, arrival unscheduled (freight pipeline), notions in flight: none in flight, days-of-cover 1 at 1 batch/day (planned yield 24u/batch, not stock), next arrival day none in flight, first failing input: flour, producible: no (flour) | Series2BakeryProductionDriver pre-check refused: flour 10 lb on hand, need 12 lb for 1 batch(es); bake nothing, batches stay planned. | [BakeryProduction] batch bakery_001-batch-5 blocked day 59 (flour), planned 6, covered 24u for account bakery_001-wholesale-0, producible: no (flour), retries tomorrow with the same batch id | Review2Wholesale: bakery lot is stale (55 days past baked day) — refused, not converted, nothing moved. | BakeryWholesaleDailyDriver: account bakery_001-wholesale-0 stays due — transfer refused, no cash moved, no bread lost. | DriveBakeryWholesalePlanning: registered bakery input need flour x1 for weekly demand collection. | DriveBakeryWholesalePlanning: registered bakery input need bakery-notions x1 for weekly demand collection.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveBakeryWholesalePlanning (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:9243)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3227)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5636,
+          "timestampUtc": "2026-11-15T01:17:50.3162946Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[BakeryProduction] Day 59: staged batch not begun — StagedBakeryChainDriver: batch refused — flour shortfall: 10 units of 'bakery-flour' on hand, need 12.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveStagedBakeryDay (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:9302)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3228)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5637,
+          "timestampUtc": "2026-11-15T01:17:50.3273666Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[FoodEconomy] meal resolution day 59: 5 households served, 27 meals eaten, 0 missed; direct meal-path purchases=0 (0c; excludes the separate physical shopping loop).",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5271)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5638,
+          "timestampUtc": "2026-11-15T01:17:50.3419267Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[Incident][RESOLVED] id='H5/need/potatoes', day=59, open 1d, observed 1 failure(s); the corresponding purchasing need is no longer open.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:ResolveHouseholdSupplyIncidentsNotOpen (System.Collections.Generic.HashSet`1<string>,int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5447)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveEmbodiedShopping (int,System.Collections.Generic.List`1<string>) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:10115)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5318)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5639,
+          "timestampUtc": "2026-11-15T01:17:50.3439258Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[SimulationDrivers] household needs day 59: [SimulationDrivers] H1 has an open 'preserved_meat' shortage, but no known seller currently offers it | [SimulationDrivers] H1 has an open 'meat_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H1 has an open 'preserved_food' shortage, but no known seller currently offers it | [SimulationDrivers] H1 has an open 'staple_food_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'preserved_meat' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'meat_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'preserved_food' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'staple_food_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'preserved_meat' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'meat_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'preserved_food' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'staple_food_unspecified' shortage, but no known seller currently offers it | ... 662 additional diagnostic(s) omitted",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5368)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5640,
+          "timestampUtc": "2026-11-15T01:17:50.3582248Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 59: task T286 'travel' owner P5 worker P5 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 52 (571500s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5641,
+          "timestampUtc": "2026-11-15T01:17:50.3601661Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 59: task T287 'travel' owner P7 worker P7 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 53 (486900s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5642,
+          "timestampUtc": "2026-11-15T01:17:50.3606795Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 59: task T289 'travel' owner P7 worker P7 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 53 (485100s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5643,
+          "timestampUtc": "2026-11-15T01:17:50.3606795Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 59: task T297 'shopping' owner P9 worker P9 expected 15min active 15min (900s, worked 15/15min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 58 (54000s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5644,
+          "timestampUtc": "2026-11-15T01:17:50.3606795Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] summary day 59: 0 open overrun(s) (0 new, 0 repeating, 0 omitted by cap); longest open: none",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:673)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5645,
+          "timestampUtc": "2026-11-15T01:17:52.2688322Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[Economy60Day] checkpoint day=59/60 date=1870-04-29 gameSeconds=5126979 residents=9/9 warnings=883 errors=0",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nCaptureNextEconomy60DayPlaytest:WriteCheckpoint (int) (at AgentScripts/CaptureNextEconomy60DayPlaytest.cs:124)\nCaptureNextEconomy60DayPlaytest:OnUpdate () (at AgentScripts/CaptureNextEconomy60DayPlaytest.cs:90)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 5646,
+          "timestampUtc": "2026-11-15T01:17:56.0762161Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[SimulationDrivers] daily activity plans day 60: DailyActivityPlanner: P1 Sleeping [1320-1440] reserved. | DailyActivityPlanner: P1 Sleeping [0-420] reserved. | DailyActivityPlanner: P1 Eating [450-480] reserved. | DailyActivityPlanner: P1 Eating [1110-1140] reserved. | DailyActivityPlanner: P1 Managing [540-600] reserved. | DailyActivityPlanner: P1 Resting [420-450] reserved. | DailyActivityPlanner: P1 Resting [480-510] reserved. | DailyActivityPlanner: P2 Sleeping [1320-1440] reserved. | DailyActivityPlanner: P2 Sleeping [0-420] reserved. | DailyActivityPlanner: P2 Eating [450-480] reserved. | DailyActivityPlanner: P2 Eating [1110-1140] reserved. | DailyActivityPlanner: P2 JobSeeking [540-720] reserved. | DailyActivityPlanner: P2 Resting [420-450] reserved. | DailyActivityPlanner: P2 Resting [480-510] reserved. | DailyActivityPlanner: P3 Sleeping [1320-1440] reserved. | DailyActivityPlanner: P3 Sleeping [0-420] reserved. | DailyActivityPlanner: P3 Eating [450-480] reserved. | DailyActivityPlanner: P3 Eating [1110-1140] reserved. | DailyActivityPlanner: P3 Managing [540-600] reserved. | DailyActivityPlanner: P3 Resting [420-450] reserved.",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyActivityPlans (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:4235)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3193)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5647,
+          "timestampUtc": "2026-11-15T01:17:56.0797351Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[BakeryProduction] Day 60: Series2BakeryProductionDriver pre-check refused: flour 10 lb on hand, need 12 lb for 1 batch(es); bake nothing, batches stay planned.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveBakeryWholesalePlanning (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:9237)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3227)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5648,
+          "timestampUtc": "2026-11-15T01:17:56.0797351Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[BakeryProduction] BakeryShopRuntime: wholesale account bakery_001-wholesale-0 already covered (24 units in the pipeline). | Series2BakeryProductionDriver: adopted 1 runtime-planned batch(es) for day 60; no batches re-planned. | BakeryWholesaleDailyDriver: flour procurement covered — 10 lb on hand + 10 lb paid and awaiting receipt cover the 12 lb target; baking still requires physical receipt. | Series2FlourProcurementDriver: ReceiveArrivals day 60 created 0 lot(s) for business 'general_store_000'. | BakeryNotionsDailySupply: notions quote 10c/unit via off-map-provision-wholesaler ('bakery-notions'), quoted transit 14d; day 60: need 1u, on hand 20u, sellable 0u, fed 0u, ordered 0u [pipeline depth 14d, forward target 15u, in transit within depth 0u]. | BakeryWholesaleDailyDriver: per-batch economics (standalone-batch standard direct-material cost; not net profit) — flour 58c + notions 10c = 68c/batch vs wholesale revenue 96c/batch (24 loaves x 4c), margin 28c/batch (direct-material contribution before wages, fuel, freight, and overhead); actual flour purchase today: 0 sack(s), 0 lb, 0c spent (cash outlay, not consumed-stock COGS); flour on hand after purchase: 10 lb; no negotiated B2B flour price term exists (Plan 02 §5) — buying at the live retail price. | [BakeryProduction] pipeline coverage day 60: bin flour 10 lb, flour in custody 0 lb, notions on hand 20u, notions in custody 0u, fuel 30u, Millbrook in transit: 1 sack(s) (10 lb), lot 'aidlot-millbrook_grain_co:opening-flour-b1' ordered day 1, arrival unscheduled (freight pipeline), notions in flight: none in flight, days-of-cover 1 at 1 batch/day (planned yield 24u/batch, not stock), next arrival day none in flight, first failing input: flour, producible: no (flour) | Series2BakeryProductionDriver pre-check refused: flour 10 lb on hand, need 12 lb for 1 batch(es); bake nothing, batches stay planned. | [BakeryProduction] batch bakery_001-batch-5 blocked day 60 (flour), planned 6, covered 24u for account bakery_001-wholesale-0, producible: no (flour), retries tomorrow with the same batch id | Review2Wholesale: bakery lot is stale (56 days past baked day) — refused, not converted, nothing moved. | BakeryWholesaleDailyDriver: account bakery_001-wholesale-0 stays due — transfer refused, no cash moved, no bread lost. | DriveBakeryWholesalePlanning: registered bakery input need flour x1 for weekly demand collection. | DriveBakeryWholesalePlanning: registered bakery input need bakery-notions x1 for weekly demand collection.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveBakeryWholesalePlanning (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:9243)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3227)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5649,
+          "timestampUtc": "2026-11-15T01:17:56.081244Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[BakeryProduction] Day 60: staged batch not begun — StagedBakeryChainDriver: batch refused — flour shortfall: 10 units of 'bakery-flour' on hand, need 12.",
+          "stackTrace": "UnityEngine.Debug:Log (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveStagedBakeryDay (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:9302)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3228)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5650,
+          "timestampUtc": "2026-11-15T01:17:56.0908297Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[FoodEconomy] meal resolution day 60: 5 households served, 27 meals eaten, 0 missed; direct meal-path purchases=0 (0c; excludes the separate physical shopping loop).",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5271)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5651,
+          "timestampUtc": "2026-11-15T01:17:56.1064329Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[SimulationDrivers] household needs day 60: [SimulationDrivers] H1 has an open 'preserved_meat' shortage, but no known seller currently offers it | [SimulationDrivers] H1 has an open 'meat_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H1 has an open 'preserved_food' shortage, but no known seller currently offers it | [SimulationDrivers] H1 has an open 'staple_food_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'preserved_meat' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'meat_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'preserved_food' shortage, but no known seller currently offers it | [SimulationDrivers] H2 has an open 'staple_food_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'preserved_meat' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'meat_unspecified' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'preserved_food' shortage, but no known seller currently offers it | [SimulationDrivers] H3 has an open 'staple_food_unspecified' shortage, but no known seller currently offers it | ... 662 additional diagnostic(s) omitted",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object,UnityEngine.Object)\nLandLedgers.Orchestration.Systems.SimulationDrivers:DriveDailyNeeds (int) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:5368)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3281)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5652,
+          "timestampUtc": "2026-11-15T01:17:56.1277931Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 60: task T290 'travel' owner P1 worker P1 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 56 (314100s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5653,
+          "timestampUtc": "2026-11-15T01:17:56.1277931Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 60: task T292 'travel' owner P1 worker P1 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 56 (312300s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5654,
+          "timestampUtc": "2026-11-15T01:17:56.1288463Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] completed-overrun day 60: task T293 'travel' owner P3 worker P3 expected 1min active 15min (900s, worked 1/1min) queue 0min blocked 0min (none recorded: no reason recorded) travel 0min (none linked) last-transition CompleteTask day 57 (227700s ago) state Complete (Finished; outcome recorded.) outcome Success",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:TryEmitWarning (LandLedgers.Tasks.TaskTimingRecord,LandLedgers.Tasks.TaskTimingVerdict,single,int,bool) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:702)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:606)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5655,
+          "timestampUtc": "2026-11-15T01:17:56.1288463Z",
+          "level": "warn",
+          "logType": "Warning",
+          "message": "[TaskDuration] summary day 60: 0 open overrun(s) (0 new, 0 repeating, 0 omitted by cap); longest open: none",
+          "stackTrace": "UnityEngine.Debug:LogWarning (object)\nLandLedgers.Tasks.TaskDurationDiagnostics/<>c:<get_LogSink>b__35_0 (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:510)\nLandLedgers.Tasks.TaskDurationDiagnostics:Emit (string) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:882)\nLandLedgers.Tasks.TaskDurationDiagnostics:EvaluateInternal (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:673)\nLandLedgers.Tasks.TaskDurationDiagnostics:Evaluate (single,int) (at Assets/Scripts/Core/Tasks/TaskDurationDiagnostics.cs:544)\nLandLedgers.Orchestration.Systems.SimulationDrivers:OnDayChanged (LandLedgers.Time.SimulationDateChangedContext) (at Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs:3329)\nLandLedgers.Time.TimeManager:ProcessDayRollover () (at Assets/Scripts/Core/Time/TimeManager.cs:700)\nLandLedgers.Time.TimeManager:AdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:532)\nLandLedgers.Time.TimeManager:QueueAndAdvanceGameSeconds (single) (at Assets/Scripts/Core/Time/TimeManager.cs:488)\nLandLedgers.Time.TimeManager:Update () (at Assets/Scripts/Core/Time/TimeManager.cs:405)\n",
+          "seeded": false
+        },
+        {
+          "seq": 5656,
+          "timestampUtc": "2026-11-15T01:17:58.0283253Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[Economy60Day] checkpoint day=60/60 date=1870-04-30 gameSeconds=5213376 residents=9/9 warnings=888 errors=0",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nCaptureNextEconomy60DayPlaytest:WriteCheckpoint (int) (at AgentScripts/CaptureNextEconomy60DayPlaytest.cs:124)\nCaptureNextEconomy60DayPlaytest:OnUpdate () (at AgentScripts/CaptureNextEconomy60DayPlaytest.cs:90)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        },
+        {
+          "seq": 5657,
+          "timestampUtc": "2026-11-15T01:17:58.0382656Z",
+          "level": "log",
+          "logType": "Log",
+          "message": "[Economy60Day] completed and paused at the target game time.",
+          "stackTrace": "UnityEngine.Debug:Log (object)\nCaptureNextEconomy60DayPlaytest:Finish (double) (at AgentScripts/CaptureNextEconomy60DayPlaytest.cs:140)\nCaptureNextEconomy60DayPlaytest:OnUpdate () (at AgentScripts/CaptureNextEconomy60DayPlaytest.cs:98)\nUnityEditor.EditorApplication:Internal_CallUpdateFunctions ()\n",
+          "seeded": false
+        }
+      ],
+      "cursor": 5657,
+      "session": "d022c2a3090e4762bfd305c366a1102d",
+      "returned": 100,
+      "dropped": false,
+      "reset": false,
+      "counts": {
+        "error": 4,
+        "warn": 1214,
+        "log": 782
+      },
+      "groundTruth": {
+        "sampledUtc": "2026-11-15T01:18:29.9009333Z",
+        "ageMs": 10,
+        "compilationFailed": false,
+        "compiling": false,
+        "consoleErrors": 1,
+        "consoleWarnings": 946,
+        "consoleLogs": 610,
+        "seeded": true
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 7801,
+      "projectPath": "F:\\Land & Ledgers"
+    }
+  },
+  "errors": [],
+  "warnings": []
+}

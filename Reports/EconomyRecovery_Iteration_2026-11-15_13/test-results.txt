@@ -1,0 +1,10 @@
+EditMode test results after the single PlayMode run
+CoupledTransportMovementControllerTests 7/7
+FreightProductionDriverTests 12/12
+HouseholdShoppingLoopTests 30/30
+ShoppingTripDriverTests 53/53
+OffMapJourneyAuthorityTests 15/15
+BakeryDriverFuelWiringTests 3/3
+FuelDealerSupplyTransferTests 5/5
+BakeryFuelBlockerDiagnosticsTests 7/7
+TOTAL 132/132 passed, 0 failed, 0 skipped

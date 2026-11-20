@@ -121,6 +121,20 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void DefaultMealScheduleIsChronologicalAndScarcityDoesNotRemoveSlots()
+        {
+            MealSchedulingPolicy policy = MealSchedulingPolicy.Default;
+
+            CollectionAssert.AreEqual(
+                new[] { MealSlot.Morning, MealSlot.Midday, MealSlot.Evening },
+                policy.GetSlotsForDay(0f));
+            CollectionAssert.AreEqual(
+                new[] { MealSlot.Morning, MealSlot.Midday, MealSlot.Evening },
+                policy.GetSlotsForDay(-100f));
+            Assert.AreEqual(3, policy.ExpectedMealsPerDay);
+        }
+
+        [Test]
         public void HouseholdEatsFromStoresWhenStocked()
         {
             population.households[0].reserves[0].currentUnits = 100;
@@ -133,7 +147,7 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
-        public void LotBackedBread_IsEatenWithoutCooking_AndSkippedMiddayIsNotNutritionalMiss()
+        public void LotBackedBread_IsEatenWithoutCooking_AndScarceMiddayIsRecordedAsMissed()
         {
             var inventories = new HouseholdInventoryRegistry();
             HouseholdInventory inventory = inventories.GetOrCreate(7);
@@ -147,19 +161,48 @@ namespace LandLedgers.EditorTests.Population
                 inventories: inventories, mealLog: mealLog,
                 mealPolicy: MealSchedulingPolicy.Default);
 
-            // The default policy skips its flexible midday slot while supply
-            // is low. The two substantial slots still produce one real meal
-            // and one genuine missed meal for Abe; Bea misses both.
+            // Breakfast, lunch and supper remain the ordinary schedule even
+            // when food is scarce. The one real bread lot serves one meal;
+            // every remaining missed slot is recorded against the household.
             Assert.AreEqual(1, report.MealsEaten);
-            Assert.AreEqual(3, report.MealsMissed);
+            Assert.AreEqual(5, report.MealsMissed);
             Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.BreadId));
             Assert.AreEqual(1, mealLog.GetMeals(7).Count,
                 "Ready bread is consumed directly; no cooking Task or prepared meal is fabricated.");
             Assert.AreEqual(HouseholdItemCatalog.BreadId, mealLog.GetMeals(7)[0].ItemsConsumed[0].ItemId);
             Assert.AreEqual(0, mealLog.GetPreparations(7).Count);
-            Assert.That(population.GetPerson(1).nutrition.nutrition01, Is.EqualTo(0.82f).Within(0.000001f),
-                "Only the two scheduled substantial slots count toward nutrition when midday is skipped.");
-            Assert.That(population.GetPerson(2).nutrition.nutrition01, Is.EqualTo(0.64f).Within(0.000001f));
+            Assert.That(population.GetPerson(1).nutrition.nutrition01, Is.EqualTo(0.64f).Within(0.000001f),
+                "The one meal served cannot erase the two other missed meal slots.");
+            Assert.That(population.GetPerson(2).nutrition.nutrition01, Is.EqualTo(0.46f).Within(0.000001f));
+        }
+
+        [Test]
+        public void ProductionCanDeferLotMealsUntilTheirClockSlots()
+        {
+            var inventories = new HouseholdInventoryRegistry();
+            HouseholdInventory inventory = inventories.GetOrCreate(7);
+            Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.BreadId, 10, 0, "physical pantry"));
+            var mealLog = new HouseholdMealLogRegistry();
+
+            DailyNeedsService.DayReport report = service.ExecuteDay(
+                population, planner, null, 0, diag,
+                inventories: inventories,
+                mealLog: mealLog,
+                mealPolicy: MealSchedulingPolicy.Default,
+                deferLotBasedMealsToClock: true);
+
+            Assert.AreEqual(0, report.MealsEaten);
+            Assert.AreEqual(0, report.MealsMissed);
+            Assert.AreEqual(10, inventory.GetAvailableUnits(HouseholdItemCatalog.BreadId),
+                "The daily needs pass must not consume breakfast, lunch and supper at day change.");
+            Assert.IsEmpty(mealLog.GetMeals(7));
+            Assert.IsEmpty(mealLog.GetMissedMeals(7));
+
+            Assert.IsTrue(new HouseholdMealService(mealLog).ServeHouseholdMealSlot(
+                population.households[0], 1, inventory, MealSchedulingPolicy.Default, 0, MealSlot.Morning));
+            Assert.AreEqual(9, inventory.GetAvailableUnits(HouseholdItemCatalog.BreadId));
+            Assert.AreEqual(1, mealLog.GetMeals(7).Count,
+                "A meal is consumed only when its actual scheduled slot is resolved.");
         }
 
         [Test]
@@ -197,7 +240,10 @@ namespace LandLedgers.EditorTests.Population
             mealService.ServeHouseholdDay(population.households[0], new[] { 1 }, inventory,
                 MealSchedulingPolicy.Default, 0, null);
             Assert.IsNotEmpty(log.GetMissedMeals(7));
-            StringAssert.Contains("Flour 1/2 lb", log.GetMissedMeals(7)[0].Reason);
+            StringAssert.Contains("No meal-sized recognized food lot", log.GetMissedMeals(7)[0].Reason,
+                "An insufficient flour lot is raw stock, not a ready-to-eat serving.");
+            Assert.AreEqual(1, inventory.GetAvailableUnits(HouseholdItemCatalog.FlourId),
+                "A missed meal does not consume flour without the real preparation step.");
         }
 
         [Test]

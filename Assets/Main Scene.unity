@@ -32903,15 +32903,15 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4633102787010910, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -132.46289
+      value: -132.376
       objectReference: {fileID: 0}
     - target: {fileID: 4633102787010910, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0.46823198
+      value: 0.346
       objectReference: {fileID: 0}
     - target: {fileID: 4633102787010910, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 16.826828
+      value: 14.209
       objectReference: {fileID: 0}
     - target: {fileID: 4633102787010910, guid: 536ccc36b751d9244b62a4b4bec738d2, type: 3}
       propertyPath: m_LocalRotation.w
@@ -35094,15 +35094,15 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4942439165838156, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -131.5405
+      value: -130.80602
       objectReference: {fileID: 0}
     - target: {fileID: 4942439165838156, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0.465786
+      value: 0.34413
       objectReference: {fileID: 0}
     - target: {fileID: 4942439165838156, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 16.823288
+      value: 14.122005
       objectReference: {fileID: 0}
     - target: {fileID: 4942439165838156, guid: 1948142dfafa96140a404d93b58e7b2f, type: 3}
       propertyPath: m_LocalRotation.w
@@ -36500,22 +36500,22 @@ MonoBehaviour:
   currentSpeed: 1
   lastNonPausedSpeed: 1
   currentDate:
-    absoluteDayIndex: 2132
-    dayOfWeekIndex: 4
+    absoluteDayIndex: 0
+    dayOfWeekIndex: 5
     dayOfMonth: 1
-    week: 305
+    week: 1
     weekOfMonth: 1
     month: 1
-    year: 1886
+    year: 1870
   timeOfDay01: 0.25
   gameSecondsIntoDay: 21600
   shortTickIndex: 24
   isPaused: 0
   logMajorTicks: 0
-  currentDayName: Friday
+  currentDayName: Saturday
   currentMonthName: January
   currentSeasonName: Winter
-  readableState: Friday, January 1, Year 1886 (Week 305) | Winter | 06:00 | Speed1x
+  readableState: Saturday, January 1, Year 1870 (Week 1) | Winter | 06:00 | Speed1x
   collapsedDayRolloversLastFrame: 0
   cappedDayRolloverFrames: 0
   compressedShortTicksLastFrame: 0
@@ -36537,6 +36537,35 @@ MonoBehaviour:
   maximumSunDim01: 0.65
   maximumAmbientDim01: 0.45
   maximumNightExposureStops: 0.5
+  speedNightExposure:
+  - speed: 101
+    nightExposureStops: 1.2
+  - speed: 103
+    nightExposureStops: 0.5
+  - speed: 1
+    nightExposureStops: 0.5
+  - speed: 2
+    nightExposureStops: 0.46
+  - speed: 4
+    nightExposureStops: 0.4
+  - speed: 5
+    nightExposureStops: 0.38
+  - speed: 6
+    nightExposureStops: 0.36
+  - speed: 10
+    nightExposureStops: 0.29
+  - speed: 25
+    nightExposureStops: 0.17
+  - speed: 50
+    nightExposureStops: 0.11
+  - speed: 100
+    nightExposureStops: 0.07
+  - speed: 102
+    nightExposureStops: 0.04
+  - speed: 104
+    nightExposureStops: 0.025
+  - speed: 0
+    nightExposureStops: 0.5
 --- !u!1001 &932242422
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -37064,6 +37093,10 @@ MonoBehaviour:
       inventoryStatement: 
       employeeOfferStatement: 
       closingDayIndex: -1
+      sellerPersonId: -1
+      purchasePriceCents: 0
+      sellerCashWithdrawalCents: 0
+      transitionArrangement: 
     mineState:
       mineralKind: 0
       depositConfidence01: 0.5
@@ -37162,6 +37195,10 @@ MonoBehaviour:
   recordsRejectedAsNonLocalResidents: 0
   residentsMissingHomeDoorAnchors: 0
   residentActorEntriesCreated: 0
+  residentsCutByAgentCap: 0
+  lastAgentCapApplied: 0
+  lastCutResidentSummary: 
+  explicitArrivalChecksForCutResidents: 0
   lastRouteFailure: 
   lastMovementStatus: 
   explicitTravelArrivalRadiusMeters: 1.5
@@ -37278,6 +37315,7 @@ MonoBehaviour:
   timeManager: {fileID: 0}
   civicFoundation: {fileID: 0}
   opportunityPressureRuntime: {fileID: 0}
+  systemsHub: {fileID: 0}
   maxLandListings: 4
   maxBusinessListings: 2
   marketSeed: 1902
@@ -59697,15 +59735,15 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: 988361532369896956, guid: 2759ba77ef766744b998a29118cf6f1d, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -135.3696
+      value: -130.83
       objectReference: {fileID: 0}
     - target: {fileID: 988361532369896956, guid: 2759ba77ef766744b998a29118cf6f1d, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0.474545
+      value: 0.346
       objectReference: {fileID: 0}
     - target: {fileID: 988361532369896956, guid: 2759ba77ef766744b998a29118cf6f1d, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 16.180557
+      value: 14.3
       objectReference: {fileID: 0}
     - target: {fileID: 988361532369896956, guid: 2759ba77ef766744b998a29118cf6f1d, type: 3}
       propertyPath: m_LocalRotation.w
@@ -69074,7 +69112,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1638510118}
   m_Layer: 0
-  m_Name: Prefab Environment
+  m_Name: Testing Prefab Environment
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0

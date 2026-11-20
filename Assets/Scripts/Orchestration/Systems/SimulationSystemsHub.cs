@@ -51,6 +51,7 @@ using LandLedgers.World.Property;
 using LandLedgers.Skills;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
+using LandLedgers.Diagnostics;
 using UnityEngine;
 
 namespace LandLedgers.Orchestration.Systems
@@ -100,6 +101,29 @@ namespace LandLedgers.Orchestration.Systems
         /// InstallTaskDurationDiagnostics runs.
         /// </summary>
         private TaskDurationDiagnostics taskDurationDiagnostics;
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        [NonSerialized]
+        private NpcActivityTraceRecorder npcActivityTraceRecorder;
+        public NpcActivityTraceRecorder ActivityTrace => EnsureNpcActivityTrace(null);
+
+        private NpcActivityTraceRecorder EnsureNpcActivityTrace(Func<float> nowSeconds)
+        {
+            if (npcActivityTraceRecorder != null) return npcActivityTraceRecorder;
+            TimeManager clock = TimeManager.Instance != null ? TimeManager.Instance : FindAnyObjectByType<TimeManager>();
+            Func<float> readClock = nowSeconds ?? (() => clock != null ? clock.AbsoluteGameSeconds : -1f);
+            PopulationManager population = null;
+            npcActivityTraceRecorder = new NpcActivityTraceRecorder(readClock, personId =>
+            {
+                if (population == null) population = FindAnyObjectByType<PopulationManager>();
+                return population != null && population.Memberships != null
+                    ? population.Memberships.GetActiveHouseholdId(personId)
+                    : -1;
+            });
+            Tasks.AddTimingObserver(npcActivityTraceRecorder);
+            return npcActivityTraceRecorder;
+        }
+#endif
 
         [SerializeField]
         private SkillService skillService = new SkillService();
@@ -1868,6 +1892,10 @@ namespace LandLedgers.Orchestration.Systems
                 Tasks.SetTimingClock(nowSeconds);
             }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            EnsureNpcActivityTrace(nowSeconds);
+#endif
+
             return taskDurationDiagnostics;
         }
 
@@ -2069,6 +2097,10 @@ namespace LandLedgers.Orchestration.Systems
                 return diagnostics;
             }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            npcActivityTraceRecorder?.RecordMarker("save-restore-start", "Authoritative SystemsSaveDto restoration began.", absoluteDayIndex);
+#endif
+
             Tasks.LoadFromSaveDto(dto.tasks);
             // Priority 4 Slice 4 (§2.5): re-observe the restored open
             // tasks at day resolution. Records the service already holds
@@ -2225,6 +2257,9 @@ namespace LandLedgers.Orchestration.Systems
                 }
             }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            npcActivityTraceRecorder?.RecordAuthorityRestored(absoluteDayIndex);
+#endif
             return diagnostics;
         }
 

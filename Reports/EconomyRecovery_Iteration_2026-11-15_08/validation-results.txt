@@ -1,0 +1,18 @@
+Unity: 6000.4.2f1
+Source recompile: completed; failed=false; compiler errors=0
+PlayMode after repair: NOT RUN (the requested one session occurred before the repair)
+Unity state at handoff: ready; stopped; Edit Mode
+
+Executed EditMode suites after the final source batch:
+PopulationPathingProfessionRhythmTests: 29 passed, 0 failed
+FreightProductionDriverTests: 12 passed, 0 failed
+FreightShipmentServiceTests: 22 passed, 0 failed
+ShoppingTripDriverTests: 53 passed, 0 failed
+HouseholdShoppingLoopTests: 30 passed, 0 failed
+Total test executions across these runs: 146 passed, 0 failed
+
+The focused route regression is included in PopulationPathingProfessionRhythmTests:
+FailedFreightRouteStartKeepsTheActualOriginForRetry: passed
+FreightExteriorStationInsideBuildingFootprintUsesDoorwayFallback: passed
+
+git diff --check: passed for edited code and test files.

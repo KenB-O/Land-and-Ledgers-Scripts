@@ -1,0 +1,13 @@
+Result=completed
+StartGameSeconds=25408.20
+EndGameSeconds=5209487.49
+SimulatedDays=60.00092
+RealSeconds=0.12
+FinalSpeed=Paused
+CapturedLogEntries=820
+CapturedWarnings=524
+CapturedErrors=0
+ManagedResidents=9
+VisibleAgents=9
+LastMovementStatus=Sent 0 agents for GoingToWork. Managed=9, Visible=9, AmbientStarted=0, AmbientFailures(anchor/path)=0/0.
+LastRouteFailure=

@@ -7,3 +7,10 @@
 *.controller whitespace=-blank-at-eol
 *.unity whitespace=-blank-at-eol
 *.gitignore whitespace=-blank-at-eof
+# Preserve formatting that is meaningful in vendored model/shader data and captured diagnostic text.
+*.obj whitespace=-blank-at-eol,-blank-at-eof
+*.shader whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+*.md whitespace=-blank-at-eof
+Reports/**/*.txt whitespace=-blank-at-eol,-blank-at-eof
+Reports/Playtest60Day_2026-11-14/console-status-after.json whitespace=-blank-at-eof
+Reports/Playtest60Day_2026-11-14/console-status-after.json whitespace=-blank-at-eol,-blank-at-eof

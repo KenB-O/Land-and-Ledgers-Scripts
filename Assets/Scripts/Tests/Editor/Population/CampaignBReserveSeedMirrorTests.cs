@@ -71,7 +71,7 @@ namespace LandLedgers.EditorTests.Population
             household.GetReserve("fuel_wood").currentUnits = 5;
             HouseholdInventory inventory = new HouseholdInventory(71);
 
-            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>());
+            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>(), fromLegacySave: true);
 
             Assert.AreEqual(8, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
                 "Seeded staple lots must hold the reserve units.");
@@ -99,7 +99,7 @@ namespace LandLedgers.EditorTests.Population
             meat.currentUnits = meat.targetUnits;
             HouseholdInventory inventory = new HouseholdInventory(72);
 
-            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>());
+            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>(), fromLegacySave: true);
 
             List<HouseholdReserveNeed> needs = HouseholdReserveEvaluator.BuildShoppingNeeds(household);
             Assert.IsFalse(FindNeed(needs, "staple_food").HasValue,
@@ -122,7 +122,7 @@ namespace LandLedgers.EditorTests.Population
             staple.currentUnits = target;
             HouseholdInventory inventory = new HouseholdInventory(73);
 
-            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>());
+            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>(), fromLegacySave: true);
             Assert.AreEqual(target, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
                 "The household holds a full target of staple lots from the seed.");
 
@@ -151,7 +151,7 @@ namespace LandLedgers.EditorTests.Population
             household.GetReserve("meat").currentUnits = 0;
             HouseholdInventory inventory = new HouseholdInventory(74);
 
-            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>());
+            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>(), fromLegacySave: true);
 
             HouseholdMealService mealService = new HouseholdMealService(new HouseholdMealLogRegistry());
             MealDayResult meal = mealService.ServeHouseholdDay(
@@ -184,7 +184,7 @@ namespace LandLedgers.EditorTests.Population
             household.GetReserve("meat").currentUnits = 0;
             HouseholdInventory inventory = new HouseholdInventory(75);
 
-            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>());
+            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>(), fromLegacySave: true);
 
             HouseholdMealService mealService = new HouseholdMealService(new HouseholdMealLogRegistry());
             mealService.ServeHouseholdDay(
@@ -199,7 +199,7 @@ namespace LandLedgers.EditorTests.Population
                 10,
                 null);
 
-            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 11, new List<string>());
+            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 11, new List<string>(), fromLegacySave: true);
 
             Assert.AreEqual(6, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
                 "A second seed after consumption adds nothing: idempotency holds through the flag, not through the reserve balance.");
@@ -216,7 +216,7 @@ namespace LandLedgers.EditorTests.Population
             household.GetReserve("fuel_wood").currentUnits = 5;
             HouseholdInventory inventory = new HouseholdInventory(76);
 
-            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>());
+            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>(), fromLegacySave: true);
 
             Assert.AreEqual(5, household.GetReserve("fuel_wood").currentUnits,
                 "The seed must leave the fuel reserve intact: heating reads the reserve, not the lots.");
@@ -244,7 +244,7 @@ namespace LandLedgers.EditorTests.Population
             household.GetReserve("staple_food").currentUnits = 8;
             HouseholdInventory inventory = new HouseholdInventory(77);
 
-            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>());
+            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>(), fromLegacySave: true);
             household.GetReserve("staple_food").currentUnits = 0;
 
             HouseholdInventoryReserveBridge.MirrorLotConsumptionToReserve(

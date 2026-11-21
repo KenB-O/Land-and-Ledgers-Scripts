@@ -2001,6 +2001,10 @@ namespace LandLedgers.FirstLedger
                 string bufferSegment = cashBuffer > 0 ? $" while holding {FormatMoney(cashBuffer)} cash reserve" : string.Empty;
                 status = $"Could not afford local {GetCategoryDisplayName(categoryId)} supply from {SanitizeLocalSupplySource(sourceLabel)}{bufferSegment}.";
                 AppendLocalSupplySummary($"{SanitizeLocalSupplySource(sourceLabel)} skipped {GetCategoryDisplayName(categoryId)}: cash buffer");
+                // Lane 9a (A10): a skipped local supply is a warning, not
+                // just a status string — a full or unaffordable category
+                // silently starves the shelf otherwise.
+                Debug.LogWarning($"[GeneralStore] Skipped local {GetCategoryDisplayName(categoryId)} supply from {SanitizeLocalSupplySource(sourceLabel)}: could not afford {requestedUnits}u at {FormatMoney(unitCost)} each{bufferSegment}.", this);
                 return 0;
             }
 
@@ -2011,6 +2015,9 @@ namespace LandLedgers.FirstLedger
             {
                 status = $"Skipped local {GetCategoryDisplayName(categoryId)} supply from {source}: category full.";
                 AppendLocalSupplySummary($"{source} skipped {GetCategoryDisplayName(categoryId)}: category full");
+                // Lane 9a (A10): see above — the category-full skip is a
+                // warning, naming the requested units.
+                Debug.LogWarning($"[GeneralStore] Skipped local {GetCategoryDisplayName(categoryId)} supply from {source}: category full, {requestedUnits}u requested, 0u accepted.", this);
                 return 0;
             }
 

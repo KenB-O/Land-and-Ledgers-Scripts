@@ -285,6 +285,14 @@ namespace LandLedgers.Orchestration.Systems
         private OffMapAidBusinessRuntime millbrookAidRuntime;
         private int lastMillbrookAidAttemptDay = -1;
         private string lastMillbrookAidRefusal = string.Empty;
+        // Lane 9a (A6): the F4 lot-identity resolver for the production
+        // meal service, built once over the hub/bakery/Millbrook
+        // authorities and cached. Null until first built; a null
+        // household-inventory authority means it cannot be constructed
+        // and the meal service keeps today's behaviour (lot ids only),
+        // with one warning. Never serialized (rebuilt per session).
+        private LandLedgers.Economy.Logistics.LotIdentityResolver mealLotIdentityResolver;
+        private bool mealLotIdentityResolverWarningLogged;
         // Plan 04 Slice 4: running bakery actuals for the cumulative
         // reconciliation line — diagnostics only, never serialized and
         // never saved (reset on scene reload / Continue, like the
@@ -6335,7 +6343,7 @@ namespace LandLedgers.Orchestration.Systems
                     // the stove stores counts then, never a guess).
                     Household = household,
                     Inventory = hub.HouseholdInventories.Get(household.id),
-                    MealService = new HouseholdMealService(hub.MealLog),
+                    MealService = new HouseholdMealService(hub.MealLog) { LotIdentityResolver = MealLotIdentityResolver() },
                     Stoves = ResolveHouseholdStoves(household),
                     FuelWoodReserveUnits = household.GetReserve(HouseholdReserveCatalog.FuelWoodCategoryId)?.currentUnits ?? 0,
                 };
@@ -9229,6 +9237,12 @@ namespace LandLedgers.Orchestration.Systems
             // no registry yet means 1.0 (no rest effect) — the same
             // fail-open as a first night.
             dailyNeedsService.RestQualityForPerson = personId => RestQualityFor(personId);
+            // Lane 9a (A6/A8): the lot-path meal service resolves consumed
+            // lots through the production resolver, and seeds legacy-save
+            // unspecified stock as flagged historical stock (new games
+            // seed none).
+            dailyNeedsService.LotIdentityResolver = MealLotIdentityResolver();
+            dailyNeedsService.RestoredFromSave = RestoredFromSave();
             consumptionPlanner ??= new HouseholdConsumptionPlanner();
             // DEF-067: construct the charge reconciliation before the
             // executor so the legacy path records from its first drive.
@@ -9330,6 +9344,56 @@ namespace LandLedgers.Orchestration.Systems
             }
         }
 
+        /// <summary>
+        /// Lane 9a (A6): the production lot-identity resolver for meal
+        /// consumption — household inventory, store business runtime,
+        /// bakery, Millbrook, freight and named-SKU authorities. Built
+        /// once and cached; authorities not attached yet stay null inside
+        /// the resolver (that lot space is unresolvable and the gap is
+        /// named in the resolver diagnostics, never an exception).
+        /// Returns null — with one warning — when the household inventory
+        /// authority itself is unavailable, which is the one the meal
+        /// service needs.
+        /// </summary>
+        private LandLedgers.Economy.Logistics.LotIdentityResolver MealLotIdentityResolver()
+        {
+            if (mealLotIdentityResolver != null) return mealLotIdentityResolver;
+            HouseholdInventoryRegistry households = hub?.HouseholdInventories;
+            if (households == null)
+            {
+                if (!mealLotIdentityResolverWarningLogged)
+                {
+                    mealLotIdentityResolverWarningLogged = true;
+                    Debug.LogWarning("[SimulationDrivers] LotIdentityResolver cannot be constructed: no household inventory authority is wired — meal lot identities stay empty (lot ids only).", this);
+                }
+                return null;
+            }
+            Series2Pass9SaveState state = Pass9State();
+            LandLedgers.FirstLedger.GeneralStoreRuntimeManager storeManager =
+                FindAnyObjectByType<LandLedgers.FirstLedger.GeneralStoreRuntimeManager>();
+            mealLotIdentityResolver = new LandLedgers.Economy.Logistics.LotIdentityResolver(
+                households,
+                storeManager?.RuntimeState,
+                state?.BakeryRuntime ?? state?.BakeryDriver?.Bakery,
+                millbrookAidRuntime,
+                freightShipmentService,
+                storeFeedProcurement);
+            return mealLotIdentityResolver;
+        }
+
+        /// <summary>
+        /// Lane 9a (A8): whether this session restored a saved game
+        /// (FirstLedgerSliceBootstrapper.MarkRestoredFromSave ran) as
+        /// opposed to a fresh New Game. Legacy saves seed their
+        /// unspecified reserve stock as flagged unidentified historical
+        /// stock; new games seed no unspecified lots at all.
+        /// </summary>
+        private bool RestoredFromSave()
+        {
+            startupBootstrapper ??= FindAnyObjectByType<FirstLedgerSliceBootstrapper>();
+            return startupBootstrapper != null && startupBootstrapper.RestoredFromSave;
+        }
+
         private void ResolveScheduledHouseholdMeals(int dayIndex, int minuteOfDay, bool closeUnresolvedAsMissed)
         {
             if (hub?.MealLog == null || hub.HouseholdInventories == null
@@ -9351,8 +9415,9 @@ namespace LandLedgers.Orchestration.Systems
                 if (members == null || members.Count == 0) continue;
 
                 HouseholdInventory inventory = hub.HouseholdInventories.GetOrCreate(household.id);
-                HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, dayIndex, diagnostics);
+                HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, dayIndex, diagnostics, RestoredFromSave());
                 var mealService = new HouseholdMealService(hub.MealLog);
+                mealService.LotIdentityResolver = MealLotIdentityResolver();
                 int[] scheduledMinutes = DailyActivityPlanner.DefaultMealMinutes;
                 for (int memberIndex = 0; memberIndex < members.Count; memberIndex++)
                 {
@@ -14166,7 +14231,14 @@ namespace LandLedgers.Orchestration.Systems
             ApplyRestoredStagedBakeryChain(state, driver, dayIndex, bakerId);
             var diag = new List<string>();
             int openBreadNeedUnits = CountOpenHouseholdBreadNeedUnits(hub?.PurchasingNeeds);
-            int bakeryRetailUnits = bakery.RetailUnitsAvailableForSale(
+            // Lane 9a (H-4): the gate compares open need against retail
+            // stock net of due-today wholesale units (see
+            // BakeryShopRuntime.RetailUnitsNetOfDueWholesale). A voluntary
+            // wholesale account no longer vetoes staged retail production;
+            // only the units actually due today are netted, so a due
+            // delivery is still protected from being shorted by a staged
+            // batch.
+            int bakeryRetailUnits = bakery.RetailUnitsNetOfDueWholesale(
                 BakeryBreadCatalog.BreadLoafId, dayIndex, diag);
             bool hasActiveConventionalBatch = false;
             foreach (BakeryDoughBatch batch in bakery.Batches)
@@ -14175,17 +14247,11 @@ namespace LandLedgers.Orchestration.Systems
                 hasActiveConventionalBatch = true;
                 break;
             }
-            bool hasActiveWholesaleAccount = false;
-            foreach (BakeryWholesaleAccount account in bakery.WholesaleAccounts)
-            {
-                if (account == null || !account.IsActive) continue;
-                hasActiveWholesaleAccount = true;
-                break;
-            }
+            bool hasActiveStagedBatch = driver.HasActiveBatch || driver.Chain.BreadShelf.Count > 0;
 
             // Retail production is authorized only by an actual open
             // household bread need not covered by this bakery's saleable
-            // stock. Wholesale batches continue through their existing
+            // stock (net of due-today wholesale). Wholesale batches continue through their existing
             // driver; either pipeline blocks a second concurrent batch.
             // A completed staged lot awaiting shelf transfer also holds the
             // retail pipeline, so a transfer refusal cannot cause duplicate
@@ -14193,11 +14259,13 @@ namespace LandLedgers.Orchestration.Systems
             if (!ShouldBeginStagedBakeryBatch(
                     openBreadNeedUnits, bakeryRetailUnits,
                     hasActiveConventionalBatch,
-                    driver.HasActiveBatch || driver.Chain.BreadShelf.Count > 0,
-                    hasActiveWholesaleAccount))
+                    hasActiveStagedBatch))
             {
-                if (diag.Count > 0)
-                    Debug.Log("[BakeryProduction] Day " + dayIndex + ": " + string.Join(" | ", diag), this);
+                string refusal = StagedBakeryBatchRefusalReason(
+                    openBreadNeedUnits, bakeryRetailUnits,
+                    hasActiveConventionalBatch, hasActiveStagedBatch);
+                string detail = diag.Count > 0 ? " | " + string.Join(" | ", diag) : string.Empty;
+                Debug.Log("[BakeryProduction] Day " + dayIndex + ": staged retail batch refused — " + refusal + detail, this);
                 return;
             }
 
@@ -14226,13 +14294,35 @@ namespace LandLedgers.Orchestration.Systems
             int openBreadNeedUnits,
             int bakeryRetailUnits,
             bool hasActiveConventionalBatch,
-            bool hasActiveStagedBatch,
-            bool hasActiveWholesaleAccount = false)
+            bool hasActiveStagedBatch)
         {
             return openBreadNeedUnits > Math.Max(0, bakeryRetailUnits)
                 && !hasActiveConventionalBatch
-                && !hasActiveStagedBatch
-                && !hasActiveWholesaleAccount;
+                && !hasActiveStagedBatch;
+        }
+
+        /// <summary>
+        /// Lane 9a (H-4 / A2): names the blocking clause whenever
+        /// DriveStagedBakeryDay refuses a staged retail batch, so a
+        /// refusal is never silent. Null when the gate passes. The
+        /// retail figure here is already net of due-today wholesale
+        /// units (see BakeryShopRuntime.RetailUnitsNetOfDueWholesale);
+        /// a voluntary wholesale account is not a blocking clause
+        /// anymore.
+        /// </summary>
+        internal static string StagedBakeryBatchRefusalReason(
+            int openBreadNeedUnits,
+            int bakeryRetailUnits,
+            bool hasActiveConventionalBatch,
+            bool hasActiveStagedBatch)
+        {
+            if (openBreadNeedUnits <= Math.Max(0, bakeryRetailUnits))
+                return $"open household bread need ({openBreadNeedUnits}u) does not exceed retail stock net of due-today wholesale ({Math.Max(0, bakeryRetailUnits)}u)";
+            if (hasActiveConventionalBatch)
+                return "a conventional batch is already active";
+            if (hasActiveStagedBatch)
+                return "a staged batch is active or a staged lot awaits shelf transfer";
+            return null;
         }
 
         private void DriveStagedBakeryTick(int wholeMinutes, int dayIndex, int minuteOfDay)

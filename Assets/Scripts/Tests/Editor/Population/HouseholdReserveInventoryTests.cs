@@ -229,28 +229,69 @@ namespace LandLedgers.EditorTests.Population
 
                 var inventory = new HouseholdInventory(household.id);
                 household.GetReserve("meat").currentUnits = 0;
+
+                // Lane 9a (A8): a NEW game seeds NO unspecified lots —
+                // generic stock is never edible — so every meal is missed
+                // and classified NoFoodInLarder, with the reserve mirror
+                // itself untouched.
                 HouseholdInventoryReserveBridge.SeedLotsFromReserves(
                     household, inventory, 0, new List<string>());
-                Assert.AreEqual(reserve.currentUnits,
+                Assert.AreEqual(0,
                     inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
-                    "The opening reserve must become the same finite physical lot quantity exactly once.");
+                    "A new game seeds no unspecified staple lots.");
+                Assert.AreEqual(expectedOpeningUnits, reserve.currentUnits,
+                    "The reserve mirror is untouched by the new-game seed.");
 
-                // Exercise the actual meal authority against only the seeded
-                // staple lot. Its lot consumption must cover seven full days
-                // at the same units-per-serving rule used by the reserve.
-                HouseholdMealService meals = new HouseholdMealService(new HouseholdMealLogRegistry());
+                var mealLog = new HouseholdMealLogRegistry();
+                HouseholdMealService meals = new HouseholdMealService(mealLog);
                 List<int> memberIds = new List<int>(household.memberIds);
-                for (int day = 0; day < 7; day++)
+                MealDayResult result = meals.ServeHouseholdDay(
+                    household, memberIds, inventory, MealSchedulingPolicy.Default, 0, null);
+                Assert.AreEqual(0, result.MealsServed);
+                Assert.AreEqual(consumerCount * dailyMealSlots, result.MealsMissed);
+                foreach (MissedMealRecord missed in mealLog.GetMissedMeals(household.id))
                 {
-                    MealDayResult result = meals.ServeHouseholdDay(
-                        household, memberIds, inventory, MealSchedulingPolicy.Default, day, null);
-                    Assert.AreEqual(consumerCount * dailyMealSlots, result.MealsServed,
-                        $"Day {day + 1} should serve all ordinary meal slots for {consumerCount} consumers.");
-                    Assert.AreEqual(0, result.MealsMissed);
+                    Assert.AreEqual(MissedMealReasonKind.NoFoodInLarder, missed.ReasonKind,
+                        "A missed meal with an empty larder is classified, not generic.");
                 }
 
-                Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
-                    "Exactly seven days of opening food is consumed; no meals or inventory are added.");
+                // Lane 9a (A8): a LEGACY save seeds the same quantity —
+                // flagged unidentified historical stock — and it still
+                // cannot be served until identified.
+                var legacyInventory = new HouseholdInventory(household.id);
+                HouseholdInventoryReserveBridge.SeedLotsFromReserves(
+                    household, legacyInventory, 0, new List<string>(), fromLegacySave: true);
+                Assert.AreEqual(reserve.currentUnits,
+                    legacyInventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
+                    "The legacy opening reserve becomes the same finite physical lot quantity exactly once.");
+                HouseholdMealLogRegistry legacyLog = new HouseholdMealLogRegistry();
+                HouseholdMealService legacyMeals = new HouseholdMealService(legacyLog);
+                MealDayResult legacyResult = legacyMeals.ServeHouseholdDay(
+                    household, memberIds, legacyInventory, MealSchedulingPolicy.Default, 0, null);
+                Assert.AreEqual(0, legacyResult.MealsServed,
+                    "Unidentified historical stock cannot be served as a meal until identified.");
+                Assert.AreEqual(reserve.currentUnits,
+                    legacyInventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
+                    "The flagged lot is untouched by the missed meals.");
+
+                // A loaf is a loaf: identified bread at one unit per
+                // serving covers seven full days at actual demand.
+                HouseholdItemDefinition bread = HouseholdItemCatalog.Get(HouseholdItemCatalog.BreadId);
+                var breadInventory = new HouseholdInventory(household.id);
+                Assert.IsNull(breadInventory.AddLot(HouseholdItemCatalog.BreadId,
+                    expectedServings * bread.MealServingUnits, 0, "opening pantry"));
+                HouseholdMealService breadMeals = new HouseholdMealService(new HouseholdMealLogRegistry());
+                for (int day = 0; day < 7; day++)
+                {
+                    MealDayResult dayResult = breadMeals.ServeHouseholdDay(
+                        household, memberIds, breadInventory, MealSchedulingPolicy.Default, day, null);
+                    Assert.AreEqual(consumerCount * dailyMealSlots, dayResult.MealsServed,
+                        $"Day {day + 1} should serve all ordinary meal slots for {consumerCount} consumers.");
+                    Assert.AreEqual(0, dayResult.MealsMissed);
+                }
+
+                Assert.AreEqual(0, breadInventory.GetAvailableUnits(HouseholdItemCatalog.BreadId),
+                    "Exactly seven days of opening bread is consumed; no meals or inventory are added.");
             }
         }
 

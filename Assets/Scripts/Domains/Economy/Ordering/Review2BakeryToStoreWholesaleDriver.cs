@@ -337,7 +337,11 @@ namespace LandLedgers.Economy.Ordering
             int stockUnits = Math.Min(availableShelf, categoryCapacity);
             if (stockUnits <= 0)
             {
-                result.Refusal = $"Review2Wholesale: live category '{categoryId}' has no receiving capacity; {line.ShelfUnits}u remain on the catalog shelf.";
+                // Lane 9a (A10): a zero-capacity refusal is item-aware and
+                // loud — it names the category target, current stock and
+                // the occupying items, so a refused stocking says whether
+                // bread is blocked by flour or by bread itself.
+                result.Refusal = $"Review2Wholesale: live category '{categoryId}' has no receiving capacity ({DescribeCategoryOccupancy(storePort, categoryId)}); {line.ShelfUnits}u '{productId}' remain on the catalog shelf.";
                 if (diag != null) diag.Add(result.Refusal);
                 return result;
             }
@@ -404,6 +408,38 @@ namespace LandLedgers.Economy.Ordering
             result.LivePoolUnitsAfter = storePort.CategoryStockUnits(categoryId);
             if (diag != null) diag.Add($"Review2Wholesale: stocked {stockUnits}u '{productId}' into live category '{categoryId}' (pool now {result.LivePoolUnitsAfter}u); {line.ShelfUnits}u remain on catalog shelf.");
             return result;
+        }
+
+        /// <summary>
+        /// Lane 9a (A10): what fills a full receiving category — target,
+        /// current stock, and the occupying items with their units where
+        /// the port can report them. A port without item-level offers
+        /// still names the target and current stock.
+        /// </summary>
+        private static string DescribeCategoryOccupancy(IGeneralStoreTradingPort storePort, string categoryId)
+        {
+            int target = storePort.CategoryTargetStockUnits(categoryId);
+            int current = storePort.CategoryStockUnits(categoryId);
+            var occupying = new List<string>();
+            if (storePort.CategoryOffers != null)
+            {
+                foreach (GeneralStoreCategoryOffer offer in storePort.CategoryOffers)
+                {
+                    if (offer == null || offer.OfferedItemIds == null
+                        || !string.Equals(offer.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase)) continue;
+                    foreach (string itemId in offer.OfferedItemIds)
+                    {
+                        if (string.IsNullOrWhiteSpace(itemId)) continue;
+                        if (storePort is IItemLevelGeneralStoreTradingPort itemPort
+                            && itemPort.UsesItemLevelInventory(itemId))
+                            occupying.Add($"{itemId} {itemPort.ItemStockUnits(itemId)}u");
+                        else
+                            occupying.Add(itemId);
+                    }
+                }
+            }
+            string occupants = occupying.Count > 0 ? string.Join(", ", occupying) : "no offered items reported";
+            return $"target {target}u, current {current}u, occupying: {occupants}";
         }
 
         private static BakeryBreadLot OldestSellableLot(BakeryShopRuntime bakery, string productId)

@@ -12,25 +12,22 @@ namespace LandLedgers.Economy.Equipment
     /// zero by default, NewGame-only, idempotent via the
     /// BusinessRuntimeState endowment marker, and never changes cash.
     /// A seller whose business key has no wholesale-account entry gets
-    /// nothing from the config; a config that lists no wholesale
-    /// accounts at all books the single demand-derived fallback account
-    /// (§5 of the plan) so the bakery is not silently blocked, labelled
-    /// calibration with D-1 open. The account id is assigned by
+    /// nothing from the config. Lane 9a (§19 retail-first, H-1): there is
+    /// NO demand-derived fallback — a config that lists no wholesale
+    /// accounts at all books nothing, so New Game creates no wholesale
+    /// account and the bakery sells direct to consumers. Wholesale after
+    /// New Game is opt-in only: an explicit config entry, or a runtime
+    /// decision recorded through
+    /// <see cref="BakeryShopRuntime.AddWholesaleAccount"/>. Accounts
+    /// already booked in existing saves stay booked (the endowment
+    /// marker prevents re-booking; removing the creation code un-books
+    /// nothing). The account id is assigned by
     /// <see cref="BakeryShopRuntime.AddWholesaleAccount"/>. No flour,
     /// no fuel, no bread: an account alone bakes nothing — it only makes
     /// the daily driver (BakeryWholesaleDailyDriver) able to plan.
     /// </summary>
     public static class ScenarioOpeningWholesaleAccounts
     {
-        /// <summary>
-        /// Demand-derived fallback price: 2c per loaf. Documented
-        /// evidence, not invention — Docs/Review2VerticalD1Review.md
-        /// ("wholesale 2c, retail 5c") and
-        /// Docs/Regional_Item_Coverage_Register_2026-11-05.md ("2c
-        /// wholesale"); the transfer tests pass 2c as the store
-        /// definition's evidence value.
-        /// </summary>
-        public const int FallbackPricePerUnitCents = 2;
 
         public static bool TryApply(
             DevelopmentTownConfiguration configuration,
@@ -68,24 +65,11 @@ namespace LandLedgers.Economy.Equipment
             // K2: direct owner-record iteration. The deleted
             // WholesaleAccounts view projected every business's opening
             // wholesaleAgreements and stamped the seller key onto them.
-            // This seller's own opening record is the entry set, and the
-            // config-wide hasAnyEntry flag still scans every business, so
-            // the fallback rule is unchanged: it books only when the
-            // config lists no wholesale accounts at all, for any seller.
-            // A seller with no entries of its own while another seller
-            // has entries gets no fallback and no booking, exactly as
-            // before (pinned by WholesaleAccounts_OtherSellerEntry_BlocksFallback).
+            // This seller's own opening record is the entry set. Lane 9a
+            // (H-1): there is no demand-derived fallback — a seller with
+            // no entries of its own books nothing, whether or not any
+            // other seller has entries.
             var entries = new List<DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition>();
-            bool hasAnyEntry = false;
-            foreach (DevelopmentTownConfiguration.BusinessDefinition candidateBusiness in configuration.Businesses)
-            {
-                if (candidateBusiness?.opening?.wholesaleAgreements == null) continue;
-                foreach (DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition candidate in candidateBusiness.opening.wholesaleAgreements)
-                {
-                    if (candidate == null) continue;
-                    hasAnyEntry = true;
-                }
-            }
             if (sellerBusiness?.opening?.wholesaleAgreements != null)
             {
                 foreach (DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition candidate in sellerBusiness.opening.wholesaleAgreements)
@@ -134,48 +118,23 @@ namespace LandLedgers.Economy.Equipment
 
             var booked = new List<string>();
 
-            if (!hasAnyEntry)
+            // Lane 9a (H-1): only explicit config entries book an
+            // account. A config with no entries books nothing — no
+            // demand-derived fallback exists anymore.
+            foreach (DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition entry in entries)
             {
-                // Demand-derived fallback (plan 01 §5), only when the
-                // config lists no wholesale accounts at all. Derivation:
-                // day-1 household demand was 24 loaves (4 households x 6
-                // — STRESS_TEST_ANALYSIS.md P0 evidence); one batch yields
-                // exactly 24 loaves (BakeryBreadCatalog.BreadYieldPerBatch),
-                // so 24/day is exactly one batch/day and
-                // PlanWholesaleBatches derives the batch count from the
-                // account (ceil(24/24) = 1) — the driver never chooses a
-                // batch count itself. Labelled calibration; D-1 open.
-                var fallback = new BakeryWholesaleAccount
+                var account = new BakeryWholesaleAccount
                 {
                     BuyerBusinessId = buyerBusiness.InstanceId,
                     BuyerType = BusinessType.GeneralStore,
-                    ProductId = BakeryBreadCatalog.BreadLoafId,
-                    UnitsPerDelivery = BakeryBreadCatalog.RetailReferenceDemandUnits,
-                    DeliveryCadenceDays = 1,
-                    PricePerUnitCents = FallbackPricePerUnitCents,
-                    Freshness = BakeryWholesaleFreshness.FreshOrDayOld,
-                    NextDeliveryDayIndex = dayIndex,
+                    ProductId = entry.productId.Trim(),
+                    UnitsPerDelivery = entry.unitsPerDelivery,
+                    DeliveryCadenceDays = Math.Max(1, entry.deliveryCadenceDays),
+                    PricePerUnitCents = entry.pricePerUnitCents,
+                    Freshness = entry.freshness,
+                    NextDeliveryDayIndex = entry.firstDeliveryDayIndex,
                 };
-                if (!BookIfNew(sellerRuntime, fallback, diag, booked, out error)) return false;
-                diag.Add("ScenarioOpeningWholesaleAccounts: fallback account is demand-derived calibration (24 units/day = one 24-loaf batch/day, 2c); D-1 open — override in scenario config.");
-            }
-            else
-            {
-                foreach (DevelopmentTownConfiguration.BakeryWholesaleAccountDefinition entry in entries)
-                {
-                    var account = new BakeryWholesaleAccount
-                    {
-                        BuyerBusinessId = buyerBusiness.InstanceId,
-                        BuyerType = BusinessType.GeneralStore,
-                        ProductId = entry.productId.Trim(),
-                        UnitsPerDelivery = entry.unitsPerDelivery,
-                        DeliveryCadenceDays = Math.Max(1, entry.deliveryCadenceDays),
-                        PricePerUnitCents = entry.pricePerUnitCents,
-                        Freshness = entry.freshness,
-                        NextDeliveryDayIndex = entry.firstDeliveryDayIndex,
-                    };
-                    if (!BookIfNew(sellerRuntime, account, diag, booked, out error)) return false;
-                }
+                if (!BookIfNew(sellerRuntime, account, diag, booked, out error)) return false;
             }
 
             if (!sellerBusinessRuntimeState.RecordAppliedScenarioEndowment(endowmentId))
@@ -186,8 +145,7 @@ namespace LandLedgers.Economy.Equipment
 
             report = booked.Count == 0
                 ? $"No wholesale accounts are configured for seller '{sellerBusinessKey}' ({sellerInstanceId}); nothing was booked."
-                : $"Booked wholesale account(s) for '{sellerBusinessKey}' ({sellerInstanceId}): {string.Join("; ", booked)}."
-                    + (!hasAnyEntry ? " (demand-derived fallback; D-1 open — override in scenario config)" : string.Empty);
+                : $"Booked wholesale account(s) for '{sellerBusinessKey}' ({sellerInstanceId}): {string.Join("; ", booked)}.";
             return true;
         }
 

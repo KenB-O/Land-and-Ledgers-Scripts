@@ -27,6 +27,7 @@ using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Trade;
 using LandLedgers.Economy.Creation;
+using LandLedgers.Diagnostics;
 using LandLedgers.Economy.Labor;
 using LandLedgers.Economy.Recruitment;
 using LandLedgers.FirstLedger;
@@ -6112,6 +6113,20 @@ namespace LandLedgers.Orchestration.Systems
             // drive has run, so a day's placements and consumptions are
             // reflected before the next day's planning reads them.
             DriveFurnishingStorageDay(absoluteDayIndex);
+
+            // Lane 6 (Tool 12, Muse Pass): the 7-day incident escalation
+            // sweep Lane 1 left open — the incident model supports the
+            // Escalated status and the authority emits [ESCALATED] on a
+            // severity upgrade, but no daily pass escalated a standing
+            // incident after 7 days. Runs last in the day drive, reusing
+            // this drive's day index, after every daily driver has run.
+            // Diagnostics only: DriveDailyHealth never throws, and it emits
+            // only genuine escalation lines, so a quiet day adds no output.
+            // (The Decision-11 no-worker ladder — warn ~1d / escalate 3d /
+            // exception 7d — was not located in source (C R-14) and is NOT
+            // implemented here; this sweep is the incident-level standing
+            // horizon, mirroring the household 7-day cadence.)
+            IncidentDiagnostics.DriveDailyHealth(absoluteDayIndex, timeManager.AbsoluteGameSeconds);
         }
 
         /// <summary>

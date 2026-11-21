@@ -25,11 +25,24 @@ namespace LandLedgers.Diagnostics
         /// <summary>DIAGNOSTIC PARAMETER. At most this many warning lines per signature per day (day-keyed dedup already allows one first line per day; the remaining allowance is for same-day [ESCALATED] / [CAUSE-CHANGED] lines).</summary>
         public int MaxWarningsPerSignaturePerDay { get; set; }
 
+        /// <summary>
+        /// DIAGNOSTIC PARAMETER. A standing (Open / CauseChanged) incident
+        /// escalates after this many days without resolving. Default 7 — the
+        /// household supply-incident cadence (SimulationDrivers
+        /// ObserveHouseholdSupplyIncident escalates every 7 days). This is
+        /// the incident-level standing horizon; it is NOT the Decision-11
+        /// no-worker ladder (warn ~1d / escalate 3d / exception 7d), whose
+        /// thresholds were not located in source (C R-14) and are not
+        /// invented here.
+        /// </summary>
+        public int EscalationHorizonDays { get; set; }
+
         public IncidentAuthoritySettings()
         {
             MaxRetainedIncidents = 512;
             MaxWarningsPerDay = 12;
             MaxWarningsPerSignaturePerDay = 3;
+            EscalationHorizonDays = 7;
         }
 
         /// <summary>A fresh settings instance carrying the defaults.</summary>
@@ -153,6 +166,34 @@ namespace LandLedgers.Diagnostics
         /// <summary>Total occurrences recorded across all incidents.</summary>
         public int TotalOccurrences { get; private set; }
 
+        /// <summary>New signatures seen on the current day (resets when the day rolls).</summary>
+        public int NewSignaturesToday
+        {
+            get { return newSignaturesToday; }
+        }
+
+        /// <summary>Signatures seen before today and seen again today.</summary>
+        public int RepeatingSignaturesToday
+        {
+            get
+            {
+                int repeating = signaturesSeenToday.Count - newSignaturesToday;
+                return repeating < 0 ? 0 : repeating;
+            }
+        }
+
+        /// <summary>Warning lines omitted by cap on the current day.</summary>
+        public int OmittedWarningsToday
+        {
+            get { return omittedCountToday; }
+        }
+
+        /// <summary>Day index the per-day counters currently belong to (-1 = no day-keyed emission yet).</summary>
+        public int CurrentDay
+        {
+            get { return warningsDay; }
+        }
+
         /// <summary>Incidents retained, in first-seen order.</summary>
         public IReadOnlyList<SimulationIncident> RetainedIncidents
         {
@@ -210,6 +251,121 @@ namespace LandLedgers.Diagnostics
         }
 
         /// <summary>
+        /// Lane 6 (Tool 12) — the 7-day escalation sweep Lane 1 left open.
+        /// Evaluates every retained standing incident (Open / CauseChanged)
+        /// for the given day: one first seen at least
+        /// <see cref="IncidentAuthoritySettings.EscalationHorizonDays"/>
+        /// days ago moves to Escalated and emits one [ESCALATED] line naming
+        /// the owning system and the recovery authority (W §7). The sweep
+        /// mirrors the household supply-incident cadence
+        /// (ObserveHouseholdSupplyIncident escalates every 7 days); it does
+        /// not change severity — ESCALATED stays at the incident's severity —
+        /// and it never re-escalates an incident that is already Escalated,
+        /// Resolved, or Closed. Occurrence counts are untouched: the sweep
+        /// observes, it does not record a new occurrence. Returns the
+        /// signature ids escalated, in first-seen order.
+        /// </summary>
+        public IReadOnlyList<string> EvaluateEscalationSweep(int dayIndex, double simSeconds)
+        {
+            var escalated = new List<string>();
+            if (!enabled || dayIndex < 0)
+            {
+                return escalated;
+            }
+
+            RollDay(dayIndex);
+            int horizon = settings != null && settings.EscalationHorizonDays >= 1
+                ? settings.EscalationHorizonDays
+                : IncidentAuthoritySettings.Defaults.EscalationHorizonDays;
+
+            // Iterate a copy of the order: ChangeStatus does not mutate it,
+            // but the sweep must stay correct if that ever changes.
+            var order = new List<string>(incidentOrder);
+            foreach (string signatureId in order)
+            {
+                SimulationIncident incident;
+                if (!incidents.TryGetValue(signatureId, out incident))
+                {
+                    continue;
+                }
+
+                if (incident.Status != IncidentStatus.Open
+                    && incident.Status != IncidentStatus.CauseChanged)
+                {
+                    continue;
+                }
+
+                if (incident.FirstSeenDay < 0)
+                {
+                    continue;
+                }
+
+                int standingDays = dayIndex - incident.FirstSeenDay;
+                if (standingDays < horizon)
+                {
+                    continue;
+                }
+
+                incident.ChangeStatus(IncidentStatus.Escalated, dayIndex, simSeconds,
+                    "standing " + standingDays + " day(s); escalation horizon " + horizon + " day(s)");
+                escalated.Add(signatureId);
+
+                if (!TryEmitLine(signatureId, dayIndex))
+                {
+                    omittedCountToday++;
+                    omittedIdentitiesToday.Add(signatureId);
+                    continue;
+                }
+
+                Emit("[Incident][ESCALATED] " + signatureId + " day " + dayIndex
+                    + ": open " + standingDays + " day(s) (first seen day " + incident.FirstSeenDay + ")"
+                    + ", system " + incident.OwningSystem
+                    + ", recovery " + incident.RecoveryAuthority
+                    + "; " + incident.Summary);
+            }
+
+            return escalated;
+        }
+
+        /// <summary>
+        /// Lane 6 (Tool 12) — the [Incident][CLOSED] emitter (E W-5).
+        /// Verified in this lane: no [CLOSED] emitter existed in the core —
+        /// the household system emits [Incident][RESOLVED] (info) when a
+        /// need closes, and nothing emitted [CLOSED] for a disposition
+        /// (fixed, explained-legitimate, blocked-with-reason). Closes the
+        /// retained incident with the given disposition, records the
+        /// transition in its status history, and emits one [CLOSED] line.
+        /// Returns false when disabled, when the signature is unknown, or
+        /// when the incident is already Resolved or Closed (a second close
+        /// emits nothing). Closing records no occurrence: dedup counts
+        /// survive the close unchanged.
+        /// </summary>
+        public bool CloseIncident(string signatureId, int dayIndex, double simSeconds, string disposition)
+        {
+            if (!enabled || string.IsNullOrWhiteSpace(signatureId))
+            {
+                return false;
+            }
+
+            SimulationIncident incident = TryGetIncident(signatureId);
+            if (incident == null)
+            {
+                return false;
+            }
+
+            if (incident.Status == IncidentStatus.Closed || incident.Status == IncidentStatus.Resolved)
+            {
+                return false;
+            }
+
+            string note = string.IsNullOrWhiteSpace(disposition) ? "closed" : disposition.Trim();
+            incident.ChangeStatus(IncidentStatus.Closed, dayIndex, simSeconds, note);
+            Emit("[Incident][CLOSED] " + incident.SignatureId + " day " + dayIndex
+                + ": " + note + "; " + incident.Summary);
+            return true;
+        }
+
+        /// <summary>
         /// Emits the daily summary line (at most once per day) through the
         /// warning sink, plus the omitted-identities line when the caps hid
         /// warnings and the evicted-identities line (info sink) when
@@ -228,11 +384,7 @@ namespace LandLedgers.Diagnostics
 
             RollDay(dayIndex);
             int retained = incidents.Count;
-            int repeatingToday = signaturesSeenToday.Count - newSignaturesToday;
-            if (repeatingToday < 0)
-            {
-                repeatingToday = 0;
-            }
+            int repeatingToday = RepeatingSignaturesToday;
 
             int evictedSinceLastSummary = EvictedIncidentCount - evictedCountAtLastSummary;
             string line = "[Incident] summary day " + dayIndex

@@ -537,6 +537,119 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void FailedMillbrookShipmentRemainsQuarantinedButDoesNotCountAsFutureFlourCover()
+        {
+            Slice s = NewSlice();
+            var supplierDefinition = CreateOffMapAidBusinessDefinition();
+            supplierDefinition.BusinessId = "millbrook_grain_co";
+            supplierDefinition.DisplayName = "Millbrook Grain Co.";
+            supplierDefinition.Inventory = new List<OffMapAidInventoryRow>
+            {
+                new OffMapAidInventoryRow
+                {
+                    ItemId = "bakery_flour_sack", InventoryUnit = "lb", StartingUnits = 230,
+                    OrderUnit = "10 lb sack", InventoryUnitsPerOrderUnit = 10,
+                    BakeryUnitsPerOrderUnit = 18, OrderPriceCents = 48
+                }
+            };
+            var supplier = new OffMapAidBusinessRuntime(supplierDefinition);
+            Assert.IsNull(supplier.TryPlaceOrder("failed-flour", BakeryInstanceId, BakeryInstanceId,
+                1, new Series2BusinessRuntimeCashPort(s.BakeryRuntime), 1, out OffMapAidCargoLot lot));
+            Assert.IsNull(supplier.CommitFreightPickup(lot.LotId, "failed-flour-shipment", 2));
+
+            var failedShipment = new LogisticsShipmentState
+            {
+                shipmentId = "failed-flour-shipment",
+                state = LogisticsShipmentStatus.Failed,
+            };
+            BakeryWholesaleDailyInputs inputs = InputsFor(s, 3);
+            inputs.MillbrookSupplier = supplier;
+            inputs.FindFreightShipment = shipmentId => shipmentId == failedShipment.ShipmentId ? failedShipment : null;
+
+            Assert.AreEqual(0, BakeryWholesaleDailyDriver.OutstandingMillbrookLb(inputs),
+                "terminal failed cargo must not suppress a legitimate replacement supply decision");
+            Assert.IsFalse(lot.Received, "the original paid lot remains distinct and unreceived in quarantine");
+            Assert.AreEqual("failed-flour-shipment", lot.ShipmentId);
+            Assert.AreEqual(10, lot.InventoryUnits);
+            Assert.AreEqual(1, supplier.CashTransactions.Count,
+                "recognizing terminal freight does not repeat or erase the original payment record");
+            Assert.AreEqual(1, supplier.Lots.Count,
+                "recognizing terminal freight does not create or destroy any lot");
+
+            BakeryWholesaleDailyInputs unresolvedAuthorityInputs = InputsFor(s, 3);
+            unresolvedAuthorityInputs.MillbrookSupplier = supplier;
+            Assert.AreEqual(10, BakeryWholesaleDailyDriver.OutstandingMillbrookLb(unresolvedAuthorityInputs),
+                "unknown shipment state remains conservatively covered; only explicit terminal failure releases procurement cover");
+
+            failedShipment.state = LogisticsShipmentStatus.InTransit;
+            Assert.AreEqual(10, BakeryWholesaleDailyDriver.OutstandingMillbrookLb(inputs),
+                "live freight cargo remains cover and cannot be purchased twice");
+        }
+
+        [Test]
+        public void FailedMillbrookCargoAllowsOneNewPaidReorderWithoutMutatingQuarantinedLot()
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, flourLb: 0, notions: 1, fuel: 1);
+            BookAccount(s, units: 24, cadence: 1, price: 2, dueDay: 2);
+
+            OffMapAidBusinessDefinition supplierDefinition = CreateOffMapAidBusinessDefinition();
+            supplierDefinition.BusinessId = "millbrook_grain_co";
+            supplierDefinition.DisplayName = "Millbrook Grain Co.";
+            supplierDefinition.Inventory = new List<OffMapAidInventoryRow>
+            {
+                new OffMapAidInventoryRow
+                {
+                    ItemId = "bakery_flour_sack", InventoryUnit = "lb", StartingUnits = 230,
+                    OrderUnit = "10 lb sack", InventoryUnitsPerOrderUnit = 10,
+                    BakeryUnitsPerOrderUnit = 18, OrderPriceCents = 48
+                }
+            };
+            var supplier = new OffMapAidBusinessRuntime(supplierDefinition);
+            BakeryWholesaleDailyInputs inputs = InputsFor(s, 2);
+            inputs.MillbrookSupplier = supplier;
+            inputs.MillbrookQuote = new MillbrookFlourQuote
+            {
+                SacksAvailable = 23,
+                GoodsPricePerSackCents = 48,
+                OneWayMiles = 50f,
+                FreightQuoteCents = 125,
+                FreightAvailable = false,
+                FreightUnavailableReason = "awaiting fresh freight negotiation",
+            };
+
+            Assert.IsNull(supplier.TryPlaceOrder("failed-opening-flour", BakeryInstanceId, BakeryInstanceId,
+                1, inputs.BakeryCashPort, 0, out OffMapAidCargoLot quarantinedLot));
+            Assert.IsNull(supplier.CommitFreightPickup(quarantinedLot.LotId, "failed-opening-shipment", 1));
+            var failedShipment = new LogisticsShipmentState
+            {
+                shipmentId = "failed-opening-shipment",
+                state = LogisticsShipmentStatus.Failed,
+            };
+            inputs.FindFreightShipment = shipmentId => shipmentId == failedShipment.ShipmentId ? failedShipment : null;
+            int cashBeforeDailyReorder = s.BakeryRuntime.CurrentCashCents;
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, s.Diag);
+
+            Assert.AreEqual(1, result.BatchesPlanned);
+            Assert.AreEqual(0, result.FlourPoundsPurchased, "no store flour is available to satisfy the planned batch");
+            Assert.AreEqual(2, result.MillbrookReorderSacks, "the explicit freight failure releases only the uncovered need");
+            Assert.IsFalse(string.IsNullOrWhiteSpace(result.MillbrookReorderLotId));
+            Assert.AreEqual(2, supplier.Lots.Count, "old quarantined cargo and new paid order remain separate lots");
+            Assert.AreNotEqual(quarantinedLot.LotId, result.MillbrookReorderLotId);
+            Assert.AreEqual("failed-opening-shipment", quarantinedLot.ShipmentId);
+            Assert.IsFalse(quarantinedLot.Received, "the failure is not silently converted to receipt");
+            Assert.AreEqual(10, quarantinedLot.InventoryUnits, "the failed cargo quantity remains intact");
+            Assert.AreEqual(2, supplier.CashTransactions.Count, "each order has one separate supplier cash transaction");
+            Assert.AreNotEqual(supplier.CashTransactions[0].OrderId, supplier.CashTransactions[1].OrderId);
+            Assert.AreEqual(cashBeforeDailyReorder - result.MillbrookReorderSacks * 48,
+                s.BakeryRuntime.CurrentCashCents, "the replacement order is paid once through the existing buyer cash port");
+            Assert.AreEqual(200, supplier.GetInventoryUnits("bakery_flour_sack"),
+                "Millbrook stock reflects the original and replacement purchases exactly once");
+        }
+
+        [Test]
         public void PlannedBatchFlourAlreadyInCustody_IsNotPurchasedAgain()
         {
             Slice s = NewSlice();

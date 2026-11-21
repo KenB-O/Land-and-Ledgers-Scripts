@@ -107,6 +107,10 @@ namespace LandLedgers.Population
         /// (ScheduleLegDueAfterLoad, :961)).</summary>
         internal EntityId ServiceTaskId;
         internal int ServiceTaskPlannedMinutes;
+        // Retain the latest clerk/task availability refusal until service
+        // succeeds or the finite wait expires, so a timeout names the real
+        // blocker instead of collapsing every case into "no clerk".
+        public string LastServiceRefusal = string.Empty;
         public float ServiceWaitDeadlineGameSeconds = -1f;
         internal PlannedShoppingTripSaveDto CandidateDto;
 
@@ -153,6 +157,7 @@ namespace LandLedgers.Population
         // 0 minutes) and take the fallback path.
         public EntityId ServiceTaskId;
         public int ServiceTaskPlannedMinutes;
+        public string LastServiceRefusal = string.Empty;
         public float ServiceWaitDeadlineGameSeconds = -1f;
         public int ActiveRouteLegKind = -1;
         public float ActiveRouteStartedGameSeconds = -1f;
@@ -1155,19 +1160,27 @@ namespace LandLedgers.Population
                 if (trip.ServiceWaitDeadlineGameSeconds >= 0f
                     && nowGameSeconds >= trip.ServiceWaitDeadlineGameSeconds)
                 {
-                    ReturnEmpty(trip, "No physically present clerk completed service within the customer's finite waiting window.",
+                    string timeoutReason = "No physically present clerk completed service within the customer's finite waiting window.";
+                    if (!string.IsNullOrWhiteSpace(trip.LastServiceRefusal))
+                        timeoutReason += " Last availability check: " + trip.LastServiceRefusal;
+                    ReturnEmpty(trip, timeoutReason,
                         "counter service expired", dayIndex, nowGameSeconds, dueEvents, diag);
                     continue;
                 }
 
-                if (loop.TryStartCustomerService(trip, dayIndex, null, out _))
+                if (loop.TryStartCustomerService(trip, dayIndex, null, out string serviceRefusal))
                 {
+                    trip.LastServiceRefusal = string.Empty;
                     string taskId = trip.ServiceTaskId.ToString();
                     dueEvents.Schedule(DueEventKind.TaskCompletionDue,
                         nowGameSeconds + Math.Max(1, trip.ServiceTaskPlannedMinutes) * 60f,
                         taskId, out string dueId);
                     serviceTaskIdStringToTripId[taskId] = trip.TripId;
                     diag.Add($"ShoppingTripDriver: queued trip {trip.TripId} began TendCustomer task {taskId}; due {dueId}.");
+                }
+                else if (!string.IsNullOrWhiteSpace(serviceRefusal))
+                {
+                    trip.LastServiceRefusal = serviceRefusal;
                 }
             }
         }
@@ -2451,6 +2464,7 @@ namespace LandLedgers.Population
                 ReturnTaskId = trip.ReturnTaskId,
                 ServiceTaskId = trip.ServiceTaskId,
                 ServiceTaskPlannedMinutes = trip.ServiceTaskPlannedMinutes,
+                LastServiceRefusal = trip.LastServiceRefusal ?? string.Empty,
                 ServiceWaitDeadlineGameSeconds = trip.ServiceWaitDeadlineGameSeconds,
                 ActiveRouteLegKind = trip.ActiveRouteLegKind,
                 ActiveRouteStartedGameSeconds = trip.ActiveRouteStartedGameSeconds,
@@ -2520,6 +2534,7 @@ namespace LandLedgers.Population
                 ReturnTaskId = dto.ReturnTaskId,
                 ServiceTaskId = dto.ServiceTaskId,
                 ServiceTaskPlannedMinutes = dto.ServiceTaskPlannedMinutes,
+                LastServiceRefusal = dto.LastServiceRefusal ?? string.Empty,
                 ServiceWaitDeadlineGameSeconds = dto.ServiceWaitDeadlineGameSeconds,
                 ActiveRouteLegKind = dto.ActiveRouteLegKind,
                 ActiveRouteStartedGameSeconds = dto.ActiveRouteStartedGameSeconds,

@@ -6,6 +6,7 @@ using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Core;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Ordering;
 using LandLedgers.Primitives;
 
@@ -61,6 +62,13 @@ namespace LandLedgers.Economy.BreadDrivers
         public bool AllowConventionalRetailProduction = true;
         public MillbrookFlourQuote MillbrookQuote;
         public OffMapAidBusinessRuntime MillbrookSupplier;
+        /// <summary>
+        /// Resolves a paid lot's bound shipment through the existing freight
+        /// authority. A missing resolver or missing shipment remains
+        /// conservatively covered; only an explicitly failed shipment is
+        /// excluded from deliverable procurement cover.
+        /// </summary>
+        public Func<string, LogisticsShipmentState> FindFreightShipment;
         public int ImportFlourPricePerLbCents;
         public int ImportTransitDays;
         public bool ImportOrderPathExists;
@@ -306,12 +314,12 @@ namespace LandLedgers.Economy.BreadDrivers
         }
 
         /// <summary>Priority 3 Slice 4: pounds of flour in unreceived
-        /// Millbrook lots for this buyer — committed (in freight) and
-        /// uncommitted (awaiting pickup) alike, since both are future
-        /// flour the forward target must not order twice. Received lots
-        /// are already in the bin (on-hand), never counted here. The
+        /// Millbrook flour lots for this buyer — committed (in freight) and
+        /// uncommitted (awaiting pickup) alike. Explicitly failed cargo is
+        /// quarantined and does not count as deliverable cover. Received
+        /// lots are already in the bin (on-hand), never counted here. The
         /// reorder receives a net quantity with this cover already deducted.</summary>
-        private static int OutstandingMillbrookLb(BakeryWholesaleDailyInputs inputs)
+        internal static int OutstandingMillbrookLb(BakeryWholesaleDailyInputs inputs)
         {
             int total = 0;
             if (inputs == null || inputs.MillbrookSupplier == null || inputs.MillbrookSupplier.Lots == null) return 0;
@@ -321,6 +329,14 @@ namespace LandLedgers.Economy.BreadDrivers
                 if (lot.Received) continue;
                 if (!string.Equals(lot.BuyerBusinessId, inputs.BakeryBusinessId, StringComparison.Ordinal)) continue;
                 if (!string.Equals(lot.SkuId, MillbrookFlourReorder.FlourSkuId, StringComparison.Ordinal)) continue;
+                LogisticsShipmentState shipment = !string.IsNullOrWhiteSpace(lot.ShipmentId)
+                    ? inputs.FindFreightShipment?.Invoke(lot.ShipmentId)
+                    : null;
+                // A failed shipment retains its paid cargo in quarantine. It
+                // remains a distinct custody record but can no longer satisfy
+                // a future flour requirement. Do not infer failure when the
+                // shipment authority is unavailable or cannot resolve the id.
+                if (shipment != null && shipment.Status == LogisticsShipmentStatus.Failed) continue;
                 total += Math.Max(0, lot.InventoryUnits);
             }
             return total;
@@ -1076,13 +1092,13 @@ namespace LandLedgers.Economy.BreadDrivers
                 }
             }
 
-            // Outstanding Millbrook sacks: uncommitted, unreceived lots
-            // for this buyer — the same filter MillbrookFlourReorder's
-            // single-outstanding-order guard uses, so today's reorder
-            // (placed earlier in this RunDay) is included with any prior
-            // outstanding lot. No lot carries a scheduled arrival day.
+            // Paid, unreceived Millbrook lots remain visible even when the
+            // freight authority has moved a bound shipment into quarantine.
+            // Only live or not-yet-bound lots count as deliverable cover.
             string millbrookText;
             int transitFlourLb = 0;
+            int quarantinedFlourLb = 0;
+            var quarantinedLotTexts = new List<string>();
             if (inputs.MillbrookSupplier == null)
             {
                 millbrookText = "none in flight";
@@ -1097,15 +1113,28 @@ namespace LandLedgers.Economy.BreadDrivers
                     {
                         if (lot == null) continue;
                         if (!string.Equals(lot.BuyerBusinessId, inputs.BakeryBusinessId, StringComparison.Ordinal)) continue;
-                        if (lot.SourceCommitted || lot.Received) continue;
+                        if (!string.Equals(lot.SkuId, MillbrookFlourReorder.FlourSkuId, StringComparison.Ordinal)) continue;
+                        if (lot.Received) continue;
+                        LogisticsShipmentState shipment = !string.IsNullOrWhiteSpace(lot.ShipmentId)
+                            ? inputs.FindFreightShipment?.Invoke(lot.ShipmentId)
+                            : null;
+                        if (shipment != null && shipment.Status == LogisticsShipmentStatus.Failed)
+                        {
+                            quarantinedFlourLb += Math.Max(0, lot.InventoryUnits);
+                            quarantinedLotTexts.Add($"lot '{lot.LotId}' / shipment '{shipment.ShipmentId}' failed; cargo remains quarantined");
+                            continue;
+                        }
                         totalSacks += Math.Max(0, lot.PackageUnits);
                         transitFlourLb += Math.Max(0, lot.InventoryUnits);
-                        lotTexts.Add($"lot '{lot.LotId}' ordered day {Math.Max(0, lot.CreatedDayIndex)}");
+                        string shipmentStatus = shipment != null ? $", shipment '{shipment.ShipmentId}' {shipment.Status}" : ", shipment not yet resolved by freight";
+                        lotTexts.Add($"lot '{lot.LotId}' ordered day {Math.Max(0, lot.CreatedDayIndex)}{shipmentStatus}");
                     }
                 }
                 millbrookText = lotTexts.Count == 0
                     ? "none in flight"
                     : $"{totalSacks} sack(s) ({transitFlourLb} lb), {string.Join("; ", lotTexts)}, arrival unscheduled (freight pipeline)";
+                if (quarantinedLotTexts.Count > 0)
+                    millbrookText += $"; {quarantinedFlourLb} lb quarantined and excluded from procurement cover: {string.Join("; ", quarantinedLotTexts)}";
             }
 
             // Notions in flight by arrival day: live (unreceived,

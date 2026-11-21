@@ -23,6 +23,7 @@ using LandLedgers.Economy.Businesses.Logging;
 using LandLedgers.Economy.Businesses.LumberYard;
 using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Economy.Freight;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Trade;
@@ -9250,7 +9251,8 @@ namespace LandLedgers.Orchestration.Systems
             DriveMillbrookFreightNegotiation(absoluteDayIndex);
         }
 
-        private void BindFurniturePurchaseFreightHooks(FreightShipmentHooks hooks)
+        private void BindFurniturePurchaseFreightHooks(
+            LandLedgers.Economy.Logistics.FreightShipmentHooks hooks)
         {
             if (hooks == null || hub == null || FreightProduction?.Service == null) return;
             Dictionary<string, FurniturePurchaseOrder> ordersByShipment = new Dictionary<string, FurniturePurchaseOrder>(StringComparer.Ordinal);
@@ -15006,6 +15008,26 @@ namespace LandLedgers.Orchestration.Systems
             // to trigger advance buying from the same-day local counter.
             const bool importFlourOrderPathExists = false;
             int flourCatalogTransitDays = ImportCatalog.Get(BakeryFlourSupply.FlourMaterialId)?.TransitDays ?? 0;
+            // Build one status snapshot from the freight authority for this
+            // synchronous planning pass. AllShipments returns a new list, so
+            // calling it from the per-lot resolver would repeatedly allocate
+            // and rescan retained freight history as the town ages.
+            Func<string, LogisticsShipmentState> findFreightShipment = null;
+            FreightProductionDriver freightAuthority = FreightProduction;
+            if (freightAuthority != null)
+            {
+                var shipmentsById = new Dictionary<string, LogisticsShipmentState>(StringComparer.Ordinal);
+                foreach (LogisticsShipmentState shipment in freightAuthority.AllShipments())
+                {
+                    if (shipment == null || string.IsNullOrWhiteSpace(shipment.ShipmentId)
+                        || shipmentsById.ContainsKey(shipment.ShipmentId)) continue;
+                    shipmentsById.Add(shipment.ShipmentId, shipment);
+                }
+                findFreightShipment = shipmentId => !string.IsNullOrWhiteSpace(shipmentId)
+                    && shipmentsById.TryGetValue(shipmentId, out LogisticsShipmentState shipment)
+                    ? shipment
+                    : null;
+            }
             var inputs = new BakeryWholesaleDailyInputs
             {
                 Bakery = bakery,
@@ -15031,6 +15053,7 @@ namespace LandLedgers.Orchestration.Systems
                 AllowConventionalRetailProduction = false,
                 MillbrookQuote = millbrookQuote,
                 MillbrookSupplier = millbrookAidRuntime,
+                FindFreightShipment = findFreightShipment,
                 ImportFlourPricePerLbCents = importFlourPricePerLbCents,
                 ImportTransitDays = importFlourTransitDays,
                 ImportOrderPathExists = importFlourOrderPathExists,

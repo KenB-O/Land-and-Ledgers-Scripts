@@ -1969,6 +1969,9 @@ namespace LandLedgers.Editor.Population
             Assert.IsNull(trip.Batch);
             Assert.AreEqual(0, queue.WaitingCount);
             Assert.IsTrue(f.Diag.Any(line => line.Contains("counter service expired")));
+            Assert.IsTrue(f.Diag.Any(line => line.Contains("no physically present service clerk is available")),
+                "The finite-wait outcome must retain the actual availability refusal instead of implying all clerk failures have the same cause.");
+            Assert.AreEqual("no physically present service clerk is available", trip.LastServiceRefusal);
         }
 
         [Test]
@@ -2001,7 +2004,15 @@ namespace LandLedgers.Editor.Population
             PlannedShoppingTrip trip = DriveToArrival(f, out _);
             Assert.AreEqual(1, queue.WaitingCount);
             Assert.IsTrue(!ServiceTaskIdOf(trip).IsValid);
+            Assert.AreEqual("no physically present service clerk is available", trip.LastServiceRefusal);
             StringAssert.Contains("service clerk is available", string.Join("\n", f.Diag));
+
+            List<PlannedShoppingTripSaveDto> saved = f.Driver.CaptureSaveDto();
+            Assert.AreEqual(1, saved.Count);
+            Assert.AreEqual(trip.LastServiceRefusal, saved[0].LastServiceRefusal);
+            f.Driver.LoadFromSaveDto(saved);
+            Assert.AreEqual(trip.LastServiceRefusal, f.Driver.ActiveTrips[0].LastServiceRefusal,
+                "A restored waiting customer must retain the last observed staffing blocker for its eventual finite-timeout evidence.");
         }
 
         [Test]

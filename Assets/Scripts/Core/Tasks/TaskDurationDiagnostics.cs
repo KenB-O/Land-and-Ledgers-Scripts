@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Diagnostics;
 using LandLedgers.Primitives;
 using EntityId = LandLedgers.Primitives.EntityId;
 using UnityEngine;
@@ -163,6 +164,14 @@ namespace LandLedgers.Tasks
 
         /// <summary>Most recent refusal fed in via RecordRefusal (Slice 2). Empty in Slice 1: no refusal feed exists yet.</summary>
         public string LastRefusal { get; set; }
+
+        /// <summary>
+        /// Lane 1 (M-R14) — the causal class of <see cref="LastRefusal"/> as a
+        /// structured field. Unclassified when the feeding caller did not know
+        /// the class (or fed the refusal through the 4-parameter overload).
+        /// The class tags the refusal; the reason string stays the evidence.
+        /// </summary>
+        public RefusalCauseClass LastRefusalCauseClass { get; set; }
 
         /// <summary>Authority method that produced <see cref="LastRefusal"/> ("AssignTask" / "StartTask" / ...). Slice 2.</summary>
         public string LastRefusalMethod { get; set; }
@@ -1071,6 +1080,10 @@ namespace LandLedgers.Tasks
             int previousDay = record.LastRefusalDay;
             record.LastRefusal = reason;
             record.LastRefusalMethod = method ?? string.Empty;
+            // Lane 1 (M-R14): this overload carries no class, so the stored
+            // class belongs to no known class — Unclassified. (The 5-parameter
+            // overload overwrites this immediately after with the real class.)
+            record.LastRefusalCauseClass = RefusalCauseClass.Unclassified;
             if (day == previousDay)
             {
                 // Same-day repeat: the streak is unchanged.
@@ -1092,6 +1105,29 @@ namespace LandLedgers.Tasks
         public void RecordRefusal(EntityId taskId, string method, string reason, int day)
         {
             RecordRefusal(taskId.ToString(), method, reason, day);
+        }
+
+        /// <summary>
+        /// Lane 1 (M-R14) — RecordRefusal with an explicit causal class. The
+        /// class is stored on the record as a structured field alongside the
+        /// verbatim reason; the streak and progress rules are identical to
+        /// the 4-parameter overload (a refusal is never progress, and a
+        /// refusal for a task with no record is dropped, never invented).
+        /// </summary>
+        public void RecordRefusal(string taskId, string method, string reason, int day, RefusalCauseClass causeClass)
+        {
+            RecordRefusal(taskId, method, reason, day);
+            TaskTimingRecord record = GetRecord(taskId);
+            if (record != null)
+            {
+                record.LastRefusalCauseClass = causeClass;
+            }
+        }
+
+        /// <summary>EntityId overload of <see cref="RecordRefusal(string, string, string, int, RefusalCauseClass)"/>.</summary>
+        public void RecordRefusal(EntityId taskId, string method, string reason, int day, RefusalCauseClass causeClass)
+        {
+            RecordRefusal(taskId.ToString(), method, reason, day, causeClass);
         }
 
         /// <summary>

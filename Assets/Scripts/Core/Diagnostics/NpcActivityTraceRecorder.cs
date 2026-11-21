@@ -66,6 +66,15 @@ namespace LandLedgers.Diagnostics
         public string selectionReason;
         public string recoveryState;
         public string detail;
+
+        /// <summary>
+        /// Lane 1 (M-R14) — the causal class of a refusal/interrupt carried as
+        /// a structured field (the <see cref="RefusalCauseClass"/> name, or
+        /// "Unclassified"). The recorder is the capture layer: it records the
+        /// tag the refusing authority supplied; classification lives in the
+        /// incident core above it.
+        /// </summary>
+        public string refusalCauseClass;
     }
 
     [Serializable]
@@ -269,7 +278,15 @@ namespace LandLedgers.Diagnostics
             }
         }
 
-        public void RecordRefusal(string taskId, string method, string reason, int day)
+        /// <summary>
+        /// Records an assign/start refusal for a task. The optional
+        /// <paramref name="causeClass"/> tags the refusal with its causal
+        /// class (M-R14) as a structured field; when the caller does not know
+        /// it, the tag stays Unclassified and the reason string is the only
+        /// evidence. A refusal is not progress: it never moves last-progress.
+        /// </summary>
+        public void RecordRefusal(string taskId, string method, string reason, int day,
+            RefusalCauseClass causeClass = RefusalCauseClass.Unclassified)
         {
             if (!Monitoring || Level < NpcTraceLevel.Detailed) return;
             knownTasks.TryGetValue(taskId ?? string.Empty, out WorkTask task);
@@ -277,6 +294,7 @@ namespace LandLedgers.Diagnostics
                 new NpcActivityTraceEvent { taskId = taskId ?? string.Empty, transition = method, simulatedSeconds = Now(), dayIndex = day };
             item.eventType = "task-refusal";
             item.reason = reason ?? string.Empty;
+            item.refusalCauseClass = causeClass.ToString();
             AppendObserved(item);
         }
 
@@ -860,6 +878,7 @@ namespace LandLedgers.Diagnostics
                 destinationBuildingId = source.destinationBuildingId,
                 reservationId = source.reservationId, workedMinutes = source.workedMinutes, plannedMinutes = source.plannedMinutes,
                 remainingMinutes = source.remainingMinutes, retryCount = source.retryCount, reason = source.reason,
+                refusalCauseClass = source.refusalCauseClass,
                 selectionReason = source.selectionReason, recoveryState = source.recoveryState, detail = source.detail
             };
         }

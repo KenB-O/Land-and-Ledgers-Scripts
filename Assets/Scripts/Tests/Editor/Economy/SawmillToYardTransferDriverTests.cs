@@ -871,5 +871,80 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(0, driver.TransferJobCount);
             Assert.AreEqual(40, mill.LumberStock.TotalLumberUnits, "Refusal preserves the mill-owned lot.");
         }
+
+        // ---- F7-2 production terms (fix #4) ---------------------------------
+        // The weekly sawmill support node cuts phantom timber into category
+        // stock the yard transfer never reads (F7-2); the routed leg is
+        // TransferSawmillCategoryLumberToYard (SimulationDrivers.cs:2241):
+        //   units = min(available, affordable, SawmillToLumberYardWeeklyMaxUnits = 80)
+        //   price = consumed x WholesaleLumberUnitCostCents (32c)
+        //   yard debit -> yard.ReceiveLumberPurchase -> mill credit, with
+        //   restore/refund on failure (SimulationDrivers.cs:2274-2310).
+        // The driver and its runtimes are Unity-bound (UnityEngine, sawmill/
+        // yard shop runtimes) and outside the Roslyn harness closure, so
+        // these pins run under the Unity Test Runner, not the harness.
+        // The 80/week cap constant lives in harness-excluded
+        // SharedBusinessRuntimeManager.cs:86 (internal const, source-verified);
+        // the driver-side terms below are what the tests pin.
+
+        [Test]
+        public void F7_ProductionTerms_WholesalePriceIs32Cents()
+        {
+            Assert.AreEqual(32, SawmillToYardTransferDriver.WholesaleLumberUnitCostCents,
+                "The routed F7-2 leg settles at 32c/unit; a changed constant changes what the yard pays and the mill earns.");
+        }
+
+        [Test]
+        public void F7_TransferAtProductionTerms_MovesWholeLotOnce_Settles32PerUnit()
+        {
+            World world = NewWorld();
+            ReceiveMillLot(world, DocumentedMillLot(9301, 40));
+            const int expectedPriceCents = 40 * 32;
+
+            SawmillToYardTransferJob job = world.Driver.BeginTransfer(LotId(9301), "merchantable",
+                SawmillToYardTransferDriver.WholesaleLumberUnitCostCents, Day, out string beginRefusal);
+            Assert.IsNotNull(job);
+            Assert.IsNull(beginRefusal);
+
+            Assert.IsTrue(world.Driver.RunTransfer(job.JobId, TransferDay, out string refusal));
+            Assert.IsNull(refusal);
+            Assert.AreEqual(SawmillToYardTransferJobState.Transferred, job.State);
+            Assert.AreEqual(40, job.LumberUnits, "the whole lot moves");
+            Assert.AreEqual(expectedPriceCents, job.SettledPriceCents, "settled at 32c per unit");
+            Assert.AreEqual(0, world.Mill.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(40, world.Yard.LumberStock.TotalLumberUnits);
+            LumberYardLumberLot yardLot = world.Yard.LumberStock.Lots[0];
+            Assert.AreEqual(32, yardLot.UnitCostCents, "the yard lot carries the production price");
+            Assert.AreEqual(1000000 - expectedPriceCents, world.YardCash.BalanceCents, "yard debited by the settled price");
+            Assert.AreEqual(expectedPriceCents, world.MillCash.BalanceCents, "mill credited by the same amount");
+
+            Assert.IsFalse(world.Driver.RunTransfer(job.JobId, TransferDay, out string secondRefusal),
+                "a transferred job never transfers again");
+            Assert.IsNotNull(secondRefusal);
+            Assert.AreEqual(40, world.Yard.LumberStock.TotalLumberUnits, "no second move");
+            Assert.AreEqual(expectedPriceCents, world.MillCash.BalanceCents, "no second credit");
+        }
+
+        [Test]
+        public void F7_WeeklyCapQuantity_TransfersInFull()
+        {
+            World world = NewWorld();
+            ReceiveMillLot(world, DocumentedMillLot(9301, 80));
+            const int expectedPriceCents = 80 * 32;
+
+            SawmillToYardTransferJob job = world.Driver.BeginTransfer(LotId(9301), "merchantable",
+                SawmillToYardTransferDriver.WholesaleLumberUnitCostCents, Day, out string beginRefusal);
+            Assert.IsNotNull(job);
+            Assert.IsNull(beginRefusal);
+
+            Assert.IsTrue(world.Driver.RunTransfer(job.JobId, TransferDay, out string refusal));
+            Assert.IsNull(refusal);
+            Assert.AreEqual(80, job.LumberUnits, "the weekly cap quantity (80u) transfers in full at the production terms");
+            Assert.AreEqual(expectedPriceCents, job.SettledPriceCents);
+            Assert.AreEqual(0, world.Mill.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(80, world.Yard.LumberStock.TotalLumberUnits);
+            Assert.AreEqual(1000000 - expectedPriceCents, world.YardCash.BalanceCents);
+            Assert.AreEqual(expectedPriceCents, world.MillCash.BalanceCents);
+        }
     }
 }

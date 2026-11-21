@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using LandLedgers.Economy;
@@ -228,6 +229,17 @@ namespace LandLedgers.Editor.Playtests
             public string scene;
             public string scenario;
             public string startupMode;
+            public string actualStartupMode = "NOT_CAPTURED";
+            public string configurationAssetPath;
+            public string configurationAssetGuid;
+            public string configurationAssetSha256;
+            public bool configurationAssetDirty;
+            public string runtimeConfigurationAssetGuid = "NOT_CAPTURED";
+            public string runtimeAssemblyModuleId;
+            public string editorAssemblyModuleId;
+            public string runtimeAssemblyFileSha256;
+            public string editorAssemblyFileSha256;
+            public string runtimeAssemblyModuleIdAtStartup = "NOT_CAPTURED";
             public string seedSource;
             public int seed;
             public int targetDays;
@@ -483,11 +495,10 @@ namespace LandLedgers.Editor.Playtests
                 return false;
             }
 
-            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
-                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+            DevelopmentTownConfiguration configuration = ResolveBootstrapConfiguration(bootstrapSerialized);
             if (configuration == null)
             {
-                message = "DevelopmentTownConfiguration.asset could not be loaded from its canonical project path.";
+                message = "The bootstrapper's development town configuration and Editor fallback are unavailable.";
                 return false;
             }
             if (!configuration.Validate(out string validationError))
@@ -526,6 +537,9 @@ namespace LandLedgers.Editor.Playtests
             string trackedStatus = ReadGit("status --porcelain --untracked-files=no", root);
             int trackedChangeCount = CountNonEmptyLines(trackedStatus);
             string trackedState = ResolveWorkingTreeState(trackedChangeCount);
+            string configurationPath = AssetDatabase.GetAssetPath(configuration);
+            var runtimeAssembly = typeof(FirstLedgerSliceBootstrapper).Assembly;
+            var editorAssembly = typeof(Playtest60DayRunnerWindow).Assembly;
             System.IO.Directory.CreateDirectory(output);
             exceptionObserved = false;
             while (PendingConsole.TryDequeue(out _)) { }
@@ -545,6 +559,14 @@ namespace LandLedgers.Editor.Playtests
                 scene = scene.path,
                 scenario = configuration.ConfigurationId,
                 startupMode = bootstrapper.StartupIntent.ToString(),
+                configurationAssetPath = configurationPath,
+                configurationAssetGuid = AssetDatabase.AssetPathToGUID(configurationPath),
+                configurationAssetSha256 = FileSha256(Path.Combine(root, configurationPath)),
+                configurationAssetDirty = EditorUtility.IsDirty(configuration),
+                runtimeAssemblyModuleId = runtimeAssembly.ManifestModule.ModuleVersionId.ToString("D"),
+                editorAssemblyModuleId = editorAssembly.ManifestModule.ModuleVersionId.ToString("D"),
+                runtimeAssemblyFileSha256 = FileSha256(runtimeAssembly.Location),
+                editorAssemblyFileSha256 = FileSha256(editorAssembly.Location),
                 seedSource = "Configured deterministic TownGenerationSettings seed; resolved seed recorded after startup.",
                 seed = town.Settings.useManualSeedOverride ? town.Settings.manualSeedOverride : town.Settings.startupMode == WorldGenerationStartupMode.FixedTestingWorld ? town.Settings.fixedTestingWorldSeed : town.Settings.fixedDebugSeed,
                 targetDays = days,
@@ -561,6 +583,7 @@ namespace LandLedgers.Editor.Playtests
             traceStartedAtSeconds = -1;
             System.IO.Directory.CreateDirectory(Path.Combine(root, RunRoot));
             File.WriteAllText(Path.Combine(output, "metadata.json"), JsonUtility.ToJson(current, true));
+            File.WriteAllText(Path.Combine(output, "git-tracked-status.txt"), trackedStatus + Environment.NewLine);
             File.WriteAllText(Path.Combine(output, "console-full.txt"), "# Complete Unity Console capture; raw messages and stack traces are preserved.\r\n");
             File.WriteAllText(Path.Combine(output, "console-events.jsonl"), string.Empty);
             File.WriteAllText(Path.Combine(output, "activity-task-trace.jsonl"), string.Empty);
@@ -970,6 +993,11 @@ namespace LandLedgers.Editor.Playtests
             SaveLoadManager save = UnityEngine.Object.FindFirstObjectByType<SaveLoadManager>();
 
             if (bootstrapper == null) { blocker = "FirstLedgerSliceBootstrapper is missing."; return false; }
+            current.actualStartupMode = bootstrapper.StartupIntent.ToString();
+            current.runtimeAssemblyModuleIdAtStartup = typeof(FirstLedgerSliceBootstrapper).Assembly.ManifestModule.ModuleVersionId.ToString("D");
+            DevelopmentTownConfiguration runtimeConfiguration = ResolveBootstrapConfiguration(new SerializedObject(bootstrapper));
+            if (runtimeConfiguration != null)
+                current.runtimeConfigurationAssetGuid = AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(runtimeConfiguration));
             if (bootstrapper.HasStartupFailed) { blocker = bootstrapper.BootstrapStatus; return false; }
             if (!bootstrapper.IsInitialized) { blocker = "Bootstrapper has not reported initialized."; return false; }
             if (time == null || time.Settings == null) { blocker = "TimeManager or SimulationTimeSettings is missing."; return false; }
@@ -1890,6 +1918,25 @@ namespace LandLedgers.Editor.Playtests
         }
 
         private static string Csv(string value) => "\"" + (value ?? string.Empty).Replace("\"", "\"\"").Replace("\r", " ").Replace("\n", " ") + "\"";
+
+        private static DevelopmentTownConfiguration ResolveBootstrapConfiguration(SerializedObject bootstrapper)
+        {
+            return bootstrapper.FindProperty("developmentTownConfiguration")?.objectReferenceValue as DevelopmentTownConfiguration
+                ?? AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>("Assets/Core/Population/DevelopmentTownConfiguration.asset");
+        }
+
+        private static string FileSha256(string path)
+        {
+            try
+            {
+                using var stream = File.OpenRead(path);
+                using var algorithm = SHA256.Create();
+                return BitConverter.ToString(algorithm.ComputeHash(stream)).Replace("-", string.Empty);
+            }
+            catch (IOException) { return "NOT_CAPTURED"; }
+            catch (UnauthorizedAccessException) { return "NOT_CAPTURED"; }
+            catch (ArgumentException) { return "NOT_CAPTURED"; }
+        }
 
         internal static string ReadGit(string arguments, string root)
         {

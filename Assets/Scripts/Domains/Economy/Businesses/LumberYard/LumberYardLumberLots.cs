@@ -476,10 +476,14 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         /// Withdraws up to the requested units, oldest acquisitions first,
         /// recording the dispense lines with provenance. Optional species /
         /// grade filters (empty = any). A shortfall returns fewer lines —
-        /// never invented units.
+        /// never invented units. Lane 9e: <paramref name="reservedUnitsByLot"/>
+        /// optionally names authority-held units per lot (an open quote's
+        /// hold); ordinary withdrawals take only the unreserved portion,
+        /// exactly as earmarked project stock is already treated below.
         /// </summary>
         public List<LumberYardLumberDispenseLine> TryWithdrawUnits(
-            int units, string speciesFilter, string gradeFilter, List<string> diag)
+            int units, string speciesFilter, string gradeFilter, List<string> diag,
+            Func<LumberYardLumberLot, int> reservedUnitsByLot = null)
         {
             diag = diag ?? diagnostics;
             var lines = new List<LumberYardLumberDispenseLine>();
@@ -489,6 +493,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
 
             int remaining = units;
             int earmarkedSkipped = 0;
+            int authorityReservedSkipped = 0;
             foreach (var lot in lots)
             {
                 if (remaining <= 0) break;
@@ -498,7 +503,11 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 // unreserved portion.
                 int reserved = Math.Max(0, lot.EarmarkedUnits);
                 earmarkedSkipped += reserved;
-                int available = Math.Max(0, lot.LumberUnits) - reserved;
+                // Lane 9e: an open quote's authority hold is likewise not
+                // ordinary sale inventory.
+                int authorityReserved = reservedUnitsByLot != null ? Math.Max(0, reservedUnitsByLot(lot)) : 0;
+                authorityReservedSkipped += authorityReserved;
+                int available = Math.Max(0, lot.LumberUnits) - reserved - authorityReserved;
                 if (available <= 0) continue;
                 int take = Math.Min(remaining, available);
                 lot.LumberUnits -= take;
@@ -516,7 +525,10 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 string earmarkNote = earmarkedSkipped > 0
                     ? $" {earmarkedSkipped} units are earmarked project stock and not for ordinary sale (Canon §6.4)."
                     : string.Empty;
-                diag.Add($"LumberYardLumberStock ({yardBusinessId}): shortfall — requested {units}, withdrew {units - remaining}{filterNote}.{earmarkNote} "
+                string authorityNote = authorityReservedSkipped > 0
+                    ? $" {authorityReservedSkipped} units are held by an open quote reservation."
+                    : string.Empty;
+                diag.Add($"LumberYardLumberStock ({yardBusinessId}): shortfall — requested {units}, withdrew {units - remaining}{filterNote}.{earmarkNote}{authorityNote} "
                     + "Empty shelves stay empty; nothing invented.");
             }
             return lines;
@@ -594,15 +606,31 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         /// earmarked project stock is excluded (Canon §6.4: allocated project
         /// material is not simultaneously available for normal sale).
         /// </summary>
-        public int AvailableUnitsForSale(string speciesFilter, string gradeFilter)
+        /// <summary>Lane 9e: saleable units under the filters, net of earmarks and of any authority-held units the overlay names.</summary>
+        public int AvailableUnitsForSale(string speciesFilter, string gradeFilter, Func<LumberYardLumberLot, int> reservedUnitsByLot = null)
         {
             int total = 0;
             foreach (var lot in lots)
             {
                 if (!MatchesFilter(lot, speciesFilter, gradeFilter)) continue;
-                total += Math.Max(0, Math.Max(0, lot.LumberUnits) - Math.Max(0, lot.EarmarkedUnits));
+                int reserved = Math.Max(0, lot.EarmarkedUnits);
+                if (reservedUnitsByLot != null) reserved += Math.Max(0, reservedUnitsByLot(lot));
+                total += Math.Max(0, Math.Max(0, lot.LumberUnits) - reserved);
             }
             return total;
+        }
+
+        /// <summary>Lane 9e: the lots matching a quote's filters, oldest acquisitions first — the quote reserves against real lots.</summary>
+        public List<LumberYardLumberLot> LotsMatching(string speciesFilter, string gradeFilter)
+        {
+            SortFifo();
+            var matches = new List<LumberYardLumberLot>();
+            foreach (var lot in lots)
+            {
+                if (lot == null) continue;
+                if (MatchesFilter(lot, speciesFilter, gradeFilter)) matches.Add(lot);
+            }
+            return matches;
         }
 
         /// <summary>D2C: earmarked units reserved for one project, under optional filters.</summary>

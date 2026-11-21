@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.Persistence;
 using LandLedgers.World;
 using UnityEngine;
@@ -353,6 +354,30 @@ namespace LandLedgers.Economy
         [SerializeField, Min(0)]
         private int standingTimberUnits = ConstructionSupportNodeDefinition.DefaultSawmillStandingTimberUnits;
 
+        /// <summary>
+        /// Lane 9e (F7-2): the stand's carrying capacity — the standing
+        /// timber regrows toward this, never past it. Defaults to the
+        /// authored opening stock (the undisturbed stand size).
+        /// </summary>
+        [SerializeField, Min(0)]
+        private int timberCarryingCapacityUnits = ConstructionSupportNodeDefinition.DefaultSawmillStandingTimberUnits;
+
+        /// <summary>Lane 9e (F7-2): site quality 0-1 for regrowth establishment (DEF-072 Decision 15).</summary>
+        [SerializeField]
+        private float timberSiteQuality01 = 1f;
+
+        /// <summary>Lane 9e (F7-2): last day regrowth was driven (-1 = never; the first drive starts the clock at day 0).</summary>
+        [SerializeField]
+        private int lastTimberRegrowthDayIndex = -1;
+
+        /// <summary>Lane 9e (F7-2): fractional matured units awaiting a whole unit (DEF-072 accrual).</summary>
+        [SerializeField]
+        private float timberMatureAccrual;
+
+        /// <summary>Lane 9e (F7-2): young (not yet merchantable) cohorts by establishment day.</summary>
+        [SerializeField]
+        private List<RegrowthCohort> timberYoungCohorts = new List<RegrowthCohort>();
+
         [SerializeField, Min(0)]
         private int logStockUnits = ConstructionSupportNodeDefinition.DefaultSawmillLogStockUnits;
 
@@ -437,6 +462,16 @@ namespace LandLedgers.Economy
         public bool RemoteProductionEnabled => active && remoteProductionEnabled && resourceKind == ConstructionResourceKind.Lumber;
         public int RemotePropertyPlotId => remotePropertyPlotId;
         public int StandingTimberUnits => Mathf.Max(0, standingTimberUnits);
+        /// <summary>Lane 9e (F7-2): the standing timber regrows toward this capacity, never past it.</summary>
+        public int TimberCarryingCapacityUnits => Mathf.Max(0, timberCarryingCapacityUnits);
+        /// <summary>Lane 9e (F7-2): site quality 0-1 for regrowth establishment.</summary>
+        public float TimberSiteQuality01 => Mathf.Clamp01(timberSiteQuality01);
+        /// <summary>Lane 9e (F7-2): last day regrowth was driven (-1 = never).</summary>
+        public int LastTimberRegrowthDayIndex => lastTimberRegrowthDayIndex;
+        /// <summary>Lane 9e (F7-2): fractional matured units awaiting a whole unit.</summary>
+        public float TimberMatureAccrual => Mathf.Max(0f, timberMatureAccrual);
+        /// <summary>Lane 9e (F7-2): young (not yet merchantable) cohorts by establishment day.</summary>
+        public IReadOnlyList<RegrowthCohort> TimberYoungCohorts => timberYoungCohorts;
         public int LogStockUnits => Mathf.Max(0, logStockUnits);
         public int WeeklyCutCapacityLogs => Mathf.Max(0, weeklyCutCapacityLogs);
         public int WeeklySawCapacityLogs => Mathf.Max(0, weeklySawCapacityLogs);
@@ -714,6 +749,14 @@ namespace LandLedgers.Economy
                 remoteProductionInitialized = definition.RemoteProductionEnabled,
                 remotePropertyPlotId = -1,
                 standingTimberUnits = definition.StartingStandingTimberUnits,
+                // Lane 9e (F7-2): the stand regrows toward its authored
+                // opening size (never below the default stand size).
+                timberCarryingCapacityUnits = Math.Max(definition.StartingStandingTimberUnits,
+                    ConstructionSupportNodeDefinition.DefaultSawmillStandingTimberUnits),
+                timberSiteQuality01 = 1f,
+                lastTimberRegrowthDayIndex = -1,
+                timberMatureAccrual = 0f,
+                timberYoungCohorts = new List<RegrowthCohort>(),
                 logStockUnits = definition.StartingLogStockUnits,
                 weeklyCutCapacityLogs = definition.WeeklyCutCapacityLogs,
                 weeklySawCapacityLogs = definition.WeeklySawCapacityLogs,
@@ -746,6 +789,14 @@ namespace LandLedgers.Economy
                 remoteProductionInitialized = dto.remoteProductionInitialized,
                 remotePropertyPlotId = dto.remotePropertyPlotId,
                 standingTimberUnits = Mathf.Max(0, dto.standingTimberUnits),
+                // Lane 9e (F7-2): regrowth state; old saves read the
+                // defaults and NormalizeRemoteProductionDefaults repairs
+                // the capacity. Cohorts are deep-copied, never aliased.
+                timberCarryingCapacityUnits = Mathf.Max(0, dto.timberCarryingCapacityUnits),
+                timberSiteQuality01 = dto.timberSiteQuality01,
+                lastTimberRegrowthDayIndex = dto.lastTimberRegrowthDayIndex,
+                timberMatureAccrual = Mathf.Max(0f, dto.timberMatureAccrual),
+                timberYoungCohorts = CopyRegrowthCohorts(dto.timberYoungCohorts),
                 logStockUnits = Mathf.Max(0, dto.logStockUnits),
                 weeklyCutCapacityLogs = Mathf.Max(0, dto.weeklyCutCapacityLogs),
                 weeklySawCapacityLogs = Mathf.Max(0, dto.weeklySawCapacityLogs),
@@ -791,6 +842,12 @@ namespace LandLedgers.Economy
                 remoteProductionInitialized = true,
                 remotePropertyPlotId = -1,
                 standingTimberUnits = ConstructionSupportNodeDefinition.DefaultSawmillStandingTimberUnits,
+                // Lane 9e (F7-2): the fallback stand regrows toward its opening size.
+                timberCarryingCapacityUnits = ConstructionSupportNodeDefinition.DefaultSawmillStandingTimberUnits,
+                timberSiteQuality01 = 1f,
+                lastTimberRegrowthDayIndex = -1,
+                timberMatureAccrual = 0f,
+                timberYoungCohorts = new List<RegrowthCohort>(),
                 logStockUnits = ConstructionSupportNodeDefinition.DefaultSawmillLogStockUnits,
                 weeklyCutCapacityLogs = ConstructionSupportNodeDefinition.DefaultSawmillWeeklyCutCapacityLogs,
                 weeklySawCapacityLogs = ConstructionSupportNodeDefinition.DefaultSawmillWeeklySawCapacityLogs,
@@ -817,6 +874,13 @@ namespace LandLedgers.Economy
                 remoteProductionInitialized = remoteProductionInitialized,
                 remotePropertyPlotId = remotePropertyPlotId,
                 standingTimberUnits = StandingTimberUnits,
+                // Lane 9e (F7-2): regrowth state, deep-copied so the
+                // snapshot never aliases live cohorts.
+                timberCarryingCapacityUnits = TimberCarryingCapacityUnits,
+                timberSiteQuality01 = TimberSiteQuality01,
+                lastTimberRegrowthDayIndex = LastTimberRegrowthDayIndex,
+                timberMatureAccrual = TimberMatureAccrual,
+                timberYoungCohorts = CopyRegrowthCohorts(timberYoungCohorts),
                 logStockUnits = LogStockUnits,
                 weeklyCutCapacityLogs = WeeklyCutCapacityLogs,
                 weeklySawCapacityLogs = WeeklySawCapacityLogs,
@@ -892,6 +956,173 @@ namespace LandLedgers.Economy
             logStockUnits -= processableLogs;
             producedLumberUnits = AddStock(processableLogs * LumberPerLog, true);
             return processableLogs;
+        }
+
+        /// <summary>
+        /// Lane 9e (F7-2): regrowth for the support node's standing timber,
+        /// mirroring LoggingStandRegistry.DriveRegrowth (DEF-072 Decision
+        /// 15) — same rules, node scale. Age-class cohorts: new growth is
+        /// young, never instantly merchantable; a cohort becomes
+        /// merchantable MaturityYears after establishment (TimberSpecies
+        /// table — white pine 80 years is the decided baseline; the node's
+        /// timber is the local stand under that baseline). Establishment
+        /// each year is (capacity / maturity years) x seed fraction x site
+        /// quality, where the seed fraction is the remaining mature stock
+        /// — the mature trees left standing ARE the seed trees, so a
+        /// clear-cut node establishes nothing. Establishment is capped so
+        /// mature + young + pending accrual never exceeds capacity.
+        /// Year-stepped: each year boundary in (last driven day, today] is
+        /// processed in order. A same-day re-call is a no-op (idempotent);
+        /// the first drive starts the clock at day 0 (the node is authored
+        /// at scenario start).
+        /// </summary>
+        public void DriveTimberRegrowth(int dayIndex, List<string> diag)
+        {
+            diag = diag ?? new List<string>();
+            NormalizeTimberRegrowthDefaults();
+            if (timberCarryingCapacityUnits <= 0) return;
+            if (dayIndex <= lastTimberRegrowthDayIndex) return;
+            int startDay = lastTimberRegrowthDayIndex < 0 ? 0 : lastTimberRegrowthDayIndex;
+            int maturityYears = TimberSpecies.MaturityYears("white pine", diag);
+            int maturityDays = maturityYears * 365;
+            int firstYearEnd = ((startDay / 365) + 1) * 365;
+            for (int yearEnd = firstYearEnd; yearEnd <= dayIndex; yearEnd += 365)
+            {
+                DriveTimberRegrowthYear(yearEnd, maturityYears, maturityDays, diag);
+            }
+            lastTimberRegrowthDayIndex = dayIndex;
+        }
+
+        /// <summary>
+        /// Lane 9e (F7-2): one regrowth year on the node. Matures due
+        /// cohorts first (so the seed fraction for this year's establishment
+        /// counts the newly matured trees), then establishes this year's
+        /// cohort. Mirrors LoggingStandRegistry.DriveRegrowthYear.
+        /// </summary>
+        private void DriveTimberRegrowthYear(int yearEnd, int maturityYears, int maturityDays, List<string> diag)
+        {
+            int matureBefore = standingTimberUnits;
+            float youngBefore = 0f;
+            foreach (RegrowthCohort cohort in timberYoungCohorts)
+            {
+                if (cohort != null) youngBefore += Mathf.Max(0f, cohort.Units);
+            }
+
+            // 1. Mature due cohorts (established MaturityYears ago or more).
+            float maturing = 0f;
+            for (int i = timberYoungCohorts.Count - 1; i >= 0; i--)
+            {
+                RegrowthCohort cohort = timberYoungCohorts[i];
+                if (cohort == null) { timberYoungCohorts.RemoveAt(i); continue; }
+                if (yearEnd - cohort.EstablishDayIndex >= maturityDays)
+                {
+                    maturing += Mathf.Max(0f, cohort.Units);
+                    timberYoungCohorts.RemoveAt(i);
+                }
+            }
+            int maturedWhole = 0;
+            int maturedDiscarded = 0;
+            if (maturing > 0f)
+            {
+                timberMatureAccrual += maturing;
+                int whole = (int)Math.Floor(timberMatureAccrual);
+                if (whole > 0)
+                {
+                    int room = timberCarryingCapacityUnits - standingTimberUnits;
+                    int added = Math.Min(whole, Math.Max(0, room));
+                    standingTimberUnits += added;
+                    timberMatureAccrual -= whole;
+                    maturedWhole = added;
+                    maturedDiscarded = whole - added;
+                }
+            }
+
+            // 2. Establish this year's cohort. Seed trees are the mature
+            // trees left standing; a clear-cut node has no seed source.
+            float established = 0f;
+            float seedSource01 = timberCarryingCapacityUnits > 0
+                ? (float)standingTimberUnits / timberCarryingCapacityUnits
+                : 0f;
+            if (seedSource01 > 0f)
+            {
+                float annual = (timberCarryingCapacityUnits / (float)maturityYears)
+                    * seedSource01 * TimberSiteQuality01;
+                if (annual > 0f)
+                {
+                    // The deficit MUST count MatureAccrual: maturation
+                    // moves young into the accrual before the units enter
+                    // the node, and without counting it the establishment
+                    // step would refill the gap maturation just opened and
+                    // the node would overfill past capacity.
+                    float youngGrowth = 0f;
+                    foreach (RegrowthCohort cohort in timberYoungCohorts)
+                    {
+                        if (cohort != null) youngGrowth += Mathf.Max(0f, cohort.Units);
+                    }
+                    float deficit = timberCarryingCapacityUnits
+                        - standingTimberUnits - youngGrowth - timberMatureAccrual;
+                    established = Math.Min(annual, Math.Max(0f, deficit));
+                    if (established > 0f)
+                    {
+                        RegrowthCohort cohort = null;
+                        foreach (var existing in timberYoungCohorts)
+                        {
+                            if (existing != null && existing.EstablishDayIndex == yearEnd) { cohort = existing; break; }
+                        }
+                        if (cohort == null)
+                        {
+                            cohort = new RegrowthCohort { EstablishDayIndex = yearEnd, Units = 0f };
+                            timberYoungCohorts.Add(cohort);
+                        }
+                        cohort.Units += established;
+                    }
+                }
+            }
+
+            if (maturedWhole > 0 || established > 0f || maturedDiscarded > 0)
+            {
+                float youngAfter = 0f;
+                foreach (RegrowthCohort cohort in timberYoungCohorts)
+                {
+                    if (cohort != null) youngAfter += Mathf.Max(0f, cohort.Units);
+                }
+                diag.Add($"ConstructionSupportNodeState ({NodeId}): timber regrowth year ending day {yearEnd} — " +
+                    $"mature {matureBefore} -> {standingTimberUnits}, young {youngBefore:0.##} -> {youngAfter:0.##}" +
+                    (maturedWhole > 0 ? $", matured {maturedWhole}" : string.Empty) +
+                    (established > 0f ? $", established {established:0.##}" : string.Empty) +
+                    (maturedDiscarded > 0 ? $", {maturedDiscarded} matured units lost to competition (capacity)" : string.Empty) + ".");
+            }
+        }
+
+        private void NormalizeTimberRegrowthDefaults()
+        {
+            if (timberCarryingCapacityUnits <= 0)
+            {
+                timberCarryingCapacityUnits = Math.Max(standingTimberUnits,
+                    ConstructionSupportNodeDefinition.DefaultSawmillStandingTimberUnits);
+            }
+            timberSiteQuality01 = Mathf.Clamp01(timberSiteQuality01);
+            if (timberYoungCohorts == null)
+            {
+                timberYoungCohorts = new List<RegrowthCohort>();
+            }
+            timberMatureAccrual = Mathf.Max(0f, timberMatureAccrual);
+        }
+
+        private static List<RegrowthCohort> CopyRegrowthCohorts(List<RegrowthCohort> source)
+        {
+            var copy = new List<RegrowthCohort>();
+            if (source == null) return copy;
+            foreach (RegrowthCohort cohort in source)
+            {
+                if (cohort == null) continue;
+                copy.Add(new RegrowthCohort
+                {
+                    EstablishDayIndex = cohort.EstablishDayIndex,
+                    Units = Mathf.Max(0f, cohort.Units),
+                });
+            }
+            return copy;
         }
 
         public void RecordSawmillWeeklyResult(
@@ -1060,6 +1291,9 @@ namespace LandLedgers.Economy
                 internalHaulingOwned = true;
                 hiredHaulingFallbackAllowed = true;
                 hiredHaulingCostPerLogCents = ConstructionSupportNodeDefinition.DefaultSawmillHiredHaulingCostPerLogCents;
+                // Lane 9e (F7-2): same regrowth repair as below — an
+                // uninitialized node still regrows from its defaults.
+                NormalizeTimberRegrowthDefaults();
                 return;
             }
 
@@ -1069,6 +1303,11 @@ namespace LandLedgers.Economy
             {
                 hiredHaulingCostPerLogCents = ConstructionSupportNodeDefinition.DefaultSawmillHiredHaulingCostPerLogCents;
             }
+
+            // Lane 9e (F7-2): old saves carry no regrowth state — repair
+            // the capacity (never below the default stand size) so the
+            // first weekly drive regrows instead of no-op-ing.
+            NormalizeTimberRegrowthDefaults();
         }
 
         private static string FormatMoney(int cents)

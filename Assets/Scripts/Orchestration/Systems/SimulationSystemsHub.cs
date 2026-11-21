@@ -351,6 +351,11 @@ namespace LandLedgers.Orchestration.Systems
                 yard = new LumberYardShopRuntime(businessInstanceId, Ids);
                 lumberYardRuntimes[businessInstanceId] = yard;
             }
+            // Lane 9e: the yard's quote/sale split holds quoted lots on the
+            // ONE reservation authority (same instance the shopping loop
+            // holds retail stock on). Rebound on every resolve — a restored
+            // runtime replaces the holder, never a stale authority.
+            yard.ReservationAuthority = Reservations;
             return yard;
         }
 

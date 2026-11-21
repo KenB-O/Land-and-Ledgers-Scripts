@@ -3,6 +3,7 @@ using EntityId = LandLedgers.Primitives.EntityId;
 using System;
 using System.Collections.Generic;
 using LandLedgers.Economy.Businesses.Sawmill;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Primitives;
 using UnityEngine;
 
@@ -81,6 +82,13 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         public LumberYardContractorLedger ContractorLedger => contractorLedger;
         public LumberYardCullDisposalRegister CullDisposal => cullDisposal;
         public IReadOnlyList<LumberYardSaleRecord> SalesHistory => salesHistory;
+
+        /// <summary>
+        /// Lane 9e: the unified reservation authority for the quote/sale
+        /// split. Null = unwired: quotes hold nothing and sales draw live
+        /// stock (today's behavior). Bound by the hub (LumberYardRuntimeFor).
+        /// </summary>
+        public IUnifiedReservationAuthority ReservationAuthority { get; set; }
         public bool OpeningStockApplied => openingStockApplied;
 
         public LumberYardShopRuntime(string businessInstanceId, EntityIdRegistry idRegistry)
@@ -655,6 +663,86 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         /// Same real-lot rails and loud refusal as construction sales.
         /// Returns null on refusal.
         /// </summary>
+        /// <summary>
+        /// Lane 9e: holds quoted yard-lot units on the unified authority
+        /// from quote until the sale attempt settles (released after every
+        /// sale attempt — success consumes the units, refusal refunds the
+        /// buyer). One reservation per lot, keyed lot:&lt;yard lot id&gt;,
+        /// capacity = lot units, window = the whole quote day, FIFO order
+        /// (the same lots the sale would withdraw). Returns the reservation
+        /// ids (empty when unwired); on an authority refusal releases what
+        /// was already held and returns null, so a half-held quote never
+        /// stands.
+        /// </summary>
+        public List<string> TryReserveQuotedUnits(
+            int units, string speciesFilter, string gradeFilter, int dayIndex,
+            string ownerTaskId, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            var ids = new List<string>();
+            if (ReservationAuthority == null || units <= 0 || string.IsNullOrWhiteSpace(ownerTaskId))
+            {
+                return ids;
+            }
+
+            float start = RetailStockReservation.GameSeconds(dayIndex, 0);
+            float end = RetailStockReservation.GameSeconds(dayIndex + 1, 0);
+            float atNoon = RetailStockReservation.GameSeconds(dayIndex, 720);
+            int remaining = units;
+            foreach (LumberYardLumberLot lot in lumberStock.LotsMatching(speciesFilter, gradeFilter))
+            {
+                if (remaining <= 0) break;
+                if (lot == null || lot.LumberUnits <= 0) continue;
+                int free = Math.Max(0, lot.LumberUnits) - Math.Max(0, lot.EarmarkedUnits)
+                    - RetailStockReservation.ReservedUnitsForLot(ReservationAuthority, lot.LotId.ToString(), lot.LumberUnits, atNoon);
+                int take = Math.Min(remaining, Math.Max(0, free));
+                if (take <= 0) continue;
+
+                string key = ReservationKeyConventions.Lot(lot.LotId.ToString());
+                RegisterLotCapacity(key, lot.LumberUnits);
+                var request = new ReservationRequest(ownerTaskId, $"yard quote for '{ownerTaskId}'");
+                request.Items.Add(new ReservationItem(key, take, start, end));
+                string refusal = ReservationAuthority.TryReserveAll(request, out ReservationHandle handle);
+                if (refusal != null || handle == null)
+                {
+                    ReleaseQuotedUnits(ids);
+                    diag.Add($"LumberYardShopRuntime ({businessInstanceId}): quote hold refused for lot {lot.LotId} — {refusal ?? "no handle"}. No units held.");
+                    return null;
+                }
+
+                ids.Add(handle.ReservationId);
+                remaining -= take;
+            }
+
+            if (remaining > 0)
+            {
+                ReleaseQuotedUnits(ids);
+                diag.Add($"LumberYardShopRuntime ({businessInstanceId}): quote hold short — {units - remaining} of {units} units could be held; no units held.");
+                return null;
+            }
+
+            return ids;
+        }
+
+        /// <summary>Lane 9e: releases quoted-unit holds by id. No-op when unknown or unwired (idempotent).</summary>
+        public void ReleaseQuotedUnits(List<string> reservationIds)
+        {
+            if (reservationIds == null) return;
+            foreach (string id in reservationIds)
+            {
+                RetailStockReservation.Release(ReservationAuthority, id);
+            }
+        }
+
+        private void RegisterLotCapacity(string lotKey, float capacity)
+        {
+            if (capacity <= 0f) return;
+            if (ReservationAuthority is EquipmentReservationService concrete)
+            {
+                concrete.RegisterResourceCapacity(lotKey, capacity);
+            }
+        }
+
         public LumberYardSaleRecord TrySellLumberRetail(
             string buyerLabel,
             int units,
@@ -662,7 +750,8 @@ namespace LandLedgers.Economy.Businesses.LumberYard
             string gradeFilter,
             int unitPriceCents,
             int dayIndex,
-            List<string> diag)
+            List<string> diag,
+            string reservationOwnerTaskId = null)
         {
             diag = diag ?? diagnostics;
             if (idRegistry == null)
@@ -684,7 +773,17 @@ namespace LandLedgers.Economy.Businesses.LumberYard
 
             // D2C: retail draws only ordinary sale inventory — earmarked project
             // stock (Canon §6.4) is never sold to walk-in buyers.
-            int available = lumberStock.AvailableUnitsForSale(speciesFilter, gradeFilter);
+            // Lane 9e: an open quote's held units are likewise not saleable
+            // to a second buyer until the quote releases; the buyer's own
+            // quote hold never blocks its own sale (excluded by owner).
+            // The overlay reads holds at midday of the sale day — inside
+            // the quote's whole-day window.
+            Func<LumberYardLumberLot, int> reservedOverlay = ReservationAuthority != null
+                ? lot => RetailStockReservation.ReservedUnitsForLotExcludingOwner(
+                    ReservationAuthority, lot.LotId.ToString(), lot.LumberUnits,
+                    RetailStockReservation.GameSeconds(dayIndex, 720), reservationOwnerTaskId)
+                : null;
+            int available = lumberStock.AvailableUnitsForSale(speciesFilter, gradeFilter, reservedOverlay);
             if (available < units)
             {
                 diag.Add($"LumberYardShopRuntime ({businessInstanceId}): RETAIL SALE REFUSED to '{buyerLabel}' — "
@@ -696,7 +795,7 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 return null;
             }
 
-            var lines = lumberStock.TryWithdrawUnits(units, speciesFilter, gradeFilter, diag);
+            var lines = lumberStock.TryWithdrawUnits(units, speciesFilter, gradeFilter, diag, reservedOverlay);
             int taken = 0;
             foreach (var line in lines) taken += line.UnitsTaken;
 

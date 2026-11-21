@@ -881,7 +881,7 @@ namespace LandLedgers.Diagnostics
                 new LotPoolMapEntry(
                     "Sawmill support node (E-13 / F7-2)", "Pool (written) vs Lot (read)",
                     "Open",
-                    "SharedBusinessRuntimeManager.SyncSawmillBusinessStockFromSupport writes CATEGORY stock (SetCategoryStockUnits, CategoryLumber); the lot-based yard transfer never reads it. Dev-town linkage open: the only SetSawmillConstructionSupportNode callers are AcquisitionMarketManager player paths (:6169, :6750); no dev-town caller located."),
+                    "SharedBusinessRuntimeManager.SyncSawmillBusinessStockFromSupport writes CATEGORY stock (SetCategoryStockUnits, CategoryLumber); the lot-based yard transfer never reads it. E-13 CLOSED (Lane 9e, source-verified 2026-11-20): the dev-town linkage is AcquisitionMarketManager.OnWeekChanged -> ResolveWeeklyConstructionSupportProduction -> EnsureConstructionSupportNodesLoaded -> LinkSawmillSupportNodeToSharedRuntime -> SetSawmillConstructionSupportNode — the weekly market tick, not a player path (the only other SetSawmillConstructionSupportNode callers are the snapshot Rollback and the link helper itself). F7-2 ROUTED (Lane 9e): the weekly yard-transfer drive now moves support-node category lumber into yard purchase lots (paid wholesale, 80/week cap), and the node regrows per DEF-072 (white pine, 80 years). The unwired scalar TransferSawmillLumberToLumberYard stays unwired by design — its output is yard category stock, which no sale path reads; the driver leg supersedes it. Row stays Open until the 5-10 day 10x run verifies the route live."),
                 new LotPoolMapEntry(
                     "Store procurement import (E-12)", "Unknown",
                     "Open",

@@ -59,6 +59,7 @@ namespace LandLedgers.Economy.Equipment
         public const string WorkspacePrefix = "workspace:";
         public const string AnimalPrefix = "animal:";
         public const string MotivePowerPrefix = "motive:";
+        public const string RetailStockPrefix = "retail-stock:";
 
         public static string Asset(string assetId) { return AssetPrefix + assetId; }
         public static string Kit(string kitId) { return KitPrefix + kitId; }
@@ -68,6 +69,12 @@ namespace LandLedgers.Economy.Equipment
         public static string Workspace(string workspaceId) { return WorkspacePrefix + workspaceId; }
         public static string Animal(string animalId) { return AnimalPrefix + animalId; }
         public static string MotivePower(string sourceId) { return MotivePowerPrefix + sourceId; }
+        /// <summary>
+        /// Lane 9e: one key per (supplier, item) retail stock pool. The
+        /// authority's capacity for the key is the live stock, so a hold is
+        /// a promise against real units, never a second stock record.
+        /// </summary>
+        public static string RetailStock(string supplierBusinessId, string itemId) { return RetailStockPrefix + supplierBusinessId + ":" + itemId; }
 
     }
 

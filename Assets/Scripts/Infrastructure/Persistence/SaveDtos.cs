@@ -5,6 +5,7 @@ using LandLedgers.Civic;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Economy.Businesses.Mine;
+using LandLedgers.Economy.Farming.Timber;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Valuation;
 using LandLedgers.FirstLedger;
@@ -1463,6 +1464,13 @@ namespace LandLedgers.Persistence
         public bool remoteProductionInitialized;
         public int remotePropertyPlotId = -1;
         public int standingTimberUnits;
+        // Lane 9e (F7-2): regrowth state. Additive; old saves read the
+        // defaults and the node repairs the capacity on load.
+        public int timberCarryingCapacityUnits;
+        public float timberSiteQuality01 = 1f;
+        public int lastTimberRegrowthDayIndex = -1;
+        public float timberMatureAccrual;
+        public List<RegrowthCohort> timberYoungCohorts = new List<RegrowthCohort>();
         public int logStockUnits;
         public int weeklyCutCapacityLogs;
         public int weeklySawCapacityLogs;

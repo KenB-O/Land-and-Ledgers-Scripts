@@ -1066,12 +1066,22 @@ namespace LandLedgers.FirstLedger
                         }
                     }
                 }
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            // Lane 9f (F R-3): the Continue presentation restore runs in
+            // release builds too — the UNITY_EDITOR || DEVELOPMENT_BUILD
+            // guard used to leave release builds with no household furnishing
+            // or business fixture presentations after a Continue, the
+            // installed pieces silently absent. The guard is removed from
+            // the whole restore block (household + business): un-guarding
+            // only the household lines would leave the same silent-absence
+            // defect for business fixtures, and the rebuild subscription
+            // must match its handler.
             DevelopmentTownFurnishingInitializer.Result furnishingRestore =
                 DevelopmentTownFurnishingInitializer.RestorePresentations(
                     ResolveDevelopmentTownConfiguration(), populationManager, townWorld, systemsHub);
             if (furnishingRestore.PresentationsRebuilt > 0)
                 Debug.Log($"[WorldStartup] Rebuilt {furnishingRestore.PresentationsRebuilt} household furnishing presentation(s) from saved ownership bindings.", this);
+            if (furnishingRestore.PresentationsSkipped > 0)
+                Debug.LogWarning($"[WorldStartup] Skipped {furnishingRestore.PresentationsSkipped} household furnishing presentation(s) after Continue — no configured dev-town item (purchased/manufactured pieces need a kind-to-prefab mapping); see the restore diagnostics.", this);
             foreach (string diagnostic in furnishingRestore.Diagnostics)
                 Debug.LogError("[WorldStartup] Household furnishing restore: " + diagnostic, this);
 
@@ -1083,7 +1093,6 @@ namespace LandLedgers.FirstLedger
             foreach (string diagnostic in businessInteriorRestore.Diagnostics)
                 Debug.LogError("[WorldStartup] Business interior restore: " + diagnostic, this);
             SubscribeToWorldVisualRebuilds();
-#endif
             RefreshRestoreDiagnostics();
             if (logBootstrapSummary)
             {
@@ -1111,7 +1120,8 @@ namespace LandLedgers.FirstLedger
 
         private void RestoreRuntimePresentationsAfterWorldRebuild(TownWorldController rebuiltWorld)
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            // Lane 9f (F R-3): see MarkRestoredFromSave — the world-rebuild
+            // recovery runs in release builds too.
             if (rebuiltWorld == null || rebuiltWorld != townWorld
                 || !enableDevelopmentTownConfiguration || systemsHub == null
                 || populationManager?.State?.households == null)
@@ -1125,6 +1135,8 @@ namespace LandLedgers.FirstLedger
                     configuration, populationManager, rebuiltWorld, systemsHub);
             if (householdResult.PresentationsRebuilt > 0)
                 Debug.Log($"[WorldStartup] Restored {householdResult.PresentationsRebuilt} household furnishing presentation(s) after the world visual rebuild.", this);
+            if (householdResult.PresentationsSkipped > 0)
+                Debug.LogWarning($"[WorldStartup] Skipped {householdResult.PresentationsSkipped} household furnishing presentation(s) after the world visual rebuild — no configured dev-town item; see the recovery diagnostics.", this);
             foreach (string diagnostic in householdResult.Diagnostics)
                 Debug.LogError("[WorldStartup] Household furnishing recovery: " + diagnostic, this);
 
@@ -1135,7 +1147,6 @@ namespace LandLedgers.FirstLedger
                 Debug.Log($"[WorldStartup] Restored {businessResult.PresentationsCreated} business fixture presentation(s) after the world visual rebuild.", this);
             foreach (string diagnostic in businessResult.Diagnostics)
                 Debug.LogError("[WorldStartup] Business fixture recovery: " + diagnostic, this);
-#endif
         }
 
         private bool TryConfigureTerrainStartup(out string error)
@@ -3765,21 +3776,27 @@ namespace LandLedgers.FirstLedger
         /// production designs the NPC construction trigger can select —
         /// all lumber only, the only material the production price port
         /// can price and the yard can supply. The settler cabin is the
-        /// DEF-011 design: framing is split across two phases so each
-        /// package ships inside the 400-unit single-trip bound (volume
-        /// binds first: 4 m3 / 0.01 m3 per unit); the total material is
-        /// the same 600 lumber the test cabin frames with, plus a
-        /// 40-lumber sill phase — real construction proceeds in stages
-        /// with materials arriving per stage, and mud-sill cabins were
-        /// built on wooden sills laid on grade. D-5 adds a family cabin
-        /// (two rooms, sleeps 6, for a household the settler cabin
-        /// cannot sleep) and a carpenter's workshop (shop floor plus
-        /// living quarters, the first business design). A fieldstone
-        /// foundation phase is a follow-up: it needs a real fieldstone
-        /// supplier and price, and neither may be invented. The design
-        /// data lives in ProductionDesignPresets (one authority); this
-        /// method only registers it. Idempotent: registering twice
-        /// refuses the duplicate and the existing design stands.
+        /// DEF-011 design: framing is split across two phases, but the
+        /// phases do NOT each fit one trip under the lumber cargo spec —
+        /// all-lumber loads use LumberCargoSpec (16 kg / 0.04 m3 per
+        /// board, 28 units/trip on the 450 kg / 4 m3 opening wagon), so
+        /// the walls phase (300 lumber) and roof phase (300 lumber) each
+        /// need about 11 trips, not one; the 400-unit single-trip bound
+        /// the earlier comment claimed (4 m3 / 0.01 m3 per unit) is the
+        /// generic FreightCargoSpec fallback, not the lumber spec. The
+        /// total material is the same 600 lumber the test cabin frames
+        /// with, plus a 40-lumber sill phase — real construction proceeds
+        /// in stages with materials arriving per stage, and mud-sill
+        /// cabins were built on wooden sills laid on grade. D-5 adds a
+        /// family cabin (two rooms, sleeps 6, for a household the
+        /// settler cabin cannot sleep) and a carpenter's workshop (shop
+        /// floor plus living quarters, the first business design). A
+        /// fieldstone foundation phase is a follow-up: it needs a real
+        /// fieldstone supplier and price, and neither may be invented.
+        /// The design data lives in ProductionDesignPresets (one
+        /// authority); this method only registers it. Idempotent:
+        /// registering twice refuses the duplicate and the existing
+        /// design stands.
         /// </summary>
         private void BindProductionDesigns(SimulationDrivers drivers)
         {

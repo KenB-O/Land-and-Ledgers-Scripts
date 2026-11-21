@@ -51,9 +51,11 @@ namespace LandLedgers.Economy.Businesses.Carpentry
     ///
     /// Items (both stocked by the store, per the store definition):
     /// nails_hardware_lot (tools_hardware, unit "lot", 25c baseline,
-    /// 30 starting stock) and basic_cloth (clothing, unit "yard", 12c
-    /// baseline, 40 starting stock). The recipes count one nails lot
-    /// per run and cloth by the yard; the generic inventory counts
+    /// 2-6 lots opening stock) and basic_cloth (clothing, unit "yard",
+    /// 12c baseline, 3-6 yards opening stock), per the development-town
+    /// configuration (nails_hardware_lot minimum 2 / maximum 6,
+    /// basic_cloth minimum 3 / maximum 6). The recipes count one nails
+    /// lot per run and cloth by the yard; the generic inventory counts
     /// units, so one lot is one unit and one yard is one unit. No
     /// price, supplier, or good is invented here.
     ///

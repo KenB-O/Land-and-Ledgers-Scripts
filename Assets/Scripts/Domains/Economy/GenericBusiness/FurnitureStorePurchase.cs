@@ -290,15 +290,17 @@ namespace LandLedgers.Economy.GenericBusiness
     /// purchases through the F4 service. Constructed once per day by the
     /// daily driver with the day's fixed bindings (store, carrier cash,
     /// freight, wagon, crew, scene seams, hooks template); one purchase
-    /// per household per day through TryPurchaseForHousehold, and the
-    /// custody-piece install leg through TryInstallCustodyPieces. The
-    /// hooks template is cloned per purchase (fresh diagnostics; the F4
-    /// service binds its commit/receive closures on the clone, so one
-    /// purchase's closures can never overwrite another's). The service
-    /// instance is fresh per purchase, so purchase ids stay unique per
-    /// service by construction and the deterministic purchase id
-    /// ("furn-store-&lt;household&gt;-&lt;kind&gt;-&lt;day&gt;") never collides
-    /// across households, kinds, or days.
+    /// per household per day through TryPurchaseForHousehold. The custody
+    /// pieces and received purchase assets no longer install here: Lane 9f
+    /// (M-R10) moved installation to furnishing.install tasks driven by
+    /// FurnishingInstallTaskDriver, so no synchronous install leg remains
+    /// on this driver. The hooks template is cloned per purchase (fresh
+    /// diagnostics; the F4 service binds its commit/receive closures on
+    /// the clone, so one purchase's closures can never overwrite
+    /// another's). The service instance is fresh per purchase, so purchase
+    /// ids stay unique per service by construction and the deterministic
+    /// purchase id ("furn-store-&lt;household&gt;-&lt;kind&gt;-&lt;day&gt;")
+    /// never collides across households, kinds, or days.
     /// </summary>
     public sealed class FurnitureStorePurchaseDriver
     {
@@ -561,13 +563,15 @@ namespace LandLedgers.Economy.GenericBusiness
                 }
             }
             // Receipt is not installation. Keep the item in household custody
-            // until an actual furnishing.install task is executed by a
-            // furnishing outcome authority. This driver may describe a
-            // placement/integration blocker, but must never install by itself.
+            // until a furnishing.install task is executed by the furnishing
+            // outcome authority (Lane 9f M-R10: FurnishingInstallTaskDriver
+            // mints the task and resolves its completion into the install).
+            // This driver may describe a placement/integration blocker, but
+            // must never install by itself. A free placement leaves the
+            // blocker empty — the task driver mints for it; a blocked
+            // placement names the reason here.
             order.InstallationBlockedReason = FindInstallationReadinessReason(
                 order, building, placements, buildingInstanceId);
-            if (string.IsNullOrWhiteSpace(order.InstallationBlockedReason))
-                order.InstallationBlockedReason = "No production furnishing.install task outcome is wired; furniture remains in household custody pending installation integration.";
             return null;
         }
 
@@ -597,30 +601,6 @@ namespace LandLedgers.Economy.GenericBusiness
                     return reason;
             }
             return null;
-        }
-
-        /// <summary>
-        /// Installs the household's workshop-made custody pieces (the G-1
-        /// sale's post-sale state) in its building. Returns the installed
-        /// count; refusals are recorded loudly in the diagnostics.
-        /// </summary>
-        public int TryInstallCustodyPieces(
-            HouseholdFurnishingRegister register,
-            int buildingInstanceId,
-            BuildingFootprintAuthority building,
-            List<string> diag)
-        {
-            diag = diag ?? new List<string>();
-            var placements = new List<BuildingEquipmentPlacement>();
-            if (scenePlacements != null)
-            {
-                foreach (BuildingEquipmentPlacement placement in scenePlacements())
-                {
-                    if (placement != null) placements.Add(placement);
-                }
-            }
-            return FurnitureInstallBinding.TryInstallCustodyPieces(register, building, buildingInstanceId,
-                placements, placementIsBound, diag);
         }
 
         private FreightShipmentHooks CloneHooks()

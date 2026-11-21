@@ -35,6 +35,34 @@ namespace LandLedgers.Economy
 
         public void SetDayIndex(int value) => taskBridge.SetDayIndex(value);
 
+        /// <summary>
+        /// Lane 9f (F R-2): rebinds one restored process's current phase task
+        /// after a Continue, without accruing work, consuming inputs, or
+        /// creating output. A process whose method is no longer registered is
+        /// refused LOUDLY with the reason — the process is never silently
+        /// dropped, and the caller records the refusal. A passive phase needs
+        /// no task and restores trivially; a completed process is already
+        /// restored. Returns false only when the process cannot be bound
+        /// (missing process, missing method, or an unbindable phase).
+        /// </summary>
+        public bool RestoreProcess(ProductionProcessState process, EntityId personId, out string reason)
+        {
+            reason = string.Empty;
+            if (process == null)
+            {
+                reason = "Generic production restore needs a process — refusing to restore nothing.";
+                return false;
+            }
+            if (process.Completed) return true;
+            if (!methods.TryGetValue(process.MethodId, out ProductionMethodDefinition method))
+            {
+                reason = $"Generic production process '{process.ProcessId}' runs '{process.MethodId}', which is not registered on this runtime — the process is kept, not dropped, and must be rebound after its method is registered.";
+                return false;
+            }
+            if (!process.PersonRequiredNow(method)) return true;
+            return taskBridge.RestorePhaseTask(process, method, personId, out reason) != null;
+        }
+
         public bool TryBegin(GenericProductionPlan plan, EntityId personId,
             Func<string, bool> hasEquipment, Func<string, bool> hasWorkspace,
             Func<string, bool> hasInput, Func<string, bool> personAvailable,

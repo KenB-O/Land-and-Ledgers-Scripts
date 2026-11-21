@@ -58,6 +58,46 @@ namespace LandLedgers.Economy
             return runtime;
         }
 
+        /// <summary>
+        /// Lane 9f (F R-2): rebinds every incomplete process on one restored
+        /// business after a Continue — the explicit restore step the daily
+        /// drivers run before advancing. ForBusiness re-registers the
+        /// business's methods (a fresh session's runtimes start empty); each
+        /// incomplete process with a parseable assigned person is rebound
+        /// through the runtime, and every refusal is collected in
+        /// diagnostics — a process is never silently lost. Returns the number
+        /// of processes rebound. Restore is resume, not refund: inputs were
+        /// consumed once at start and are never re-consumed here. Idempotent:
+        /// rebound processes are found again, never duplicated.
+        /// </summary>
+        public int RestoreProcessesForBusiness(BusinessInstanceState business, EntityId businessId, int dayIndex,
+            out List<string> diagnostics)
+        {
+            diagnostics = new List<string>();
+            if (business == null) return 0;
+            if (ProductionPathRegistry.GetPath(business) != ProductionPath.GenericPath) return 0;
+            GenericProductionRuntime runtime = ForBusiness(business, businessId, dayIndex);
+            int restored = 0;
+            foreach (ProductionProcessState process in new List<ProductionProcessState>(business.GenericConfiguration.ActiveProcesses))
+            {
+                if (process == null || process.Completed) continue;
+                if (!TryParsePerson(process.AssignedPersonId, out EntityId personId))
+                {
+                    diagnostics.Add($"Generic production restore: business '{business.InstanceId}' process '{process.ProcessId}' has no parseable assigned person ('{process.AssignedPersonId}') — the process is kept, not dropped, and must be rebound once a worker is assigned.");
+                    continue;
+                }
+                if (runtime.RestoreProcess(process, personId, out string reason))
+                {
+                    restored++;
+                }
+                else
+                {
+                    diagnostics.Add($"Generic production restore: business '{business.InstanceId}' process '{process.ProcessId}' could not be rebound — {reason}");
+                }
+            }
+            return restored;
+        }
+
         public void AdvanceBusinessProcesses(BusinessInstanceState business, EntityId businessId, int dayIndex, int elapsedMinutes)
         {
             if (business == null || elapsedMinutes <= 0) return;

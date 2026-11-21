@@ -148,6 +148,23 @@ namespace LandLedgers.Economy
 
         public void SetDayIndex(int value) => dayIndex = value;
 
+        /// <summary>
+        /// Lane 9f (F R-2): rebinds the current phase's task after a Continue
+        /// without accruing any work — the explicit restore step. A persisted
+        /// open task is adopted (same task id, same worked minutes); a
+        /// terminal task is skipped and a fresh task is minted; a missing
+        /// task is created. Returns the bound task, or null with the reason
+        /// when the phase cannot be bound. Never advances the process, never
+        /// consumes inputs, never creates output: restore is resume, not
+        /// replay. Assignment may book the worker's time budget (the task is
+        /// this worker's, as before the save); it accrues no minutes.
+        /// </summary>
+        public WorkTask RestorePhaseTask(ProductionProcessState process, ProductionMethodDefinition method,
+            EntityId personId, out string reason)
+        {
+            return EnsureCurrentPhaseTask(process, method, personId, out reason);
+        }
+
         public WorkTask EnsureCurrentPhaseTask(ProductionProcessState process, ProductionMethodDefinition method,
             EntityId personId, out string reason)
         {
@@ -163,7 +180,15 @@ namespace LandLedgers.Economy
             {
                 string definitionId = taskId + ":definition";
                 WorkTask persisted = taskAuthority.FindOpenTask(definitionId, businessId, personId);
-                if (persisted != null)
+                // Lane 9f (F R-2): FindOpenTask excludes only Complete tasks,
+                // so a Failed/Cancelled/Interrupted phase task would be adopted
+                // here and the process would strand — WorkCurrentPhase refuses
+                // a terminal task and no fresh task is ever created, so a
+                // process whose phase task failed before the save could never
+                // advance after Continue. Adopt only a task that can still
+                // work; a terminal task is skipped so a fresh task is minted
+                // below and the phase retries instead of dying with the save.
+                if (persisted != null && persisted.IsOpen)
                 {
                     existingId = persisted.TaskId;
                     phaseTasks[taskId] = existingId;

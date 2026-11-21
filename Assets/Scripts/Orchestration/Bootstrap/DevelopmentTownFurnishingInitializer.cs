@@ -83,6 +83,12 @@ namespace LandLedgers.Orchestration
             public int HouseholdsProcessed;
             public int AssetsInstalled;
             public int PresentationsRebuilt;
+            // Lane 9f (F R-3): bindings skipped because no configured
+            // dev-town item exists for them (purchased/manufactured pieces)
+            // — counted, not silently absent, so a piece that never
+            // re-appears after Continue is visible and countable.
+            public int PresentationsSkipped;
+            public readonly List<string> SkippedBindingIds = new();
             public readonly List<string> Diagnostics = new();
         }
 
@@ -182,9 +188,19 @@ namespace LandLedgers.Orchestration
                     DevelopmentTownConfiguration.HouseholdFurnishingItem item = FindItem(configuration, binding.AssetId);
                     if (item == null)
                     {
-                        // Purchased/manufactured furnishings may be added by
-                        // separate physical-delivery wiring. Do not guess a
-                        // prefab from a visual name or silently create one.
+                        // Purchased/manufactured furnishings have no configured
+                        // dev-town item, so no prefab can be resolved for them
+                        // here. Do not guess a prefab from a visual name or
+                        // silently create one — the skip is counted and
+                        // diagnosed (Lane 9f F R-3) so a purchased piece that
+                        // never re-appears after Continue is visible instead
+                        // of silently absent. A real presentation path for
+                        // purchased pieces needs a kind-to-prefab mapping
+                        // that does not exist anywhere in source; inventing
+                        // one here would furnish the wrong object.
+                        result.PresentationsSkipped++;
+                        result.SkippedBindingIds.Add(binding.AssetId);
+                        result.Diagnostics.Add($"Household {household.id} furnishing binding '{binding.AssetId}' ({asset.Kind}) in building {binding.BuildingInstanceId} has no configured dev-town item — no presentation was recreated after Continue; purchased/manufactured pieces need a kind-to-prefab mapping that does not exist yet.");
                         continue;
                     }
                     HouseholdFurnishingRuntimePresentation existingPresentation =

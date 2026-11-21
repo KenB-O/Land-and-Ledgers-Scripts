@@ -1960,6 +1960,13 @@ namespace LandLedgers.Orchestration.Systems
             postal?.RegisterTaskDefinitions(tasks);
             DomesticTaskCatalog.RegisterAll(tasks, diagnostics);
 
+            // Lane 9f (M-R10): furnishing install/move/remove definitions —
+            // the install outcome resolver (FurnishingInstallTaskDriver)
+            // mints furnishing.install tasks from the custody leg, so the
+            // definitions must exist in the production authority, not only
+            // in the B7 presence test.
+            FurnishingTaskDefinitions.RegisterAll(tasks);
+
             diagnostics.Add("RegisterTaskCatalogs: all static task catalogs registered (duplicates rejected).");
         }
 

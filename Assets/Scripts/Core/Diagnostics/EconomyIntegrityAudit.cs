@@ -1307,6 +1307,19 @@ namespace LandLedgers.Diagnostics
                 "DevelopmentTownConfiguration.asset bakery wholesaleAgreements (24 x bake.bread-loaf/day @ 4c, first day 0)",
                 "ProtectWholesaleContracts", findings);
 
+            // DEF-067 double charge (E-02, §17 CRITICAL): the same weekly payroll
+            // settled twice for one store and period — once by the wage service,
+            // once by the legacy General Store loop. The audit flags any second
+            // posting for the same business + period + kind; a single posting
+            // (the E-05 paid case below) produces no finding.
+            AuditDoubleSettlement(
+                new[]
+                {
+                    new SettlementRecord("store:1", "week-12", "payroll", 500, "WageSettlementService"),
+                    new SettlementRecord("store:1", "week-12", "payroll", 500, "GeneralStoreRuntimeManager.ResolveWeeklyPayrollAndReorder"),
+                },
+                findings);
+
             // Byproduct settlement (W SF-7): custody moved, settlement refused
             // (mill credit refused after dealer debit), no compensating path.
             AuditCustodySettlement(

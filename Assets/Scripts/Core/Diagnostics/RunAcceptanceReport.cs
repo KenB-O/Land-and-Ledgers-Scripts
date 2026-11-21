@@ -590,7 +590,7 @@ namespace LandLedgers.Diagnostics
             }
 
             checks.Add(new RunAcceptanceCheck("Missed-meal classification (A5 enum)", RunAcceptanceVerdict.NotCaptured, "Seam: MissedMealRecord + A5 enum — NOT_CAPTURED until A5 lands; until then missed meals are UNCLASSIFIED"));
-            checks.Add(new RunAcceptanceCheck("Heating / fuel burned per day", RunAcceptanceVerdict.NotCaptured, "Seam: ResolveDailyUse daily drive — NOT_CAPTURED until A3 lands; the heating economy is dormant, listed as a failing check, not as zero burn"));
+            checks.Add(new RunAcceptanceCheck("Heating / fuel burned per day", RunAcceptanceVerdict.NotCaptured, "Seam: daily fuel burned — Lane 9b landed the ResolveDailyUse daily drive, so the heating economy is no longer dormant; the daily fuel-burned figures are NOT_CAPTURED until a run records them, listed as a failing check, not as zero burn"));
 
             string routine = "Household lots trajectory: " + LotTrajectory(summary) + ".";
             return new RunAcceptanceSection(RunAcceptanceSectionKind.HouseholdSurvival, Combine(checks), checks, routine);
@@ -645,7 +645,7 @@ namespace LandLedgers.Diagnostics
                     "No Save/Continue boundary in this run.");
             }
 
-            checks.Add(new RunAcceptanceCheck("Pre/post equality across the Continue boundary", RunAcceptanceVerdict.NotCaptured, "Seam: §07 Save/Continue State Comparator (Tool 07, Lane 7) — does not exist yet; until it lands, the comparison is PARTIAL"));
+            checks.Add(new RunAcceptanceCheck("Pre/post equality across the Continue boundary", RunAcceptanceVerdict.NotCaptured, "Seam: §07 Save/Continue State Comparator (Tool 07, Lane 7) exists, but no Continue-midpoint snapshots exist in this run; until a run saves mid-way, the comparison is PARTIAL"));
             checks.Add(summary.DoubleSettlements == 0
                 ? new RunAcceptanceCheck("No duplicate settlement across the boundary", RunAcceptanceVerdict.Pass, "console-events.jsonl receipt matching: 0 double settlements")
                 : new RunAcceptanceCheck("No duplicate settlement across the boundary", RunAcceptanceVerdict.Fail, "console-events.jsonl receipt matching: " + summary.DoubleSettlements + " double settlement(s)"));
@@ -669,7 +669,7 @@ namespace LandLedgers.Diagnostics
                 "console-events.jsonl: " + summary.Signatures.Count + " distinct (signature, destination) pairs; register status per signature is NOT_CAPTURED until the §22 register is wired to the report"));
 
             checks.Add(new RunAcceptanceCheck("Every WARNING signature has a register entry with a suspected/confirmed cause", RunAcceptanceVerdict.NotCaptured, "Seam: §22 register lookup — not wired to the report yet"));
-            checks.Add(new RunAcceptanceCheck("UNKNOWN-cause warnings older than 7 days: zero", RunAcceptanceVerdict.NotCaptured, "Seam: Lane 1 warning-core classification of run text — until it lands, classification from console text is PROVISIONAL"));
+            checks.Add(new RunAcceptanceCheck("UNKNOWN-cause warnings older than 7 days: zero", RunAcceptanceVerdict.NotCaptured, "Seam: console-text → incident classification — Lane 1 landed the live warning core (RefusalCauseClassifier + IncidentWarningAuthority), but classifying run text into incidents is a different pipeline and stays PROVISIONAL until it is wired"));
             checks.Add(new RunAcceptanceCheck("Escalations applied (7-day standing, 3-day missed meals, 14-day open incident)", RunAcceptanceVerdict.NotCaptured, "Seam: [Incident] lifecycle events — escalation recomputation from console text is PROVISIONAL"));
 
             string routine = summary.RoutineLogCount + " routine Log events reported, not hidden, not counted as diagnostics. "

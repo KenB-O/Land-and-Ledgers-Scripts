@@ -725,8 +725,16 @@ namespace LandLedgers.EditorTests.Diagnostics
             Assert.IsTrue(ids.Contains("E-18"), "Shipment ETA gap not reproduced.");
             Assert.IsTrue(ids.Contains("E-20"), "Opening-cash discrepancy not reproduced.");
             Assert.IsTrue(ids.Contains("F1"), "Pool/lot freeze not reproduced.");
+            Assert.IsTrue(ids.Contains("E-02"), "DEF-067 double charge not reproduced.");
             Assert.IsFalse(ids.Contains("E-05"), "The paid 32c lumber case must not produce a finding.");
             Assert.AreEqual(1, report.Findings.Count(f => f.Id == "SF-7" && f.Severity == EconomyFindingSeverity.Critical));
+            // Wiring pass (W-2a): the DEF-067 case is one E-02 Critical finding naming
+            // both postings — the wage service and the legacy General Store loop.
+            EconomyIntegrityFinding doubleCharge = report.Findings.First(f => f.Id == "E-02");
+            Assert.AreEqual(EconomyFindingSeverity.Critical, doubleCharge.Severity);
+            Assert.AreEqual(EconomyFindingStatus.Confirmed, doubleCharge.Status);
+            Assert.IsTrue(doubleCharge.Evidence.Contains("WageSettlementService"));
+            Assert.IsTrue(doubleCharge.Evidence.Contains("GeneralStoreRuntimeManager.ResolveWeeklyPayrollAndReorder"));
         }
 
         [Test]

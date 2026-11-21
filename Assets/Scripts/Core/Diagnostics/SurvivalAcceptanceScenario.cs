@@ -237,7 +237,7 @@ namespace LandLedgers.Diagnostics
         /// <summary>Every received lot was deposited with the purchased item id, units and seller source label, and the need was decremented by exactly UnitsAcquired (null = NOT_CAPTURED).</summary>
         public bool? LotDepositedAndNeedDecremented;
 
-        /// <summary>True when LotIdentityResolver is wired in production so a meal can be traced to its received lot (A6). False until A6 lands: S8 can then only assert meals from any identified lot of that item.</summary>
+        /// <summary>True when LotIdentityResolver is wired in production so a meal can be traced to its received lot (A6, Lane 9a: the resolver is constructed in production, assigned to the meal service, and consulted at meal time). The Scenario Lab sets this from a source check on the evaluated tree; a run on another tree is reported against this tree's wiring. False means S8 can only assert meals eaten from any identified lot of that item.</summary>
         public bool LotTracingAvailable;
 
         /// <summary>True when a Save/Continue midpoint (save day 7, fresh-scene load, resume to day 15) was executed in this run.</summary>
@@ -771,7 +771,7 @@ namespace LandLedgers.Diagnostics
             if (!evidence.LotTracingAvailable)
             {
                 return new SurvivalStageVerdict(SurvivalVerdict.Blocked,
-                    "Aggregate meals pass, but lot tracing is unavailable (A6: LotIdentityResolver is never constructed in production), so no meal can be traced to its received lot. S8 can only assert meals eaten from any identified lot of that item.");
+                    "Aggregate meals pass, but lot tracing is unavailable for this run (A6: no LotIdentityResolver wiring was found for the evaluated tree), so no meal can be traced to its received lot. S8 can only assert meals eaten from any identified lot of that item.");
             }
             return new SurvivalStageVerdict(SurvivalVerdict.Pass, "Days 11–15 average >= 38/42 meals eaten; received food was eaten.");
         }

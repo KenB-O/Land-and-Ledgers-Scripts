@@ -637,6 +637,15 @@ namespace LandLedgers.Editor.Diagnostics
             return detail;
         }
 
+        /// <summary>Wiring pass (N-2): live D-18 value — true when any resident knows
+        /// this dealer business (Lane 9e seeding, read through SimulationDrivers).
+        /// No drivers object in the scene means unknown, never seeded.</summary>
+        private static bool IsFuelDealerKnown(string businessInstanceId)
+        {
+            SimulationDrivers drivers = Object.FindAnyObjectByType<SimulationDrivers>();
+            return drivers != null && drivers.AnyHouseholdKnowsSeller(businessInstanceId);
+        }
+
         private static FuelDealerOperationsDetail BuildFuelDealerDetail(
             SharedBusinessRuntimeManager shared, BusinessInstanceState business, FuelDealerRuntime dealer)
         {
@@ -646,9 +655,10 @@ namespace LandLedgers.Editor.Diagnostics
                 TargetStockIntakeUnits = dealer.TargetStockIntakeUnits,
                 ReorderPointIntakeUnits = dealer.ReorderPointIntakeUnits,
                 RetailPriceCentsPerBundle = shared.GetConfiguredCategorySalePriceCents(business, "fuel_wood"),
-                // D-18 (source-grounded): no SeedLocalFuelDealerKnowledge exists
-                // anywhere in Assets/Scripts; seeding is Lane 9e's repair.
-                SellerKnowledgeSeeded = false,
+                // D-18 (wiring pass, N-2): the live seeded value from SimulationDrivers —
+                // Lane 9e seeds dealer knowledge on every registration pass, so a dealer
+                // no resident knows is a real blocker and a known dealer clears it.
+                SellerKnowledgeSeeded = IsFuelDealerKnown(business.InstanceId),
             };
 
             int outstanding = 0;

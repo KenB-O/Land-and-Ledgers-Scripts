@@ -96,6 +96,22 @@ namespace LandLedgers.Tasks
         public Func<EntityId, bool> IsWorkerUnavailable { get; set; }
 
         /// <summary>
+        /// Wiring pass (J-S3): optional completion hook, invoked once per completed
+        /// task after it is marked terminal. The hub sets it to the skill resolver
+        /// (SkillService.ApplyExperienceFromTask) so direct completions — the
+        /// RecordWork auto-complete and the direct CompleteTask callers — grant
+        /// experience the way the causal path already does. Null by default: a
+        /// standalone authority completes tasks with no hook. The authority never
+        /// references the skill system directly (no Core → Orchestration inversion);
+        /// the hook is a plain Action set by the coordinator. The causal path
+        /// (CompleteTaskWithCausalOutcome) passes applyCompletionHook: false
+        /// because ResolveCausalOutcome already applied experience for that episode
+        /// — the ledger is EntryId-idempotent per call, so a second application
+        /// would credit the episode twice. Same shape as IsWorkerUnavailable.
+        /// </summary>
+        public Action<WorkTask, TaskOutcome, int> CompletionHook { get; set; }
+
+        /// <summary>
         /// NX-1A: installs the equipment execution gate. Canon 4.1 CANON LOCK —
         /// a task is executable only when the full combination exists (capable
         /// person + required tool/equipment + workspace + materials + motive
@@ -499,8 +515,13 @@ namespace LandLedgers.Tasks
         /// Pass IV: transitions from the new lifecycle states are validated against
         /// TaskLifecyclePolicy (legacy states keep their existing behavior); terminal
         /// transitions release reservations and cancel the task's due events.
+        ///
+        /// Wiring pass (J-S3): after the task is marked terminal, the CompletionHook
+        /// runs once (unless applyCompletionHook is false). The hook's caller owns
+        /// idempotency: the causal path passes false because ResolveCausalOutcome
+        /// already applied experience for the episode.
         /// </summary>
-        public bool CompleteTask(EntityId taskId, TaskOutcome outcome, int currentDayIndex, WorkTimeBudgetStore budgetStore)
+        public bool CompleteTask(EntityId taskId, TaskOutcome outcome, int currentDayIndex, WorkTimeBudgetStore budgetStore, bool applyCompletionHook = true)
         {
             WorkTask task = FindTask(taskId);
             if (task == null || !task.IsOpen)
@@ -527,6 +548,11 @@ namespace LandLedgers.Tasks
             else
             {
                 task.MarkComplete(outcome, currentDayIndex);
+            }
+
+            if (applyCompletionHook && CompletionHook != null)
+            {
+                CompletionHook(task, outcome, currentDayIndex);
             }
 
             NotifyTimingObserver(task, "CompleteTask", currentDayIndex);

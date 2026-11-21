@@ -1,3 +1,4 @@
+using System;
 using LandLedgers.Primitives;
 using LandLedgers.Skills;
 using LandLedgers.Tasks;
@@ -212,6 +213,194 @@ namespace LandLedgers.EditorTests.Core
             // Capability still moved from its start value (0.10 novice).
             Assert.AreEqual(PersonCapabilityStore.NoviceCapability, before, 1e-9);
             Assert.Greater(skills.GetCapability(worker, SkillIds.Stocking), before);
+        }
+
+        // --- Wiring pass (J-S3): the completion hook --------------------------------
+        //
+        // The hub sets TaskAuthority.CompletionHook to the skill resolver, so direct
+        // completions grant experience the way the causal path already does. These
+        // tests pin the hook's contract on a standalone authority: it fires once
+        // per completion (direct or RecordWork auto-complete), it is suppressed
+        // when the caller already applied experience, and without that suppression
+        // the causal sequence would double-credit — which is why the production
+        // causal path passes applyCompletionHook: false.
+
+        private sealed class HookCounter
+        {
+            public int Calls;
+        }
+
+        private static HookCounter InstallHubHook(SkillService skills, TaskAuthority authority)
+        {
+            var counter = new HookCounter();
+            authority.CompletionHook = (completed, outcome, day) =>
+            {
+                counter.Calls++;
+                skills.ApplyExperienceFromTask(authority, completed.TaskId,
+                    difficulty01: 0.5, novelty01: 0.25, supervised: false,
+                    outcome: outcome.ToString(), day: day,
+                    minutesWorked: Math.Max(1, completed.MinutesWorked));
+            };
+            return counter;
+        }
+
+        private static WorkTask StartedTask(TaskAuthority authority, string definitionId, EntityId worker, WorkTimeBudgetStore budgets)
+        {
+            string reason;
+            WorkTask task = authority.CreateTask(definitionId, EntityId.For(EntityKind.Business, 1), 1);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, worker, budgets, out reason), reason);
+            Assert.IsTrue(authority.StartTask(task.TaskId, 1, out reason), reason);
+            bool reachedCompletion;
+            Assert.IsTrue(authority.RecordWorkProgress(task.TaskId, 60, budgets, 1, out reachedCompletion, out reason), reason);
+            Assert.IsTrue(reachedCompletion);
+            return task;
+        }
+
+        [Test]
+        public void CompletionHook_DirectComplete_GrantsRequiredSkillInFull()
+        {
+            // A direct completion — no ResolveTaskCompletion ran — grants the
+            // required skill through its learning tag. Before the hook, the
+            // RecordWork auto-complete and the direct CompleteTask callers
+            // granted no experience at all.
+            var skills = new SkillService();
+            skills.RegisterStarterSet();
+
+            var authority = new TaskAuthority();
+            string reason;
+            var definition = new TaskDefinition("test.wiring-direct", "Stock shelves", 60);
+            definition.SetRequiredSkill(SkillIds.Stocking, new[] { SkillIds.Stocking });
+            Assert.IsTrue(authority.RegisterDefinition(definition, out reason), reason);
+
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+
+            EntityId worker = Person(70);
+            WorkTask task = StartedTask(authority, "test.wiring-direct", worker, budgets);
+
+            HookCounter counter = InstallHubHook(skills, authority);
+            double before = skills.GetCapability(worker, SkillIds.Stocking);
+
+            Assert.IsTrue(authority.CompleteTask(task.TaskId, TaskOutcome.Success, 1, budgets));
+            Assert.AreEqual(1, counter.Calls);
+            Assert.AreEqual(1, skills.Experience.Count);
+            Assert.AreEqual(1, skills.Experience.GetEntries(worker.ToString(), SkillIds.Stocking).Count);
+            Assert.Greater(skills.GetCapability(worker, SkillIds.Stocking), before);
+        }
+
+        [Test]
+        public void CompletionHook_RecordWorkAutoComplete_FiresOnce()
+        {
+            // The RecordWork auto-complete runs CompleteTask with the hook on,
+            // so a task worked to its plan grants experience without any caller
+            // remembering to resolve it.
+            var skills = new SkillService();
+            skills.RegisterStarterSet();
+
+            var authority = new TaskAuthority();
+            string reason;
+            var definition = new TaskDefinition("test.wiring-autocomplete", "Stock shelves", 60);
+            definition.SetRequiredSkill(SkillIds.Stocking, new[] { SkillIds.Stocking });
+            Assert.IsTrue(authority.RegisterDefinition(definition, out reason), reason);
+
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+
+            EntityId worker = Person(71);
+            WorkTask task = authority.CreateTask("test.wiring-autocomplete", EntityId.For(EntityKind.Business, 1), 1);
+            Assert.IsTrue(authority.AssignTask(task.TaskId, worker, budgets, out reason), reason);
+            Assert.IsTrue(authority.StartTask(task.TaskId, 1, out reason), reason);
+
+            HookCounter counter = InstallHubHook(skills, authority);
+
+            Assert.IsTrue(authority.RecordWork(task.TaskId, 60, budgets, 1, out reason), reason);
+            Assert.AreEqual(TaskStatus.Complete, task.Status);
+            Assert.AreEqual(1, counter.Calls);
+            Assert.AreEqual(1, skills.Experience.GetEntries(worker.ToString(), SkillIds.Stocking).Count);
+        }
+
+        [Test]
+        public void CompletionHook_SuppressedWhenApplyCompletionHookFalse_NoDoubleCredit()
+        {
+            // The causal path installs the same hook but passes
+            // applyCompletionHook: false, because ResolveCausalOutcome already
+            // applied experience for the episode. Suppression keeps one episode
+            // at exactly one entry per skill.
+            var skills = new SkillService();
+            skills.RegisterStarterSet();
+
+            var authority = new TaskAuthority();
+            string reason;
+            var definition = new TaskDefinition("test.wiring-suppressed", "Clean and restock", 60);
+            definition.SetRequiredSkill(SkillIds.Cleaning, new[] { SkillIds.Cleaning, SkillIds.Stocking });
+            Assert.IsTrue(authority.RegisterDefinition(definition, out reason), reason);
+
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+
+            EntityId worker = Person(72);
+            WorkTask task = StartedTask(authority, "test.wiring-suppressed", worker, budgets);
+
+            CausalOutcomeInputs inputs = skills.BuildCausalInputs(worker, SkillIds.Cleaning, 60);
+            TaskOutcome outcome = skills.ResolveTaskCompletion(
+                worker, SkillIds.Cleaning, inputs,
+                difficulty01: 0.5, novelty01: 0.25, supervised: false,
+                day: 1, taskIdForDeterminism: task.TaskId.ToString());
+            skills.ApplyExperienceFromTask(
+                authority, task.TaskId,
+                difficulty01: 0.5, novelty01: 0.25, supervised: false,
+                outcome: outcome.ToString(), day: 1, minutesWorked: task.MinutesWorked,
+                excludeSkillId: SkillIds.Cleaning);
+
+            HookCounter counter = InstallHubHook(skills, authority);
+            Assert.IsTrue(authority.CompleteTask(task.TaskId, outcome, 1, budgets, applyCompletionHook: false));
+            Assert.AreEqual(0, counter.Calls);
+            Assert.AreEqual(2, skills.Experience.Count);
+            Assert.AreEqual(1, skills.Experience.GetEntries(worker.ToString(), SkillIds.Cleaning).Count);
+            Assert.AreEqual(1, skills.Experience.GetEntries(worker.ToString(), SkillIds.Stocking).Count);
+        }
+
+        [Test]
+        public void CompletionHook_WithoutSuppression_CausalSequenceDoubleCredits()
+        {
+            // The load-bearing half of the suppression: the same causal sequence
+            // with the hook left on credits BOTH tags twice for one episode
+            // (resolver + hook for the required skill, practice + hook for the
+            // secondary tag), because the ledger's idempotency is EntryId-based
+            // and cannot catch the semantic duplicate. This is why
+            // CompleteTaskWithCausalOutcome must pass false.
+            var skills = new SkillService();
+            skills.RegisterStarterSet();
+
+            var authority = new TaskAuthority();
+            string reason;
+            var definition = new TaskDefinition("test.wiring-unsuppressed", "Clean and restock", 60);
+            definition.SetRequiredSkill(SkillIds.Cleaning, new[] { SkillIds.Cleaning, SkillIds.Stocking });
+            Assert.IsTrue(authority.RegisterDefinition(definition, out reason), reason);
+
+            var budgets = new WorkTimeBudgetStore();
+            budgets.EnsureDay(1);
+
+            EntityId worker = Person(73);
+            WorkTask task = StartedTask(authority, "test.wiring-unsuppressed", worker, budgets);
+
+            CausalOutcomeInputs inputs = skills.BuildCausalInputs(worker, SkillIds.Cleaning, 60);
+            TaskOutcome outcome = skills.ResolveTaskCompletion(
+                worker, SkillIds.Cleaning, inputs,
+                difficulty01: 0.5, novelty01: 0.25, supervised: false,
+                day: 1, taskIdForDeterminism: task.TaskId.ToString());
+            skills.ApplyExperienceFromTask(
+                authority, task.TaskId,
+                difficulty01: 0.5, novelty01: 0.25, supervised: false,
+                outcome: outcome.ToString(), day: 1, minutesWorked: task.MinutesWorked,
+                excludeSkillId: SkillIds.Cleaning);
+
+            HookCounter counter = InstallHubHook(skills, authority);
+            Assert.IsTrue(authority.CompleteTask(task.TaskId, outcome, 1, budgets));
+            Assert.AreEqual(1, counter.Calls);
+            Assert.AreEqual(4, skills.Experience.Count);
+            Assert.AreEqual(2, skills.Experience.GetEntries(worker.ToString(), SkillIds.Cleaning).Count);
+            Assert.AreEqual(2, skills.Experience.GetEntries(worker.ToString(), SkillIds.Stocking).Count);
         }
     }
 }

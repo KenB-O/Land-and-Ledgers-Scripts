@@ -246,6 +246,21 @@ namespace LandLedgers.EditorTests.Diagnostics
         }
 
         [Test]
+        public void Evaluate_Stage8PassesWithLotTracing_AssertsReceivedFoodEaten()
+        {
+            // Wiring pass (N-1): with the production resolver wired (Lane 9a),
+            // S8 asserts the full chain — received food was eaten — not just
+            // aggregate meals. The Blocked branch above is only for a run whose
+            // tree has no resolver wiring.
+            SurvivalRunEvidence evidence = PassingEvidence();
+            evidence.LotTracingAvailable = true;
+            SurvivalAcceptanceResult result = SurvivalAcceptanceScenario.Evaluate(evidence);
+            Assert.AreEqual(SurvivalVerdict.Pass, result.StageVerdict("S8").Verdict);
+            Assert.IsTrue(result.StageVerdict("S8").Reason.Contains("received food was eaten"));
+            Assert.IsTrue(result.Accepted);
+        }
+
+        [Test]
         public void Evaluate_GenericStapleMeal_FailsStage8()
         {
             SurvivalRunEvidence evidence = PassingEvidence();

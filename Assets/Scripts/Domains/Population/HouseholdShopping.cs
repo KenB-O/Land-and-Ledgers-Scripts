@@ -228,6 +228,27 @@ namespace LandLedgers.Population
             return false;
         }
 
+        /// <summary>Wiring pass (N-2): true when any live resident knows this supplier.
+        /// The Business Operations Monitor reads it through SimulationDrivers so the
+        /// D-18 blocker reflects the seeded knowledge (Lane 9e), not a hardcoded false.</summary>
+        public bool KnowsSupplier(string supplierBusinessId)
+        {
+            if (string.IsNullOrWhiteSpace(supplierBusinessId))
+            {
+                return false;
+            }
+
+            for (int i = 0; i < records.Count; i++)
+            {
+                if (string.Equals(records[i].SupplierBusinessId, supplierBusinessId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         public List<IGoodsSupplier> KnownSuppliers(int personId, IEnumerable<IGoodsSupplier> allSuppliers)
         {
             var result = new List<IGoodsSupplier>();

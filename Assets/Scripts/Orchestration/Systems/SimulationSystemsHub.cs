@@ -183,7 +183,36 @@ namespace LandLedgers.Orchestration.Systems
         public HouseholdNeedRegistry PurchasingNeeds => purchasingNeeds ??= new HouseholdNeedRegistry();
         public PersonHandOccupancyRegistry PersonHands => personHands ??= new PersonHandOccupancyRegistry();
         public HandheldContainerRegistry HandheldContainers => handheldContainers ??= new HandheldContainerRegistry();
-        public TaskAuthority Tasks => taskAuthority ??= new TaskAuthority();
+
+        /// <summary>
+        /// Wiring pass (J-S3): the Tasks getter is the hook's set point. On first
+        /// construction the authority's CompletionHook is set to the skill
+        /// resolver, so direct completions (RecordWork auto-complete and the
+        /// direct CompleteTask callers) grant experience the way the causal path
+        /// already does. The formation context matches ResolveCausalOutcome
+        /// (difficulty 0.5, novelty 0.25, unsupervised) and the required skill
+        /// is NOT excluded here — unlike the causal path, ResolveTaskCompletion
+        /// never ran for a direct completion, so the task's required skill is
+        /// credited in full through its learning tag. The causal path passes
+        /// applyCompletionHook: false, so one episode is never credited twice.
+        /// </summary>
+        public TaskAuthority Tasks
+        {
+            get
+            {
+                if (taskAuthority == null)
+                {
+                    taskAuthority = new TaskAuthority();
+                    taskAuthority.CompletionHook = (task, outcome, day) =>
+                        Skills.ApplyExperienceFromTask(taskAuthority, task.TaskId,
+                            difficulty01: 0.5, novelty01: 0.25, supervised: false,
+                            outcome: outcome.ToString(), day: day,
+                            minutesWorked: Math.Max(1, task.MinutesWorked));
+                }
+
+                return taskAuthority;
+            }
+        }
 
         /// <summary>Priority 4 Slice 4 — the installed task-duration diagnostic, or null when not installed.</summary>
         public TaskDurationDiagnostics DurationDiagnostics => taskDurationDiagnostics;

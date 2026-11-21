@@ -166,5 +166,81 @@ namespace LandLedgers.EditorTests.Diagnostics
                 IncidentInvestigator.IncidentCore = previous;
             }
         }
+
+        // --- Wiring pass (W-4 / F3): the live refusal feed -------------------------
+        //
+        // LogRefusalDayKeyed is the first production emitter into the §17 warning
+        // authority. These tests pin the report it builds (signature, owning
+        // system, severity, cause class) and the authority's day-keyed handling
+        // of it, on a fresh authority — never on SharedAuthority, which the
+        // Control Center sweep test counts on.
+
+        [Test]
+        public void RefusalReport_NamespacedKey_KeepsKeyAndDerivesOwningSystem()
+        {
+            IncidentReport report = IncidentDiagnostics.RefusalReport(
+                "yard-retail-delivery:no-yard", 7,
+                "[SimulationDrivers] yard retail delivery skipped: no yard runtime.");
+
+            Assert.AreEqual("yard-retail-delivery:no-yard", report.SignatureId);
+            Assert.AreEqual("yard-retail-delivery", report.OwningSystem);
+            Assert.AreEqual("yard-retail-delivery", report.RecoveryAuthority);
+            Assert.AreEqual(IncidentSeverity.Warning, report.Severity);
+            Assert.AreEqual(7, report.DayIndex);
+            Assert.AreEqual(-1, report.SimSeconds);
+            Assert.AreEqual(RefusalCauseClass.Unclassified, report.CauseClass);
+            Assert.AreEqual("[SimulationDrivers] yard retail delivery skipped: no yard runtime.", report.CauseEvidence);
+            Assert.AreEqual("[SimulationDrivers] yard retail delivery skipped: no yard runtime.", report.Summary);
+        }
+
+        [Test]
+        public void RefusalReport_KeyWithoutPrefix_FallsBackToSimulationDrivers()
+        {
+            IncidentReport report = IncidentDiagnostics.RefusalReport(
+                "no-colon-key", 3, "Something refused.");
+
+            Assert.AreEqual("no-colon-key", report.SignatureId);
+            Assert.AreEqual("SimulationDrivers", report.OwningSystem);
+        }
+
+        [Test]
+        public void RefusalReport_NullOrEmptyKey_UsesUnclassifiedFallback()
+        {
+            Assert.AreEqual("refusal:unclassified", IncidentDiagnostics.RefusalReport(null, 1, "m").SignatureId);
+            Assert.AreEqual("refusal:unclassified", IncidentDiagnostics.RefusalReport("   ", 1, "m").SignatureId);
+        }
+
+        [Test]
+        public void RefusalReport_ClassifiesStartNotWalkableAsOriginInvalid()
+        {
+            IncidentReport report = IncidentDiagnostics.RefusalReport(
+                "travel:start-not-walkable", 9,
+                "[AgentMover] StartNotWalkable: Start cell is not walkable.");
+
+            Assert.AreEqual(RefusalCauseClass.OriginInvalid, report.CauseClass);
+        }
+
+        [Test]
+        public void Emit_RefusalReport_RecordsIncidentDayKeyedOnFreshAuthority()
+        {
+            var sink = new CapturingSink();
+            IncidentWarningAuthority authority = sink.CreateAuthority();
+
+            IncidentReport report = IncidentDiagnostics.RefusalReport(
+                "yard-retail-delivery:no-yard", 7,
+                "[SimulationDrivers] yard retail delivery skipped: no yard runtime.");
+            Assert.IsNotNull(authority.Emit(report));
+
+            SimulationIncident incident = authority.TryGetIncident("yard-retail-delivery:no-yard");
+            Assert.IsNotNull(incident);
+            Assert.AreEqual(IncidentSeverity.Warning, incident.Severity);
+            Assert.AreEqual(1, authority.OccurrencesOnDay("yard-retail-delivery:no-yard", 7));
+
+            // A second emit the same day counts as a second occurrence of the
+            // same incident — no second incident, no second [Incident] line.
+            Assert.IsNotNull(authority.Emit(report));
+            Assert.AreEqual(1, authority.RetainedCount);
+            Assert.AreEqual(2, authority.OccurrencesOnDay("yard-retail-delivery:no-yard", 7));
+        }
     }
 }

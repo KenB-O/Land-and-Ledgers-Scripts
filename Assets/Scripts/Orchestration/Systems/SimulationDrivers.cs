@@ -4560,6 +4560,17 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Wiring pass (N-2): read-only query for the Business Operations Monitor —
+        /// true when any resident knows this supplier business (Lane 9e seeding).
+        /// False with no drivers state, never throws; the D-18 blocker reads this
+        /// live value instead of a hardcoded false.
+        /// </summary>
+        public bool AnyHouseholdKnowsSeller(string supplierBusinessId)
+        {
+            return sellerKnowledge != null && sellerKnowledge.KnowsSupplier(supplierBusinessId);
+        }
+
+        /// <summary>
         /// Pure policy seam used to protect the generic placeholder id.
         /// A registered adapter whose business id fell back to
         /// "general-store" (the trading port's fallback when no Business
@@ -6283,7 +6294,15 @@ namespace LandLedgers.Orchestration.Systems
             // exception 7d — was not located in source (C R-14) and is NOT
             // implemented here; this sweep is the incident-level standing
             // horizon, mirroring the household 7-day cadence.)
-            IncidentDiagnostics.DriveDailyHealth(absoluteDayIndex, timeManager.AbsoluteGameSeconds);
+            // Wiring pass (W-8): the returned escalated signature ids were
+            // discarded; log them, only when non-empty, so a quiet day
+            // still adds no output.
+            IReadOnlyList<string> escalated = IncidentDiagnostics.DriveDailyHealth(absoluteDayIndex, timeManager.AbsoluteGameSeconds);
+            if (escalated != null && escalated.Count > 0)
+            {
+                Debug.Log("[SimulationDrivers] daily health sweep escalated " + escalated.Count
+                    + " incident(s): " + string.Join(", ", escalated), this);
+            }
         }
 
         /// <summary>
@@ -9535,6 +9554,16 @@ namespace LandLedgers.Orchestration.Systems
             if (refusalLoggedDay.TryGetValue(key, out int loggedDay) && loggedDay == dayIndex) return;
             refusalLoggedDay[key] = dayIndex;
             Debug.LogWarning(message, this);
+            // Wiring pass (W-4 / F3): the first live production feed into the
+            // §17 warning authority. The day-keyed refusal funnel is the one
+            // bounded emitter — one call site, already deduped per key per day —
+            // not a blanket route of every Debug.LogWarning. Signatures are the
+            // existing stable "system:reason" keys; severity is Warning, the
+            // documented default for a stuck condition with a named cause and
+            // owning system; the cause class comes from the live classifier.
+            // Diagnostics must never break the simulation, so the emit is
+            // guarded the same way DriveDailyHealth is.
+            IncidentDiagnostics.EmitRefusal(key, dayIndex, message);
         }
 
         private EntityId ResolveFreightHandler(BusinessInstanceState carrier)
@@ -14445,7 +14474,12 @@ namespace LandLedgers.Orchestration.Systems
         /// </summary>
         private void CompleteTaskWithCausalOutcome(WorkTask task, int dayIndex, int baseMinutesFallback)
         {
-            hub.Tasks.CompleteTask(task.TaskId, ResolveCausalOutcome(task, dayIndex, baseMinutesFallback), dayIndex, hub.WorkTimeBudgets);
+            // Wiring pass (J-S3): applyCompletionHook is false here — ResolveCausalOutcome
+            // already applied experience for this episode (required skill via
+            // ResolveTaskCompletion, secondary tags via ApplyExperienceFromTask),
+            // and the ledger is EntryId-idempotent per call, so the hook would
+            // credit the same episode a second time.
+            hub.Tasks.CompleteTask(task.TaskId, ResolveCausalOutcome(task, dayIndex, baseMinutesFallback), dayIndex, hub.WorkTimeBudgets, applyCompletionHook: false);
             if (task.Status == TaskStatus.Complete)
                 HandleCompletedFreightDispatchTask(task);
         }

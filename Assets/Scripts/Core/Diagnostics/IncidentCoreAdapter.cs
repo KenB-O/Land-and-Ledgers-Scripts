@@ -167,5 +167,66 @@ namespace LandLedgers.Diagnostics
                 return new string[0];
             }
         }
+
+        /// <summary>
+        /// Wiring pass (W-4 / F3) — builds the authority report for one
+        /// day-keyed refusal, without emitting. The refusal key is the
+        /// signature: the existing stable "system:reason" id (the authority
+        /// normalises it to a SIG- id when it carries volatile content).
+        /// The owning system is the key's prefix before the first ':';
+        /// a key with no prefix belongs to SimulationDrivers, the funnel's
+        /// owner. Severity is Warning — the documented default for a real
+        /// defect signal, something stuck with a named cause and a named
+        /// owning system — and the cause class comes from the live
+        /// classifier over the message verbatim. Pure and test-covered;
+        /// the live funnel calls <see cref="EmitRefusal"/>.
+        /// </summary>
+        public static IncidentReport RefusalReport(string key, int dayIndex, string message)
+        {
+            string safeKey = string.IsNullOrWhiteSpace(key) ? "refusal:unclassified" : key.Trim();
+            string owningSystem = "SimulationDrivers";
+            int colon = safeKey.IndexOf(':');
+            if (colon > 0)
+            {
+                owningSystem = safeKey.Substring(0, colon);
+            }
+
+            return new IncidentReport
+            {
+                SignatureId = safeKey,
+                Severity = IncidentSeverity.Warning,
+                Summary = message ?? string.Empty,
+                DayIndex = dayIndex,
+                SimSeconds = -1,
+                OwningSystem = owningSystem,
+                RecoveryAuthority = owningSystem,
+                CauseClass = RefusalCauseClassifier.Classify(message ?? string.Empty),
+                CauseEvidence = message ?? string.Empty,
+            };
+        }
+
+        /// <summary>
+        /// Wiring pass (W-4 / F3) — the first live production feed into the
+        /// §17 warning authority, from the day-keyed refusal funnel
+        /// (SimulationDrivers.LogRefusalDayKeyed). One call site, already
+        /// deduped per key per day; the authority adds its own day-keyed
+        /// dedup, occurrence counts, per-day caps and the 7-day escalation
+        /// sweep. Never throws: a diagnostic failure must never break the
+        /// simulation. This is deliberately NOT a blanket route for every
+        /// Debug.LogWarning — each other warning site still needs its own
+        /// signature and severity decision before it feeds the authority.
+        /// </summary>
+        public static void EmitRefusal(string key, int dayIndex, string message)
+        {
+            try
+            {
+                SharedAuthority.Emit(RefusalReport(key, dayIndex, message));
+            }
+            catch
+            {
+                // Diagnostics must never break the simulation; a lost
+                // emission is recorded nowhere and retried never.
+            }
+        }
     }
 }

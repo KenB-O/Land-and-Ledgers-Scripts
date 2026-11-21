@@ -40,6 +40,7 @@ namespace LandLedgers.Editor.Diagnostics
         private SurvivalAcceptanceResult survivalResult;
         private RunAcceptanceReport acceptanceReport;
         private RunSummary runSummary;
+        private List<AtoZFinding> runCheckFindings;
         private string status = "No run evaluated yet. Point the lab at a run directory and press Evaluate run artifacts.";
 
         private void OnGUI()
@@ -105,6 +106,16 @@ namespace LandLedgers.Editor.Diagnostics
                     SurvivalStageVerdict verdict = survivalResult.BarVerdict(bar.BarId);
                     EditorGUILayout.LabelField(bar.BarId + " " + verdict.Verdict + ": " + verdict.Reason, EditorStyles.wordWrappedLabel);
                 }
+
+                if (runCheckFindings != null)
+                {
+                    EditorGUILayout.Space();
+                    EditorGUILayout.LabelField("Run checks (A-to-Z mapping of the survival result)", EditorStyles.boldLabel);
+                    foreach (AtoZFinding finding in runCheckFindings)
+                    {
+                        EditorGUILayout.LabelField(finding.Definition.Id + " " + finding.Status + ": " + finding.Detail, EditorStyles.wordWrappedLabel);
+                    }
+                }
             }
 
             if (acceptanceReport != null)
@@ -152,14 +163,43 @@ namespace LandLedgers.Editor.Diagnostics
             RunArtifactReader.ApplyMetadataToSummary(runSummary, metadataText);
 
             SurvivalRunEvidence evidence = RunArtifactReader.BuildSurvivalEvidence(identity.RunId, identity, rows, console);
+            // Wiring pass (N-1): the artifact reader only fills what the artifacts
+            // measure; lot tracing is a property of the evaluated tree, not the run —
+            // the resolver wiring is checked in source here (Lane 9a wired it), so S8
+            // is judged against this tree's wiring, never assumed.
+            evidence.LotTracingAvailable = IsLotTracingWiredInProduction(repoRoot);
             // The artifact reader only fills what the artifacts measure; the
             // acceptance configuration is fixed, so a run on another
             // configuration is reported BLOCKED by the evaluator, not passed.
             survivalResult = SurvivalAcceptanceScenario.Evaluate(evidence);
+            // Wiring pass (W-1): map the survival result onto the A-to-Z run checks
+            // so the lab shows which findings a run verifies, leaves unresolved,
+            // or blocks on a prior repair.
+            runCheckFindings = AtoZAuditRunner.EvaluateRunChecks(survivalResult);
             acceptanceReport = RunAcceptanceReportBuilder.Build(runSummary, survivalResult, continueMidpointRun);
 
             status = "Evaluated run " + identity.RunId + ": survival " + survivalResult.Overall
                 + ", acceptance " + acceptanceReport.Overall + ".";
+        }
+
+        /// <summary>
+        /// Wiring pass (N-1): true when the production lot-identity resolver is wired
+        /// in this tree — the meal service's LotIdentityResolver is assigned from
+        /// MealLotIdentityResolver() in SimulationDrivers (Lane 9a). Fail-safe false:
+        /// an unreadable tree never claims tracing. Same source-check pattern the
+        /// A-to-Z audit uses for live-file facts.
+        /// </summary>
+        private static bool IsLotTracingWiredInProduction(string repoRoot)
+        {
+            try
+            {
+                string path = Path.Combine(repoRoot, "Assets", "Scripts", "Orchestration", "Systems", "SimulationDrivers.cs");
+                return File.Exists(path) && File.ReadAllText(path).Contains("LotIdentityResolver = MealLotIdentityResolver()");
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private void WriteAcceptanceReport()

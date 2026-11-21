@@ -13,7 +13,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     /// authorities (stock, cash, settlement). Scene wiring constructs this
     /// and registers the adapter in the SupplierDirectory (Codex integrates).
     /// </summary>
-    public sealed class GeneralStoreTradingPort : IItemLevelRestockTradingPort, ICostedRetailStockReceivingPort, IPaidStoreReceivingPort, IRetailReceiptIdentityPort
+    public sealed class GeneralStoreTradingPort : IItemLevelRestockTradingPort, ICostedRetailStockReceivingPort,
+        IPaidStoreReceivingPort, IRetailReceiptIdentityPort, IItemReceivingSpacePort
     {
         private readonly GeneralStoreRuntimeManager manager;
         private readonly BusinessInstanceState business;
@@ -134,7 +135,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         {
             GeneralStoreCategoryOffer offer = FindOffer(itemId);
             return offer != null && offer.UsesItemLevelInventory
-                ? ActiveState?.GetRetailItemStockUnits(itemId, offer.CategoryId) ?? 0
+                ? ActiveState?.GetRetailItemPhysicalUnits(itemId) ?? 0
                 : 0;
         }
 
@@ -266,18 +267,20 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             if (state.CurrentCashCents < costCents) return $"Store cannot afford {costCents}c for the receipt.";
             CategoryStockState category = state.GetCategoryStock(categoryId);
             if (category == null) return $"Destination category missing: {categoryId}.";
-            if (category.TargetStockUnits > 0 && units > category.TargetStockUnits - category.CurrentStockUnits)
-                return $"Category '{categoryId}' cannot accept the full receipt.";
-
             // No external callbacks or awaits between validation, receipt and
             // debit. A refused identified lot has not changed stock or cash.
             if (!string.IsNullOrWhiteSpace(itemId))
             {
-                string problem = state.TryAddRetailItemLot(lotId, itemId, categoryId, unitLabel,
-                    units, StoreBusinessId, StoreBusinessId, provenance, dayIndex, costCents);
+                string problem = ReceiveCostedRetailItemLot(lotId, itemId, categoryId, unitLabel,
+                    units, provenance, dayIndex, costCents);
                 if (problem != null) return problem;
             }
-            else state.AddCategoryStockUnits(categoryId, units);
+            else
+            {
+                if (units > CategoryReceivableUnits(categoryId))
+                    return $"Category '{categoryId}' cannot accept the full receipt.";
+                state.AddCategoryStockUnits(categoryId, units);
+            }
             state.SpendCents(costCents);
             state.RecordWeeklyInputProcurement(units, costCents);
             return null;
@@ -314,8 +317,28 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         {
             BusinessRuntimeState state = ActiveState;
             if (state == null) return "Store runtime unavailable.";
+            int? itemTarget = StapleItemStockTarget(itemId, categoryId);
             return state.TryAddRetailItemLot(lotId, itemId, categoryId, unitLabel, units,
-                StoreBusinessId, StoreBusinessId, provenance, dayIndex, acquisitionCostCents);
+                StoreBusinessId, StoreBusinessId, provenance, dayIndex, acquisitionCostCents, itemTarget);
+        }
+
+        public int ItemReceivableUnits(string itemId, string categoryId)
+        {
+            int? target = StapleItemStockTarget(itemId, categoryId);
+            if (!target.HasValue) return CategoryReceivableUnits(categoryId);
+            BusinessRuntimeState state = ActiveState;
+            CategoryStockState stock = state?.GetCategoryStock(categoryId);
+            return stock == null ? 0 : Math.Min(int.MaxValue - stock.CurrentStockUnits,
+                Math.Max(0, target.Value - state.GetRetailItemPhysicalUnits(itemId)));
+        }
+
+        private int? StapleItemStockTarget(string itemId, string categoryId)
+        {
+            if (!string.Equals(categoryId, "staple_food", StringComparison.OrdinalIgnoreCase)) return null;
+            var item = manager.StoreDefinition?.FindItem(itemId);
+            return item != null && string.Equals(item.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase)
+                ? Math.Max(0, item.ReorderTargetUnits)
+                : 0;
         }
 
         public int CategoryReceivableUnits(string categoryId)
@@ -329,7 +352,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
             return stock.TargetStockUnits > 0
                 ? Math.Max(0, stock.TargetStockUnits - stock.CurrentStockUnits)
-                : int.MaxValue;
+                : int.MaxValue - stock.CurrentStockUnits;
         }
 
         public int DeliveryFeeCents(string itemId, int units)

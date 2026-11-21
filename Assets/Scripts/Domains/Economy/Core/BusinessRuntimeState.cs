@@ -368,7 +368,9 @@ namespace LandLedgers.Economy
             return true;
         }
 
-        public int AddStockUnits(int units)
+        public int AddStockUnits(int units) => AddStockUnits(units, useCategoryTarget: true);
+
+        internal int AddStockUnits(int units, bool useCategoryTarget)
         {
             int requestedUnits = Mathf.Max(0, units);
             if (requestedUnits <= 0)
@@ -376,9 +378,9 @@ namespace LandLedgers.Economy
                 return 0;
             }
 
-            int capacityRemaining = targetStockUnits > 0
+            int capacityRemaining = useCategoryTarget && targetStockUnits > 0
                 ? Mathf.Max(0, targetStockUnits - currentStockUnits)
-                : requestedUnits;
+                : int.MaxValue - currentStockUnits;
             int acceptedUnits = Mathf.Min(requestedUnits, capacityRemaining);
             currentStockUnits += acceptedUnits;
             pendingReorderUnits = Mathf.Min(pendingReorderUnits, Mathf.Max(0, targetStockUnits - currentStockUnits));
@@ -4097,7 +4099,7 @@ namespace LandLedgers.Economy
 
         public string TryAddRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
             int quantityUnits, string ownerBusinessId, string custodianBusinessId, string provenance, int dayIndex,
-            int acquisitionCostCents = -1)
+            int acquisitionCostCents = -1, int? itemStockTarget = null)
         {
             if (string.IsNullOrWhiteSpace(BusinessId) || string.IsNullOrWhiteSpace(lotId)
                 || string.IsNullOrWhiteSpace(itemId) || string.IsNullOrWhiteSpace(categoryId)
@@ -4110,9 +4112,19 @@ namespace LandLedgers.Economy
             if (FindRetailItemLot(lotId) != null) return $"Retail item lot '{lotId}' already exists.";
             CategoryStockState category = GetCategoryStock(categoryId);
             if (category == null) return $"Business has no stock category '{categoryId}'.";
-            if (category.TargetStockUnits > 0 && category.CurrentStockUnits + quantityUnits > category.TargetStockUnits)
+            if (quantityUnits > int.MaxValue - category.CurrentStockUnits)
+                return $"Category '{categoryId}' cannot represent the full item-lot receipt.";
+            if (itemStockTarget.HasValue)
+            {
+                // Reserved units still occupy stock. The category counter is
+                // a projection here, so another product cannot fill this target.
+                int held = GetRetailItemPhysicalUnits(itemId);
+                if (quantityUnits > Math.Max(0, itemStockTarget.Value - held))
+                    return $"Item '{itemId}' cannot accept the full receipt at its authored stock target.";
+            }
+            else if (category.TargetStockUnits > 0 && category.CurrentStockUnits + quantityUnits > category.TargetStockUnits)
                 return $"Category '{categoryId}' capacity would be exceeded.";
-            if (category.AddStockUnits(quantityUnits) != quantityUnits)
+            if (category.AddStockUnits(quantityUnits, useCategoryTarget: !itemStockTarget.HasValue) != quantityUnits)
                 return $"Category '{categoryId}' rejected the full item-lot receipt.";
             retailItemLots.Add(new BusinessRetailItemLotState(lotId, itemId, categoryId, unitLabel,
                 quantityUnits, ownerBusinessId, custodianBusinessId, provenance, dayIndex, acquisitionCostCents));

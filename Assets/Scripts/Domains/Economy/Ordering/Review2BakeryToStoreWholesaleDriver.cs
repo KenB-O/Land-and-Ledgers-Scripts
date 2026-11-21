@@ -333,15 +333,22 @@ namespace LandLedgers.Economy.Ordering
                 return result;
             }
             int availableShelf = Math.Min(units, line.ShelfUnits);
-            int categoryCapacity = Math.Max(0, storePort.CategoryReceivableUnits(categoryId));
-            int stockUnits = Math.Min(availableShelf, categoryCapacity);
+            bool usesItemCapacity = storePort is IItemReceivingSpacePort
+                && storePort is IItemLevelGeneralStoreTradingPort exactStock
+                && exactStock.UsesItemLevelInventory(productId);
+            int availableSpace = usesItemCapacity
+                ? ((IItemReceivingSpacePort)storePort).ItemReceivableUnits(productId, categoryId)
+                : storePort.CategoryReceivableUnits(categoryId);
+            int stockUnits = Math.Min(availableShelf, Math.Max(0, availableSpace));
             if (stockUnits <= 0)
             {
                 // Lane 9a (A10): a zero-capacity refusal is item-aware and
                 // loud — it names the category target, current stock and
                 // the occupying items, so a refused stocking says whether
                 // bread is blocked by flour or by bread itself.
-                result.Refusal = $"Review2Wholesale: live category '{categoryId}' has no receiving capacity ({DescribeCategoryOccupancy(storePort, categoryId)}); {line.ShelfUnits}u '{productId}' remain on the catalog shelf.";
+                result.Refusal = usesItemCapacity
+                    ? $"Review2Wholesale: no receiving space for '{productId}' at its stock target; {line.ShelfUnits}u remain on the catalog shelf."
+                    : $"Review2Wholesale: live category '{categoryId}' has no receiving capacity ({DescribeCategoryOccupancy(storePort, categoryId)}); {line.ShelfUnits}u '{productId}' remain on the catalog shelf.";
                 if (diag != null) diag.Add(result.Refusal);
                 return result;
             }

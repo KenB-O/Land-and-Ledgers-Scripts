@@ -97,6 +97,26 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void ItemTargetReceipt_UsesExactSkuWithoutReclassifyingLegacyStock()
+        {
+            BusinessRuntimeState mill = MillWithFlour(0, 5000);
+            CategoryStockState category = mill.EnsureCategoryStock("staple_food", 10, 10);
+            Assert.IsNull(mill.TryAddRetailItemLot("bread-1", "bread", "staple_food", "loaf",
+                3, "mill-1", "mill-1", "test receipt", 0, itemStockTarget: 3));
+            Assert.IsNotNull(mill.TryAddRetailItemLot("bread-overflow", "bread", "staple_food", "loaf",
+                1, "mill-1", "mill-1", "test receipt", 0, itemStockTarget: 3));
+            Assert.IsNull(mill.TryAddRetailItemLot("flour-1", "flour", "staple_food", "sack",
+                2, "mill-1", "mill-1", "test receipt", 0, itemStockTarget: 2));
+            Assert.AreEqual(15, category.CurrentStockUnits);
+            Assert.AreEqual(3, mill.GetRetailItemPhysicalUnits("bread"));
+            Assert.AreEqual(2, mill.GetRetailItemPhysicalUnits("flour"));
+            Assert.IsTrue(mill.TryConsumeCategoryStockUnits("staple_food", 10, out int legacyUnits));
+            Assert.AreEqual(10, legacyUnits);
+            Assert.AreEqual(5, category.CurrentStockUnits);
+            Assert.IsFalse(mill.TryConsumeCategoryStockUnits("staple_food", 1, out _));
+        }
+
+        [Test]
         public void SettledSale_ZeroUnits_PreservesExistingShape()
         {
             BusinessRuntimeState mill = MillWithFlour(0, 5000);

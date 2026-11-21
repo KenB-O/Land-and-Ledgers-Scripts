@@ -184,6 +184,55 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void StapleReceivingKeepsRoomForBreadWhenLegacyCategoryIsFull()
+        {
+            var definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(DefinitionPath);
+            var owner = new GameObject(nameof(StapleReceivingKeepsRoomForBreadWhenLegacyCategoryIsFull));
+            try
+            {
+                var manager = owner.AddComponent<GeneralStoreRuntimeManager>();
+                typeof(GeneralStoreRuntimeManager).GetField("storeDefinition", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .SetValue(manager, definition);
+                var business = BusinessInstanceState.Create("sku-receipt-test", definition, 60,
+                    BusinessOwnerIdentity.Npc(1, "Test owner", "Test"));
+                var port = manager.BuildHouseholdTradingPort(business);
+                ItemDefinition bread = FindItem(definition, "bread");
+                var category = business.RuntimeState.GetCategoryStock(bread.CategoryId);
+                int legacyUnits = category.TargetStockUnits;
+                category.SetCurrentStockForTests(legacyUnits);
+                business.RuntimeState.SetCurrentCashCents(100);
+
+                Assert.AreEqual(0, port.CategoryReceivableUnits(bread.CategoryId));
+                Assert.AreEqual(bread.ReorderTargetUnits, port.ItemReceivableUnits(bread.ItemId, bread.CategoryId));
+                Assert.IsNull(port.ReceivePaidStock("paid-bread", bread.ItemId, bread.CategoryId, bread.Unit,
+                    1, 7, "paid bread fixture", 1));
+
+                var catalog = new Pass3StoreCatalog();
+                var diagnostics = new List<string>();
+                Assert.IsTrue(catalog.AddProduct(new Pass3ProductLine
+                {
+                    ProductId = bread.ItemId,
+                    DisplayName = "Test received bread",
+                    PriceCents = 5,
+                }, diagnostics));
+                catalog.Find(bread.ItemId).ShelfUnits = bread.ReorderTargetUnits;
+                Review2StockingResult stocked = Review2BakeryToStoreWholesaleDriver.StockShelfToLive(
+                    catalog, bread.ItemId, bread.ReorderTargetUnits, bread.CategoryId, port,
+                    diagnostics, bread.Unit, "test-settled-bakery-lot", 1);
+                Assert.IsTrue(stocked.Stocked, stocked.Refusal);
+                Assert.AreEqual(1, catalog.Find(bread.ItemId).ShelfUnits, "Only the exact bread headroom leaves the receiving shelf.");
+                Assert.AreEqual(0, port.ItemReceivableUnits(bread.ItemId, bread.CategoryId));
+                Assert.IsNotNull(port.ReceivePaidStock("excess-bread", bread.ItemId, bread.CategoryId, bread.Unit,
+                    1, 5, "refused bread fixture", 1));
+                Assert.AreEqual(93, port.CurrentCashCents);
+                Assert.AreEqual(legacyUnits + bread.ReorderTargetUnits, port.CategoryStockUnits(bread.CategoryId));
+                Assert.AreEqual(bread.ReorderTargetUnits, port.ItemRestockStockUnits(bread.ItemId));
+                Assert.AreEqual(0, port.ItemRestockStockUnits("flour"));
+            }
+            finally { Object.DestroyImmediate(owner); }
+        }
+
+        [Test]
         public void PaidReceiptRefusalAndRestoredDuplicateLeaveRealStoreCashAndStockUnchanged()
         {
             var definition = AssetDatabase.LoadAssetAtPath<GeneralStoreBusinessDefinition>(DefinitionPath);

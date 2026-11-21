@@ -116,6 +116,11 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             int units, string provenance, int dayIndex, int acquisitionCostCents);
     }
 
+    public interface IItemReceivingSpacePort
+    {
+        int ItemReceivableUnits(string itemId, string categoryId);
+    }
+
     /// <summary>
     /// Phase C: registers the REAL general store as an <see cref="IGoodsSupplier"/>
     /// in the <see cref="SupplierDirectory"/> so the embodied shopping path is

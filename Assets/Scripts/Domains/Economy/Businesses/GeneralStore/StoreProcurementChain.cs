@@ -685,6 +685,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     receivable = target > 0
                         ? Math.Max(0, target - Math.Max(0, itemPort.ItemRestockStockUnits(delivery.ItemId)))
                         : 0;
+                    if (store is IItemReceivingSpacePort receivingSpace)
+                        receivable = Math.Min(receivable, receivingSpace.ItemReceivableUnits(delivery.ItemId, delivery.CategoryId));
                 }
                 else
                 {

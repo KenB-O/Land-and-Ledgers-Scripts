@@ -47,13 +47,15 @@ namespace LandLedgers.EditorTests.Population
         [Test]
         public void CalibrationAnchors_JanuaryMeanBurnMatchesVerifiedBaseline()
         {
-            // The old B2 pin, preserved: a 4-person Basic household at the
-            // January mean burns 3. The size factor (84 m2 derived area)
-            // is part of the pin: 1.025 x 2.05 x 1.4 = 2.94 -> 3.
-            Assert.AreEqual(3, HouseholdThermalModel.CalculateDailyFuelUseUnits(Profile(members: 4), -10.7f));
-            Assert.AreEqual(2, HouseholdThermalModel.CalculateDailyFuelUseUnits(Profile(members: 2), -10.7f),
+            // The old B2 pin, preserved, through the real ProfileFor path
+            // (derived areas: 4-person 84 m2, 2-person 60 m2, 1-person 48 m2).
+            Assert.AreEqual(3, HouseholdThermalModel.CalculateDailyFuelUseUnits(
+                HouseholdThermalModel.ProfileFor(new HouseholdState { memberIds = new List<int> { 1, 2, 3, 4 } }), -10.7f));
+            Assert.AreEqual(2, HouseholdThermalModel.CalculateDailyFuelUseUnits(
+                HouseholdThermalModel.ProfileFor(new HouseholdState { memberIds = new List<int> { 1, 2 } }), -10.7f),
                 "A 2-person household burns 2 at the January mean.");
-            Assert.AreEqual(1, HouseholdThermalModel.CalculateDailyFuelUseUnits(Profile(members: 1), -10.7f),
+            Assert.AreEqual(1, HouseholdThermalModel.CalculateDailyFuelUseUnits(
+                HouseholdThermalModel.ProfileFor(new HouseholdState { memberIds = new List<int> { 1 } }), -10.7f),
                 "A 1-person household burns 1 at the January mean.");
             Assert.AreEqual(1, HouseholdThermalModel.CalculateDailyFuelUseUnits(Profile(members: 2), 6.2f),
                 "A 2-person household burns 1 at the April mean — spring mornings need a fire.");
@@ -93,17 +95,18 @@ namespace LandLedgers.EditorTests.Population
         public void BurnScalesWithInsulationAndStoveTier()
         {
             // At a cold January day (-20 C) the tier differences are visible
-            // in integers: Drafty 5, Basic 4, Tight 3; Efficient 3 vs Basic 4.
+            // in integers for a 4-person household at its derived 84 m2:
+            // Drafty 5, Basic 4, Tight 3; Efficient 3 vs Basic 4.
             // (At the January mean the size factor pushes Basic and Tight to
             // the same integer — the multipliers are real, the rounding hides it.)
             Assert.AreEqual(5, HouseholdThermalModel.CalculateDailyFuelUseUnits(
-                Profile(retention: HouseholdHeatRetentionTier.Drafty), -20f));
+                Profile(floorAreaM2: 84f, retention: HouseholdHeatRetentionTier.Drafty), -20f));
             Assert.AreEqual(4, HouseholdThermalModel.CalculateDailyFuelUseUnits(
-                Profile(retention: HouseholdHeatRetentionTier.Basic), -20f));
+                Profile(floorAreaM2: 84f, retention: HouseholdHeatRetentionTier.Basic), -20f));
             Assert.AreEqual(3, HouseholdThermalModel.CalculateDailyFuelUseUnits(
-                Profile(retention: HouseholdHeatRetentionTier.Tight), -20f));
+                Profile(floorAreaM2: 84f, retention: HouseholdHeatRetentionTier.Tight), -20f));
             Assert.AreEqual(3, HouseholdThermalModel.CalculateDailyFuelUseUnits(
-                Profile(stove: HouseholdStoveTier.Efficient), -20f),
+                Profile(floorAreaM2: 84f, stove: HouseholdStoveTier.Efficient), -20f),
                 "An Efficient stove burns less than a Basic stove on the same cold day.");
         }
 
@@ -133,7 +136,7 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(60f, HouseholdThermalModel.DerivedFloorAreaM2(2));
             Assert.AreEqual(84f, HouseholdThermalModel.DerivedFloorAreaM2(4));
             Assert.AreEqual(120f, HouseholdThermalModel.DerivedFloorAreaM2(10), "Ten members clamp at 120 m2.");
-            Assert.AreEqual(36f, HouseholdThermalModel.DerivedFloorAreaM2(0), "Zero members clamp at 36 m2.");
+            Assert.AreEqual(48f, HouseholdThermalModel.DerivedFloorAreaM2(0), "Zero members behave as one member (48 m2) — the 36 m2 floor never binds below one member.");
         }
     }
 }

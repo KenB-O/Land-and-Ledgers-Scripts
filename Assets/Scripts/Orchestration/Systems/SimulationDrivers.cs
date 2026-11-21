@@ -6492,8 +6492,9 @@ namespace LandLedgers.Orchestration.Systems
                         hub.MealLog, household.id, absoluteDayIndex),
                     // Campaign C-24 (DEF-010, Decision 6): fuel handling is
                     // needed when the household burns fuel today (the heating
-                    // authority's own forecast: season, members, stove and
-                    // heat-retention tiers) and has fuel on hand to handle.
+                    // authority's own forecast: the day's exterior temperature,
+                    // members, stove, heat-retention tier and home size) and
+                    // has fuel on hand to handle.
                     // No fuel on hand means nothing to handle — the shortfall
                     // is a procurement need. The fuel itself is still consumed
                     // only by HouseholdReserveEvaluator (DEF-019 untouched).

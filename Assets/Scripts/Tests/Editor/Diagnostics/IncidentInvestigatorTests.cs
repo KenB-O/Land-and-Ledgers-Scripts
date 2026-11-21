@@ -216,5 +216,45 @@ namespace LandLedgers.EditorTests.Diagnostics
             IncidentFinding finding = IncidentInvestigator.InvestigateKnownFuelHandlingStall();
             Assert.AreEqual(IncidentSeverity.Warning, finding.Severity);
         }
+
+        // --- Lane 5: business jump-to target ------------------------------------
+
+        [Test]
+        public void ResolveBusinessKey_MapsDefinitionsToDevTownBusinessKeys()
+        {
+            Assert.AreEqual("bakery", IncidentInvestigator.ResolveBusinessKey("bakery.production", ""));
+            Assert.AreEqual("bakery", IncidentInvestigator.ResolveBusinessKey("", "bake.bread-loaf wholesale"));
+            Assert.AreEqual("general-store", IncidentInvestigator.ResolveBusinessKey("shopping.trip", ""));
+            Assert.AreEqual("general-store", IncidentInvestigator.ResolveBusinessKey("", "TendCustomer at the store counter"));
+            Assert.AreEqual("fuel-dealer", IncidentInvestigator.ResolveBusinessKey("", "fuel dealer has no stock"));
+            Assert.AreEqual("freight-company", IncidentInvestigator.ResolveBusinessKey("freight.dispatch", ""));
+            Assert.AreEqual("sawmill", IncidentInvestigator.ResolveBusinessKey("", "sawmill run task cancelled"));
+            Assert.AreEqual("lumber-yard", IncidentInvestigator.ResolveBusinessKey("", "lumber-yard quote refused"));
+            Assert.AreEqual("carpentry-workshop", IncidentInvestigator.ResolveBusinessKey("carpentry.make", ""));
+            Assert.AreEqual("carpentry-workshop", IncidentInvestigator.ResolveBusinessKey("", "furniture install refused"));
+        }
+
+        [Test]
+        public void ResolveBusinessKey_NamesNoBusinessRatherThanGuessing()
+        {
+            Assert.AreEqual(string.Empty, IncidentInvestigator.ResolveBusinessKey("domestic.fuel-handling", ""));
+            Assert.AreEqual(string.Empty, IncidentInvestigator.ResolveBusinessKey("", ""));
+            Assert.AreEqual(string.Empty, IncidentInvestigator.ResolveBusinessKey(null, null));
+        }
+
+        [Test]
+        public void ProvingCaseWholesaleResolvesToTheBakery()
+        {
+            IncidentFinding finding = IncidentInvestigator.InvestigateWholesaleObligation(
+                IncidentInvestigator.KnownWholesaleObligationEvidence());
+            Assert.AreEqual("bakery", finding.BusinessKey);
+        }
+
+        [Test]
+        public void ProvingCaseFuelHandlingNamesNoBusiness()
+        {
+            IncidentFinding finding = IncidentInvestigator.InvestigateKnownFuelHandlingStall();
+            Assert.AreEqual(string.Empty, finding.BusinessKey);
+        }
     }
 }

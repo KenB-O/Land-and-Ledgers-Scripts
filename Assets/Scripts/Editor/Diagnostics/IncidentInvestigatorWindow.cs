@@ -177,18 +177,26 @@ namespace LandLedgers.Editor.Diagnostics
             {
                 if (GUILayout.Button("Jump to task in NPC Monitor")) OpenMonitorFor(item);
             }
+            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(item.BusinessKey)))
+            {
+                if (GUILayout.Button("Jump to business")) OpenBusinessInspectorFor(item);
+            }
             using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(item.AuthoritySourcePath)))
             {
                 if (GUILayout.Button("Jump to authority source")) OpenAuthoritySource(item);
             }
             EditorGUILayout.EndHorizontal();
-            // Jump-to status (verified in Lane 2):
+            // Jump-to status (verified in Lane 2, business completed in Lane 5):
             // - NPC: implemented (frames the person in the Scene view, same as the Monitor's Frame button).
             // - Task: implemented (opens the NPC Activity Monitor with the task's person/household selected).
-            // - Business: MISSING — no business inspector exists yet; Lane 5 (Tool 04, Business Operations
-            //   Monitor) builds it. The authority name and source above are the interim route to the business.
+            // - Business: implemented (Lane 5, Tool 04) — opens the Business Operations Monitor pre-targeted
+            //   at the incident's business, showing that business's runtime state and its authority source.
+            //   Disabled when the incident names no business, rather than guessing one.
             // - Source: implemented (opens the owning authority's file at the cited line, or pings the asset).
-            EditorGUILayout.HelpBox("Jump to business: not available — no business inspector exists yet (Lane 5, Tool 04). Use the authority name and source above.", MessageType.None);
+            if (string.IsNullOrWhiteSpace(item.BusinessKey))
+                EditorGUILayout.HelpBox("Jump to business: not available — this incident names no business.", MessageType.None);
+            else
+                EditorGUILayout.LabelField("Jump to business: opens the Business Operations Monitor for " + item.BusinessKey + ".");
             EditorGUILayout.EndVertical();
         }
 
@@ -224,6 +232,18 @@ namespace LandLedgers.Editor.Diagnostics
             if (item.HouseholdId >= 0)
                 SessionState.SetString("LandLedgers.NpcTrace.Households", "H" + item.HouseholdId);
             NpcActivityMonitorWindow.Open();
+        }
+
+        /// <summary>
+        /// Lane 5 (Tool 04): open the Business Operations Monitor
+        /// pre-targeted at the incident's business — the business
+        /// inspector this jump-to was missing until Lane 5.
+        /// </summary>
+        private static void OpenBusinessInspectorFor(IncidentFinding item)
+        {
+            if (item == null || string.IsNullOrWhiteSpace(item.BusinessKey))
+                return;
+            BusinessOperationsMonitorWindow.OpenForBusiness(item.BusinessKey);
         }
 
         private static void OpenAuthoritySource(IncidentFinding item)

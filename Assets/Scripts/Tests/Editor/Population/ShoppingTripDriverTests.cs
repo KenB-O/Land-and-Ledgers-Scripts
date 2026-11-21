@@ -510,6 +510,59 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(0, trip.WindowReservationIds.Count);
         }
 
+        [Test]
+        public void RecoveryWarningMessageNamesTripLegOwnerAndReason()
+        {
+            // W SF-6 (Lane 2): when the liveness recovery fires, the warning
+            // must name the trip, the leg, how long it was out, and the owner.
+            string message = ShoppingTripDriver.RecoveryWarningMessage(
+                "trip-2-77", "Outbound",
+                "physical Outbound journey exceeded its absolute liveness deadline without confirmed arrival",
+                30, 1);
+            StringAssert.Contains("trip-2-77", message);
+            StringAssert.Contains("Outbound", message);
+            StringAssert.Contains("29d without arrival callback", message);
+            StringAssert.Contains("owner: ShoppingTripDriver", message);
+            StringAssert.Contains("absolute liveness deadline", message);
+        }
+
+        [Test]
+        public void OutboundDeadlineRecovery_ReleasesTripAndLogsRecovery()
+        {
+            // W SF-6 (Lane 2): the recovery itself is exercised here (trip
+            // Failed, reservations released, shopper returns); the warning
+            // text it emits is pinned by RecoveryWarningMessageNamesTripLegOwnerAndReason.
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            bool routeCancelled = false;
+            var driver = new ShoppingTripDriver(f.Loop,
+                (person, destination) => true,
+                (person, destination) => false,
+                (person, destination) => true,
+                (person, destination) => (float?)null,
+                (person, destination) => { routeCancelled = true; },
+                60f);
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = driver.ActiveTrips[0];
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+            Assert.IsTrue(trip.ActiveRouteDeadlineGameSeconds > departure);
+
+            DueEvent outboundDue = f.DueEvents.PeekNext();
+            Assert.IsNotNull(outboundDue);
+            driver.HandleDueEvent(outboundDue, Fixture.Day, outboundDue.DueGameSeconds, f.DueEvents, f.Diag);
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Outbound, trip.State);
+
+            driver.AdvanceTick(trip.ActiveRouteDeadlineGameSeconds + 1f, Fixture.Day, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Failed, trip.State);
+            Assert.IsTrue(routeCancelled);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(0, trip.WindowReservationIds.Count);
+            Assert.IsTrue(f.Diag.Any(line => line.Contains("released its failed Outbound task")),
+                "the recovery must leave a diagnostics record naming the failed leg");
+        }
+
         [TestCase(0)]
         [TestCase(1)]
         [TestCase(2)]

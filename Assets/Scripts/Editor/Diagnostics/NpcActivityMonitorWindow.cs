@@ -192,6 +192,13 @@ namespace LandLedgers.Editor.Diagnostics
             {
                 NpcActivityTraceAnomaly anomaly = trace.Anomalies[i];
                 EditorGUILayout.HelpBox($"{anomaly.category}: {anomaly.personId} H{anomaly.householdId} task={anomaly.taskId}\n{anomaly.reason}\nlast progress {anomaly.lastProgressSeconds:0}s; detected {anomaly.detectedAtSeconds:0}s", MessageType.Warning);
+                // Lane 2: jump from an anomaly to a full causal investigation
+                // of its task (authority, timeline, earliest confirmed blocker).
+                // Jump-to NPC already exists per live person (Frame button in
+                // Live state above); jump-to business is not available — no
+                // business inspector exists yet (Lane 5, Tool 04).
+                if (!string.IsNullOrWhiteSpace(anomaly.taskId) && GUILayout.Button("Investigate task " + anomaly.taskId))
+                    IncidentInvestigatorWindow.OpenForTask(anomaly.taskId);
             }
             EditorGUILayout.EndVertical();
         }

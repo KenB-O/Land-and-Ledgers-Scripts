@@ -116,7 +116,12 @@ namespace LandLedgers.Editor.Economy
 
             purchaseDriver = new FurnitureStorePurchaseDriver(storeRuntime, QuotePrice, carrierCash,
                 freight, "opening-freight-wagon", loader, driver, null,
-                () => placements, PlacementIsBound, hooksTemplate, DayIndex);
+                () => placements, PlacementIsBound, hooksTemplate, DayIndex,
+                // G3 pins the legacy synchronous path: this suite's default
+                // driver opts in explicitly. The constructor default is
+                // staged (fix #7); no caller gets synchronous installs
+                // by accident.
+                false);
         }
 
         [TearDown]
@@ -689,6 +694,32 @@ namespace LandLedgers.Editor.Economy
             Assert.IsTrue(shipment.deliveryApplied);
             Assert.IsTrue(shipment.sourceLotDebitApplied);
             Assert.AreEqual(1, shipment.DeliveredQuantityUnits);
+        }
+
+        [Test]
+        public void DefaultDriver_RefusesRatherThanInstallingSynchronously()
+        {
+            AddLot("bed-lot-1", FurnitureItemSpecs.BedId, 1);
+            BuildingEquipmentPlacement placement = MakePlacement("Bed", building, "furniture.bed", "plc-default-bed");
+            placements.Add(placement);
+            // Fix (#7): the constructor default is staged. Build a driver
+            // exactly as the old setup did, without passing stagedDelivery,
+            // and prove it cannot silently install synchronously: without
+            // the durable order register and carrier authority a staged
+            // driver refuses instead of falling back to the sync path.
+            var defaultDriver = new FurnitureStorePurchaseDriver(storeRuntime, QuotePrice, carrierCash,
+                freight, "opening-freight-wagon", loader, driver, null,
+                () => placements, PlacementIsBound, hooksTemplate, DayIndex);
+            var diag = new List<string>();
+            FurniturePurchaseOrder order = defaultDriver.TryPurchaseForHousehold(buyerLedger, buyerRegister,
+                BuyerHousehold, BuildingInstance, building, FurnitureItemSpecs.BedId, 45, diag);
+            Assert.IsNull(order, "a default driver must not complete a purchase it cannot stage: " + string.Join(" | ", diag));
+            Assert.IsTrue(diag.Exists(d => d != null && d.Contains("staged delivery requires")),
+                "the refusal must name the missing staged plumbing: " + string.Join(" | ", diag));
+            Assert.AreEqual(40000, buyerLedger.GetBalanceCents(), "nothing is charged on the refused purchase");
+            Assert.AreEqual(1, storeRuntime.FindRetailItemLot("bed-lot-1").AvailableUnits, "seller stock untouched");
+            Assert.AreEqual(0, buyerRegister.Assets.Count, "nothing received, nothing installed");
+            Assert.AreEqual(0, freight.TrackedShipments.Count, "no shipment was started");
         }
 
         [Test]

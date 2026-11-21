@@ -13,6 +13,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using LandLedgers.Diagnostics;
+using LandLedgers.Population;
 using UnityEditor;
 using UnityEngine;
 
@@ -44,9 +45,9 @@ namespace LandLedgers.Editor.Diagnostics
 
             EditorGUILayout.Space();
             EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Run Audit (source scans + known cases)", GUILayout.Height(28)))
+            if (GUILayout.Button("Audit Current Source and Authored Asset", GUILayout.Height(28)))
                 RunAudit();
-            if (GUILayout.Button("Run Known Cases Only", GUILayout.Height(28)))
+            if (GUILayout.Button("Run Historical and Example Cases", GUILayout.Height(28)))
                 RunKnownCasesOnly();
             EditorGUILayout.EndHorizontal();
 
@@ -100,7 +101,7 @@ namespace LandLedgers.Editor.Diagnostics
             if (report != null && report.LotPoolMap != null)
             {
                 EditorGUILayout.Space();
-                EditorGUILayout.LabelField("E-10 lot/pool map (verified at this HEAD)", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField("E-10 historical lot/pool reference", EditorStyles.boldLabel);
                 foreach (LotPoolMapEntry entry in report.LotPoolMap)
                 {
                     EditorGUILayout.LabelField(entry.Subsystem + " — " + entry.StockForm + " [" + entry.Status + "]", EditorStyles.boldLabel);
@@ -124,7 +125,7 @@ namespace LandLedgers.Editor.Diagnostics
             findings = report.Findings;
             writerInventory = null;
             configValues = string.Empty;
-            status = "Known cases reproduced from the current tree's source-reviewed evidence (no run exists on this HEAD).";
+            status = "Historical and example cases. These results describe their supplied inputs.";
         }
 
         private void RunAudit()
@@ -177,13 +178,9 @@ namespace LandLedgers.Editor.Diagnostics
             // E-14 / E-20: config values read from the asset text.
             configValues = ReadConfigValues(repoRoot);
 
-            // Known cases, reproduced from the current tree's verified evidence.
-            EconomyIntegrityReport known = EconomyIntegrityAudit.AuditKnownCases();
-            allFindings.AddRange(known.Findings);
-
             report = new EconomyIntegrityReport(allFindings, writerInventory, EconomyIntegrityAudit.BuildLotPoolMap());
             findings = allFindings;
-            status = "Audit complete. Source-reviewed evidence only — no run exists on this HEAD, nothing here is Unity-compiled or live-verified.";
+            status = "Current source and authored asset checks completed. Runtime transactions were not examined.";
         }
 
         private static string RepoRoot()
@@ -304,8 +301,18 @@ namespace LandLedgers.Editor.Diagnostics
                     fuel.Add("line " + (i + 1) + ": " + lines[i].Trim());
             }
 
-            return "fuelDealerIntakeUnitsPerBakeryUnit occurrences (E-14):\n" + string.Join("\n", fuel.ToArray())
-                + "\nOpening cash is reported by the E-20 known-case finding (config governs: bakery 35,000c / dealer 20,000c).";
+            const string projectAssetPath = "Assets/Core/Population/DevelopmentTownConfiguration.asset";
+            var configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(projectAssetPath);
+            var bakery = configuration?.FindBusinessByOperation("bakery");
+            var accounts = bakery?.opening?.wholesaleAgreements;
+            string wholesale = accounts == null
+                ? "Authored bakery opening could not be read."
+                : $"Authored bakery wholesale entries: {accounts.Count(account => account != null)}"
+                    + $"\nAuthored channels: {configuration.OpeningBakerySalesChannels}"
+                    + $" / allocation: {configuration.OpeningBakerySupplyProtection}";
+            return "Asset GUID: " + AssetDatabase.AssetPathToGUID(projectAssetPath)
+                + "\n" + wholesale
+                + "\nfuelDealerIntakeUnitsPerBakeryUnit occurrences (E-14):\n" + string.Join("\n", fuel.ToArray());
         }
     }
 }

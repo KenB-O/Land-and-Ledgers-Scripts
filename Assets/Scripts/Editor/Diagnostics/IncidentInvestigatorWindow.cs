@@ -20,6 +20,7 @@ using System.Collections.Generic;
 using LandLedgers.Diagnostics;
 using LandLedgers.FirstLedger;
 using LandLedgers.Orchestration.Systems;
+using LandLedgers.Persistence;
 using LandLedgers.Time;
 using UnityEditor;
 using UnityEngine;
@@ -77,7 +78,7 @@ namespace LandLedgers.Editor.Diagnostics
             EditorGUILayout.EndVertical();
 
             EditorGUILayout.BeginVertical("box");
-            EditorGUILayout.LabelField("Known incidents (recorded run evidence — no live run on this HEAD)", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Historical task evidence", EditorStyles.boldLabel);
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Proving case 1: fuel-handling stall"))
             {
@@ -85,13 +86,32 @@ namespace LandLedgers.Editor.Diagnostics
                 finding = IncidentInvestigator.InvestigateKnownFuelHandlingStall();
                 status = "Proving case 1: interrupted domestic.fuel-handling tasks T9/T10/T170 (60-day) and T8/T9/T11 (5-day), retained-run record.";
             }
-            if (GUILayout.Button("Proving case 2: 24-loaf wholesale"))
-            {
-                IncidentDiagnostics.WireInvestigator();
-                finding = IncidentInvestigator.InvestigateWholesaleObligation(IncidentInvestigator.KnownWholesaleObligationEvidence());
-                status = "Proving case 2: 24-loaf/day @ 4c wholesale obligation (E-06 SOLVED), config + bootstrap source at this HEAD.";
-            }
             EditorGUILayout.EndHorizontal();
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.LabelField("Live bakery wholesale accounts", EditorStyles.boldLabel);
+            var bakery = EditorApplication.isPlaying
+                ? UnityEngine.Object.FindFirstObjectByType<SaveLoadManager>()?.Series2Pass9State?.BakeryRuntime
+                : null;
+            if (bakery == null)
+            {
+                EditorGUILayout.LabelField("No live bakery authority connected.");
+            }
+            else
+            {
+                EditorGUILayout.LabelField(bakery.BusinessInstanceId,
+                    $"{bakery.SalesChannels} / {bakery.SupplyProtection}");
+                EditorGUILayout.LabelField($"Recorded accounts: {bakery.WholesaleAccounts.Count}");
+                foreach (var account in bakery.WholesaleAccounts)
+                {
+                    if (account == null) continue;
+                    EditorGUILayout.LabelField(account.AccountId,
+                        $"{account.UnitsPerDelivery} {account.ProductId} at {account.PricePerUnitCents}c to " +
+                        $"{account.BuyerBusinessId}, next due day {account.NextDeliveryDayIndex}",
+                        EditorStyles.wordWrappedLabel);
+                }
+            }
             EditorGUILayout.EndVertical();
 
             EditorGUILayout.LabelField(status, EditorStyles.wordWrappedLabel);

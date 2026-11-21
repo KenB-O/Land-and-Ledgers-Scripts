@@ -795,7 +795,11 @@ namespace LandLedgers.Economy.BreadDrivers
                     continue;
                 }
 
-                int retailPriceCents = inputs.StorePort.CategoryPricePerUnitCents(StoreCategoryId);
+                // Lane 9a (A9): the retail price is the BREAD item price
+                // (the store's bread line), never the staple_food category
+                // average — the transfer's retail guard is evaluated
+                // against bread's own price.
+                int retailPriceCents = BreadRetailPriceCents(inputs, storeProductId, diag);
                 int expectedSettlementCents = checked(transferUnits * Math.Max(0, account.PricePerUnitCents));
                 if (inputs.StoreCashPort == null || inputs.StoreCashPort.BalanceCents < expectedSettlementCents)
                 {
@@ -881,6 +885,33 @@ namespace LandLedgers.Economy.BreadDrivers
             }
 
             return FinishWithActualsLine(inputs, result, wholesaleRevenueTodayCents, diag);
+        }
+
+        /// <summary>
+        /// Lane 9a (A9): the bread line's retail price is bread's own
+        /// price. The item-level restock port supplies it per store unit
+        /// (the production port: the store's bread baseline, 5c). A
+        /// category-only port cannot supply an item price, so the
+        /// staple_food category average is used only as a loud fallback
+        /// — never silently. The catalog line price is NOT a fallback:
+        /// Pass3WholesaleIntake seeds it from the wholesale price, so
+        /// using it would set retail equal to wholesale and the
+        /// transfer guard would refuse every delivery.
+        /// </summary>
+        private static int BreadRetailPriceCents(BakeryWholesaleDailyInputs inputs, string storeProductId, List<string> diag)
+        {
+            if (inputs?.StorePort is IItemLevelRestockTradingPort restockPort
+                && !string.IsNullOrWhiteSpace(storeProductId))
+            {
+                int itemPrice = restockPort.ItemRetailPricePerStoreUnitCents(storeProductId);
+                if (itemPrice > 0) return itemPrice;
+                diag?.Add($"BakeryWholesaleDailyDriver: item retail price for '{storeProductId}' is {itemPrice}c — falling back to the {StoreCategoryId} category average for the transfer retail guard.");
+            }
+            else
+            {
+                diag?.Add($"BakeryWholesaleDailyDriver: store port supplies no item retail price for '{storeProductId ?? string.Empty}' — falling back to the {StoreCategoryId} category average for the transfer retail guard.");
+            }
+            return inputs.StorePort.CategoryPricePerUnitCents(StoreCategoryId);
         }
 
         private static string StoreProductIdFor(string bakeryProductId, List<string> diag)

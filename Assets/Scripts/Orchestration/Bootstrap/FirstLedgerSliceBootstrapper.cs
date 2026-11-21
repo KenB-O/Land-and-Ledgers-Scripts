@@ -218,6 +218,12 @@ namespace LandLedgers.FirstLedger
         public string LastStartupTimingSummary => lastStartupTimingSummary ?? string.Empty;
         public WorldStartupIntent StartupIntent => startupIntent;
         public bool IsInitialized => initialized;
+        /// <summary>
+        /// Lane 9a (A8): true when this session restored a saved game
+        /// (MarkRestoredFromSave ran). False for a fresh New Game.
+        /// Runtime-only, never serialized.
+        /// </summary>
+        public bool RestoredFromSave { get; private set; }
         public bool IsStartupReadyForManagementUi => initialized || initializing;
         public bool HasStartupFailed => startupFailed;
         public string BootstrapStatus => bootstrapStatus ?? string.Empty;
@@ -907,6 +913,7 @@ namespace LandLedgers.FirstLedger
             ReportDuplicateSceneAuthorities();
             Debug.Log("[WorldStartup] Startup path: save load; saved world state and placements are authoritative.", this);
             initialized = true;
+            RestoredFromSave = true;
             bootstrapStatus = "Game slice restored from save.";
             lastRestorePersistenceSummary = string.IsNullOrWhiteSpace(persistenceSummary)
                 ? "No persistence repair notes recorded."

@@ -271,10 +271,35 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void SupplyProtection_ContractsBeatCounter_ByDefault()
+        public void SupplyProtection_DefaultIsProtectRetailCounter()
+        {
+            // Lane 9a (H-1 / owner decision, Nov 20, 2026): canon gives
+            // no default, so the code default IS the decision — the
+            // retail counter sells freely. With a due 24-loaf account
+            // and 24 fresh loaves on the shelf, the counter sells all 24.
+            var diag = new List<string>();
+            var runtime = StockedShop(diag);
+            Assert.AreEqual(BakerySupplyProtectionPolicy.ProtectRetailCounter, runtime.SupplyProtection,
+                "a new runtime defaults to ProtectRetailCounter");
+            Assert.IsNull(runtime.AddWholesaleAccount(BoardingHouseAccount(units: 24, dueDay: 300), diag));
+
+            Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.BreadLoafId, 1, 300, diag));
+            Assert.AreEqual(1, WorkDay(runtime, 300, diag));
+
+            var sold = runtime.SellBread(BakeryBreadCatalog.BreadLoafId, 24, 300, diag);
+            int soldUnits = 0;
+            foreach (var record in sold) soldUnits += record.Units;
+            Assert.AreEqual(24, soldUnits, "the counter sells freely under the retail-first default");
+        }
+
+        [Test]
+        public void SupplyProtection_ContractsBeatCounter_WhenPolicyProtectsContracts()
         {
             var diag = new List<string>();
             var runtime = StockedShop(diag);
+            // The policy, not the default: under ProtectWholesaleContracts
+            // a due account still holds all 24 loaves against the counter.
+            runtime.SupplyProtection = BakerySupplyProtectionPolicy.ProtectWholesaleContracts;
             Assert.IsNull(runtime.AddWholesaleAccount(BoardingHouseAccount(units: 24, dueDay: 300), diag));
 
             Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.BreadLoafId, 1, 300, diag));

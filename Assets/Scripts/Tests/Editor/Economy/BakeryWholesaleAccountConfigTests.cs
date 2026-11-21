@@ -12,15 +12,16 @@ namespace LandLedgers.Editor.Economy
 {
     /// <summary>
     /// Plan 01 (2026-11-06) slice 1A: scenario-authored bakery wholesale
-    /// accounts — config schema, applicator, and the demand-derived
-    /// fallback. Pins that accounts are authorable per seller key, zero
-    /// by default, idempotent via the endowment marker plus defensive
-    /// dedup, validated before any mutation, and that the fallback books
-    /// exactly one 24-unit daily 2c account only when the config lists no
-    /// wholesale accounts at all. Unity compilation, Test Runner,
-    /// PlayMode, and the bootstrapper call site are NOT claimed; the
-    /// bootstrapper is harness-excluded, so its call is source-reviewed
-    /// only and exercised here through the same public API it calls.
+    /// accounts — config schema, applicator, and the opt-in rule. Pins
+    /// that accounts are authorable per seller key, zero by default,
+    /// idempotent via the endowment marker plus defensive dedup,
+    /// validated before any mutation, and that a config with no entries
+    /// books NOTHING (Lane 9a, H-1: the demand-derived fallback is
+    /// removed — no entries means no account). Unity compilation, Test
+    /// Runner, PlayMode, and the bootstrapper call site are NOT claimed;
+    /// the bootstrapper is harness-excluded, so its call is
+    /// source-reviewed only and exercised here through the same public
+    /// API it calls.
     /// </summary>
     [TestFixture]
     public sealed class BakeryWholesaleAccountConfigTests
@@ -180,8 +181,13 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void WholesaleAccounts_NoEntries_BooksDemandDerivedFallback()
+        public void WholesaleAccounts_NoEntries_BooksNothing()
         {
+            // Lane 9a (H-1): the demand-derived fallback is removed. A
+            // config with no wholesale entries books no account — New
+            // Game creates no wholesale account and the bakery sells
+            // direct to consumers. Voluntary wholesale stays available
+            // via AddWholesaleAccount and explicit config entries.
             var diag = new List<string>();
             DevelopmentTownConfiguration config = BuildConfig(null);
             Assert.IsTrue(config.Validate(out string configError), configError);
@@ -190,25 +196,14 @@ namespace LandLedgers.Editor.Economy
 
             Assert.IsTrue(Apply(config, bakery, state, StoreBusiness(), 2, diag, out string report, out string error), error);
 
-            Assert.AreEqual(1, bakery.WholesaleAccounts.Count, "the fallback books exactly one account");
-            BakeryWholesaleAccount account = bakery.WholesaleAccounts[0];
-            Assert.AreEqual(StoreInstanceId, account.BuyerBusinessId, "the fallback buyer is the General Store");
-            Assert.AreEqual(BusinessType.GeneralStore, account.BuyerType);
-            Assert.AreEqual(BakeryBreadCatalog.BreadLoafId, account.ProductId);
-            Assert.AreEqual(24, account.UnitsPerDelivery, "24 units/day = one 24-loaf batch/day (day-1 demand was 24 loaves)");
-            Assert.AreEqual(1, account.DeliveryCadenceDays, "daily cadence");
-            Assert.AreEqual(2, account.PricePerUnitCents, "2c wholesale (documented evidence value)");
-            Assert.AreEqual(BakeryWholesaleFreshness.FreshOrDayOld, account.Freshness);
-            Assert.AreEqual(2, account.NextDeliveryDayIndex, "due on the booking day");
-            Assert.IsTrue(account.IsActive);
-
-            string allText = report + " | " + string.Join(" | ", diag);
-            StringAssert.Contains("demand-derived fallback", allText, "the fallback is labelled calibration; text: " + allText);
-            StringAssert.Contains("D-1 open", allText, "D-1 stays open; text: " + allText);
+            Assert.AreEqual(0, bakery.WholesaleAccounts.Count, "no entries books no account");
+            StringAssert.Contains("nothing was booked", report, "report: " + report);
+            Assert.IsTrue(!report.Contains("fallback"), "no fallback is mentioned; report: " + report);
+            Assert.IsTrue(!string.Join(" | ", diag).Contains("fallback"), "no fallback in diagnostics");
         }
 
         [Test]
-        public void WholesaleAccounts_ConfigEntry_WinsOverFallback()
+        public void WholesaleAccounts_ConfigEntry_BooksOneAccount()
         {
             var diag = new List<string>();
             DevelopmentTownConfiguration config = BuildConfig(new[]
@@ -234,15 +229,12 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
-        public void WholesaleAccounts_OtherSellerEntry_BlocksFallback()
+        public void WholesaleAccounts_OtherSellerEntry_BooksNothingForThisSeller()
         {
-            // K2: the fallback books only when the config lists no
-            // wholesale accounts at all, for ANY seller. A config whose
-            // only entry belongs to another seller gives this seller no
-            // fallback and no booking: the entry is not this seller's, and
-            // the config has still spoken about wholesale accounts. This
-            // pins the preserved hasAnyEntry rule after the
-            // WholesaleAccounts view was replaced by direct iteration.
+            // K2: a config whose only entry belongs to another seller
+            // gives this seller no booking: the entry is not this
+            // seller's. Lane 9a (H-1): with the fallback removed, no
+            // entry for this seller means no account, full stop.
             var diag = new List<string>();
             DevelopmentTownConfiguration config = BuildConfigWithOtherSellerEntry();
             Assert.IsTrue(config.Validate(out string configError), configError);

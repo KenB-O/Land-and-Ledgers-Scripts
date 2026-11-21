@@ -35,6 +35,23 @@ namespace LandLedgers.Population
         public IReadOnlyList<string> Diagnostics => diagnostics;
 
         /// <summary>
+        /// Lane 9a (A6): the F4 lot-identity resolver the lot-based meal
+        /// path sets on its HouseholdMealService, supplied by the
+        /// SimulationDrivers hub wiring. Null (the default) means
+        /// today's behaviour: meals record the lot id only.
+        /// </summary>
+        public LandLedgers.Economy.Logistics.LotIdentityResolver LotIdentityResolver { get; set; }
+
+        /// <summary>
+        /// Lane 9a (A8): whether this session restored a saved game.
+        /// Legacy saves seed unspecified reserve stock as flagged
+        /// unidentified historical stock; new games seed none. Set by
+        /// SimulationDrivers from the bootstrapper; false by default
+        /// (unwired contexts and tests behave as a new game).
+        /// </summary>
+        public bool RestoredFromSave { get; set; }
+
+        /// <summary>
         /// W-G2 (Agent G, expanded campaign 2026-11-16): rest quality
         /// from last night's sleep (SleepingPlaceRegistry.
         /// LastRestQuality01), handed in by the owner —
@@ -200,6 +217,10 @@ namespace LandLedgers.Population
             // Phase B (Real People): when the lot inventory + meal log are
             // wired, meals consume real lots and record traceable records;
             // otherwise the legacy reserve-unit path runs unchanged.
+            // Lane 9a (A8): the legacy reserve-based path stays confined
+            // to unwired contexts and tests (inventories or meal log
+            // null) — the lot path never falls back to it, so abstract
+            // staple_food consumption cannot leak into production meals.
             if (inventories != null && mealLog != null && !deferLotBasedMealsToClock)
             {
                 ExecuteLotBasedMeals(
@@ -393,7 +414,7 @@ namespace LandLedgers.Population
         {
             mealPolicy ??= MealSchedulingPolicy.Default;
             HouseholdInventory inventory = inventories.GetOrCreate(household.id);
-            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, dayIndex, diag);
+            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, dayIndex, diag, RestoredFromSave);
 
             var memberIds = new List<int>(members.Count);
             var outOfHomeMeals = new Dictionary<int, OutOfHomeMeals>();
@@ -437,6 +458,7 @@ namespace LandLedgers.Population
             }
 
             var mealService = new HouseholdMealService(mealLog);
+            mealService.LotIdentityResolver = LotIdentityResolver;
             MealDayResult result = mealService.ServeHouseholdDay(
                 household, memberIds, inventory, mealPolicy, dayIndex, outOfHomeMeals);
             foreach (string serviceDiagnostic in mealService.Diagnostics)

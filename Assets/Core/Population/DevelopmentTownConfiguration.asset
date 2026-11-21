@@ -1807,14 +1807,7 @@ MonoBehaviour:
       fuelDealerIntakeUnitsPerBakeryUnit: 0
       openingHorseId: 
       openingWagonId: 
-      wholesaleAgreements:
-      - buyerBusinessKey: general-store
-        productId: bake.bread-loaf
-        unitsPerDelivery: 24
-        deliveryCadenceDays: 1
-        pricePerUnitCents: 4
-        freshness: 0
-        firstDeliveryDayIndex: 0
+      wholesaleAgreements: []
   - key: fuel-dealer
     displayName: Fuel Dealer
     operationId: fuel-dealer

@@ -285,10 +285,16 @@ namespace LandLedgers.Economy.Businesses.Bakery
 
         /// <summary>
         /// D1D: who scarce supply protects (Canon §7.3E: "the player can
-        /// choose"). Default ProtectWholesaleContracts is TUNING — canon gives
-        /// no default.
+        /// choose"). Default ProtectRetailCounter is an OWNER DECISION
+        /// taken in Lane 9a (§19 retail-first, Nov 20, 2026): canon gives
+        /// no default, so the code default IS the decision — the retail
+        /// counter sells freely and wholesale accounts get the remainder.
+        /// The field initializer and the save-DTO default below remain
+        /// only as deserialization fallbacks for old saves, never as a
+        /// decision; Lane 10a (H-2) adds the config-authored initial
+        /// policy resolved once as a recorded decision.
         /// </summary>
-        private BakerySupplyProtectionPolicy supplyProtection = BakerySupplyProtectionPolicy.ProtectWholesaleContracts;
+        private BakerySupplyProtectionPolicy supplyProtection = BakerySupplyProtectionPolicy.ProtectRetailCounter;
 
         private int batchSeq;
         private int saleSeq;
@@ -377,12 +383,17 @@ namespace LandLedgers.Economy.Businesses.Bakery
         /// <summary>D1D: proofing-rack slots gating the daily proof schedule.</summary>
         public int ProofingRackSlots => proofingRackSlots;
 
-        /// <summary>D1D: the owner's scarcity policy (Canon §7.3E).</summary>
+        /// <summary>
+        /// D1D: the owner's scarcity policy (Canon §7.3E). Unspecified
+        /// coerces to the Lane 9a owner decision ProtectRetailCounter
+        /// (see the supplyProtection field comment); the coercion is a
+        /// deserialization fallback for old saves, never a decision.
+        /// </summary>
         public BakerySupplyProtectionPolicy SupplyProtection
         {
             get => supplyProtection;
             set => supplyProtection = value == BakerySupplyProtectionPolicy.Unspecified
-                ? BakerySupplyProtectionPolicy.ProtectWholesaleContracts
+                ? BakerySupplyProtectionPolicy.ProtectRetailCounter
                 : value;
         }
 
@@ -1758,6 +1769,33 @@ namespace LandLedgers.Economy.Businesses.Bakery
         }
 
         /// <summary>
+        /// Lane 9a (H-4): units of a product committed to wholesale
+        /// accounts due today, for the staged-batch gate. A voluntary
+        /// wholesale account no longer vetoes staged retail production;
+        /// only the units actually due today are netted out of the retail
+        /// stock figure, so a due delivery is still protected from being
+        /// shorted by a staged batch.
+        /// </summary>
+        public int WholesaleUnitsDueToday(string productId, int dayIndex) =>
+            WholesaleUnitsDue(productId, dayIndex);
+
+        /// <summary>
+        /// Lane 9a (H-4): the retail stock figure the staged-batch gate
+        /// compares against open household need — the counter allowance
+        /// net of due-today wholesale units. Under ProtectRetailCounter
+        /// the allowance is the full shelf, so due units are netted here.
+        /// Under the other policies the allowance already nets due
+        /// commitments (ProtectWholesaleContracts) or shares them
+        /// (ProportionalShare); netting again would double-subtract.
+        /// </summary>
+        public int RetailUnitsNetOfDueWholesale(string productId, int dayIndex, List<string> diag = null)
+        {
+            int allowance = RetailUnitsAvailableForSale(productId, dayIndex, diag);
+            if (supplyProtection != BakerySupplyProtectionPolicy.ProtectRetailCounter) return allowance;
+            return Math.Max(0, allowance - WholesaleUnitsDue(productId, dayIndex));
+        }
+
+        /// <summary>
         /// D1D: what the retail counter may sell of a product today under the
         /// owner's scarcity policy (Canon §7.3E).
         /// </summary>
@@ -1783,7 +1821,7 @@ namespace LandLedgers.Economy.Businesses.Bakery
                 return Math.Min(totalSellable, totalSellable * reference / (reference + Math.Max(0, committed)));
             }
 
-            // ProtectWholesaleContracts (the default): due accounts first.
+            // ProtectWholesaleContracts: due accounts first.
             return Math.Max(0, totalSellable - Math.Max(0, committed));
         }
 
@@ -2128,8 +2166,14 @@ namespace LandLedgers.Economy.Businesses.Bakery
             /// <summary>D1D: proofing-rack slots.</summary>
             public int ProofingRackSlots = BakeryBreadCatalog.DefaultProofingRackSlots;
 
-            /// <summary>D1D: the owner's scarcity policy.</summary>
-            public BakerySupplyProtectionPolicy SupplyProtection = BakerySupplyProtectionPolicy.ProtectWholesaleContracts;
+            /// <summary>
+            /// D1D: the owner's scarcity policy. Deserialization fallback
+            /// only (Lane 9a owner decision ProtectRetailCounter); a
+            /// persisted policy is restored by LoadFromSaveDto, and the
+            /// choice itself is recorded by the Lane 10a decision
+            /// machinery, never by this default.
+            /// </summary>
+            public BakerySupplyProtectionPolicy SupplyProtection = BakerySupplyProtectionPolicy.ProtectRetailCounter;
 
             public int BatchSeq;
             public int SaleSeq;

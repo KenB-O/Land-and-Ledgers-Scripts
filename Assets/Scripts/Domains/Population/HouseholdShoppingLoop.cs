@@ -561,9 +561,43 @@ namespace LandLedgers.Population
         /// never silently passed: a DoesNotFit verdict on an over-cap
         /// load is recorded in diagnostics while the settled purchase
         /// proceeds per the loop's existing enforcement (see
-        /// SettleAtCounter).
+        /// SettleAtCounter). Lane 9a (A11) OWNER DECISION: settle-time
+        /// capacity is advisory — the cap is enforced at candidate
+        /// evaluation (the delivery decision) and in the affordability
+        /// downsize clamp, and all three points consult the same F2
+        /// evaluator verdict against the same live cap, so they cannot
+        /// disagree. Refusing or downsizing at settle would change
+        /// purchase quantities after cash moved — a shopping-rule change
+        /// requiring a further owner decision.
         /// </summary>
         public PhysicalCapacityVerdict? LastSettleCapacityVerdict { get; private set; }
+
+        /// <summary>
+        /// Lane 9a (A11): the single live on-foot carry cap every
+        /// enforcement point reads — the delivery decision, the
+        /// affordability downsize clamp, and the settle-time verdict all
+        /// consult this one value through the same evaluator, so the
+        /// three points cannot disagree about the cap.
+        /// </summary>
+        internal static int LiveCarryCapUnits(ShoppingLoopOptions options) =>
+            Math.Max(1, (options ?? new ShoppingLoopOptions()).CarryCapacityUnits);
+
+        /// <summary>
+        /// Lane 9a (A11): the one on-foot carry verdict, from the F2
+        /// evaluator against the live cap. With the cap set the
+        /// evaluator answers on the units axis only (Fits iff the load
+        /// fits the cap); mass and volume stay Unknown.
+        /// </summary>
+        private PhysicalCapacityVerdict EvaluateOnFootCarryVerdict(
+            int shopperId, IEnumerable<(string ItemId, int Units)> loadLines, int dayIndex, ShoppingLoopOptions options)
+        {
+            var query = new PhysicalCapacityQuery(
+                PhysicalContainerKind.OnFootPerson, "person:" + shopperId,
+                new PhysicalLoad(loadLines), dayIndex);
+            var capacityContext = PhysicalCapacityEvaluationContext.Default;
+            capacityContext.OnFootCarryCapUnits = LiveCarryCapUnits(options);
+            return CapacityEvaluator.Evaluate(query, capacityContext);
+        }
 
         public HouseholdShoppingLoop(
             PopulationState population,
@@ -2131,6 +2165,12 @@ namespace LandLedgers.Population
         // loudly instead of silently passed (see the V1 over-cap test).
         // Refusing here would change purchase quantities, which is a
         // shopping-rule change, not wiring.
+        // Lane 9a (A11) OWNER DECISION, recorded: settle-time capacity
+        // stays ADVISORY. All three points consult the same F2 verdict
+        // through EvaluateOnFootCarryVerdict against the same live cap
+        // (LiveCarryCapUnits), so they cannot disagree; the settle-time
+        // verdict sees the fullest load (prior batches in hand plus
+        // this purchase), which is why it is the recording point.
         var capacityLines = new List<(string ItemId, int Units)>();
         foreach (CarriedGoodsBatch carried in custodyBatches)
         {
@@ -2142,13 +2182,8 @@ namespace LandLedgers.Population
         }
 
         capacityLines.Add((need.ItemId, sold));
-        var capacityQuery = new PhysicalCapacityQuery(
-            PhysicalContainerKind.OnFootPerson, "person:" + shopperId,
-            new PhysicalLoad(capacityLines), dayIndex);
-        var capacityContext = PhysicalCapacityEvaluationContext.Default;
-        int carryCap = Math.Max(1, (options ?? new ShoppingLoopOptions()).CarryCapacityUnits);
-        capacityContext.OnFootCarryCapUnits = carryCap;
-        PhysicalCapacityVerdict capacityVerdict = CapacityEvaluator.Evaluate(capacityQuery, capacityContext);
+        int carryCap = LiveCarryCapUnits(options);
+        PhysicalCapacityVerdict capacityVerdict = EvaluateOnFootCarryVerdict(shopperId, capacityLines, dayIndex, options);
         LastSettleCapacityVerdict = capacityVerdict;
         diag.Add($"[V1] capacity consulted at settle: P{shopperId} carrying {capacityVerdict.Load.TotalUnits}u " +
             $"{need.ItemId} (live cap {carryCap}u) — {capacityVerdict.Outcome}: {capacityVerdict.Reason}");
@@ -3752,7 +3787,8 @@ namespace LandLedgers.Population
                 int freight = deliveryOffered && !string.IsNullOrEmpty(carrierBusinessId)
                     ? Math.Max(0, ((IDeliveryOfferingSupplier)supplier).DeliveryFeeCents(need.ItemId, units))
                     : 0;
-                bool useDelivery = deliveryOffered && units > Math.Max(1, options.CarryCapacityUnits);
+                bool useDelivery = deliveryOffered
+                    && EvaluateOnFootCarryVerdict(shopperId, new[] { (need.ItemId, units) }, dayIndex, options).Outcome == PhysicalCapacityOutcome.DoesNotFit;
                 int total = goodsCost + (useDelivery ? freight : 0);
                 ShoppingSettlementMode mode;
                 // Review 2 second scripts pass: why this candidate
@@ -3781,11 +3817,15 @@ namespace LandLedgers.Population
                     // a smaller real trip, not a rejected need and never debt.
                     int fullPlannedTotal = total;
                     units = Math.Min(ledgerBalance / price, stock);
-                    useDelivery = deliveryOffered && units > Math.Max(1, options.CarryCapacityUnits);
+                    // Lane 9a (A11): the affordability downsize uses the
+                    // same F2 carry verdict as the delivery decision and
+                    // the settle-time check — one authority, one live cap.
+                    useDelivery = deliveryOffered
+                        && EvaluateOnFootCarryVerdict(shopperId, new[] { (need.ItemId, units) }, dayIndex, options).Outcome == PhysicalCapacityOutcome.DoesNotFit;
                     if (useDelivery)
                     {
                         // Freight on a shoestring budget: carry what fits.
-                        units = Math.Min(units, Math.Max(1, options.CarryCapacityUnits));
+                        units = Math.Min(units, LiveCarryCapUnits(options));
                         useDelivery = false;
                     }
 

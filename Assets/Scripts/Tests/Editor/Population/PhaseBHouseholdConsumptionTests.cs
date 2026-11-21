@@ -94,7 +94,10 @@ namespace LandLedgers.Editor.Population
             household.GetReserve("meat").currentUnits = 3;
             var inventory = new HouseholdInventory(55);
 
-            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>());
+            // Lane 9a (A8): this test exercises the LEGACY-save mirror —
+            // a restored save's historical reserve seeds as flagged
+            // unidentified stock, never as an invented SKU.
+            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 9, new List<string>(), fromLegacySave: true);
 
             Assert.AreEqual(8, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
                 "Legacy staple units seed honestly as unspecified, never invented as flour/bread.");
@@ -103,8 +106,17 @@ namespace LandLedgers.Editor.Population
                 "Legacy meat reserve units retain unknown composition rather than being labeled preserved meat.");
             Assert.AreEqual(0, inventory.GetAvailableUnits(HouseholdItemCatalog.PreservedMeatId));
             Assert.IsTrue(inventory.State.SeededFromReserves);
+            foreach (var lot in inventory.Lots)
+            {
+                if (string.Equals(lot.ItemId, HouseholdItemCatalog.UnspecifiedStapleFoodId, System.StringComparison.Ordinal)
+                    || string.Equals(lot.ItemId, HouseholdItemCatalog.UnspecifiedMeatId, System.StringComparison.Ordinal))
+                {
+                    Assert.IsTrue(lot.IsUnidentifiedHistoricalStock,
+                        "legacy-seeded unspecified lots are flagged unidentified historical stock");
+                }
+            }
 
-            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 10, new List<string>());
+            HouseholdInventoryReserveBridge.SeedLotsFromReserves(household, inventory, 10, new List<string>(), fromLegacySave: true);
             Assert.AreEqual(8, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedStapleFoodId),
                 "Seeding is idempotent: a second pass adds nothing.");
             Assert.AreEqual(3, inventory.GetAvailableUnits(HouseholdItemCatalog.UnspecifiedMeatId));

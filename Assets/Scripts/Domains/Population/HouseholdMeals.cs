@@ -71,6 +71,31 @@ namespace LandLedgers.Population
     }
 
     /// <summary>
+    /// Lane 9a (A5): why a meal was missed, classified at close time
+    /// from the evidence available then — so a missed meal can be told
+    /// apart from legitimate poverty vs broken mechanics from the
+    /// record alone. Only the kinds the evidence supports are ever
+    /// written: the meal service classifies from inventory evidence
+    /// (NoFoodInLarder / SchedulingWindowMissed / Unknown); cash,
+    /// seller, stock-at-seller, shopper and counter reasons need the
+    /// shopping loop's or shortage monitor's evidence and are stamped
+    /// by the caller that holds it. Unknown is a valid outcome — never
+    /// invent a reason. Unknown is 0 so records from old saves (which
+    /// carry no kind) load as Unknown, never as an invented reason.
+    /// </summary>
+    public enum MissedMealReasonKind
+    {
+        Unknown = 0,
+        NoFoodInLarder = 1,
+        CannotAfford = 2,
+        NoKnownSeller = 3,
+        NoStockAtSeller = 4,
+        NoShopperAvailable = 5,
+        NoCounterService = 6,
+        SchedulingWindowMissed = 7,
+    }
+
+    /// <summary>
     /// Phase B: a meal that could not be served. Shortage causes hardship and
     /// responses — never invisible replenishment, never a faked meal record.
     /// </summary>
@@ -82,6 +107,8 @@ namespace LandLedgers.Population
         public int DayIndex;
         public MealSlot Slot;
         public string Reason = string.Empty;
+        /// <summary>Lane 9a (A5): the classified reason. Unknown is the default — old saves load Unknown, never an invented reason.</summary>
+        public MissedMealReasonKind ReasonKind = MissedMealReasonKind.Unknown;
     }
 
     /// <summary>
@@ -124,7 +151,14 @@ namespace LandLedgers.Population
         /// </summary>
         public float MiddayMealSupplyThresholdDays { get; set; } = 0f;
 
-        /// <summary>Item priority for meal serving (first available wins).</summary>
+        /// <summary>
+        /// Item priority for meal serving (first available wins). Lane 9a
+        /// (A8): generic unspecified staple is NOT a meal item — a loaf
+        /// is a loaf, and unspecified stock never satisfies a meal, a
+        /// purchase, a shipment or a receipt as if it were a named
+        /// product. Legacy unidentified stock cannot be served until
+        /// identified (see HouseholdInventoryReserveBridge).
+        /// </summary>
         public List<string> MealItemPriority { get; set; } = new List<string>
         {
             HouseholdItemCatalog.BreadId,
@@ -135,7 +169,6 @@ namespace LandLedgers.Population
             HouseholdItemCatalog.UnspecifiedMeatId,
             HouseholdItemCatalog.PreservedFoodId,
             HouseholdItemCatalog.PotatoesId,
-            HouseholdItemCatalog.UnspecifiedStapleFoodId,
         };
 
         /// <summary>Per-item serving-size overrides (item id → units per serving).</summary>
@@ -395,6 +428,7 @@ namespace LandLedgers.Population
                             DayIndex = Mathf.Max(0, dayIndex),
                             Slot = slot,
                             Reason = DescribeMealInventoryFailure(inventory, policy),
+                            ReasonKind = ClassifyMissedMealReason(inventory, policy),
                         });
                         result.MealsMissed++;
                     }
@@ -425,7 +459,8 @@ namespace LandLedgers.Population
             MealSlot slot,
             bool alreadyAteAwayFromHome = false,
             MealSourceKind awayMealSource = MealSourceKind.PurchasedMeal,
-            string missedReasonOverride = null)
+            string missedReasonOverride = null,
+            MissedMealReasonKind missedReasonKind = MissedMealReasonKind.Unknown)
         {
             if (household == null || personId < 0 || inventory == null)
             {
@@ -459,15 +494,50 @@ namespace LandLedgers.Population
                 && TryServeFromInventory(household, personId, inventory, policy, slot, dayIndex))
                 return true;
 
+            // Lane 9a (A5): the late-close path checks inventory before
+            // writing the generic reason, and never serves a meal
+            // retroactively. Food in the larder means the window passed,
+            // not the larder — SchedulingWindowMissed. No servable food
+            // means the missed meal is NoFoodInLarder. A caller that
+            // holds stronger evidence (cash, seller, shopper, counter)
+            // stamps its kind explicitly; it wins over this
+            // inventory-only classification.
+            MissedMealReasonKind reasonKind;
+            string reason;
+            if (missedReasonKind != MissedMealReasonKind.Unknown)
+            {
+                reasonKind = missedReasonKind;
+                reason = string.IsNullOrWhiteSpace(missedReasonOverride)
+                    ? DescribeMealInventoryFailure(inventory, policy)
+                    : missedReasonOverride;
+            }
+            else if (!string.IsNullOrWhiteSpace(missedReasonOverride))
+            {
+                if (HasServableMeal(inventory, policy))
+                {
+                    reasonKind = MissedMealReasonKind.SchedulingWindowMissed;
+                    reason = "The scheduled meal opportunity passed with servable food in the larder; no later food was consumed retroactively.";
+                }
+                else
+                {
+                    reasonKind = MissedMealReasonKind.NoFoodInLarder;
+                    reason = missedReasonOverride;
+                }
+            }
+            else
+            {
+                reasonKind = ClassifyMissedMealReason(inventory, policy);
+                reason = DescribeMealInventoryFailure(inventory, policy);
+            }
+
             log.RecordMissedMeal(new MissedMealRecord
             {
                 PersonId = personId,
                 HouseholdId = household.id,
                 DayIndex = Math.Max(0, dayIndex),
                 Slot = slot,
-                Reason = string.IsNullOrWhiteSpace(missedReasonOverride)
-                    ? DescribeMealInventoryFailure(inventory, policy)
-                    : missedReasonOverride,
+                Reason = reason,
+                ReasonKind = reasonKind,
             });
             return true;
         }
@@ -484,6 +554,10 @@ namespace LandLedgers.Population
             for (int i = 0; i < priority.Count; i++)
             {
                 string itemId = priority[i];
+                // Lane 9a (A8): generic unspecified staple is never a
+                // servable meal item, even when a custom policy lists it
+                // — a loaf is a loaf.
+                if (IsUnspecifiedStaple(itemId)) continue;
                 int servingUnits = policy.GetServingUnits(itemId);
                 if (inventory.GetAvailableUnits(itemId) < servingUnits)
                 {
@@ -552,6 +626,45 @@ namespace LandLedgers.Population
             return false;
         }
 
+        /// <summary>
+        /// Lane 9a (A8): the generic unspecified staple item. Never a
+        /// servable meal item, never counted toward supply, never
+        /// reported as a meal item — whatever policy lists it.
+        /// </summary>
+        private static bool IsUnspecifiedStaple(string itemId) =>
+            string.Equals(itemId, HouseholdItemCatalog.UnspecifiedStapleFoodId, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Lane 9a (A5): whether the larder holds a full serving of an
+        /// identified meal item right now. Generic unspecified stock
+        /// never counts (A8) — it is not a servable meal.
+        /// </summary>
+        private static bool HasServableMeal(HouseholdInventory inventory, MealSchedulingPolicy policy)
+        {
+            if (inventory == null || policy?.MealItemPriority == null) return false;
+            for (int i = 0; i < policy.MealItemPriority.Count; i++)
+            {
+                string itemId = policy.MealItemPriority[i];
+                if (IsUnspecifiedStaple(itemId)) continue;
+                HouseholdItemDefinition definition = HouseholdItemCatalog.Get(itemId);
+                if (definition == null || !definition.IsFood) continue;
+                if (inventory.GetAvailableUnits(itemId) >= policy.GetServingUnits(itemId)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Lane 9a (A5): classifies a missed meal from the inventory
+        /// evidence available at close time. Inventory evidence can
+        /// only prove NoFoodInLarder (no servable identified food) or,
+        /// when food was present but the slot still missed, Unknown —
+        /// cash, seller, stock-at-seller, shopper and counter evidence
+        /// live in the shopping loop and the shortage monitor, not here,
+        /// so this classifier never invents those reasons.
+        /// </summary>
+        public static MissedMealReasonKind ClassifyMissedMealReason(HouseholdInventory inventory, MealSchedulingPolicy policy) =>
+            HasServableMeal(inventory, policy) ? MissedMealReasonKind.Unknown : MissedMealReasonKind.NoFoodInLarder;
+
         private static string DescribeMealInventoryFailure(HouseholdInventory inventory, MealSchedulingPolicy policy)
         {
             if (inventory == null || policy?.MealItemPriority == null)
@@ -561,6 +674,9 @@ namespace LandLedgers.Population
             for (int i = 0; i < policy.MealItemPriority.Count; i++)
             {
                 string itemId = policy.MealItemPriority[i];
+                // Lane 9a (A8): generic unspecified staple is not a meal
+                // item and is never reported as one.
+                if (IsUnspecifiedStaple(itemId)) continue;
                 HouseholdItemDefinition item = HouseholdItemCatalog.Get(itemId);
                 if (item == null || !item.IsFood) continue;
                 int available = inventory.GetAvailableUnits(itemId);
@@ -597,6 +713,9 @@ namespace LandLedgers.Population
             int stapleAvailable = 0;
             for (int i = 0; i < policy.MealItemPriority.Count; i++)
             {
+                // Lane 9a (A8): generic unspecified staple never counts
+                // toward days of supply — it is not servable food.
+                if (IsUnspecifiedStaple(policy.MealItemPriority[i])) continue;
                 HouseholdItemDefinition definition = HouseholdItemCatalog.Get(policy.MealItemPriority[i]);
                 if (definition != null && definition.IsFood)
                 {

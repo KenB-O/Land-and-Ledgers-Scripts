@@ -254,6 +254,18 @@ namespace LandLedgers.Population
         public bool HasPerishableCondition;
 
         public int AvailableUnits => Mathf.Max(0, QuantityUnits - Mathf.Max(0, HeldUnits));
+
+        /// <summary>
+        /// Lane 9a (A8): unidentified historical stock — a lot seeded
+        /// from a legacy save's reserves whose composition was never
+        /// identified. It is real stock with a real quantity, but it
+        /// cannot be served as a meal until identified (the meal path
+        /// never serves the unspecified item). Never silently converted
+        /// to an arbitrary product. Additive: old saves load false.
+        /// Inherited by splits; a lot created from identified stock is
+        /// never flagged.
+        /// </summary>
+        public bool IsUnidentifiedHistoricalStock;
     }
 
     /// <summary>Phase B: one traceable consumption of a lot.</summary>
@@ -312,7 +324,7 @@ namespace LandLedgers.Population
         /// </summary>
         public string AddLot(string itemId, int quantityUnits, int dayIndex, string sourceLabel,
             string qualityBand = "", string sourceKind = "", int ownerPersonId = -1,
-            PerishableLotState condition = null)
+            PerishableLotState condition = null, bool isUnidentifiedHistoricalStock = false)
         {
             HouseholdItemDefinition definition = HouseholdItemCatalog.Get(itemId);
             if (definition == null)
@@ -354,6 +366,9 @@ namespace LandLedgers.Population
                         ? condition.WithUnits(quantityUnits)
                         : condition).CaptureSaveDto(),
                 HasPerishableCondition = condition != null,
+                // Lane 9a (A8): unidentified historical stock keeps its
+                // flag from seeding; never set for identified stock.
+                IsUnidentifiedHistoricalStock = isUnidentifiedHistoricalStock,
             };
             // Priority 9 Slice F4: the lot's own canonical provenance key
             // is appended to its SourceLabel (free text kept verbatim,
@@ -408,6 +423,9 @@ namespace LandLedgers.Population
                 QualityBand = source.QualityBand ?? string.Empty,
                 SourceKind = source.SourceKind ?? string.Empty,
                 OwnerPersonId = source.OwnerPersonId,
+                // Lane 9a (A8): a split of unidentified historical stock
+                // stays unidentified — splitting never identifies it.
+                IsUnidentifiedHistoricalStock = source.IsUnidentifiedHistoricalStock,
             };
             if (source.AncestryLotIds != null)
                 child.AncestryLotIds.AddRange(source.AncestryLotIds);
@@ -875,6 +893,10 @@ namespace LandLedgers.Population
                             // state; the bool travels with it).
                             PerishableCondition = lot.PerishableCondition,
                             HasPerishableCondition = lot.HasPerishableCondition,
+                            // Lane 9a (A8): the unidentified-historical
+                            // flag is part of the lot and survives
+                            // Save/Continue with it.
+                            IsUnidentifiedHistoricalStock = lot.IsUnidentifiedHistoricalStock,
                         });
                     }
                 }

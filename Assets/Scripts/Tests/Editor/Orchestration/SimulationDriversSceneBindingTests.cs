@@ -91,14 +91,32 @@ namespace LandLedgers.EditorTests.Orchestration
         }
 
         [Test]
-        public void StagedBakeryPlanning_DoesNotCompeteWithAnActiveWholesaleAccount()
+        public void StagedBakeryPlanning_VoluntaryWholesaleNoLongerVetoesRetailProduction()
         {
-            Assert.IsFalse(SimulationDrivers.ShouldBeginStagedBakeryBatch(
-                    24, 0, false, false, hasActiveWholesaleAccount: true),
-                "an active wholesale commitment remains with the conventional account planner; the staged retail path cannot consume the same bakery inputs concurrently");
+            // Lane 9a (H-4): a voluntary wholesale account no longer
+            // vetoes staged retail production. Due-today wholesale is
+            // netted upstream (RetailUnitsNetOfDueWholesale), so the
+            // gate itself sees retail stock net of what is already
+            // committed — a voluntary account with nothing due today
+            // leaves the gate untouched.
             Assert.IsTrue(SimulationDrivers.ShouldBeginStagedBakeryBatch(
-                    24, 0, false, false, hasActiveWholesaleAccount: false),
-                "with no wholesale commitments, uncovered actual household need can still use staged physical production");
+                    24, 0, false, false),
+                "with no wholesale units due today, uncovered actual household need authorizes a staged retail batch");
+            Assert.IsNull(SimulationDrivers.StagedBakeryBatchRefusalReason(24, 0, false, false),
+                "the gate passes, so there is no refusal to name");
+        }
+
+        [Test]
+        public void StagedBakeryPlanning_RefusalReasonNamesTheBlockingClause()
+        {
+            StringAssert.Contains("does not exceed retail stock net of due-today wholesale",
+                SimulationDrivers.StagedBakeryBatchRefusalReason(0, 0, false, false));
+            StringAssert.Contains("does not exceed retail stock net of due-today wholesale",
+                SimulationDrivers.StagedBakeryBatchRefusalReason(8, 8, false, false));
+            Assert.AreEqual("a conventional batch is already active",
+                SimulationDrivers.StagedBakeryBatchRefusalReason(24, 0, true, false));
+            Assert.AreEqual("a staged batch is active or a staged lot awaits shelf transfer",
+                SimulationDrivers.StagedBakeryBatchRefusalReason(48, 0, false, true));
         }
 
         [Test]

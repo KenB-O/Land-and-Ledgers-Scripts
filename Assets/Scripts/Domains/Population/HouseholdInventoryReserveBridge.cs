@@ -41,12 +41,25 @@ namespace LandLedgers.Population
         /// reserve units into lots. Idempotent via SeededFromReserves.
         /// Categories without SKU composition use an unspecified category
         /// item; fuel wood retains its exact identity.
+        ///
+        /// Lane 9a (A8): for a NEW game (fromLegacySave false, the
+        /// default) no unspecified lots are seeded at all — opening
+        /// reserves are calibration, not history, and generic stock
+        /// must never become edible meals. Only fuel wood, which has an
+        /// exact identity, is seeded. For a LEGACY save (fromLegacySave
+        /// true) the unspecified staple/meat reserves ARE seeded, so the
+        /// historical quantity is preserved — but flagged as
+        /// unidentified historical stock that cannot be served as a meal
+        /// until identified, never silently converted to an arbitrary
+        /// product. The reserve mirror itself is untouched either way:
+        /// reserves remain the legacy planning numbers.
         /// </summary>
         public static void SeedLotsFromReserves(
             HouseholdState household,
             HouseholdInventory inventory,
             int dayIndex,
-            List<string> diagnostics)
+            List<string> diagnostics,
+            bool fromLegacySave = false)
         {
             if (household == null || inventory == null)
             {
@@ -60,12 +73,21 @@ namespace LandLedgers.Population
 
             household.EnsureHouseholdReservesInitialized(
                 migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
-            SeedCategory(household, inventory, "staple_food",
-                HouseholdItemCatalog.UnspecifiedStapleFoodId,
-                "legacy reserve migration (composition unspecified)", dayIndex, diagnostics);
-            SeedCategory(household, inventory, "meat",
-                HouseholdItemCatalog.UnspecifiedMeatId,
-                "legacy reserve migration (composition unspecified)", dayIndex, diagnostics);
+            if (fromLegacySave)
+            {
+                SeedCategory(household, inventory, "staple_food",
+                    HouseholdItemCatalog.UnspecifiedStapleFoodId,
+                    "legacy reserve migration (composition unspecified) — unidentified historical stock, cannot be served until identified",
+                    dayIndex, diagnostics, isUnidentifiedHistoricalStock: true);
+                SeedCategory(household, inventory, "meat",
+                    HouseholdItemCatalog.UnspecifiedMeatId,
+                    "legacy reserve migration (composition unspecified) — unidentified historical stock, cannot be served until identified",
+                    dayIndex, diagnostics, isUnidentifiedHistoricalStock: true);
+            }
+            else
+            {
+                diagnostics?.Add("Reserve bridge seed: new game — unspecified staple/meat reserves seed no lots (generic stock is never edible); only exact-identity fuel wood is seeded.");
+            }
             SeedCategory(household, inventory, "fuel_wood",
                 HouseholdItemCatalog.FuelWoodId,
                 "legacy reserve migration", dayIndex, diagnostics);
@@ -187,7 +209,8 @@ namespace LandLedgers.Population
             string itemId,
             string sourceLabel,
             int dayIndex,
-            List<string> diagnostics)
+            List<string> diagnostics,
+            bool isUnidentifiedHistoricalStock = false)
         {
             HouseholdReserveState reserve = household.GetReserve(categoryId);
             int units = reserve != null ? Math.Max(0, reserve.currentUnits) : 0;
@@ -196,7 +219,8 @@ namespace LandLedgers.Population
                 return;
             }
 
-            string rejection = inventory.AddLot(itemId, units, dayIndex, sourceLabel);
+            string rejection = inventory.AddLot(itemId, units, dayIndex, sourceLabel,
+                isUnidentifiedHistoricalStock: isUnidentifiedHistoricalStock);
             if (rejection != null)
             {
                 diagnostics?.Add($"Reserve bridge seed: {rejection}");

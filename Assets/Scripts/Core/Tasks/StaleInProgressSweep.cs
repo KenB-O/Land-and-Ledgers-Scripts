@@ -265,4 +265,80 @@ namespace LandLedgers.Tasks
                 && task.MinutesRemaining <= 0;
         }
     }
+
+    public enum StaleQueuedDecision
+    {
+        /// <summary>Not this sweep's task (null, not Queued, or a negative age): leave entirely alone.</summary>
+        Skip,
+
+        /// <summary>Queued but within the bound: no action, no log.</summary>
+        UntouchedHealthy,
+
+        /// <summary>Queued past the bound with no assignee: surface it (day-keyed warning naming task, kind, owner, age).</summary>
+        EscalateUnassigned,
+
+        /// <summary>Queued past the bound with an assignee who never started it: surface it the same way.</summary>
+        EscalateAssignedIdle,
+    }
+
+    public readonly struct StaleQueuedVerdict
+    {
+        public readonly StaleQueuedDecision Decision;
+
+        /// <summary>Diagnostic string for the caller's log line.</summary>
+        public readonly string Reason;
+
+        public StaleQueuedVerdict(StaleQueuedDecision decision, string reason)
+        {
+            Decision = decision;
+            Reason = reason ?? string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Lane 9d (F6-2, Queued gap): the pure decision seam for tasks stuck
+    /// Queued with no progress path. The InProgress sweep above never sees
+    /// them (it only iterates InProgress tasks), and the stall recorder
+    /// only surfaces a Queued task after 72 hours — with no repair path
+    /// attached. This seam bounds the wait and surfaces the strand; it
+    /// deliberately has NO fail decision. Failing Queued tasks generically
+    /// would destroy obligations this lane has no authority to close (a
+    /// Queued domestic task may simply be waiting for its worker's free
+    /// day, and the freight dispatch tasks that strand here are owned by
+    /// their own recovery paths). The repair is the bound plus the
+    /// surfacing: the daily driver logs the Escalate verdicts once per day
+    /// per task, naming task, kind, owner, age, and assignee state, so a
+    /// strand is visible instead of silent.
+    ///
+    /// The bound (3 days) mirrors the stall recorder's 72-hour Queued
+    /// threshold — the same "three days without movement" the codebase
+    /// already treats as a stall — and DEF-071's 3-cycle abandonment
+    /// bound. The anchor is the day the task entered Queued: the caller
+    /// supplies it (today, CreatedDayIndex — WorkTask carries no
+    /// last-transition day, so creation is the best-known anchor; a
+    /// future lane that tracks re-queue days can pass those instead).
+    /// </summary>
+    public static class StaleQueuedSweep
+    {
+        public const int QueuedStallLimitDays = 3;
+
+        public static StaleQueuedVerdict DecideQueued(WorkTask task, int dayIndex, int anchorDayIndex)
+        {
+            if (task == null)
+                return new StaleQueuedVerdict(StaleQueuedDecision.Skip, "no task to sweep");
+            if (task.Status != TaskStatus.Queued)
+                return new StaleQueuedVerdict(StaleQueuedDecision.Skip, "task is not Queued");
+            int ageDays = dayIndex - anchorDayIndex;
+            if (ageDays < 0)
+                return new StaleQueuedVerdict(StaleQueuedDecision.Skip, "anchor day is ahead of the current day");
+            if (ageDays < QueuedStallLimitDays)
+                return new StaleQueuedVerdict(StaleQueuedDecision.UntouchedHealthy,
+                    "Queued " + ageDays + " day(s); within the " + QueuedStallLimitDays + "-day bound.");
+            if (!task.AssigneeId.IsValid)
+                return new StaleQueuedVerdict(StaleQueuedDecision.EscalateUnassigned,
+                    "Queued " + ageDays + " day(s) with no assignee.");
+            return new StaleQueuedVerdict(StaleQueuedDecision.EscalateAssignedIdle,
+                "Queued " + ageDays + " day(s) with assignee " + task.AssigneeId + " who never started it.");
+        }
+    }
 }

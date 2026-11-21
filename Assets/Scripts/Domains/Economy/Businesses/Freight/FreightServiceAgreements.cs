@@ -274,8 +274,35 @@ namespace LandLedgers.Economy.Freight
         public FreightServiceAgreement FindAgreement(string agreementId) => agreements.Find(a =>
             a != null && string.Equals(a.AgreementId, agreementId, StringComparison.Ordinal));
 
+        /// <summary>
+        /// The LIVE agreement for a request: the first agreement that is
+        /// not Cancelled. A cancelled agreement is history, not a live
+        /// agreement — it must not block contact notes, deferral,
+        /// re-acceptance, or requeue for a request reopened after a
+        /// recovery cancelled it (Lane 9d, F6-2). Callers that need the
+        /// cancelled record itself use FindCancelledAgreementForRequest.
+        /// </summary>
         public FreightServiceAgreement FindAgreementForRequest(string requestId) => agreements.Find(a =>
-            a != null && string.Equals(a.RequestId, requestId, StringComparison.Ordinal));
+            a != null && string.Equals(a.RequestId, requestId, StringComparison.Ordinal)
+            && a.Status != FreightServiceAgreementStatus.Cancelled);
+
+        /// <summary>
+        /// Lane 9d (F6-2): the cancelled agreement for a request, if any —
+        /// the record ReopenTerminalRequest must find to prove the request
+        /// was terminalized by a cancelled agreement rather than left
+        /// hanging. Only the latest cancelled agreement is returned.
+        /// </summary>
+        public FreightServiceAgreement FindCancelledAgreementForRequest(string requestId)
+        {
+            FreightServiceAgreement found = null;
+            foreach (FreightServiceAgreement agreement in agreements)
+            {
+                if (agreement != null && string.Equals(agreement.RequestId, requestId, StringComparison.Ordinal)
+                    && agreement.Status == FreightServiceAgreementStatus.Cancelled)
+                    found = agreement;
+            }
+            return found;
+        }
 
         /// <summary>
         /// Selects the next accepted, registered shipment which has not yet
@@ -394,6 +421,46 @@ namespace LandLedgers.Economy.Freight
             return null;
         }
 
+        /// <summary>
+        /// Lane 9d (F6-2): reopens a terminally ACCEPTED request whose
+        /// agreement was cancelled by a recovery's terminal disposition, so
+        /// the same paid lot can be retried under a fresh agreement instead
+        /// of stranding behind a request no code path can move. The pre-load
+        /// terminal path already cancels the agreement and logs it; the
+        /// post-load/committed strand used to end there too, with the
+        /// request still Accepted and the lot still committed. Distinct from
+        /// ReopenRefusedRequest (Refused only, no agreement ever existed):
+        /// this requires the agreement to be Cancelled — never a live
+        /// Accepted or Fulfilled one — and the lot must still be shippable,
+        /// which the driver verifies with FindShippableLot before calling.
+        /// The same stable request id and lot are retried; re-acceptance
+        /// creates a fresh agreement with a retry-suffixed id (Accept), so
+        /// the cancelled record stays in the book as history. The lot
+        /// commitment itself is released separately (OffMapAidBusinessRuntime
+        /// ReleaseFreightCommitment): reopening the request without
+        /// releasing the lot would retry into the same refused commit.
+        /// </summary>
+        public string ReopenTerminalRequest(string requestId, string reason)
+        {
+            FreightServiceRequest request = FindRequest(requestId);
+            if (request == null) return "Unknown freight service request.";
+            if (request.Status != FreightServiceRequestStatus.Accepted)
+                return "Only a terminally accepted freight request can be reopened as a terminal request.";
+            FreightServiceAgreement agreement = FindCancelledAgreementForRequest(requestId);
+            if (agreement == null)
+                return "A terminally accepted request with no cancelled agreement cannot be reopened as a terminal request.";
+            if (string.IsNullOrWhiteSpace(reason)) return "Reopening a terminally accepted request requires its cause.";
+
+            request.Status = FreightServiceRequestStatus.Open;
+            request.RefusalReason = reason.Trim();
+            request.AgreementId = string.Empty;
+            request.ShipmentId = string.Empty;
+            request.ContactTravelTaskId = string.Empty;
+            request.MeetingTaskId = string.Empty;
+            request.MeetingOperatorReservationId = string.Empty;
+            return null;
+        }
+
         public string SetQuote(string requestId, FreightServiceQuote quote)
         {
             FreightServiceRequest request = FindRequest(requestId);
@@ -424,7 +491,19 @@ namespace LandLedgers.Economy.Freight
             if (operatorPersonId < 0 || request.CarrierOperatorPersonId != operatorPersonId)
                 return "The accepting operator does not match the carrier's assigned person.";
             FreightServiceQuote quote = request.Quote;
-            string id = "freight-agreement:" + request.RequestId;
+            // Lane 9d (F6-2): a retry after a cancelled agreement keeps a
+            // distinct id. The first agreement keeps the plain id; a retry
+            // is suffixed with its attempt number, derived from the book's
+            // own contents so it is stable across save/load. Without the
+            // suffix, FindAgreement would return the cancelled record.
+            int priorAgreements = 0;
+            foreach (FreightServiceAgreement existing in agreements)
+            {
+                if (existing != null && string.Equals(existing.RequestId, requestId, StringComparison.Ordinal))
+                    priorAgreements++;
+            }
+            string id = "freight-agreement:" + request.RequestId
+                + (priorAgreements > 0 ? ":retry-" + (priorAgreements + 1) : string.Empty);
             agreement = new FreightServiceAgreement
             {
                 AgreementId = id,

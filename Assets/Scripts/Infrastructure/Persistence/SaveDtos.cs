@@ -673,6 +673,9 @@ namespace LandLedgers.Persistence
         // forward move. Legacy saves without this field restore 0
         // (clear-then-load stays valid).
         public int delayCycles;
+        // Lane 9d (E-18) additive: expected delivery day. Legacy saves
+        // without this field restore -1 (no ETA; never judged overdue).
+        public int expectedDeliveryDayIndex = -1;
         public float loadingDurationGameSeconds;
         public float transitDurationGameSeconds;
         public float unloadingDurationGameSeconds;

@@ -140,6 +140,14 @@ namespace LandLedgers.Economy
         // every forward move (see ResetDelayCycles). Additive field;
         // legacy saves read 0.
         [SerializeField] public int delayCycles;
+        // Lane 9d (E-18): the day this shipment is expected to be delivered.
+        // -1 means no ETA was ever set (legacy saves, and shipments created
+        // before any driver set one): such a shipment is never judged
+        // overdue — "no ETA" is a missing expectation, not a late delivery.
+        // Set from the shipment's own stage durations at creation, and
+        // re-set at dispatch authorization for held shipments, so the hold
+        // days (negotiation, meeting, staging) are not counted as haul time.
+        [SerializeField] public int expectedDeliveryDayIndex = -1;
         [SerializeField] public float loadingDurationGameSeconds = 30f;
         [SerializeField] public float transitDurationGameSeconds = 120f;
         [SerializeField] public float unloadingDurationGameSeconds = 30f;
@@ -176,6 +184,65 @@ namespace LandLedgers.Economy
         /// fresh shipment.
         /// </summary>
         public int DelayCycles => Mathf.Max(0, delayCycles);
+
+        /// <summary>
+        /// Lane 9d (E-18): game seconds in one simulation day. Mirrors
+        /// SimulationTimeSettings.GameSecondsPerDay (24 * 60 * 60); kept
+        /// as a const here so the ETA estimate needs no clock dependency.
+        /// </summary>
+        public const float GameSecondsPerDay = 86400f;
+
+        /// <summary>Lane 9d (E-18): true once an expected delivery day was set.</summary>
+        public bool HasExpectedDelivery => expectedDeliveryDayIndex >= 0;
+
+        /// <summary>
+        /// Lane 9d (E-18): the expected delivery day for a haul starting on
+        /// <paramref name="startDayIndex"/> with the given stage durations.
+        /// Whole days, rounded up: a haul whose stages total any part of a
+        /// day is expected by the end of that day, never "today" for a
+        /// multi-day route. Pure, so the estimate is pinned in tests.
+        /// </summary>
+        public static int EstimateDeliveryDay(int startDayIndex,
+            float loadingDurationGameSeconds, float transitDurationGameSeconds,
+            float unloadingDurationGameSeconds)
+        {
+            float total = Mathf.Max(0f, loadingDurationGameSeconds)
+                + Mathf.Max(0f, transitDurationGameSeconds)
+                + Mathf.Max(0f, unloadingDurationGameSeconds);
+            int days = (int)Math.Ceiling(total / GameSecondsPerDay);
+            return Math.Max(0, startDayIndex) + Math.Max(0, days);
+        }
+
+        /// <summary>
+        /// Lane 9d (E-18): records the expected delivery day. A negative
+        /// day is refused (returns the refusal, sets nothing); re-setting
+        /// replaces the previous ETA — dispatch authorization re-sets it
+        /// once the hold days are behind the shipment.
+        /// </summary>
+        public string SetExpectedDelivery(int dayIndex)
+        {
+            if (dayIndex < 0) return "An expected delivery day cannot be negative.";
+            expectedDeliveryDayIndex = dayIndex;
+            return null;
+        }
+
+        /// <summary>
+        /// Lane 9d (E-18): true only when an ETA is set and the judged day
+        /// is past it. A shipment with no ETA is never overdue.
+        /// </summary>
+        public bool IsOverdue(int dayIndex)
+        {
+            return HasExpectedDelivery && dayIndex > expectedDeliveryDayIndex;
+        }
+
+        /// <summary>
+        /// Lane 9d (E-18): whole days past the expected delivery day on the
+        /// judged day; 0 when on time, early, or when no ETA is set.
+        /// </summary>
+        public int OverdueDays(int dayIndex)
+        {
+            return HasExpectedDelivery ? Math.Max(0, dayIndex - expectedDeliveryDayIndex) : 0;
+        }
         public float EstimatedRemainingGameSeconds => Mathf.Max(0f, ResolveCurrentStageDuration() - stageElapsedGameSeconds);
 
         /// <summary>
@@ -310,6 +377,7 @@ namespace LandLedgers.Economy
                 deliveryApplied = deliveryApplied,
                 freightRevenueCollected = freightRevenueCollected,
                 delayCycles = DelayCycles,
+                expectedDeliveryDayIndex = HasExpectedDelivery ? expectedDeliveryDayIndex : -1,
                 loadingDurationGameSeconds = Mathf.Max(0f, loadingDurationGameSeconds),
                 transitDurationGameSeconds = Mathf.Max(0f, transitDurationGameSeconds),
                 unloadingDurationGameSeconds = Mathf.Max(0f, unloadingDurationGameSeconds),
@@ -371,6 +439,9 @@ namespace LandLedgers.Economy
             state.deliveryApplied = dto.deliveryApplied;
             state.freightRevenueCollected = dto.freightRevenueCollected;
             state.delayCycles = Mathf.Max(0, dto.delayCycles);
+            // Lane 9d (E-18): legacy saves carry -1 (no ETA); a negative
+            // value other than the sentinel is normalized to "no ETA".
+            state.expectedDeliveryDayIndex = dto.expectedDeliveryDayIndex >= 0 ? dto.expectedDeliveryDayIndex : -1;
             state.loadingDurationGameSeconds = Mathf.Max(0f, dto.loadingDurationGameSeconds);
             state.transitDurationGameSeconds = Mathf.Max(0f, dto.transitDurationGameSeconds);
             state.unloadingDurationGameSeconds = Mathf.Max(0f, dto.unloadingDurationGameSeconds);

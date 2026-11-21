@@ -362,6 +362,15 @@ namespace LandLedgers.Economy.Freight
             // the default unchanged.
             if (transitDurationGameSeconds > 0f)
                 shipment.transitDurationGameSeconds = Mathf.Max(60f, transitDurationGameSeconds);
+            // Lane 9d (E-18): re-set the ETA from the shipment's own stage
+            // durations now that the real transit is known (the service set
+            // a creation-day ETA from the 120 s default). Dispatch
+            // authorization re-sets it again for held shipments, so the hold
+            // days are not counted as haul time.
+            if (hooks != null)
+                shipment.SetExpectedDelivery(LogisticsShipmentState.EstimateDeliveryDay(hooks.DayIndex,
+                    shipment.loadingDurationGameSeconds, shipment.transitDurationGameSeconds,
+                    shipment.unloadingDurationGameSeconds));
             if (!company.TryAcceptShipment(shipment, diagnostics))
             {
                 reason = "FreightProductionDriver: carrier '" + carrierBusinessId + "' refused shipment '" + shipmentId + "'.";
@@ -376,8 +385,15 @@ namespace LandLedgers.Economy.Freight
             return shipment;
         }
 
-        /// <summary>Releases an accepted agreement shipment only after the next dispatch-preparation stage has prepared its real team.</summary>
-        public bool AuthorizeShipmentDispatch(string shipmentId, out string reason)
+        /// <summary>
+        /// Releases an accepted agreement shipment only after the next dispatch-preparation stage has prepared its real team.
+        /// Lane 9d (E-18): when the authorization day is supplied, the ETA is
+        /// re-set from that day plus the shipment's own stage durations, so
+        /// the negotiation/meeting/staging hold days are not counted as haul
+        /// time. A negative day (legacy callers) leaves the creation ETA in
+        /// place.
+        /// </summary>
+        public bool AuthorizeShipmentDispatch(string shipmentId, out string reason, int dayIndex = -1)
         {
             reason = string.Empty;
             LogisticsShipmentState shipment = AllShipments().Find(s => s != null
@@ -387,6 +403,10 @@ namespace LandLedgers.Economy.Freight
             if (shipment.Status != LogisticsShipmentStatus.Planned)
             { reason = "Only a planned shipment can be released from its dispatch-preparation hold."; return false; }
             shipment.requiresDispatchAuthorization = false;
+            if (dayIndex >= 0)
+                shipment.SetExpectedDelivery(LogisticsShipmentState.EstimateDeliveryDay(dayIndex,
+                    shipment.loadingDurationGameSeconds, shipment.transitDurationGameSeconds,
+                    shipment.unloadingDurationGameSeconds));
             return true;
         }
 

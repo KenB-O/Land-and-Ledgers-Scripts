@@ -353,5 +353,66 @@ namespace LandLedgers.Economy.Trade
             }
             return delivered;
         }
+
+        /// <summary>
+        /// Lane 9d (E R-08): intake-gated delivery. The ungated
+        /// ReceiveDueImports marks an order Delivered the moment it hands
+        /// the lot over; when the yard's intake then refuses the lot, the
+        /// goods sit in no inventory ("UNWIND FAILED" in the yard drivers)
+        /// while the order already reads Delivered — goods that exist
+        /// nowhere. This variant calls the intake FIRST and only marks the
+        /// order Delivered (and hands the lot over) on success. On refusal
+        /// the order stays Ordered — retryable on a later day once the yard
+        /// can take it — and the refusal is recorded in diagnostics.
+        /// Payment needs no unwind here: it was made at order time (cash
+        /// debit or honest credit), and the order still stands, so the
+        /// payment still buys the same goods on the retry.
+        ///
+        /// The intake delegate takes the built lot and returns null on
+        /// success or a refusal reason; it owns the inventory move, this
+        /// method owns the order status. A null delegate is refused
+        /// outright (no intake, no delivery) rather than silently behaving
+        /// like the ungated path.
+        /// </summary>
+        public List<ImportLot> ReceiveDueImportsWithIntake(int dayIndex, Func<ImportLot, string> tryIntake,
+            List<string> diagnostics)
+        {
+            diagnostics = diagnostics ?? new List<string>();
+            var delivered = new List<ImportLot>();
+            foreach (ImportOrder order in orders)
+            {
+                if (order.Status != ImportOrderStatus.Ordered) continue;
+                if (order.ExpectedArrivalDayIndex > dayIndex) continue;
+
+                ImportMaterial material = ImportCatalog.Get(order.MaterialId);
+                var lot = new ImportLot
+                {
+                    LotId = $"IMP-{order.OrderId}-{delivered.Count + 1}",
+                    MaterialId = order.MaterialId,
+                    MaterialName = material != null ? material.DisplayName : order.MaterialId,
+                    Units = order.Units,
+                    OriginName = order.OriginName,
+                    OrderId = order.OrderId,
+                    ArrivalDayIndex = dayIndex,
+                    Imported = true,
+                };
+                string intakeRefusal = tryIntake == null
+                    ? "no intake authority wired; refusing delivery rather than handing goods to no inventory."
+                    : tryIntake(lot);
+                if (intakeRefusal != null)
+                {
+                    diagnostics.Add(
+                        $"ImportService: order {order.OrderId} NOT delivered — intake refused ({intakeRefusal}); " +
+                        $"order remains Ordered and retryable; {lot.Units}x {lot.MaterialName} from {lot.OriginName} (lot {lot.LotId}) not handed over.");
+                    continue;
+                }
+                order.Status = ImportOrderStatus.Delivered;
+                delivered.Add(lot);
+                diagnostics.Add(
+                    $"ImportService: order {order.OrderId} delivered — {lot.Units}x {lot.MaterialName} " +
+                    $"from {lot.OriginName} (lot {lot.LotId}).");
+            }
+            return delivered;
+        }
     }
 }

@@ -5874,6 +5874,13 @@ namespace LandLedgers.Orchestration.Systems
             // advancement beside mortality, and the domestic pending prune.
             DriveDemographicDay(absoluteDayIndex);
 
+            // Lane 9d (F6-2, Queued gap): once-daily sweep over every open
+            // task, surfacing Queued tasks stuck past the bound. Nothing is
+            // failed or deleted here — the sweep only makes the strand
+            // visible; the freight and domestic owners keep their own
+            // recovery paths.
+            DriveStaleQueuedTaskSweep(absoluteDayIndex);
+
             // Population may be generated after Awake; bind the now-real
             // household ledgers before any daily finance workflow can open a
             // cash window.
@@ -8471,6 +8478,36 @@ namespace LandLedgers.Orchestration.Systems
         /// no revenue. Shipments wait honestly when the carrier has no real
         /// handling person (owner or active employee).
         /// </summary>
+        /// <summary>
+        /// Lane 9d (F6-2, Queued gap): once-daily sweep over every open task
+        /// (business- and household-owned alike — unlike the business-only
+        /// AdvanceAutonomousWork loop). A Queued task past the bound is
+        /// surfaced with a day-keyed warning naming task, kind, owner, age,
+        /// and assignee state. Nothing is failed, completed, or deleted
+        /// here: failing Queued tasks generically would destroy obligations
+        /// this lane has no authority to close. The freight dispatch tasks
+        /// that strand here are owned by their own recovery paths; the
+        /// domestic tasks that strand here are Lane 9c's area — this sweep
+        /// makes both visible instead of silent.
+        /// </summary>
+        private void DriveStaleQueuedTaskSweep(int dayIndex)
+        {
+            if (hub?.Tasks == null) return;
+            foreach (WorkTask task in hub.Tasks.GetAllOpenTasks())
+            {
+                if (task == null) continue;
+                LandLedgers.Tasks.StaleQueuedVerdict verdict =
+                    LandLedgers.Tasks.StaleQueuedSweep.DecideQueued(task, dayIndex, task.CreatedDayIndex);
+                if (verdict.Decision == LandLedgers.Tasks.StaleQueuedDecision.EscalateUnassigned
+                    || verdict.Decision == LandLedgers.Tasks.StaleQueuedDecision.EscalateAssignedIdle)
+                {
+                    LogRefusalDayKeyed("stale-queued:" + task.TaskId, dayIndex,
+                        "[StaleQueued] Task '" + task.TaskId + "' (" + task.DefinitionId + ", owner " + task.OwnerId
+                        + ") is stuck Queued — " + verdict.Reason);
+                }
+            }
+        }
+
         private void DriveFreightCompanies(int absoluteDayIndex)
         {
             if (hub == null || sharedBusinessRuntime == null)
@@ -8571,12 +8608,18 @@ namespace LandLedgers.Orchestration.Systems
                     return false;
                 }
                 bool routeUsable = pathing.TryCarryFreightToActivity(handlerId.Id,
-                    destination.AssignedBuildingId, "receiving", out physicallyReceived, out reason);
+                    destination.AssignedBuildingId, "receiving", out physicallyReceived, out reason,
+                    out bool usedDoorFallback);
                 if (!routeUsable) return false;
                 if (physicallyReceived)
                     pathing.ReleaseFreightReceivingRoute(handlerId.Id, destination.AssignedBuildingId);
+                // Lane 9d (M-R5): a delivery that arrived at the authored
+                // front door records "door:" — never "receiving:" — so the
+                // shipment record says where the goods actually changed
+                // hands. The door fallback is legitimate; mislabeling it
+                // as a receiving-station delivery is not.
                 shipment.physicalLocationId = physicallyReceived
-                    ? "receiving:" + destination.InstanceId
+                    ? (usedDoorFallback ? "door:" + destination.InstanceId : "receiving:" + destination.InstanceId)
                     : "person:" + handlerId.Id;
                 if (!physicallyReceived && !reason.StartsWith("Carrying:", StringComparison.Ordinal))
                     reason = string.IsNullOrWhiteSpace(reason)
@@ -8590,11 +8633,74 @@ namespace LandLedgers.Orchestration.Systems
                     FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
                 pathing?.HideFreightCargoVisual(handlerId.Id);
             };
+            // Lane 9d (M-R11): the pre-work arrival gates. The loader must
+            // be at the source loading premises before load minutes accrue;
+            // the handler must be at the destination premises before unload
+            // minutes accrue. The Millbrook source is off-map — there is no
+            // on-map loading point to stand at — so its loading arrival is
+            // owned by the off-map pickup journey: the gate passes with the
+            // exemption named, rather than pretending a presence check ran.
+            // The off-map check comes first because the aid business is not
+            // a town business instance and the town lookup below would fail
+            // it. Any other unresolvable source/destination refuses the
+            // gate (route unavailable) and pins — visible, never a pass.
+            hooks.ConfirmPhysicalLoading = (LogisticsShipmentState shipment, EntityId handlerId,
+                out bool physicallyAtLoadingPoint, out string reason) =>
+            {
+                physicallyAtLoadingPoint = false;
+                reason = string.Empty;
+                if (shipment == null)
+                {
+                    reason = "No shipment to check loading arrival for.";
+                    return false;
+                }
+                if (millbrookAidRuntime != null && string.Equals(shipment.sourceBusinessInstanceId,
+                        millbrookAidRuntime.BusinessId, StringComparison.Ordinal))
+                {
+                    physicallyAtLoadingPoint = true;
+                    reason = "Off-map source: loading arrival is owned by the off-map pickup journey.";
+                    return true;
+                }
+                if (sharedBusinessRuntime == null
+                    || !sharedBusinessRuntime.TryFindByInstanceId(shipment.sourceBusinessInstanceId,
+                        out BusinessInstanceState source)
+                    || source == null || source.AssignedBuildingId < 0)
+                {
+                    reason = "No assigned source premises resolve for this shipment; loading arrival cannot be confirmed.";
+                    return false;
+                }
+                physicallyAtLoadingPoint = IsPersonVisuallyAtBuilding(handlerId.Id, source.AssignedBuildingId);
+                reason = physicallyAtLoadingPoint
+                    ? "Loader is at the source loading premises."
+                    : "Loader has not reached the source loading premises.";
+                return true;
+            };
+            hooks.ConfirmPhysicalUnloadingArrival = (LogisticsShipmentState shipment, EntityId handlerId,
+                out bool physicallyAtUnloadingPoint, out string reason) =>
+            {
+                physicallyAtUnloadingPoint = false;
+                reason = string.Empty;
+                if (shipment == null || sharedBusinessRuntime == null
+                    || !sharedBusinessRuntime.TryFindByInstanceId(shipment.destinationBusinessInstanceId,
+                        out BusinessInstanceState destination)
+                    || destination == null || destination.AssignedBuildingId < 0)
+                {
+                    reason = "No assigned destination premises resolve for this shipment; unloading arrival cannot be confirmed.";
+                    return false;
+                }
+                physicallyAtUnloadingPoint = IsPersonVisuallyAtBuilding(handlerId.Id, destination.AssignedBuildingId);
+                reason = physicallyAtUnloadingPoint
+                    ? "Handler is at the destination premises."
+                    : "Handler has not reached the destination premises.";
+                return true;
+            };
             if (millbrookCustody != null)
             {
                 hooks.CommitSourceLot = (LandLedgers.Economy.LogisticsShipmentState shipment,
                     int quantityUnits, out string reason) =>
-                    millbrookCustody.CommitSourceLot(shipment, quantityUnits, out reason);
+                    // Lane 9d (E-18): the pickup drive's day, passed
+                    // explicitly so the lot's ETA can be set at commit time.
+                    millbrookCustody.CommitSourceLot(shipment, quantityUnits, out reason, absoluteDayIndex);
                 hooks.ReceiveCargoLot = (LandLedgers.Economy.LogisticsShipmentState shipment,
                     int quantityUnits, out string reason) =>
                     millbrookCustody.ReceiveCargoLot(shipment, quantityUnits, absoluteDayIndex, out reason);
@@ -8683,10 +8789,15 @@ namespace LandLedgers.Orchestration.Systems
                         return false;
                     }
                     bool routeUsable = pathing.TryCarryFreightToActivity(handlerId.Id,
-                        order.BuildingInstanceId, "receiving", out physicallyReceived, out reason);
+                        order.BuildingInstanceId, "receiving", out physicallyReceived, out reason,
+                        out bool usedDoorFallback);
                     if (!routeUsable) return false;
+                    // Lane 9d (M-R5): a household delivery that arrived at
+                    // the authored front door records "door:" — never
+                    // "receiving:" — so the shipment record says where the
+                    // goods actually changed hands.
                     shipment.physicalLocationId = physicallyReceived
-                        ? "receiving:household:" + order.HouseholdId
+                        ? (usedDoorFallback ? "door:household:" + order.HouseholdId : "receiving:household:" + order.HouseholdId)
                         : "person:" + handlerId.Id;
                     if (!physicallyReceived && !reason.StartsWith("Carrying:", StringComparison.Ordinal))
                         reason = string.IsNullOrWhiteSpace(reason) ? "Carrying: handler is travelling to the household's authored receiving point." : "Carrying: " + reason;
@@ -8793,6 +8904,41 @@ namespace LandLedgers.Orchestration.Systems
                     // per day keeps it visible; the message is unchanged.
                     LogRefusalDayKeyed("dispatch-prerequisite:" + agreement.AgreementId, dayIndex,
                         $"[FreightDispatch] Accepted agreement '{agreement.AgreementId}' remains prepared; dispatch assignment deferred because {missing} is unresolved.");
+                    continue;
+                }
+                // Lane 9d (C-4): the staging wait is bounded. A prepared
+                // shipment whose staging travel was never created, or whose
+                // operator never arrived, must not sit Prepared forever.
+                // On Overdue the same terminal disposition as the dispatch
+                // recovery limit applies: fail the shipment (cargo
+                // quarantined on record), cancel the agreement, and release
+                // the Millbrook lot when it is one, so the negotiation
+                // drive can reopen the request and retry the haul.
+                int preparedDayIndex = (int)Math.Floor(agreement.PreparedGameSeconds
+                    / LogisticsShipmentState.GameSecondsPerDay);
+                string stagingTravelRef = FreightDispatchStaging.TravelCustomerRef(
+                    agreement.AgreementId, shipment.ShipmentId);
+                bool hasOpenStagingTravel = hub?.Tasks != null && hub.Tasks.GetAllOpenTasks().Any(candidate => candidate != null
+                    && string.Equals(candidate.CustomerRef, stagingTravelRef, StringComparison.Ordinal));
+                PersonState stagingOperator = populationManager?.State?.GetPerson(agreement.AcceptingOperatorPersonId);
+                bool operatorAtStaging = stagingOperator != null && stagingOperator.homeBuildingId >= 0
+                    && IsPersonVisuallyAtBuilding(stagingOperator.id, stagingOperator.homeBuildingId);
+                FreightDispatchStaging.StagingWaitVerdict stagingVerdict =
+                    FreightDispatchStaging.DecideStagingWait(preparedDayIndex, dayIndex,
+                        hasOpenStagingTravel, operatorAtStaging, out string stagingReason);
+                if (stagingVerdict == FreightDispatchStaging.StagingWaitVerdict.Overdue)
+                {
+                    string terminalReason = "Prepared freight staging deadline reached: " + stagingReason;
+                    FreightProduction.Service.FailAbandonedShipment(shipment, terminalReason, latestFreightHooks);
+                    string cancellationRefusal = FreightProduction.ServiceAgreements.CancelAgreement(
+                        agreement.AgreementId, terminalReason);
+                    if (cancellationRefusal != null)
+                        LogRefusalDayKeyed("dispatch-staging-cancel:" + shipment.ShipmentId, dayIndex,
+                            $"[FreightDispatch] Shipment '{shipment.ShipmentId}' failed at the staging deadline, but its accepted agreement could not be closed: {cancellationRefusal}");
+                    string releaseNote = ReleaseMillbrookLotAfterAbandonment(shipment, terminalReason);
+                    Debug.LogWarning($"[FreightDispatch] Shipment '{shipment.ShipmentId}' reached the staging deadline after preparation; "
+                        + "the agreement was cancelled through its existing authority and the cargo stays quarantined on the failed shipment record. "
+                        + terminalReason + " " + releaseNote, this);
                     continue;
                 }
                 CreatePreparedFreightDispatchTask(agreement, shipment, freight, horse, wagon, dayIndex);
@@ -8916,6 +9062,26 @@ namespace LandLedgers.Orchestration.Systems
                     $"Lot '{lot.LotId}' is still shippable; reopening the refused request for a retried meeting.");
                 if (reopenRefusal == null)
                     Debug.Log($"[FreightAgreement] Reopened refused request '{request.RequestId}' for lot '{lot.LotId}': the lot is still shippable, so the meeting will be retried.", this);
+            }
+
+            // Lane 9d (F6-2): the same retry for a request terminalized by
+            // a recovery — Accepted with its agreement cancelled after the
+            // dispatch recovery limit, and its lot released back to
+            // shippable stock by the terminal disposition. FindShippableLot
+            // already returned this lot above, which proves the release
+            // happened (a still-committed lot is not shippable); the
+            // cancelled-agreement guard proves the request was terminalized
+            // rather than in flight, so a healthy Accepted request is never
+            // reopened. The reopened request is Open again, so the flow
+            // below retries the contact and meeting from the start.
+            if (request.Status == FreightServiceRequestStatus.Accepted
+                && book.FindCancelledAgreementForRequest(request.RequestId) != null
+                && string.Equals(lot.LotId, request.CargoLotId, StringComparison.Ordinal))
+            {
+                string reopenRefusal = book.ReopenTerminalRequest(request.RequestId,
+                    $"Lot '{lot.LotId}' is still shippable after its shipment was abandoned; reopening the terminally accepted request for a retried haul.");
+                if (reopenRefusal == null)
+                    Debug.Log($"[FreightAgreement] Reopened terminally accepted request '{request.RequestId}' for lot '{lot.LotId}': the lot is still shippable, so the haul will be retried.", this);
             }
 
             if (request.Status == FreightServiceRequestStatus.AtMeeting)
@@ -10651,7 +10817,11 @@ namespace LandLedgers.Orchestration.Systems
             if (glen == null || ethan == null || bakery?.Owner == null || carrier?.Owner == null
                 || ethan.homeBuildingId < 0 || glen.homeBuildingId < 0)
             {
-                Debug.LogWarning($"[FreightAgreement] Meeting '{request.RequestId}' deferred: requester, operator, or staging building is unresolved.", this);
+                // Lane 9d (C-7): day-keyed, once per day per request — the
+                // bare warning repeated on every drive while the meeting
+                // could not be scheduled.
+                LogRefusalDayKeyed("freight-meeting-unresolved:" + request.RequestId, dayIndex,
+                    $"[FreightAgreement] Meeting '{request.RequestId}' deferred: requester, operator, or staging building is unresolved.");
                 return;
             }
             // CAMPAIGN-B (DEF-007): this was a silent return — a meeting
@@ -10677,7 +10847,9 @@ namespace LandLedgers.Orchestration.Systems
                 if (!developmentTownConfiguration.TryGetBusiness(developmentTownConfiguration.FreightBusinessKey, out carrierDefinition)
                     || carrierDefinition?.freightRateCard == null)
                 {
-                    Debug.LogWarning($"[FreightAgreement] Request '{request.RequestId}' is waiting: B3 has no configured freight rate card.", this);
+                    // Lane 9d (C-7): day-keyed, once per day per request.
+                    LogRefusalDayKeyed("freight-meeting-ratecard:" + request.RequestId, dayIndex,
+                        $"[FreightAgreement] Request '{request.RequestId}' is waiting: B3 has no configured freight rate card.");
                     return;
                 }
                 float oneWayMiles = millbrookAidRuntime != null ? millbrookAidRuntime.PickupRouteMilesFromTown : 0f;
@@ -10687,7 +10859,9 @@ namespace LandLedgers.Orchestration.Systems
                         carrierDefinition.freightRateCard.chargeRoundTrip,
                         out FreightServiceQuote quote, out string quoteRefusal))
                 {
-                    Debug.LogWarning($"[FreightAgreement] Request '{request.RequestId}' has no valid Millbrook quote: {quoteRefusal}", this);
+                    // Lane 9d (C-7): day-keyed, once per day per request.
+                    LogRefusalDayKeyed("freight-meeting-quote:" + request.RequestId, dayIndex,
+                        $"[FreightAgreement] Request '{request.RequestId}' has no valid Millbrook quote: {quoteRefusal}");
                     return;
                 }
                 quote.QuoteId = "freight-quote:" + request.RequestId;
@@ -10699,7 +10873,9 @@ namespace LandLedgers.Orchestration.Systems
                 string quoteProblem = FreightProduction.ServiceAgreements.SetQuote(request.RequestId, quote);
                 if (quoteProblem != null)
                 {
-                    Debug.LogWarning($"[FreightAgreement] Request '{request.RequestId}' quote refused: {quoteProblem}", this);
+                    // Lane 9d (C-7): day-keyed, once per day per request.
+                    LogRefusalDayKeyed("freight-meeting-quote-refused:" + request.RequestId, dayIndex,
+                        $"[FreightAgreement] Request '{request.RequestId}' quote refused: {quoteProblem}");
                     return;
                 }
                 FreightProduction.ServiceAgreements.SetStatus(request.RequestId, FreightServiceRequestStatus.AtMeeting);
@@ -10734,7 +10910,9 @@ namespace LandLedgers.Orchestration.Systems
                     hub.WorkTimeBudgets, dayIndex, out string assignmentRefusal))
             {
                 hub.Tasks.CancelTask(meeting.TaskId, hub.WorkTimeBudgets);
-                Debug.LogWarning($"[FreightAgreement] Meeting task for '{request.RequestId}' could not assign Glen's time: {assignmentRefusal}", this);
+                // Lane 9d (C-7): day-keyed, once per day per request.
+                LogRefusalDayKeyed("freight-meeting-assign-glen:" + request.RequestId, dayIndex,
+                    $"[FreightAgreement] Meeting task for '{request.RequestId}' could not assign Glen's time: {assignmentRefusal}");
                 return;
             }
             string operatorLabel = "freight-meeting-operator:" + request.RequestId;
@@ -10743,7 +10921,9 @@ namespace LandLedgers.Orchestration.Systems
             if (operatorRefusal != null)
             {
                 hub.Tasks.CancelTask(meeting.TaskId, hub.WorkTimeBudgets);
-                Debug.LogWarning($"[FreightAgreement] Meeting task for '{request.RequestId}' could not reserve Ethan's time: {operatorRefusal}", this);
+                // Lane 9d (C-7): day-keyed, once per day per request.
+                LogRefusalDayKeyed("freight-meeting-reserve-ethan:" + request.RequestId, dayIndex,
+                    $"[FreightAgreement] Meeting task for '{request.RequestId}' could not reserve Ethan's time: {operatorRefusal}");
                 return;
             }
             string requesterRefusal = hub.PersonSchedules.TryReserve(glen.id, PersonActivityKind.Work,
@@ -10752,7 +10932,9 @@ namespace LandLedgers.Orchestration.Systems
             {
                 ReleasePersonScheduleByLabel(ethan.id, dayIndex, operatorLabel);
                 hub.Tasks.CancelTask(meeting.TaskId, hub.WorkTimeBudgets);
-                Debug.LogWarning($"[FreightAgreement] Meeting task for '{request.RequestId}' could not reserve Glen's time: {requesterRefusal}", this);
+                // Lane 9d (C-7): day-keyed, once per day per request.
+                LogRefusalDayKeyed("freight-meeting-reserve-glen:" + request.RequestId, dayIndex,
+                    $"[FreightAgreement] Meeting task for '{request.RequestId}' could not reserve Glen's time: {requesterRefusal}");
                 return;
             }
             request.MeetingTaskId = meeting.TaskId.ToString();
@@ -10982,7 +11164,18 @@ namespace LandLedgers.Orchestration.Systems
 
             EnsureFreightCompany(carrier);
             hub.TransportAssets.Register(wagon);
-            string stableShipmentId = "freight-shipment:" + agreement.RequestId;
+            // Lane 9d (F6-2): the stable shipment id derives from the
+            // AGREEMENT id, not the request id. A retried haul gets a
+            // retry-suffixed agreement ("freight-agreement:<request>:retry-2"),
+            // so its shipment must get a distinct id too — otherwise the
+            // retry collides with the failed shipment and the service
+            // refuses it as a duplicate. The first attempt is unchanged:
+            // the agreement id's suffix after "freight-agreement:" is
+            // exactly the request id.
+            string agreementSuffix = agreement.AgreementId.StartsWith("freight-agreement:", StringComparison.Ordinal)
+                ? agreement.AgreementId.Substring("freight-agreement:".Length)
+                : agreement.AgreementId;
+            string stableShipmentId = "freight-shipment:" + agreementSuffix;
             string priorFailure = agreement.ShipmentRegistrationFailureReason;
             // Slice S4: route resolved by this registration attempt, for the
             // registration log. Empty when the shipment already existed.
@@ -11915,6 +12108,29 @@ namespace LandLedgers.Orchestration.Systems
                 $"no pickup, cargo movement, or freight payment occurred.", this);
         }
 
+        /// <summary>
+        /// Lane 9d (F6-2): best-effort release of a Millbrook aid lot after
+        /// its shipment was abandoned by a recovery's terminal disposition.
+        /// Returns a one-line note for the terminal log. A non-Millbrook lot
+        /// (no "aidlot-" cargo lot id, the prefix the aid runtime itself
+        /// authors) and a missing runtime are not errors — the cargo stays
+        /// quarantined on the failed shipment record, preserved, and the
+        /// note says so. A refused release is likewise preserved, not
+        /// forced: the lot stays committed to the failed shipment id.
+        /// </summary>
+        private string ReleaseMillbrookLotAfterAbandonment(LogisticsShipmentState shipment, string reason)
+        {
+            if (shipment == null || string.IsNullOrWhiteSpace(shipment.CargoLotId)
+                || !shipment.CargoLotId.StartsWith("aidlot-", StringComparison.Ordinal))
+                return "No Millbrook aid lot to release; cargo stays quarantined on the failed shipment record.";
+            if (millbrookAidRuntime == null)
+                return "Millbrook runtime unavailable; aid lot '" + shipment.CargoLotId + "' stays committed and quarantined on the failed shipment record.";
+            string releaseRefusal = millbrookAidRuntime.ReleaseFreightCommitment(shipment.CargoLotId, shipment.ShipmentId, reason);
+            if (releaseRefusal != null)
+                return "Aid lot '" + shipment.CargoLotId + "' could not be released (" + releaseRefusal + "); it stays committed and quarantined on the failed shipment record.";
+            return "Aid lot '" + shipment.CargoLotId + "' released back to shippable stock; the next negotiation drive may reopen the request and retry.";
+        }
+
         private void CreatePreparedFreightDispatchTask(FreightServiceAgreement agreement,
             LogisticsShipmentState shipment, BusinessInstanceState freight, AnimalState horse,
             EquipmentAsset wagon, int dayIndex)
@@ -12012,6 +12228,37 @@ namespace LandLedgers.Orchestration.Systems
                         Debug.LogWarning($"[FreightDispatch] Shipment '{shipment.ShipmentId}' entered the existing pre-load failure path after bounded dispatch recovery; "
                             + "the original agreement was cancelled through its existing authority and source cargo remains in its original inventory. "
                             + terminalReason, this);
+                    }
+                    else if (recoveryLimitReached && shipment.Status == LogisticsShipmentStatus.Planned
+                        && shipment.requiresDispatchAuthorization
+                        && (shipment.loadApplied || shipment.sourceCommittedAtSchedule || shipment.physicalTransportBound))
+                    {
+                        // Lane 9d (F6-2): the post-load strand. The pre-load
+                        // terminal path above is logged; this strand used to
+                        // end with only a day-keyed "remains held" note while
+                        // the cargo stayed committed, the request stayed
+                        // terminal-Accepted, and no code path could move
+                        // either. Decision 13 (delayed freight): preserve
+                        // the cargo, attempt recovery, and only then take
+                        // the terminal disposition — fail the shipment
+                        // (cargo quarantined on record, never destroyed),
+                        // cancel the agreement, and release the Millbrook
+                        // lot back to shippable stock when it is one, so the
+                        // next daily negotiation drive can reopen the
+                        // request and retry the haul.
+                        string terminalReason = "Prepared freight dispatch failed after "
+                            + agreement.DispatchTaskRecoveryAttempts + " bounded re-preparation attempt(s): "
+                            + failureReason + ". The source lot was already loaded or committed, so it stays quarantined on the failed shipment record until released.";
+                        FreightProduction.Service.FailAbandonedShipment(shipment, terminalReason, latestFreightHooks);
+                        string cancellationRefusal = FreightProduction.ServiceAgreements.CancelAgreement(
+                            agreement.AgreementId, terminalReason);
+                        if (cancellationRefusal != null)
+                            LogRefusalDayKeyed("dispatch-recovery-cancel:" + shipment.ShipmentId, dayIndex,
+                                $"[FreightDispatch] Shipment '{shipment.ShipmentId}' failed after load, but its accepted agreement could not be closed: {cancellationRefusal}");
+                        string releaseNote = ReleaseMillbrookLotAfterAbandonment(shipment, terminalReason);
+                        Debug.LogWarning($"[FreightDispatch] Shipment '{shipment.ShipmentId}' entered the post-load failure path after bounded dispatch recovery; "
+                            + "the agreement was cancelled through its existing authority and the loaded/committed cargo stays quarantined on the failed shipment record. "
+                            + terminalReason + " " + releaseNote, this);
                     }
                     else
                     {
@@ -14785,7 +15032,12 @@ namespace LandLedgers.Orchestration.Systems
             shipment.physicalDriverPersonId = operatorEntityId;
             shipment.physicalTransportBound = true;
 
-            if (!FreightProduction.AuthorizeShipmentDispatch(shipment.ShipmentId, out string authorizationRefusal))
+            // Lane 9d (E-18): the authorization day re-sets the ETA (hold
+            // days are not haul time). This handler carries no day parameter;
+            // the task completed today, so the current absolute day is the
+            // authorization day.
+            int authorizationDayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
+            if (!FreightProduction.AuthorizeShipmentDispatch(shipment.ShipmentId, out string authorizationRefusal, authorizationDayIndex))
             {
                 if (justBound)
                     WagonAuthority.ReleaseDraftTeam(wagon, new List<AnimalState> { horse },

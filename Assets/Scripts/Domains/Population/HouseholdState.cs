@@ -64,6 +64,19 @@ namespace LandLedgers.Population
         public int lifetimeMedicalSpendCents;
         public HouseholdHeatRetentionTier heatRetentionTier = HouseholdHeatRetentionTier.Basic;
         public HouseholdStoveTier stoveTier = HouseholdStoveTier.Basic;
+        /// <summary>
+        /// Heating lane (Nov 20 2026): total heated floor area in m2, all
+        /// storeys. 0 means "not authored" — HouseholdThermalModel derives
+        /// the area from the household's member count instead. Additive
+        /// save field; old saves load 0 and derive.
+        /// </summary>
+        public float homeFloorAreaM2;
+        /// <summary>
+        /// Heating lane (Nov 20 2026): storeys of the home. 1 by default;
+        /// no dev-town home is authored with more than one storey. The
+        /// thermal model multiplies floor area by storeys.
+        /// </summary>
+        public int homeStoreys = 1;
         public HouseholdFuelType preferredFuel = HouseholdFuelType.Wood;
         public float lastWinterStrain01;
         public float lastHeatingPressure01;
@@ -203,6 +216,12 @@ namespace LandLedgers.Population
             lastHeatingPressure01 = Clamp01(lastHeatingPressure01);
             lastHeatingFuelUseUnits = Math.Max(0, lastHeatingFuelUseUnits);
             lastHeatingFuelShortfallUnits = Math.Max(0, lastHeatingFuelShortfallUnits);
+
+            // Heating lane (Nov 20 2026): 0 floor area means "not authored"
+            // (derive from member count); a stored area is clamped to a
+            // plausible home. Storeys are at least 1.
+            homeFloorAreaM2 = homeFloorAreaM2 <= 0f ? 0f : Math.Min(1000f, Math.Max(10f, homeFloorAreaM2));
+            homeStoreys = Math.Min(6, Math.Max(1, homeStoreys));
         }
 
         private static float Clamp01(float value)

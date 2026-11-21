@@ -356,8 +356,6 @@ namespace LandLedgers.Population
 
     public static class HouseholdHeatingEvaluator
     {
-        private const float ShoulderSeasonStrain01 = 0.45f;
-
         public static bool IsFuelReserve(string categoryId)
         {
             return string.Equals(categoryId, HouseholdReserveCatalog.FuelWoodCategoryId, StringComparison.OrdinalIgnoreCase);
@@ -375,7 +373,7 @@ namespace LandLedgers.Population
 
         public static int ResolveDailyHeatingUse(
             HouseholdState household, HouseholdReserveState reserve, int absoluteDayIndex, CalendarAnchor anchor,
-            HouseholdStoveRegistry stoves = null)
+            HouseholdStoveRegistry stoves = null, float? exteriorMeanCelsius = null)
         {
             if (household == null)
             {
@@ -393,7 +391,17 @@ namespace LandLedgers.Population
 
             reserve.ApplyDefinition(HouseholdReserveCatalog.Get(HouseholdReserveCatalog.FuelWoodCategoryId), household);
 
-            int requiredFuelUnits = CalculateDailyFuelUseUnits(household, absoluteDayIndex, anchor);
+            // Heating lane (Nov 20 2026): the burn is driven by the day's
+            // exterior temperature, not the month. A caller that already
+            // resolved the day's temperature (the daily drive) passes it in;
+            // otherwise the day's temperature is resolved here with the
+            // default scenario seed. Exactly one burn, one debit per day —
+            // the day-key guard lives in ResolveDailyUse.
+            float exteriorMean = exteriorMeanCelsius ?? ExteriorTemperatureAuthority
+                .GetDailyTemperature(ExteriorTemperatureAuthority.DefaultScenarioSeed, absoluteDayIndex, anchor)
+                .MeanC;
+            int requiredFuelUnits = HouseholdThermalModel.CalculateDailyFuelUseUnits(
+                HouseholdThermalModel.ProfileFor(household), exteriorMean);
             int consumedUnits = 0;
             if (stoves != null)
             {
@@ -430,7 +438,7 @@ namespace LandLedgers.Population
 
             int shortfallUnits = Mathf.Max(0, requiredFuelUnits - consumedUnits);
             float winterStrain01 = CalculateEffectiveWinterStrain01(
-                household, GetMonthFromAbsoluteDay(absoluteDayIndex, anchor));
+                household, HouseholdThermalModel.TemperatureFactor(exteriorMean));
             float pressure01 = CalculateHeatingPressure01(household, winterStrain01, requiredFuelUnits, shortfallUnits);
 
             reserve.lastDailyUseUnits = consumedUnits;
@@ -446,6 +454,12 @@ namespace LandLedgers.Population
             return CalculateDailyFuelUseUnits(household, absoluteDayIndex, CalendarAnchor.Default);
         }
 
+        /// <summary>
+        /// Heating lane (Nov 20 2026): the burn for a household on a day,
+        /// driven by that day's exterior temperature (default scenario seed).
+        /// The old month-gated strain table is gone — a mild January and a
+        /// brutal January no longer burn identically.
+        /// </summary>
         public static int CalculateDailyFuelUseUnits(
             HouseholdState household, int absoluteDayIndex, CalendarAnchor anchor)
         {
@@ -454,22 +468,36 @@ namespace LandLedgers.Population
                 return 0;
             }
 
-            float seasonStrain01 = GetSeasonStrain01(GetMonthFromAbsoluteDay(absoluteDayIndex, anchor));
-            if (seasonStrain01 <= 0f)
+            float exteriorMean = ExteriorTemperatureAuthority
+                .GetDailyTemperature(ExteriorTemperatureAuthority.DefaultScenarioSeed, absoluteDayIndex, anchor)
+                .MeanC;
+            return CalculateDailyFuelUseUnits(household, exteriorMean);
+        }
+
+        /// <summary>
+        /// Heating lane (Nov 20 2026): the burn for a household on a day with
+        /// the given exterior mean temperature. The explicit-temperature
+        /// overload: tests pin the formula here, and callers that already
+        /// resolved the day's temperature pass it in instead of re-drawing it.
+        /// </summary>
+        public static int CalculateDailyFuelUseUnits(HouseholdState household, float exteriorMeanCelsius)
+        {
+            if (household == null)
             {
                 return 0;
             }
 
-            int members = household.ConsumptionMemberCount;
-            float memberLoad = 1f + Mathf.Max(0, members - 1) * 0.35f;
-            float useUnits = seasonStrain01
-                * memberLoad
-                * GetHeatRetentionFuelMultiplier(household.heatRetentionTier)
-                * GetStoveFuelMultiplier(household.stoveTier);
-            return Mathf.Max(1, Mathf.CeilToInt(useUnits));
+            return HouseholdThermalModel.CalculateDailyFuelUseUnits(
+                HouseholdThermalModel.ProfileFor(household), exteriorMeanCelsius);
         }
 
-        public static float CalculateEffectiveWinterStrain01(HouseholdState household, int month)
+        /// <summary>
+        /// Heating strain for the day, from the temperature factor (0 in warm
+        /// weather, ~1.0 at the January mean, 1.0 in extreme cold) times the
+        /// retention and stove strain multipliers. Feeds heating pressure,
+        /// which feeds the illness-risk channel — no weights re-tuned.
+        /// </summary>
+        public static float CalculateEffectiveWinterStrain01(HouseholdState household, float temperatureFactor01)
         {
             if (household == null)
             {
@@ -477,20 +505,9 @@ namespace LandLedgers.Population
             }
 
             return Mathf.Clamp01(
-                GetSeasonStrain01(month)
+                Mathf.Clamp01(temperatureFactor01)
                 * GetHeatRetentionStrainMultiplier(household.heatRetentionTier)
                 * GetStoveStrainMultiplier(household.stoveTier));
-        }
-
-        public static float GetSeasonStrain01(int month)
-        {
-            int normalizedMonth = Mathf.Clamp(month, 1, 12);
-            return normalizedMonth switch
-            {
-                12 or 1 or 2 => 1f,
-                11 or 3 => ShoulderSeasonStrain01,
-                _ => 0f
-            };
         }
 
         /// <summary>
@@ -536,21 +553,6 @@ namespace LandLedgers.Population
             household.lastHeatingFuelShortfallUnits = 0;
         }
 
-        private static float GetHeatRetentionFuelMultiplier(HouseholdHeatRetentionTier tier)
-        {
-            return tier switch
-            {
-                HouseholdHeatRetentionTier.Drafty => 1.25f,
-                HouseholdHeatRetentionTier.Tight => 0.75f,
-                _ => 1f
-            };
-        }
-
-        private static float GetStoveFuelMultiplier(HouseholdStoveTier tier)
-        {
-            return tier == HouseholdStoveTier.Efficient ? 0.7f : 1f;
-        }
-
         private static float GetHeatRetentionStrainMultiplier(HouseholdHeatRetentionTier tier)
         {
             return tier switch
@@ -588,7 +590,8 @@ namespace LandLedgers.Population
 
         public static int ResolveDailyUse(
             HouseholdState household, int absoluteDayIndex, CalendarAnchor anchor,
-            HouseholdStoveRegistry stoves = null, bool foodInventoryIsAuthoritative = false)
+            HouseholdStoveRegistry stoves = null, bool foodInventoryIsAuthoritative = false,
+            float? exteriorMeanCelsius = null)
         {
             if (household == null)
             {
@@ -637,7 +640,7 @@ namespace LandLedgers.Population
                     // stores first, then the reserve. Null keeps today's
                     // behaviour exactly.
                     totalUsed += HouseholdHeatingEvaluator.ResolveDailyHeatingUse(
-                        household, reserve, absoluteDayIndex, anchor, stoves);
+                        household, reserve, absoluteDayIndex, anchor, stoves, exteriorMeanCelsius);
                     continue;
                 }
 

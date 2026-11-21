@@ -168,6 +168,14 @@ namespace LandLedgers.Diagnostics
         public int PersonNumericId = -1;
         /// <summary>Household id when known (owner-id fallback applied), else -1.</summary>
         public int HouseholdId = -1;
+        /// <summary>
+        /// Dev-town business key the incident concerns (general-store,
+        /// bakery, fuel-dealer, freight-company, sawmill, lumber-yard,
+        /// carpentry-workshop), or empty when the incident names no
+        /// business. Lane 5 (Tool 04): the Investigator's business
+        /// jump-to opens the Business Operations Monitor for this key.
+        /// </summary>
+        public string BusinessKey = string.Empty;
     }
 
     /// <summary>
@@ -491,6 +499,7 @@ namespace LandLedgers.Diagnostics
                 if (!string.IsNullOrWhiteSpace(item.RecoveryState)) recoveryOwner = item.RecoveryState;
                 if (!string.IsNullOrWhiteSpace(item.Reason)) refusalReason = item.Reason;
             }
+            finding.BusinessKey = ResolveBusinessKey(definitionId, recoveryOwner);
 
             finding.ResponsibleAuthority = ResolveAuthority(definitionId, recoveryOwner, out string sourcePath, out int sourceLine);
             finding.AuthoritySourcePath = sourcePath;
@@ -622,6 +631,7 @@ namespace LandLedgers.Diagnostics
                 Title = "24-loaf/day wholesale obligation starves the bakery retail counter",
                 Severity = IncidentSeverity.Warning,
                 BlockerKind = DestinationBlockerKind.DestinationMissing,
+                BusinessKey = "bakery",
             };
             if (evidence == null)
             {
@@ -669,6 +679,36 @@ namespace LandLedgers.Diagnostics
                 + "No live run exists on this HEAD.";
             EmitToCore(finding);
             return finding;
+        }
+
+        /// <summary>
+        /// Resolves the dev-town business key an incident concerns, from
+        /// the task definition id or the recovery owner text (Lane 5
+        /// jump-to target). Returns empty when the incident names no
+        /// business — the jump-to button stays disabled rather than
+        /// guessing. The wholesale obligation resolves to "bakery" (the
+        /// seller whose counter is starved); the buyer (general-store) is
+        /// named in the finding's evidence.
+        /// </summary>
+        public static string ResolveBusinessKey(string definitionId, string recoveryState)
+        {
+            string combined = ((definitionId ?? string.Empty) + " " + (recoveryState ?? string.Empty)).ToLowerInvariant();
+            if (combined.Contains("bakery") || combined.Contains("bread") || combined.Contains("bake."))
+                return "bakery";
+            if (combined.Contains("fuel") && (combined.Contains("dealer") || combined.Contains("fuelwood") || combined.Contains("fuel_wood")))
+                return "fuel-dealer";
+            if (combined.Contains("shopping") || combined.Contains("general-store") || combined.Contains("general store")
+                || combined.Contains("store counter") || combined.Contains("tendcustomer"))
+                return "general-store";
+            if (combined.Contains("freight") || combined.Contains("shipment") || combined.Contains("wagon") || combined.Contains("livery"))
+                return "freight-company";
+            if (combined.Contains("sawmill") || combined.Contains("lumber") && combined.Contains("mill"))
+                return "sawmill";
+            if (combined.Contains("lumber-yard") || combined.Contains("lumberyard") || combined.Contains("lumber yard"))
+                return "lumber-yard";
+            if (combined.Contains("carpentry") || combined.Contains("furniture"))
+                return "carpentry-workshop";
+            return string.Empty;
         }
 
         private static double LatestProgressSeconds(IReadOnlyList<IncidentEvidenceEvent> events)

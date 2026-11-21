@@ -5,6 +5,7 @@
 // adapter records findings in the core and never assigns work, changes
 // routes, or moves goods, money, food, transport or labour.
 using System;
+using System.Collections.Generic;
 
 namespace LandLedgers.Diagnostics
 {
@@ -141,6 +142,29 @@ namespace LandLedgers.Diagnostics
             if (IncidentInvestigator.IncidentCore == null)
             {
                 IncidentInvestigator.IncidentCore = new IncidentCoreAdapter(SharedAuthority);
+            }
+        }
+
+        /// <summary>
+        /// Lane 6 (Tool 12) — the day-drive hook. Runs the 7-day
+        /// escalation sweep on the shared authority for the day that just
+        /// changed (reuses the daily drive's day index; call from
+        /// SimulationDrivers.OnDayChanged at the end of the day drive,
+        /// after the daily drivers have run). Returns the signature ids
+        /// escalated. Never throws: a diagnostic failure must never break
+        /// the simulation. The daily summary line stays on demand from the
+        /// Control Center window; the hook emits only genuine escalation
+        /// lines, so a quiet day adds no Console output.
+        /// </summary>
+        public static IReadOnlyList<string> DriveDailyHealth(int dayIndex, double simSeconds)
+        {
+            try
+            {
+                return SharedAuthority.EvaluateEscalationSweep(dayIndex, simSeconds);
+            }
+            catch
+            {
+                return new string[0];
             }
         }
     }

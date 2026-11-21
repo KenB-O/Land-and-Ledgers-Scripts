@@ -1701,3 +1701,15 @@ Accessible issue count advances from 585 to **586**: 354 original CI warning sig
 - **Next required action:** compile current source; run the new cases plus `HouseholdFuelCookingDriverB3Tests`, `CampaignBFuelReserveCreditTests`, household reserve/inventory and property-transfer regressions; add/execute Save/Continue and exactly-once rollback coverage; then capture paid fuel receipt, pantry/reserve balance, stove transfer, physical heating consumption, and replenishment behavior in Main Scene. Keep `DEF-019` separate as the earlier receipt-link issue; this defect concerns ongoing physical stock conservation.
 - **Last reviewed cycle:** Campaign 07 Cycle 20 (2026-11-21).
 
+## 2026-11-21 Muse–Codex semantic integration
+
+The [integration checkpoint](MUSE_CODEX_SEMANTIC_INTEGRATION_2026-11-21.md) preserves the two development histories and links the source inventory, validation backlog, and accessible Muse issue records.
+
+| Issue | Evidence and action | Status |
+|---|---|---|
+| F-2 | Category settlement could draw from the category count that mirrors identified lots. Added the shared unidentified-stock guard and a mixed-stock conservation regression. Run it in Unity and verify old-save intake. | IMPLEMENTED UNVERIFIED |
+| F-3 | Bakery shelf intake and paid receipts still depend on category headroom. Define exact SKU headroom across receiving and preserve unknown legacy stock. | UNRESOLVED |
+| F-4 | Removed the historical bakery fixture from current Editor findings. Display actual runtime contracts and inspect the authored configuration. Verify empty and populated states inside Unity. | IMPLEMENTED UNVERIFIED |
+| F-5 | Preserved the authored direct retail policy, empty opening wholesale list, explicit contract support and staged retail production. Verify actual startup, demand and saved contract recovery. | IMPLEMENTED UNVERIFIED |
+| F-6 | Preserved the terminal service refusal and added one incident feed for expiry and balk. Clerk routing, exact arrival and end-to-end purchase still need Main Scene evidence. | IMPLEMENTED UNVERIFIED for incident feed, UNRESOLVED for physical completion |
+

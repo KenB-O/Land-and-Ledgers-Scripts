@@ -1193,6 +1193,13 @@ namespace LandLedgers.FirstLedger
                     managed.routeMode = AgentRouteMode.TaskDirected;
                     return true;
                 }
+                // Fix (B-5): a Hidden mover refuses every route method.
+                // A route request is the recovery point: show the actor at
+                // its current authoritative location (populated at the home
+                // door anchor) and proceed. This does not alter mover
+                // initialization.
+                if (managed.mover != null && managed.mover.IsHidden)
+                    managed.mover.ShowAtCurrentLocation();
                 if (!TrySendAgent(managed, targetBuildingId, nextState,
                         out ScheduledRouteFailureKind failureKind, out refusal,
                         $"destination=building:{targetBuildingId}"))
@@ -1800,6 +1807,15 @@ namespace LandLedgers.FirstLedger
                 reason = presentationFailure;
                 return DomesticActivityMovementResult.Unsupported;
             }
+            // Fix (B-5): a Hidden mover refuses every route method, so a
+            // route request is the recovery point. Show the actor at its
+            // current authoritative location (populated at the home door
+            // anchor) and proceed. This does not alter mover
+            // initialization; it only recovers a hidden actor when a route
+            // is actually requested. (The presentation check above already
+            // guarantees managed.mover is non-null here.)
+            if (managed.mover.IsHidden)
+                managed.mover.ShowAtCurrentLocation();
             if (ShouldDeferDomesticActivityForFreightMovement(
                     managed.transportStagingSeat != null,
                     managed.freightReceivingTargetBuildingId))

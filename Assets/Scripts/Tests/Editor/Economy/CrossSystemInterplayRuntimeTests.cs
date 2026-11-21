@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Reflection;
 using LandLedgers.Economy;
+using LandLedgers.Orchestration.Systems;
 using LandLedgers.Reputation;
 using LandLedgers.FirstLedger;
 using NUnit.Framework;
@@ -210,11 +211,13 @@ namespace LandLedgers.Editor.Economy
             GameObject storeObject = new("Town Pulse Store Spillover Test");
             GameObject sharedObject = new("Town Pulse Shared Spillover Test");
             GameObject pulseObject = new("Town Pulse Runtime Spillover Test");
+            GameObject driverObject = new("Town Pulse Drivers Spillover Test");
             try
             {
                 GeneralStoreRuntimeManager storeRuntime = storeObject.AddComponent<GeneralStoreRuntimeManager>();
                 SharedBusinessRuntimeManager sharedRuntime = sharedObject.AddComponent<SharedBusinessRuntimeManager>();
                 TownPulseRuntimeManager pulseRuntime = pulseObject.AddComponent<TownPulseRuntimeManager>();
+                SimulationDrivers drivers = driverObject.AddComponent<SimulationDrivers>();
                 GeneralStoreBusinessDefinition storeDefinition = LoadGeneralStoreDefinition();
                 BusinessInstanceState store = BusinessInstanceState.Create("pulse_store", storeDefinition, 0, BusinessOwnerIdentity.Player());
                 BusinessInstanceState blacksmith = CreateBusiness(BusinessType.Blacksmith, "pulse_blacksmith", LoadProfile(BusinessType.Blacksmith));
@@ -230,8 +233,10 @@ namespace LandLedgers.Editor.Economy
                 SetPrivateField(storeRuntime, "runtimeState", store.RuntimeState);
                 SetPrivateField(storeRuntime, "sharedBusinessRuntime", sharedRuntime);
                 SetPrivateField(storeRuntime, "townPulseRuntime", pulseRuntime);
+                SetPrivateField(drivers, "sharedBusinessRuntime", sharedRuntime);
+                SetPrivateField(drivers, "townPulseRuntime", pulseRuntime);
 
-                InvokeResolveTownPulseDemand(storeRuntime, 4);
+                InvokeDriveTownPulseDemand(drivers, 4);
 
                 Assert.AreEqual(3, pulseRuntime.RuntimeState.lastDailyFulfilledUnits);
                 Assert.AreEqual(0, store.RuntimeState.GetCategoryStock("tools_hardware").CurrentStockUnits);
@@ -239,6 +244,7 @@ namespace LandLedgers.Editor.Economy
             }
             finally
             {
+                Object.DestroyImmediate(driverObject);
                 Object.DestroyImmediate(pulseObject);
                 Object.DestroyImmediate(sharedObject);
                 Object.DestroyImmediate(storeObject);
@@ -251,11 +257,13 @@ namespace LandLedgers.Editor.Economy
             GameObject storeObject = new("Town Pulse Store Meat Spillover Test");
             GameObject sharedObject = new("Town Pulse Shared Meat Spillover Test");
             GameObject pulseObject = new("Town Pulse Runtime Meat Spillover Test");
+            GameObject driverObject = new("Town Pulse Drivers Meat Spillover Test");
             try
             {
                 GeneralStoreRuntimeManager storeRuntime = storeObject.AddComponent<GeneralStoreRuntimeManager>();
                 SharedBusinessRuntimeManager sharedRuntime = sharedObject.AddComponent<SharedBusinessRuntimeManager>();
                 TownPulseRuntimeManager pulseRuntime = pulseObject.AddComponent<TownPulseRuntimeManager>();
+                SimulationDrivers drivers = driverObject.AddComponent<SimulationDrivers>();
                 GeneralStoreBusinessDefinition storeDefinition = LoadGeneralStoreDefinition();
                 BusinessInstanceState store = BusinessInstanceState.Create("pulse_meat_store", storeDefinition, 0, BusinessOwnerIdentity.Player());
                 BusinessInstanceState butcher = CreateBusiness(BusinessType.Butcher, "pulse_butcher", LoadProfile(BusinessType.Butcher));
@@ -283,14 +291,17 @@ namespace LandLedgers.Editor.Economy
                 SetPrivateField(storeRuntime, "runtimeState", store.RuntimeState);
                 SetPrivateField(storeRuntime, "sharedBusinessRuntime", sharedRuntime);
                 SetPrivateField(storeRuntime, "townPulseRuntime", pulseRuntime);
+                SetPrivateField(drivers, "sharedBusinessRuntime", sharedRuntime);
+                SetPrivateField(drivers, "townPulseRuntime", pulseRuntime);
 
-                InvokeResolveTownPulseDemand(storeRuntime, 4);
+                InvokeDriveTownPulseDemand(drivers, 4);
 
                 Assert.AreEqual(2, pulseRuntime.RuntimeState.lastDailyFulfilledUnits);
                 Assert.AreEqual(4, butcher.RuntimeState.GetCategoryStock("meat").CurrentStockUnits);
             }
             finally
             {
+                Object.DestroyImmediate(driverObject);
                 Object.DestroyImmediate(pulseObject);
                 Object.DestroyImmediate(sharedObject);
                 Object.DestroyImmediate(storeObject);
@@ -393,13 +404,24 @@ namespace LandLedgers.Editor.Economy
             SetPrivateField(manager, "businesses", businesses);
         }
 
-        private static void InvokeResolveTownPulseDemand(GeneralStoreRuntimeManager manager, int dayIndex)
+        // Lane 9b: the town-pulse drive moved from
+        // GeneralStoreRuntimeManager.ResolveTownPulseDemand to
+        // SimulationDrivers.DriveTownPulseDemand. The two spillover tests
+        // invoke the current home. NOTE: both tests are KNOWN FAILING at
+        // this HEAD — pre-existing, failing at the checkpoint too:
+        // SharedBusinessRuntimeManager.TrySellTownPulseDemand returns 0
+        // unconditionally under the Pass VII "no buyer, no sale" rule, so
+        // fulfilled is 0 and no stock moves, while the tests assert the
+        // older spillover behaviour (fulfilled 3 / 2, stock moved). That
+        // is an owner/design question (does the pulse spillover sell
+        // stock, or are the tests stale?), not a Lane 9b regression.
+        private static void InvokeDriveTownPulseDemand(SimulationDrivers drivers, int dayIndex)
         {
-            MethodInfo method = typeof(GeneralStoreRuntimeManager).GetMethod(
-                "ResolveTownPulseDemand",
+            MethodInfo method = typeof(SimulationDrivers).GetMethod(
+                "DriveTownPulseDemand",
                 BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(method);
-            method.Invoke(manager, new object[] { dayIndex });
+            method.Invoke(drivers, new object[] { dayIndex });
         }
 
         private static void SetPrivateField(object target, string fieldName, object value)

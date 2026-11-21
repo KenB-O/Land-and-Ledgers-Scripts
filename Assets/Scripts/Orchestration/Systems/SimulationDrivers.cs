@@ -15337,10 +15337,27 @@ namespace LandLedgers.Orchestration.Systems
             string skillId = definition != null ? definition.RequiredSkillId : string.Empty;
             CausalOutcomeInputs inputs = hub.Skills.BuildCausalInputs(
                 task.AssigneeId, skillId, definition != null ? definition.BaseMinutes : baseMinutesFallback);
-            return hub.Skills.ResolveTaskCompletion(
+            TaskOutcome outcome = hub.Skills.ResolveTaskCompletion(
                 task.AssigneeId, skillId, inputs,
                 difficulty01: 0.5, novelty01: 0.25, supervised: false,
                 day: dayIndex, taskIdForDeterminism: task.TaskId.ToString());
+            // Lane 10c (J-S4): minutes-worked practice for the task's
+            // learning tags — the first production caller of
+            // ApplyExperienceFromTask. This is the single completion funnel
+            // (per-tick driver, due-event drain, arrival-driven travel tasks
+            // and player work all resolve through here), so one call site
+            // covers every completion. The required skill is excluded: the
+            // ResolveTaskCompletion call above already credited it for this
+            // episode. Secondary tags (e.g. typesetting on a presswork job)
+            // gain here; they gain nowhere else. Skill scales duration and
+            // quality only — no refusal path reads capability (M-05).
+            hub.Skills.ApplyExperienceFromTask(
+                hub.Tasks, task.TaskId,
+                difficulty01: 0.5, novelty01: 0.25, supervised: false,
+                outcome: outcome.ToString(), day: dayIndex,
+                minutesWorked: Math.Max(1, task.MinutesWorked),
+                excludeSkillId: skillId);
+            return outcome;
         }
 
         private PlayerTaskProgressDriver playerWorkDriver;

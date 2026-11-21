@@ -34,6 +34,39 @@ namespace LandLedgers.Skills
     /// migrated. Legacy PersonSkillState XP is deterministically migrated on
     /// load (see PersonSkillState.EnsureMigrated) — never silently dropped.
     ///
+    /// Lane 10c (Nov 20, 2026) — PERSONALITY, DOCUMENT-ONLY. No personality
+    /// code was added in this lane, by direction. What exists, recorded here
+    /// so a later pass starts from the truth instead of re-deriving it:
+    ///   WHAT EXISTS: a narrow 6-trait worker system, separate from this
+    ///   service — WorkerTraits.cs (Reliability, Care, SocialSkill, Honesty,
+    ///   LearningSpeed, Durability, each 0-100, hidden values rolled
+    ///   deterministically per person in PersonState.EnsureWorkerTraitsInitialized)
+    ///   feeding WorkerRoleFitEvaluator, which production hiring actually uses
+    ///   (GeneralStore clerk hiring; the shared-business generic hiring path,
+    ///   including Bakery). Traits influence WHO gets hired, nothing else.
+    ///   WHAT IS MISSING: no risk-tolerance or preference field anywhere
+    ///   (owner decisions Part 5 §§5.1-5.3 approve risk tolerance and
+    ///   preferences influencing debt, opportunity, saving and expansion, but
+    ///   no per-person field implements them); no personality/skill input to
+    ///   any business decision (pricing, expansion, borrowing, replenishment);
+    ///   nobody runs a business based on personality or skills today —
+    ///   ownership is authored config (7 ownerPersonKey entries) and firm
+    ///   founding (OpportunityPressureRuntimeManager) has zero skill/trait
+    ///   references. A second, parallel progression track also exists and
+    ///   never interacts with this ledger: WorkerApprenticeshipState
+    ///   (Helper/Apprentice/Worker + XP + weeks worked).
+    ///   WHAT A LATER PASS NEEDS (owner decisions owed, J-S2/J-S5-J-S8):
+    ///   seeded starting capabilities/aptitudes for the 14 residents (values
+    ///   + authored-vs-derived); risk-tolerance/preference fields (which
+    ///   preferences exist, their ranges) read by at most two decision points
+    ///   first (expansion/borrowing, hire-vs-do-it-yourself); a ruling on
+    ///   which progression track is authoritative; founding/succession
+    ///   ranking weights (capability + traits + capital, biases never gates,
+    ///   per Canon XXXI §19 and register §3.3/§12.2). No refusal path reads
+    ///   capability (M-05): skill scales duration/quality only, so skill
+    ///   must never be used to explain a failed task whose real cause is a
+    ///   missing physical destination.
+    ///
     /// Canon: XXXI Part I §§1.2-1.4, Part III §§3.1-3.5, Part IV §§4.4-4.6;
     /// Tech XIV Part II §§2.1-2.5, Part III §§3.4-3.5; preserved Rev VII
     /// Part I §§1.1-1.5; Rev XVII integration §§3-4, §12; Rev XVI §2.2.
@@ -119,6 +152,12 @@ namespace LandLedgers.Skills
             RegisterSkill(new SkillDefinition(SkillIds.Cooking, "Cooking", "Meal preparation.", CapabilityFamily.FoodProcessing), out ignored);
             RegisterSkill(new SkillDefinition(SkillIds.Cleaning, "Cleaning", "Sweeping, tidying and upkeep.", CapabilityFamily.OrganizationManagement), out ignored);
             RegisterSkill(new SkillDefinition(SkillIds.BasicRepair, "Basic Repair", "Simple fixes to tools, fixtures and fittings.", CapabilityFamily.MechanicalRepair), out ignored);
+            // Lane 10c (J-S1): carpentry is the 9th starter skill (SkillIds.Carpentry,
+            // F1 furniture-making trade). It was missing from this set, so a
+            // carpentry task's aptitude family fell back to Unknown like the
+            // other unregistered general skills. Construction is the broad
+            // transferable family for workshop woodwork.
+            RegisterSkill(new SkillDefinition(SkillIds.Carpentry, "Carpentry", "Furniture making and workshop woodwork.", CapabilityFamily.Construction), out ignored);
         }
 
         public SkillDefinition GetSkill(string skillId)
@@ -333,11 +372,23 @@ namespace LandLedgers.Skills
         /// learning tags. The caller supplies formation context (difficulty,
         /// novelty, supervision, day); outcome resolution is separate.
         /// Replaces the canon-violating ApplyPracticeFromTask (1 XP/min ladder).
+        ///
+        /// Lane 10c (J-S4): the production caller is the shared task-completion
+        /// path (SimulationDrivers.ResolveCausalOutcome), which passes the
+        /// task's required skill as <paramref name="excludeSkillId"/>.
+        /// ResolveTaskCompletion already credited that skill for this episode,
+        /// and the ledger's idempotency is EntryId-based, so an unfiltered
+        /// call here would credit the same episode twice — once per tag list
+        /// entry — because authored catalogs almost always list the required
+        /// skill as its own learning tag. Excluding it keeps one episode =
+        /// one ledger entry per skill; secondary tags (a second skill the
+        /// task exercises) still gain here, and gain nowhere else.
         /// </summary>
         public void ApplyExperienceFromTask(
             TaskAuthority authority, EntityId taskId,
             double difficulty01, double novelty01, bool supervised,
-            string outcome, int day, double minutesWorked)
+            string outcome, int day, double minutesWorked,
+            string excludeSkillId = null)
         {
             if (authority == null)
             {
@@ -358,6 +409,12 @@ namespace LandLedgers.Skills
 
             foreach (string skillId in definition.LearningTags)
             {
+                if (!string.IsNullOrEmpty(excludeSkillId)
+                    && string.Equals(skillId, excludeSkillId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
                 var inputs = new ExperienceFormationInputs
                 {
                     TaskCapabilityId = skillId,

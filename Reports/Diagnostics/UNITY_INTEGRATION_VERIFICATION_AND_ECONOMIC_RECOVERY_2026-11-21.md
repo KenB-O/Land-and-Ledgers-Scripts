@@ -84,13 +84,13 @@ Counts below describe this recovery cycle's changes and executions. They are not
 |---|---:|---|
 | Accessible stable issue identities in previous ledger reconciliation | 586 | Ledger states original Muse pass-home source set was incomplete; not a complete universe claim. |
 | New issue identities this cycle | 0 | F-3 remains the same identity. No new Console signature or occurrence is claimed. |
-| Issues investigated | 1 | F-3 exact SKU receiving. |
+| Issues investigated | 2 | F-3 exact SKU receiving; F-6 physical clerk service integration seam. |
 | Repair attempts | 1 | One coherent cross-path receiving correction. |
 | Implemented repairs | 1 | Source checkpoint `a5300635`. |
 | Regression-verified fixes | 1 | Exact SKU authority paths passed targeted standalone current-source regressions; Unity integration pending. |
 | Live-verified fixes | 0 | No Unity runtime evidence. |
 | Suspected fixes | 0 | F-3 has targeted regression evidence; other items were not reclassified. |
-| Unresolved defects | 1 worked issue remains live-unverified | F-3 end-to-end Unity behavior remains unresolved for gameplay acceptance. This is not the total historical unresolved count. |
+| Unresolved defects | 2 scoped issues remain live-unverified | F-3 end-to-end Unity behavior and F-6 physical clerk arrival/service lifecycle. This is not the total historical unresolved count. |
 | Blocked verification gates | 1 environment gate | Owner Unity Editor / memory-safe isolated import. Not counted as a separate product defect. |
 | Not reproduced | 0 | No live test was run. |
 | Explained legitimate | 0 | No new runtime observation. |
@@ -98,14 +98,14 @@ Counts below describe this recovery cycle's changes and executions. They are not
 | Owner design decisions pending | 1 known decision item | Town-pulse spillover acceptance remains unchanged and pending as documented in the backlog. |
 | Current cycle Console occurrences | 0 | No Unity test or Playtest generated Console evidence. Historical 645 occurrence count remains retained. |
 
-The prior ledger contains many more open issues than F-3. This cycle does not close or remove any of them. Historical risks still outstanding include food replenishment and physical purchase/receipt, clerk service, bakery startup policy, household Firewood/stoves/heating, worker attendance, freight and furniture lifecycle, Save/Continue obligations, warning accuracy and memory growth, DEF-046 double production consumers, the pending spillover decision, and unresolved baseline warning signatures. F-6 still distinguishes its implemented incident feed from unresolved physical clerk completion.
+The prior ledger contains many more open issues than F-3/F-6. This cycle does not close or remove any of them. Historical risks still outstanding include food replenishment and physical purchase/receipt, bakery startup policy, household Firewood/stoves/heating, worker attendance, freight and furniture lifecycle, Save/Continue obligations, warning accuracy and memory growth, DEF-046 double production consumers, the pending spillover decision, and unresolved baseline warning signatures. F-6 still distinguishes its implemented incident feed from unresolved physical clerk completion.
 
 ## Current status and next recovery order
 
-1. **F-3 exact SKU receiving — REGRESSION VERIFIED, integrated Unity verification outstanding.** After safe project opening: run the asset-backed receipt test, relevant Test Runner fixtures, then observe bread/flour SKU custody, exact cash movement, category projection, excess shelf custody, and Save/Continue in Main Scene.
-2. **Unity integration gate — BLOCKED WITH REASON.** Owner Editor is open on another checkout with dirty persistent objects observed earlier and limited commit headroom. Resume only after it is safely saved/closed and memory/commit is rechecked. Do not terminate the active Editor or import the same project in a competing process.
-3. **F-5/F-4 bakery configuration and diagnostic accuracy — IMPLEMENTED, UNVERIFIED.** In the fresh New Game, record the loaded configuration object/GUID/hash, effective seed, initial channel decision, and wholesale initialization report; confirm no automatic 24-loaf, 4-cent Kennedy's agreement while preserving explicit legitimate contracts and Continued-save obligations.
-4. **F-6 physical clerk service — UNRESOLVED.** Verify approach routing, counter service position, reservations, customer patience, settlement exactly once, and refusal/recovery using actual Main Scene traces. Do not infer physical coordinates or bypass service.
+1. **Unity integration gate — BLOCKED WITH REASON.** Owner Editor is open on another checkout with dirty persistent objects observed earlier and limited commit headroom. Resume only after it is safely saved/closed and memory/commit is rechecked. Do not terminate the active Editor or import the same project in a competing process.
+2. **F-6 physical clerk service — UNRESOLVED, source cause confirmed.** Production binds physical counter service as required and resolves clerks at the building, but the exact counter-arrival callback has no production binding and no retail clerk route caller exists. After safe Unity opening, confirm General Store Counter point resolution/reachability, implement a task-owned route with exact arrival and recovery, and verify one-time settlement and Save/Continue.
+3. **F-3 exact SKU receiving — REGRESSION VERIFIED, integrated Unity verification outstanding.** Run the asset-backed receipt test, relevant Test Runner fixtures, then observe bread/flour SKU custody, exact cash movement, category projection, excess shelf custody, and Save/Continue in Main Scene.
+4. **F-5/F-4 bakery configuration and diagnostic accuracy — IMPLEMENTED, UNVERIFIED.** In the fresh New Game, record the loaded configuration object/GUID/hash, effective seed, initial channel decision, and wholesale initialization report; confirm no automatic 24-loaf, 4-cent Kennedy's agreement while preserving explicit legitimate contracts and Continued-save obligations.
 5. **Household necessities, heating, freight, furniture, and Save/Continue — unresolved register items.** Run the focused Unity fixtures in the backlog, then short 10x live physical verification before any extended test.
 6. **15–30 day and then 60-day campaign — not authorized by evidence yet.** Start only after current Unity compile, focused gates, fresh seed-1886 startup, and short physical gameplay acceptance pass. Preserve 250x as the preferred long-run preset; measure actual throughput and collect daily economic/conservation metrics.
 

@@ -130,6 +130,22 @@ namespace LandLedgers.Economy.Logistics
         public Action<LogisticsShipmentState, EntityId> OnPhysicalReceivingComplete;
 
         /// <summary>
+        /// Lane 9d (M-R11): pre-work physical arrival gates for handling.
+        /// ConfirmPhysicalLoading: the loader must be at the source loading
+        /// point before load minutes accrue. ConfirmPhysicalUnloadingArrival:
+        /// the handler must be at the destination unloading point before
+        /// unload minutes accrue. Null means no check — the abstract
+        /// behaviour (a shipment may load/unload without a witnessed
+        /// arrival), recorded once per shipment in Diagnostics by the
+        /// service. These are distinct from ConfirmPhysicalReceiving, which
+        /// is the POST-work receipt gate and stays post-work: its existing
+        /// contract lets the unload task accrue while the handler is still
+        /// carrying, and reusing it as a pre-work gate would break that.
+        /// </summary>
+        public ConfirmFreightPhysicalHandlingHandler ConfirmPhysicalLoading;
+        public ConfirmFreightPhysicalHandlingHandler ConfirmPhysicalUnloadingArrival;
+
+        /// <summary>
         /// Pass IX WS3 (A4-13): the existing unified reservation authority
         /// (EquipmentReservationService via the hub). When wired, Dispatch
         /// atomically reserves the wagon, driver and draft animals through
@@ -229,6 +245,20 @@ namespace LandLedgers.Economy.Logistics
         public const int AbandonDelayCycles = 3;
         private readonly Dictionary<string, int> physicalReceivingPins =
             new Dictionary<string, int>(StringComparer.Ordinal);
+        // Lane 9d (M-R11): consecutive pinned ticks on the pre-work arrival
+        // gates, mirroring physicalReceivingPins and the same bound
+        // (PhysicalReceivingPinLimit). A bound, not a bypass: at the bound
+        // the handling task closes as failed and the shipment is Delayed,
+        // so the driver retry can re-attempt it. Service-side memory only.
+        private readonly Dictionary<string, int> physicalLoadingPins =
+            new Dictionary<string, int>(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> physicalUnloadingArrivalPins =
+            new Dictionary<string, int>(StringComparer.Ordinal);
+        // Lane 9d (M-R11): shipments already noted in Diagnostics as
+        // proceeding without a wired arrival gate ("shipmentId:loading" /
+        // "shipmentId:unloading"). The abstract case is logged once per
+        // shipment per stage, not once per tick.
+        private readonly HashSet<string> physicalHandlingGateNoted = new HashSet<string>(StringComparer.Ordinal);
         // Pass IX WS3 (A4-13): every shipment this service created or restored,
         // so exclusivity can be checked ACROSS live shipments. Terminal
         // shipments (Completed/Failed) hold nothing and never conflict.
@@ -560,6 +590,15 @@ namespace LandLedgers.Economy.Logistics
             Log(hooks, "shipment '" + shipmentId + "' planned: " + quantityUnits + " units ("
                 + totalMassKg.ToString("0.0") + "kg, " + totalVolumeM3.ToString("0.00") + "m3) on wagon '"
                 + wagonAssetId + "' from '" + sourceBusinessId + "' to '" + destinationBusinessId + "'.");
+            // Lane 9d (E-18): the creation-day ETA from the shipment's own
+            // stage durations. Drivers that override the transit duration
+            // after creation (FreightProductionDriver) re-set it once the
+            // real route is known; dispatch authorization re-sets it again
+            // for held shipments, so hold days are not counted as haul.
+            if (hooks != null)
+                shipment.SetExpectedDelivery(LogisticsShipmentState.EstimateDeliveryDay(hooks.DayIndex,
+                    shipment.loadingDurationGameSeconds, shipment.transitDurationGameSeconds,
+                    shipment.unloadingDurationGameSeconds));
             Track(shipment);
             return shipment;
         }
@@ -671,6 +710,11 @@ namespace LandLedgers.Economy.Logistics
                 + FreightConsolidatedManifest.TotalMassKg(lines).ToString("0.0") + "kg, "
                 + FreightConsolidatedManifest.TotalVolumeM3(lines).ToString("0.00") + "m3) on wagon '"
                 + wagonAssetId + "' from '" + sourceBusinessId + "' to '" + destinationBusinessId + "'.");
+            // Lane 9d (E-18): same creation-day ETA as CreateShipment.
+            if (hooks != null)
+                shipment.SetExpectedDelivery(LogisticsShipmentState.EstimateDeliveryDay(hooks.DayIndex,
+                    shipment.loadingDurationGameSeconds, shipment.transitDurationGameSeconds,
+                    shipment.unloadingDurationGameSeconds));
             Track(shipment);
             return shipment;
         }
@@ -956,6 +1000,55 @@ namespace LandLedgers.Economy.Logistics
             return false;
         }
 
+        /// <summary>
+        /// Lane 9d (M-R11): pre-work physical arrival gate for one handling
+        /// stage. Returns true when the handler may accrue minutes this
+        /// tick. Returns false when the gate held: no minutes accrue, the
+        /// pin count rises, and <paramref name="boundExceeded"/> is true
+        /// once the pin count reaches PhysicalReceivingPinLimit — the caller
+        /// then closes the handling task as failed and Delays the shipment,
+        /// so the driver retry can re-attempt it. Cargo is preserved on
+        /// every exit: at load nothing was debited yet; at unload the cargo
+        /// stays in wagon custody. When no gate is wired the abstract
+        /// behaviour is kept (minutes accrue) and the gap is recorded once
+        /// per shipment per stage in Diagnostics — loading/unloading
+        /// without a witnessed arrival is a known absence of a check, not
+        /// a silent pass.
+        /// </summary>
+        private bool TryPassPhysicalHandlingGate(LogisticsShipmentState shipment, EntityId handlerId,
+            FreightShipmentHooks hooks, ConfirmFreightPhysicalHandlingHandler gate,
+            Dictionary<string, int> pins, string stage,
+            out bool boundExceeded, out int pinCount, out string reason)
+        {
+            boundExceeded = false;
+            pinCount = 0;
+            reason = string.Empty;
+            if (shipment == null) { reason = "FreightShipmentService: no shipment to check arrival for."; return false; }
+            if (gate == null)
+            {
+                string noteKey = shipment.ShipmentId + ":" + stage;
+                if (physicalHandlingGateNoted.Add(noteKey))
+                    Log(hooks, $"shipment '{shipment.ShipmentId}': {stage} proceeds without a physical arrival check (no arrival gate wired).");
+                return true;
+            }
+            bool routeAvailable = gate(shipment, handlerId, out bool arrived, out reason);
+            if (routeAvailable && arrived)
+            {
+                pins.Remove(shipment.ShipmentId);
+                return true;
+            }
+            pins.TryGetValue(shipment.ShipmentId, out pinCount);
+            pinCount++;
+            if (pinCount >= PhysicalReceivingPinLimit)
+            {
+                pins.Remove(shipment.ShipmentId);
+                boundExceeded = true;
+                return false;
+            }
+            pins[shipment.ShipmentId] = pinCount;
+            return false;
+        }
+
         /// <summary>Works the loading task; on completion custody moves to the wagon.</summary>
         public bool WorkLoading(LogisticsShipmentState shipment, int minutes,
             FreightShipmentHooks hooks, out string reason)
@@ -1002,6 +1095,26 @@ namespace LandLedgers.Economy.Logistics
                 // task; closing it and delaying back to Planned lets the
                 // driver retry through BeginLoading when the hook returns.
                 return FailLoadOnDebitRefusal(shipment, taskId, hooks, reason);
+            }
+            // Lane 9d (M-R11): no load minutes before the loader reaches
+            // the source loading point. The gate is checked before any
+            // minute accrues, so a loader who never arrives never loads.
+            // At the pin bound the load task closes as failed and the
+            // shipment Delays back to Planned (FailLoadOnDebitRefusal's
+            // shape: nothing was debited yet, so no cargo moves); the
+            // driver retry re-attempts through BeginLoading.
+            if (!TryPassPhysicalHandlingGate(shipment, loadTask.AssigneeId, hooks, hooks?.ConfirmPhysicalLoading,
+                physicalLoadingPins, "loading", out bool loadBoundExceeded, out int loadPins, out reason))
+            {
+                if (loadBoundExceeded)
+                {
+                    string gateReason = string.IsNullOrWhiteSpace(reason)
+                        ? "physical loading arrival did not confirm" : reason.Trim();
+                    return FailLoadOnDebitRefusal(shipment, taskId, hooks,
+                        "physical loading-arrival gate pinned for " + PhysicalReceivingPinLimit + " ticks: " + gateReason);
+                }
+                Log(hooks, $"shipment '{shipment.ShipmentId}': physical loading arrival not yet confirmed (pin {loadPins}/{PhysicalReceivingPinLimit}): {reason}");
+                return true;
             }
             bool done = loadTask.MinutesRemaining <= 0;
             if (!done && !hooks.Tasks.RecordWorkProgress(taskId,
@@ -1358,6 +1471,34 @@ namespace LandLedgers.Economy.Logistics
             {
                 reason = $"FreightShipmentService: unload task '{taskId}' is missing; cargo remains in wagon custody.";
                 return false;
+            }
+            // Lane 9d (M-R11): no unload minutes before the handler reaches
+            // the destination unloading point. Mirrors the loading gate:
+            // pinned ticks accrue nothing; at the pin bound the unload task
+            // closes as failed and the shipment Delays back to Arrived with
+            // the cargo still in wagon custody, so the driver retry can
+            // re-attempt it. This is the PRE-work gate — distinct from the
+            // post-work ConfirmPhysicalReceiving gate below, which stays
+            // post-work so a handler still carrying can finish the task
+            // minutes and then wait for receipt.
+            if (!TryPassPhysicalHandlingGate(shipment, unloadTask.AssigneeId, hooks, hooks?.ConfirmPhysicalUnloadingArrival,
+                physicalUnloadingArrivalPins, "unloading", out bool unloadBoundExceeded, out int unloadPins, out reason))
+            {
+                if (unloadBoundExceeded)
+                {
+                    string gateReason = string.IsNullOrWhiteSpace(reason)
+                        ? "physical unloading arrival did not confirm" : reason.Trim();
+                    hooks.Tasks.CompleteTask(taskId, TaskOutcome.RecoverableFailure, hooks.DayIndex, hooks.Budgets);
+                    ReleaseHandlerWindow(unloadReservations, hooks, shipment.ShipmentId, unloadTask.AssigneeId, "freight:unload:" + shipment.ShipmentId);
+                    unloadTasks.Remove(shipment.ShipmentId);
+                    shipment.MarkDelayed(
+                        "physical unloading-arrival gate pinned for " + PhysicalReceivingPinLimit + " ticks: " + gateReason,
+                        LogisticsShipmentStatus.Arrived);
+                    Log(hooks, $"shipment '{shipment.ShipmentId}': unload task closed as failed — unloading-arrival gate pinned ({gateReason}); cargo remains in wagon custody.");
+                    return true;
+                }
+                Log(hooks, $"shipment '{shipment.ShipmentId}': physical unloading arrival not yet confirmed (pin {unloadPins}/{PhysicalReceivingPinLimit}): {reason}");
+                return true;
             }
             bool done = unloadTask.MinutesRemaining <= 0;
             if (!done && !hooks.Tasks.RecordWorkProgress(taskId,

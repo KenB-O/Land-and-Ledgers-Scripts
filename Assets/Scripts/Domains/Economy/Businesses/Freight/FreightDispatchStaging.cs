@@ -123,6 +123,66 @@ namespace LandLedgers.Economy.Freight
         }
 
         /// <summary>
+        /// Lane 9d (C-4): the staging wait is bounded. A prepared shipment
+        /// waits for Ethan to reach staging and authorize dispatch; before
+        /// this lane the wait had no deadline — a shipment whose staging
+        /// travel was never created, or whose operator never arrived, sat
+        /// Prepared forever with no warning and no terminal disposition.
+        /// The bound mirrors DEF-071's AbandonDelayCycles (3): a carrier
+        /// gives up after three days without a forward move. The decision
+        /// is deliberately narrow: Overdue only when nothing is moving — no
+        /// open staging travel AND the operator is not at staging — for the
+        /// full bound. A travel task in flight, or an operator already at
+        /// staging, keeps the wait alive however long it runs: that
+        /// progress is the travel watchdog's concern, not staging's. The
+        /// caller applies the terminal disposition on Overdue (fail the
+        /// shipment, cancel the agreement, release the cargo) and logs the
+        /// reason, which names the wait in days.
+        /// </summary>
+        public const int StagingWaitLimitDays = 3;
+
+        public enum StagingWaitVerdict
+        {
+            Waiting = 0,
+            Overdue = 1,
+        }
+
+        public static StagingWaitVerdict DecideStagingWait(int preparedDayIndex, int dayIndex,
+            bool hasOpenStagingTravel, bool operatorAtStaging, out string reason)
+        {
+            reason = string.Empty;
+            if (preparedDayIndex < 0)
+            {
+                reason = "Staging wait has not started (shipment not yet prepared).";
+                return StagingWaitVerdict.Waiting;
+            }
+            int ageDays = dayIndex - preparedDayIndex;
+            if (ageDays < 0)
+            {
+                reason = "Staging wait day is ahead of the current day; treating as not yet due.";
+                return StagingWaitVerdict.Waiting;
+            }
+            if (hasOpenStagingTravel)
+            {
+                reason = "Staging travel is in progress (" + ageDays + " day(s) since preparation).";
+                return StagingWaitVerdict.Waiting;
+            }
+            if (operatorAtStaging)
+            {
+                reason = "Operator is at staging (" + ageDays + " day(s) since preparation).";
+                return StagingWaitVerdict.Waiting;
+            }
+            if (ageDays >= StagingWaitLimitDays)
+            {
+                reason = "No staging travel open and operator not at staging for " + ageDays
+                    + " day(s) since preparation (limit " + StagingWaitLimitDays + " days).";
+                return StagingWaitVerdict.Overdue;
+            }
+            reason = "Waiting for staging (" + ageDays + " day(s) since preparation; limit " + StagingWaitLimitDays + " days).";
+            return StagingWaitVerdict.Waiting;
+        }
+
+        /// <summary>
         /// W3 (H1/Note-4) — the HITCH staging-travel decision. The journey
         /// location is deliberately NOT an input to this decision: it can
         /// read as staging while the visual agent is idle elsewhere

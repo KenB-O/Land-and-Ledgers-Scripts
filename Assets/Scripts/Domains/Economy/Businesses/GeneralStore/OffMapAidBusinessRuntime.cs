@@ -32,10 +32,49 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public int BakeryUnits;
         public int TotalCostCents;
         public int CreatedDayIndex;
+        // Lane 9d (E-18): the day this lot is expected to reach its
+        // destination. -1 means no ETA was ever set (legacy lots, and lots
+        // whose pickup has not yet been committed): such a lot is never
+        // judged overdue. Set at pickup-commit time from the pickup day
+        // plus the full haul allowance — the overestimate is deliberate,
+        // so the overdue flag fires late rather than false-positive.
+        public int ExpectedDeliveryDayIndex = -1;
         public string ShipmentId = string.Empty;
         public string DestinationBusinessId = string.Empty;
         public bool SourceCommitted;
         public bool Received;
+
+        /// <summary>Lane 9d (E-18): true once an expected delivery day was set.</summary>
+        public bool HasExpectedDelivery => ExpectedDeliveryDayIndex >= 0;
+
+        /// <summary>
+        /// Lane 9d (E-18): records the expected delivery day. A negative
+        /// day is refused (returns the refusal, sets nothing).
+        /// </summary>
+        public string SetExpectedDelivery(int dayIndex)
+        {
+            if (dayIndex < 0) return "An expected delivery day cannot be negative.";
+            ExpectedDeliveryDayIndex = dayIndex;
+            return null;
+        }
+
+        /// <summary>
+        /// Lane 9d (E-18): true only when an ETA is set and the judged day
+        /// is past it. A lot with no ETA is never overdue.
+        /// </summary>
+        public bool IsOverdue(int dayIndex)
+        {
+            return HasExpectedDelivery && dayIndex > ExpectedDeliveryDayIndex;
+        }
+
+        /// <summary>
+        /// Lane 9d (E-18): whole days past the expected delivery day on the
+        /// judged day; 0 when on time, early, or when no ETA is set.
+        /// </summary>
+        public int OverdueDays(int dayIndex)
+        {
+            return HasExpectedDelivery ? Math.Max(0, dayIndex - ExpectedDeliveryDayIndex) : 0;
+        }
 
         /// <summary>
         /// Priority spoilage integration: the Slice 5 perishable
@@ -281,6 +320,98 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             return null;
         }
 
+        /// <summary>
+        /// Lane 9d (F6-2 / F-02): releases a committed lot back to
+        /// shippable stock after its shipment was abandoned by a recovery's
+        /// terminal disposition, so the same paid lot can be recommitted to
+        /// a retried shipment instead of stranding behind a dead shipment
+        /// id. The goods, the payment, and the lot identity are preserved:
+        /// nothing is refunded, destroyed, or re-created here — the lot
+        /// simply becomes committable again. Refuses a received lot (its
+        /// goods are already credited at the destination) and a lot
+        /// committed to a different shipment (another haul still owns it).
+        /// The caller must reopen the request (FreightServiceAgreementBook
+        /// ReopenTerminalRequest) for the retry to happen; releasing the lot
+        /// alone leaves the request terminal and the lot unshipped.
+        /// </summary>
+        public string ReleaseFreightCommitment(string lotId, string shipmentId, string reason)
+        {
+            string supplierName = string.IsNullOrWhiteSpace(DisplayName) ? BusinessId : DisplayName;
+            OffMapAidCargoLot lot = FindLotById(lotId);
+            if (lot == null) return supplierName + " freight release refused: unknown aid lot.";
+            if (lot.Received) return supplierName + " freight release refused: lot was already received.";
+            if (!lot.SourceCommitted) return supplierName + " freight release refused: lot is not committed.";
+            if (!string.Equals(lot.ShipmentId, shipmentId, StringComparison.Ordinal))
+                return supplierName + " freight release refused: lot is committed to a different shipment.";
+            if (string.IsNullOrWhiteSpace(reason)) return supplierName + " freight release refused: a cause is required.";
+            lot.ShipmentId = string.Empty;
+            lot.SourceCommitted = false;
+            return null;
+        }
+
+        /// <summary>
+        /// Lane 9d (F6-2 / F-02): refunds an unreceived lot to its buyer
+        /// when the goods cannot be re-shipped — the money-back half of the
+        /// orphaned-lot recovery, alongside ReleaseFreightCommitment (the
+        /// goods-back half). Conserves money exactly: the supplier's
+        /// retained limbo balance is debited by the lot's full cost and the
+        /// buyer's port is credited the same amount, with a compensating
+        /// transaction recorded (negative amount, "aidrefund-" id) so the
+        /// ledger still reconciles. The lot's units are restocked into
+        /// supplier inventory and the lot record is removed — it no longer
+        /// exists as a purchasable lot. Refuses a received lot (its goods
+        /// are already credited; a refund would pay for goods the buyer
+        /// holds), a zero/negative-cost lot, and a supplier balance too
+        /// short to cover the refund (the money is gone, so the refund
+        /// cannot be invented). If the buyer credit fails after the
+        /// supplier debit, the whole move is rolled back and nothing
+        /// moves.
+        /// </summary>
+        public string RefundUnreceivedLot(string lotId, IBusinessCashPort buyerCash, int dayIndex, string reason, out int refundedCents)
+        {
+            refundedCents = 0;
+            string supplierName = string.IsNullOrWhiteSpace(DisplayName) ? BusinessId : DisplayName;
+            OffMapAidCargoLot lot = FindLotById(lotId);
+            if (lot == null) return supplierName + " lot refund refused: unknown aid lot.";
+            if (lot.Received) return supplierName + " lot refund refused: lot was already received.";
+            if (buyerCash == null) return supplierName + " lot refund refused: no buyer cash port.";
+            if (lot.TotalCostCents <= 0) return supplierName + " lot refund refused: lot carries no payment to refund.";
+            if (cashCents < lot.TotalCostCents)
+                return supplierName + " lot refund refused: supplier balance is short of the lot cost; the refund cannot be invented.";
+            if (string.IsNullOrWhiteSpace(reason)) return supplierName + " lot refund refused: a cause is required.";
+
+            int refund = lot.TotalCostCents;
+            string skuId = lot.SkuId;
+            int restockUnits = lot.InventoryUnits;
+            string orderId = lot.OrderId;
+            string buyerBusinessId = lot.BuyerBusinessId;
+
+            cashCents -= refund;
+            inventory[skuId] = GetInventoryUnits(skuId) + restockUnits;
+            string creditProblem = buyerCash.Credit(refund, "Refund of unreceived aid lot " + lotId + ": " + reason.Trim());
+            if (creditProblem != null)
+            {
+                cashCents += refund;
+                inventory[skuId] = Math.Max(0, GetInventoryUnits(skuId) - restockUnits);
+                return supplierName + " lot refund refused: buyer credit failed (" + creditProblem + "); nothing moved.";
+            }
+
+            lots.Remove(lot);
+            transactions.Add(new OffMapAidCashTransaction
+            {
+                TransactionId = "aidrefund-" + orderId,
+                BuyerBusinessId = buyerBusinessId,
+                BuyerName = string.Empty,
+                SupplierBusinessId = BusinessId,
+                AmountCents = -refund,
+                DayIndex = Math.Max(0, dayIndex),
+                SupplierCashAfterCents = cashCents,
+                OrderId = orderId,
+            });
+            refundedCents = refund;
+            return null;
+        }
+
         /// <summary>Credits the purchased lot to its named destination once, preserving its identity and bakery-unit conversion.</summary>
         public string ReceiveAtBakery(string lotId, string shipmentId, string destinationBusinessId, out int bakeryUnits)
         {
@@ -415,7 +546,8 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             SupplierBusinessId = value.SupplierBusinessId, BuyerBusinessId = value.BuyerBusinessId,
             OrderUnit = value.OrderUnit, PackageUnits = value.PackageUnits, InventoryUnits = value.InventoryUnits,
             InventoryUnit = value.InventoryUnit, BakeryUnits = value.BakeryUnits, TotalCostCents = value.TotalCostCents,
-            CreatedDayIndex = value.CreatedDayIndex, ShipmentId = value.ShipmentId,
+            CreatedDayIndex = value.CreatedDayIndex, ExpectedDeliveryDayIndex = value.ExpectedDeliveryDayIndex,
+            ShipmentId = value.ShipmentId,
             DestinationBusinessId = value.DestinationBusinessId, SourceCommitted = value.SourceCommitted, Received = value.Received,
             // Priority spoilage integration: the attached condition state
             // is part of the lot and clones with it (the SaveDto is a

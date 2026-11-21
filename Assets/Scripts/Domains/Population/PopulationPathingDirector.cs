@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.Transport;
 using LandLedgers.Pathing;
 using LandLedgers.Population;
@@ -1340,8 +1341,23 @@ namespace LandLedgers.FirstLedger
         public bool TryCarryFreightToActivity(int personId, int targetBuildingId, string activityId,
             out bool arrived, out string reason)
         {
+            return TryCarryFreightToActivity(personId, targetBuildingId, activityId, out arrived, out reason, out _);
+        }
+
+        /// <summary>
+        /// Lane 9d (M-R5): same as the five-argument form, plus
+        /// <paramref name="usedDoorFallback"/> — true when the handler was
+        /// routed to the authored front door instead of a receiving
+        /// station, so the caller can record the delivery point honestly
+        /// ("door:&lt;business&gt;") instead of the misleading
+        /// "receiving:&lt;business&gt;".
+        /// </summary>
+        public bool TryCarryFreightToActivity(int personId, int targetBuildingId, string activityId,
+            out bool arrived, out string reason, out bool usedDoorFallback)
+        {
             arrived = false;
             reason = string.Empty;
+            usedDoorFallback = false;
             if (personId < 0 || targetBuildingId < 0 || townWorld == null || pathingManager?.Grid == null
                 || !townWorld.TryGetBuildingById(targetBuildingId, out PlacedBuilding building)
                 || building?.runtimeFootprintAuthority == null)
@@ -1350,8 +1366,22 @@ namespace LandLedgers.FirstLedger
                 return false;
             }
             BuildingFootprintAuthority authority = building.runtimeFootprintAuthority;
-            if (!authority.TryGetActivityLocation(activityId, targetBuildingId,
-                    out ResolvedBuildingActivityLocation activity, out reason))
+            // Lane 9d (M-R5): no location carries the id "receiving" on any
+            // building in the dev town, so the exact-id lookup fails
+            // everywhere and every delivery falls back to the front door.
+            // Resolve by Receiving type instead: an authored Receiving-type
+            // point (e.g. the lumber yard's
+            // "lumberyard-receiving-approach") is a real receiving station
+            // and deliveries route to it. Only when no such point exists —
+            // or it cannot be resolved as a walkable location — does the
+            // door fallback apply, and then explicitly.
+            bool resolved = authority.TryGetActivityLocation(activityId, targetBuildingId,
+                out ResolvedBuildingActivityLocation activity, out reason);
+            if (!resolved && string.Equals(activityId, "receiving", StringComparison.Ordinal))
+            {
+                resolved = TryResolveReceivingPointByType(authority, targetBuildingId, out activity, out reason);
+            }
+            if (!resolved)
             {
                 // Some operating buildings have a real authored exterior door but
                 // no separately authored receiving station. Freight may be handed
@@ -1362,6 +1392,7 @@ namespace LandLedgers.FirstLedger
                 {
                     if (TryCarryFreightToAuthoredDoor(personId, targetBuildingId, building, out arrived, out string doorReason))
                     {
+                        usedDoorFallback = true;
                         reason = ResolveFreightDoorRouteReason(arrived, doorReason);
                         return true;
                     }
@@ -1380,6 +1411,7 @@ namespace LandLedgers.FirstLedger
                     if (TryCarryFreightToAuthoredDoor(personId, targetBuildingId, building,
                             out arrived, out string doorReason))
                     {
+                        usedDoorFallback = true;
                         reason = arrived ? string.Empty : doorReason;
                         return true;
                     }
@@ -1645,6 +1677,51 @@ namespace LandLedgers.FirstLedger
             return string.IsNullOrWhiteSpace(routeReason)
                 ? "Carrying: handler is physically travelling to the receiving point."
                 : routeReason;
+        }
+
+        /// <summary>
+        /// Lane 9d (M-R5): resolves a "receiving" request by Receiving type
+        /// when no location carries the literal id. Maps the building's
+        /// authored locations to the pure resolver's plain candidates, then
+        /// validates the resolved id through the same walkable-location
+        /// lookup the exact-id path uses — a type match that fails the
+        /// interior check is not a receiving station, and the caller falls
+        /// back to the door explicitly instead of routing to an unreachable
+        /// point.
+        /// </summary>
+        private static bool TryResolveReceivingPointByType(BuildingFootprintAuthority authority, int targetBuildingId,
+            out ResolvedBuildingActivityLocation activity, out string reason)
+        {
+            activity = default;
+            reason = string.Empty;
+            if (authority?.ActivityLocations == null)
+            {
+                reason = "No receiving station is authored on this building; the front door is the only fallback.";
+                return false;
+            }
+            var candidates = new List<FreightReceivingPointResolver.AuthoredReceivingPoint>();
+            foreach (BuildingActivityLocationAuthoring location in authority.ActivityLocations)
+            {
+                if (location == null) continue;
+                candidates.Add(new FreightReceivingPointResolver.AuthoredReceivingPoint(
+                    location.id, (int)location.type));
+            }
+            FreightReceivingPointResolver.ReceivingPointResolution resolution =
+                FreightReceivingPointResolver.Resolve("receiving", candidates,
+                    (int)BuildingActivityLocationType.Receiving);
+            if (resolution.Source != FreightReceivingPointResolver.ReceivingPointSource.ReceivingType)
+            {
+                reason = resolution.Reason;
+                return false;
+            }
+            if (!authority.TryGetActivityLocation(resolution.ActivityLocationId, targetBuildingId, out activity, out reason))
+            {
+                reason = "The authored Receiving-type point '" + resolution.ActivityLocationId
+                    + "' could not be resolved as a walkable location: " + reason
+                    + " The front door is the only fallback.";
+                return false;
+            }
+            return true;
         }
 
         private static string DescribeFreightRouteProgress(AgentMover mover, int targetBuildingId,

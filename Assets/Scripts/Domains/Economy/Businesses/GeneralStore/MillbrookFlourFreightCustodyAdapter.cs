@@ -80,6 +80,15 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
 
             reason = supplier.CommitFreightPickup(lot.LotId, shipment.ShipmentId, packageUnits);
             if (reason != null) return false;
+            // Lane 9d (E-18): the lot's ETA, set once the pickup commits.
+            // Pickup day plus the full haul allowance (loading + transit +
+            // unloading) — the overestimate is deliberate, so the overdue
+            // flag fires late rather than false-positive. UnknownDayIndex
+            // (-1) means the caller carried no day: no ETA is invented.
+            if (dayIndex >= 0)
+                lot.SetExpectedDelivery(LogisticsShipmentState.EstimateDeliveryDay(dayIndex,
+                    shipment.loadingDurationGameSeconds, shipment.transitDurationGameSeconds,
+                    shipment.unloadingDurationGameSeconds));
             // Priority 9 Slice F3: custody recording only, after the commit
             // succeeds. The wagon holds the lot now; wagon custody is not a
             // lot, so the destination key is Empty. A logging failure never

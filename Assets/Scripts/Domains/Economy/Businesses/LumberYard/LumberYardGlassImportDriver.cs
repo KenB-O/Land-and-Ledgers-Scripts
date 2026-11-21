@@ -180,13 +180,12 @@ namespace LandLedgers.Economy.Businesses.LumberYard
         /// F1: pulls due imports from the service and receives each glass
         /// lot into the yard's glass stock, with the order id and origin
         /// on the lot. The yard's id registry is validated BEFORE
-        /// pulling: ReceiveDueImports marks an order Delivered the
-        /// moment it hands the lot over, so a lot pulled with nowhere to
-        /// put it would be lost. A lot the yard intake refuses after
-        /// that point is a loud reconciliation failure — the order is
-        /// already Delivered, so the driver records the loss in
-        /// diagnostics instead of silently dropping it. Returns the
-        /// glass panes received.
+        /// pulling. Lane 9d (E R-08): intake-gated — the service calls the
+        /// yard intake FIRST and only marks the order Delivered on success,
+        /// so a refused lot stays Ordered and retryable on the next day's
+        /// drive instead of the old Delivered-before-intake hazard (goods
+        /// in no inventory, "UNWIND FAILED"). Returns the glass panes
+        /// received.
         /// </summary>
         public int ReceiveDueImports(int dayIndex)
         {
@@ -205,26 +204,21 @@ namespace LandLedgers.Economy.Businesses.LumberYard
                 diagnostics.Add("LumberYardGlassImportDriver.ReceiveDueImports: the yard has no id registry — nothing received; due imports stay Ordered and the next day's drive re-attempts them.");
                 return 0;
             }
-            List<ImportLot> due = importService.ReceiveDueImports(dayIndex, diagnostics);
+            List<ImportLot> due = importService.ReceiveDueImportsWithIntake(dayIndex, lot =>
+            {
+                if (lot == null) return "no lot to receive.";
+                if (!string.Equals(lot.MaterialId, LumberYardSupply.GlassImportMaterialId, StringComparison.Ordinal))
+                    return $"import lot {lot.LotId} is material '{lot.MaterialId}', not glass-panes — this driver only receives glass.";
+                ImportOrder order = FindOrder(lot.OrderId);
+                int unitCostCents = order != null ? order.PricePerUnitCents : 0;
+                return yard.ReceiveGlassImportArrival(
+                    lot.Units, lot.OrderId, lot.OriginName,
+                    dayIndex, unitCostCents, diagnostics);
+            }, diagnostics);
             int receivedUnits = 0;
             foreach (ImportLot lot in due)
             {
                 if (lot == null) continue;
-                if (!string.Equals(lot.MaterialId, LumberYardSupply.GlassImportMaterialId, StringComparison.Ordinal))
-                {
-                    diagnostics.Add($"LumberYardGlassImportDriver.ReceiveDueImports: import lot {lot.LotId} is material '{lot.MaterialId}', not glass-panes — this driver only receives glass; the lot is left unreceived and the order stays Delivered in the service. Reconcile before the next drive.");
-                    continue;
-                }
-                ImportOrder order = FindOrder(lot.OrderId);
-                int unitCostCents = order != null ? order.PricePerUnitCents : 0;
-                string refusal = yard.ReceiveGlassImportArrival(
-                    lot.Units, lot.OrderId, lot.OriginName,
-                    dayIndex, unitCostCents, diagnostics);
-                if (refusal != null)
-                {
-                    diagnostics.Add($"LumberYardGlassImportDriver.ReceiveDueImports: UNWIND FAILED — glass lot {lot.LotId} ({lot.Units} panes, order {lot.OrderId}) was marked Delivered by the import service but the yard intake refused it ({refusal}). The goods are not in any inventory. Reconcile the books and the order before the next drive.");
-                    continue;
-                }
                 receivedUnits += lot.Units;
             }
             return receivedUnits;

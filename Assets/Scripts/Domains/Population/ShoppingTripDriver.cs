@@ -5,6 +5,7 @@ using LandLedgers.Economy.Logistics;
 using LandLedgers.Primitives;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
+using UnityEngine;
 
 namespace LandLedgers.Population
 {
@@ -739,11 +740,30 @@ namespace LandLedgers.Population
             PersistRouteWatch(trip, tracking);
         }
 
+        /// <summary>
+        /// W SF-6 (Lane 2): the warning text emitted when the Outbound /
+        /// Returning liveness recovery fires. Pure function of its inputs so
+        /// the wording is pinned by test without capturing Console output.
+        /// </summary>
+        internal static string RecoveryWarningMessage(string tripId, string legKind, string reason, int dayIndex, int tripDayIndex)
+        {
+            int daysOut = Math.Max(0, dayIndex - tripDayIndex);
+            return "ShoppingTripDriver: trip " + (tripId ?? string.Empty) + " " + (legKind ?? string.Empty)
+                + " " + daysOut + "d without arrival callback; deadline recovery aborted the trip and released its task and reservations"
+                + "; owner: ShoppingTripDriver. Reason: " + (reason ?? string.Empty);
+        }
+
         private void RecoverStalledRoute(PlannedShoppingTrip trip, LegKind kind,
             string failedDestination, string reason, int dayIndex,
             IDueEventScheduler dueEvents, List<string> diag)
         {
             if (trip == null || !trip.IsActive) return;
+            // W SF-6 (Lane 2): the Outbound liveness recovery itself was
+            // fixed in source (persisted absolute deadline + no-progress
+            // timeout), but it fired silently — the trip only appeared in
+            // the driver's diagnostics list. A recovery firing is a WARNING
+            // so the Console names the trip, the leg, and the owner.
+            Debug.LogWarning(RecoveryWarningMessage(trip.TripId, kind.ToString(), reason, dayIndex, trip.DayIndex));
             cancelPhysicalRoute?.Invoke(trip.ShopperPersonId, failedDestination ?? string.Empty);
             WorkTask activeLeg = kind == LegKind.Outbound ? trip.Legs?.Outbound : trip.Legs?.Return;
             EntityId activeTaskId = kind == LegKind.Outbound ? trip.OutboundTaskId : trip.ReturnTaskId;

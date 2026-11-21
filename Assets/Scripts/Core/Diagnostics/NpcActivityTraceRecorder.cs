@@ -66,6 +66,13 @@ namespace LandLedgers.Diagnostics
         public string selectionReason;
         public string recoveryState;
         public string detail;
+        /// <summary>
+        /// Lane 2 (M-R14): the M-R14 causal class of this event's refusal /
+        /// interrupt, as a structured field, so classification never has to
+        /// reconstruct the call chain from free text. Empty when unclassified.
+        /// Values are DestinationBlockerKind names.
+        /// </summary>
+        public string blockerKind;
     }
 
     [Serializable]
@@ -277,6 +284,9 @@ namespace LandLedgers.Diagnostics
                 new NpcActivityTraceEvent { taskId = taskId ?? string.Empty, transition = method, simulatedSeconds = Now(), dayIndex = day };
             item.eventType = "task-refusal";
             item.reason = reason ?? string.Empty;
+            // Lane 2 (M-R14): tag the refusal with its causal class at capture
+            // time, from the reason the owning system already emits.
+            item.blockerKind = IncidentInvestigator.ClassifyRefusalReason(reason).ToString();
             AppendObserved(item);
         }
 
@@ -523,6 +533,82 @@ namespace LandLedgers.Diagnostics
             terminalObserved.Clear();
         }
 
+        /// <summary>
+        /// Lane 2: bounded pre-incident capture for one task. Returns the
+        /// retained history rows for the task inside [now - windowSeconds,
+        /// now], oldest first, capped at 500 rows so an investigation can
+        /// never pull an unbounded slice of the trace. The recorder's
+        /// retention limits and drop counters still bound the underlying
+        /// history; this method reports only what survived.
+        /// </summary>
+        public IReadOnlyList<NpcActivityTraceEvent> CapturePreIncident(string taskId, double windowSeconds, double nowSeconds)
+        {
+            var result = new List<NpcActivityTraceEvent>();
+            if (string.IsNullOrWhiteSpace(taskId)) return result;
+            double window = windowSeconds < 0 ? -1 : windowSeconds;
+            for (int i = 0; i < history.Count; i++)
+            {
+                NpcActivityTraceEvent item = history[i];
+                if (item == null || !string.Equals(item.taskId, taskId, StringComparison.Ordinal)) continue;
+                if (window >= 0 && item.simulatedSeconds >= 0 && nowSeconds >= 0 && nowSeconds - item.simulatedSeconds > window) continue;
+                if (item.simulatedSeconds >= 0 && nowSeconds >= 0 && item.simulatedSeconds > nowSeconds) continue;
+                result.Add(item);
+                if (result.Count >= 500) break;
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Lane 2: investigate one task from its retained trace evidence.
+        /// Maps the recorder's events onto the investigator's plain input
+        /// and returns the classified finding (authority, causal timeline,
+        /// earliest confirmed blocker, circumstance severity). Observation
+        /// only: assigns no work and changes no simulation state.
+        /// </summary>
+        public IncidentFinding InvestigateTask(string taskId, double nowSeconds)
+        {
+            if (string.IsNullOrWhiteSpace(taskId)) return IncidentInvestigator.InvestigateTaskStall(null, nowSeconds);
+            IReadOnlyList<NpcActivityTraceEvent> captured = CapturePreIncident(taskId, -1, nowSeconds);
+            var evidence = new List<IncidentEvidenceEvent>(captured.Count);
+            for (int i = 0; i < captured.Count; i++) evidence.Add(ToEvidence(captured[i]));
+            if (evidence.Count == 0)
+            {
+                // No retained rows: still return a finding so the window can
+                // show UNKNOWN with the missing evidence named, instead of
+                // an empty panel.
+                evidence.Add(new IncidentEvidenceEvent { TaskId = taskId, SimulatedSeconds = -1 });
+            }
+            return IncidentInvestigator.InvestigateTaskStall(evidence, nowSeconds);
+        }
+
+        private static IncidentEvidenceEvent ToEvidence(NpcActivityTraceEvent item)
+        {
+            if (item == null) return new IncidentEvidenceEvent();
+            return new IncidentEvidenceEvent
+            {
+                SimulatedSeconds = item.simulatedSeconds,
+                DayIndex = item.dayIndex,
+                EventType = item.eventType ?? string.Empty,
+                Transition = item.transition ?? string.Empty,
+                TaskId = item.taskId ?? string.Empty,
+                TaskDefinitionId = item.taskDefinitionId ?? string.Empty,
+                TaskStatus = item.taskStatus ?? string.Empty,
+                TaskOwnerId = item.taskOwnerId ?? string.Empty,
+                PersonId = item.personId ?? string.Empty,
+                PersonNumericId = item.personNumericId,
+                HouseholdId = item.householdId,
+                Reason = item.reason ?? string.Empty,
+                Detail = item.detail ?? string.Empty,
+                RecoveryState = item.recoveryState ?? string.Empty,
+                ActivityLocationId = item.activityLocationId ?? string.Empty,
+                ReservationId = item.reservationId ?? string.Empty,
+                WorkedMinutes = item.workedMinutes,
+                RemainingMinutes = item.remainingMinutes,
+                PlannedMinutes = item.plannedMinutes,
+                InterruptionCount = item.retryCount,
+            };
+        }
+
         public void WriteJsonLines(string path)
         {
             if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Export path is required.", nameof(path));
@@ -648,6 +734,9 @@ namespace LandLedgers.Diagnostics
                 reason = anomaly.reason,
                 recoveryState = anomaly.recoveryState,
                 detail = anomaly.supportingState,
+                // Lane 2 (M-R14): tag the anomaly with its causal class.
+                blockerKind = IncidentInvestigator.ClassifyRefusalReason(
+                    (anomaly.reason ?? string.Empty) + " " + (anomaly.recoveryState ?? string.Empty)).ToString(),
                 selectionReason = "automatic anomaly selection: " + category
             };
             if (AutoSelectAnomalies && person >= 0)
@@ -860,7 +949,8 @@ namespace LandLedgers.Diagnostics
                 destinationBuildingId = source.destinationBuildingId,
                 reservationId = source.reservationId, workedMinutes = source.workedMinutes, plannedMinutes = source.plannedMinutes,
                 remainingMinutes = source.remainingMinutes, retryCount = source.retryCount, reason = source.reason,
-                selectionReason = source.selectionReason, recoveryState = source.recoveryState, detail = source.detail
+                selectionReason = source.selectionReason, recoveryState = source.recoveryState, detail = source.detail,
+                blockerKind = source.blockerKind
             };
         }
 

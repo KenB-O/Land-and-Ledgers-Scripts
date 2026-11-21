@@ -822,9 +822,23 @@ namespace LandLedgers.FirstLedger
             firstSessionGuidance?.ResetGuidanceForNewSession();
             AppendStartupTiming(timing, stepTimer, "decision/ui configure");
 
+            // Lane 9b (Agent L F-L8): the opening-day household cadence
+            // runs through SimulationDrivers.DriveHouseholdReserveDay —
+            // the one daily household cadence — instead of the old
+            // storeRuntime.ResolveDailySales() call, which early-returned
+            // in a town with no player store and implied the store owned
+            // the cadence. Day 0 has no preceding day boundary, so the
+            // opening day is driven explicitly here; later days arrive
+            // through SimulationDrivers.OnDayChanged. The legacy
+            // reserve-purchase step is still not run (L-04): the embodied
+            // shopping loop is the live purchase path. The flag keeps its
+            // name and meaning (resolve opening-day sales); only the
+            // target moved.
             if (resolveOpeningDaySales)
             {
-                storeRuntime?.ResolveDailySales();
+                SimulationDrivers simulationDrivers = FindAnyObjectByType<SimulationDrivers>();
+                int openingDayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
+                simulationDrivers?.DriveHouseholdReserveDay(openingDayIndex);
             }
             AppendStartupTiming(timing, stepTimer, "opening sales");
 

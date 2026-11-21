@@ -60,6 +60,10 @@ namespace LandLedgers.FirstLedger
         [SerializeField]
         private LandLedgersHUDController hudController;
 
+        // Lane 9b (Agent L F-L2): retained for scene wiring (Configure /
+        // AutoWire) only — town-pulse resolution moved to
+        // SimulationDrivers.DriveTownPulseDemand, so this manager no
+        // longer reads the runtime.
         [SerializeField]
         private TownPulseRuntimeManager townPulseRuntime;
 
@@ -1736,7 +1740,11 @@ namespace LandLedgers.FirstLedger
                 }
             }
 
-            ResolveTownPulseDemand(absoluteDay);
+            // Lane 9b (Agent L F-L2): town-pulse demand no longer resolves
+            // here. It lives in SimulationDrivers.DriveHouseholdReserveDay
+            // now, guarded only on the town-pulse runtime existing — this
+            // manager's daily sales path is player-store gated, so the
+            // pulse never resolved in a town with no player store.
             lastDailyHouseholdWalletAfterCents = GetTotalHouseholdSpendingMoneyCents();
             lastCategoryDemandSummary = CategoryDemandDebug.BuildSummary();
             RefreshReorderState();
@@ -1814,7 +1822,16 @@ namespace LandLedgers.FirstLedger
             }
             ReleaseSuspendedPayrollWorkersFromPopulation();
             ApprenticeshipProgressionEvaluator.AdvancePaidWorkers(currentBusiness, populationManager != null ? populationManager.State : null);
-            ApplyWeeklyHouseholdSettlementEffects();
+            // Lane 9b (Agent L F-L3): weekly household-upgrade settlement
+            // effects moved to SharedBusinessRuntimeManager.
+            // ResolveWeeklySharedOperations — this weekly path is
+            // player-store gated, so upgrade income/upkeep/spoilage never
+            // ran in a town with no player store. OWNER-DECISION-PENDING:
+            // implemented per the audit's recommendation; awaiting owner
+            // confirmation that upgrade income/upkeep is a household
+            // system rather than a store-system artifact. The call was
+            // MOVED, not copied — running it in both passes would credit
+            // upgrade income and apply spoilage twice in one week.
             populationManager?.ResolveWeeklySettlementProgression();
             lastWeeklyLocalSupplySpendCents = 0;
             lastWeeklyLocalSupplyUnitsReceived = 0;
@@ -2781,6 +2798,43 @@ namespace LandLedgers.FirstLedger
         {
             ResolveDailySales();
             DriveDailyRestock();
+            // Lane 9b (Agent D D-5): the NPC store's daily sales cadence.
+            // ResolveDailySales above is player-store gated and must NOT
+            // be called as-is for the NPC store (it would re-run the
+            // legacy reserve-purchase loop and the household loop behind
+            // that gate). The cadence itself is only a daily counter
+            // reset on the NPC runtime, so the day's embodied sales
+            // accumulate against a fresh day — the same reset the player
+            // store gets from BeginDailySalesCadence inside
+            // ResolveDailySales.
+            DriveNpcDailySalesCadence();
+        }
+
+        /// <summary>
+        /// Lane 9b (Agent D D-5): begin the daily sales cadence on the
+        /// development NPC General Store's runtime, resolved the same way
+        /// DriveDailyRestock resolves it. Skipped when the NPC instance
+        /// is the player store (its cadence already began in
+        /// ResolveDailySales) or when no NPC runtime exists. Never
+        /// settles purchases or payroll — embodied sales already record
+        /// against this runtime live, and the legacy purchase loop stays
+        /// out (L-04 double-charge trap).
+        /// </summary>
+        private void DriveNpcDailySalesCadence()
+        {
+            BusinessInstanceState npcBusiness = ResolveDevelopmentNpcRestockBusiness();
+            if (npcBusiness?.RuntimeState == null || storeDefinition == null)
+            {
+                return;
+            }
+
+            if (currentBusiness != null && runtimeState != null
+                && string.Equals(npcBusiness.InstanceId, currentBusiness.InstanceId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            npcBusiness.RuntimeState.BeginDailySalesCadence();
         }
 
         /// <summary>
@@ -3260,47 +3314,14 @@ namespace LandLedgers.FirstLedger
                 : null;
         }
 
-        private void ResolveTownPulseDemand(int absoluteDayIndex)
-        {
-            if (runtimeState == null)
-            {
-                return;
-            }
-
-            if (townPulseRuntime == null)
-            {
-                // PL-03: synthetic fallback demand removed (was: households / 6 -> revenue).
-                // Aggregate town demand must not post revenue without an embodied buyer;
-                // the household-level purchasing loop above already resolves real demand.
-                return;
-            }
-
-            IReadOnlyList<TownPulseDemandLine> demandLines = townPulseRuntime.BeginDailyResolution(absoluteDayIndex);
-            if (demandLines == null || demandLines.Count == 0)
-            {
-                return;
-            }
-
-            for (int i = 0; i < demandLines.Count; i++)
-            {
-                TownPulseDemandLine line = demandLines[i];
-                if (line == null)
-                {
-                    continue;
-                }
-
-                int requestedUnits = line.UnitsPerDay;
-                int storeFulfilledUnits = ResolveTownPulseCategoryDemand(line.CategoryId, requestedUnits);
-                int supportFulfilledUnits = ResolveTownPulseSupportIndustryDemand(
-                    line.CategoryId,
-                    Mathf.Max(0, requestedUnits - storeFulfilledUnits));
-                int fulfilledUnits = Mathf.Min(requestedUnits, storeFulfilledUnits + supportFulfilledUnits);
-                townPulseRuntime.RecordDailyFulfillment(line.CategoryId, requestedUnits, fulfilledUnits);
-            }
-
-            townPulseRuntime.CompleteDailyResolution(absoluteDayIndex);
-        }
-
+        // Lane 9b (Agent L F-L2): ResolveTownPulseDemand and
+        // ResolveTownPulseSupportIndustryDemand lived here and were
+        // removed when town-pulse resolution moved to
+        // SimulationDrivers.DriveTownPulseDemand. The store leg
+        // (ResolveTownPulseCategoryDemand, public, kept for tests) always
+        // fulfils zero — the aggregate pulse is a demand signal, not a
+        // buyer — and the support leg now calls the shared runtime
+        // directly from the new drive.
         public int ResolveTownPulseCategoryDemand(string categoryId, int requestedUnits)
         {
             // Generic Retail is embodied-only; the aggregate town pulse has no
@@ -3328,32 +3349,6 @@ namespace LandLedgers.FirstLedger
             CategoryStockState stock = runtimeState.GetCategoryStock(categoryId);
             RecordDemandLossBreakdown(requestedUnits, staffedRequestUnits, 0, stock.CurrentStockUnits);
             return 0;
-        }
-
-        private int ResolveTownPulseSupportIndustryDemand(string categoryId, int requestedUnits)
-        {
-            if (requestedUnits <= 0)
-            {
-                return 0;
-            }
-
-            AutoWire();
-            if (sharedBusinessRuntime == null)
-            {
-                return 0;
-            }
-
-            HouseholdReserveDefinition definition = HouseholdReserveCatalog.Get(categoryId);
-            if (definition == null)
-            {
-                return 0;
-            }
-
-            return sharedBusinessRuntime.TrySellTownPulseDemand(
-                definition.CategoryId,
-                definition.LocalSellerCategoryIds,
-                requestedUnits,
-                out _);
         }
 
         private PersonState FindPersonForWorkerSlot(WorkerSlotState slot)
@@ -3889,24 +3884,6 @@ namespace LandLedgers.FirstLedger
         /// settlement-effects pass (upgrades, reserves) and is renamed to say
         /// what it does.
         /// </summary>
-        private void ApplyWeeklyHouseholdSettlementEffects()
-        {
-            PopulationState population = populationManager != null ? populationManager.State : null;
-            if (population == null || population.households == null)
-            {
-                return;
-            }
-
-            HouseholdLedgerRegistry ledgers = ResolvedHouseholdLedgers;
-            int dayIndex = timeManager != null ? timeManager.CurrentDate.AbsoluteDayIndex : -1;
-            for (int i = 0; i < population.households.Count; i++)
-            {
-                HouseholdState household = population.households[i];
-                HouseholdLedger ledger = ledgers != null ? ledgers.GetOrCreate(household.id) : null;
-                HouseholdUpgradeEconomyEvaluator.ApplyWeeklySettlementEffects(household, ledger, Mathf.Max(0, dayIndex));
-            }
-        }
-
         private int EvaluateHouseholdShoppingPriority(HouseholdState household)
         {
             if (household == null)

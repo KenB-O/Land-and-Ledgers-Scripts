@@ -2425,7 +2425,7 @@ namespace LandLedgers.Economy
             }
 
             int units = Mathf.Max(0, unitsSold);
-            if (stock.CurrentStockUnits < units)
+            if (units > 0 && GetUnidentifiedCategoryStockUnits(stock, categoryId) < units)
             {
                 return false;
             }
@@ -4007,15 +4007,7 @@ namespace LandLedgers.Economy
             // genuinely unspecified. Identified lots must leave through the
             // item-level path so a category sale cannot silently remove flour
             // while leaving its flour lot available (or vice versa).
-            int identifiedPhysicalUnits = 0;
-            for (int i = 0; i < retailItemLots.Count; i++)
-            {
-                BusinessRetailItemLotState lot = retailItemLots[i];
-                if (lot != null && string.Equals(lot.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase))
-                    identifiedPhysicalUnits += lot.QuantityUnits;
-            }
-            int unallocatedCategoryUnits = Mathf.Max(0, stock.CurrentStockUnits - identifiedPhysicalUnits);
-            if (requestedUnits <= 0 || requestedUnits > unallocatedCategoryUnits)
+            if (requestedUnits <= 0 || requestedUnits > GetUnidentifiedCategoryStockUnits(stock, categoryId))
                 return false;
             if (!stock.TryConsumeStockUnits(requestedUnits))
             {
@@ -4026,6 +4018,20 @@ namespace LandLedgers.Economy
             RefreshStockHealth();
             RefreshStoredCapacityOnly();
             return true;
+        }
+
+        private int GetUnidentifiedCategoryStockUnits(CategoryStockState stock, string categoryId)
+        {
+            int units = stock.CurrentStockUnits;
+            foreach (BusinessRetailItemLotState lot in retailItemLots)
+            {
+                if (lot != null && string.Equals(lot.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase))
+                {
+                    units -= lot.QuantityUnits;
+                    if (units <= 0) return 0;
+                }
+            }
+            return units;
         }
 
         public int GetRetailItemStockUnits(string itemId)

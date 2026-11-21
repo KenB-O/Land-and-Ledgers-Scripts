@@ -73,6 +73,30 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void SettledSale_IdentifiedStockCannotBeSoldThroughCategorySettlement()
+        {
+            BusinessRuntimeState mill = MillWithFlour(2, 5000);
+            Assert.IsNull(mill.TryAddRetailItemLot("flour-lot", "flour", "flour", "sack",
+                8, "mill-1", "mill-1", "production", 0));
+
+            Assert.IsFalse(mill.ResolveSettledSale("flour", 3, 165, "bakery-1"));
+            Assert.AreEqual(5000, mill.CurrentCashCents);
+            Assert.AreEqual(10, mill.GetCategoryStock("flour").CurrentStockUnits);
+            Assert.AreEqual(8, mill.GetRetailItemStockUnits("flour", "flour"));
+
+            Assert.IsTrue(mill.ResolveSettledSale("flour", 2, 110, "bakery-1"));
+            Assert.AreEqual(5110, mill.CurrentCashCents);
+            Assert.IsFalse(mill.ResolveSettledSale("flour", 1, 55, "bakery-1"));
+            Assert.AreEqual(8, mill.GetCategoryStock("flour").CurrentStockUnits);
+            Assert.AreEqual(8, mill.GetRetailItemStockUnits("flour", "flour"));
+
+            Assert.IsTrue(mill.TryConsumeRetailItemStockUnits("flour", "flour", 8, out int consumed));
+            Assert.AreEqual(8, consumed);
+            Assert.AreEqual(0, mill.GetCategoryStock("flour").CurrentStockUnits);
+            Assert.AreEqual(0, mill.GetRetailItemStockUnits("flour", "flour"));
+        }
+
+        [Test]
         public void SettledSale_ZeroUnits_PreservesExistingShape()
         {
             BusinessRuntimeState mill = MillWithFlour(0, 5000);

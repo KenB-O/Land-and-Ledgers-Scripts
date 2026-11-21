@@ -662,6 +662,11 @@ namespace LandLedgers.Orchestration.Systems
                         $"saleable bundles={adapter.ItemStockUnits(HouseholdItemCatalog.FuelWoodId)}.", this);
                 }
             }
+
+            // Lane 9e: a (re)registered dealer must be known before any
+            // household can shop there — seed dealer knowledge on every
+            // registration pass (idempotent through ShopperSellerKnowledge).
+            SeedLocalFuelDealerKnowledge();
         }
 
         private void LogFuelDealerSupplierWarningOnce(string businessId, string message)
@@ -2087,6 +2092,23 @@ namespace LandLedgers.Orchestration.Systems
             driver.MillCash = new Series2BusinessRuntimeCashPort(millBusiness.RuntimeState);
 
             var diag = new List<string>();
+            int categoryMovedUnits = 0;
+
+            // 2b. Lane 9e (F7-2 ROUTE): the support node's lumber lives in
+            // the mill runtime's CATEGORY stock (synced weekly from the
+            // node), which the lot-based transfer never reads — the phantom
+            // node. Once a week, on the week-boundary day, move up to the
+            // scalar transfer's weekly cap into yard purchase LOTS
+            // (saleable at retail), as a paid wholesale purchase at the
+            // driver's wholesale price — the same price, cap, and cash
+            // ports as the lot transfer, never a zero-cost gift. Weekly,
+            // not daily, so the leg cannot drain the week's production
+            // ahead of construction sales, which draw the same category
+            // stock.
+            if (absoluteDayIndex >= 0 && absoluteDayIndex % 7 == 0)
+            {
+                categoryMovedUnits = TransferSawmillCategoryLumberToYard(millBusiness, yardBusiness, yard, driver, absoluteDayIndex, diag);
+            }
 
             // 3. Re-attempt pass (C7 analogue): open Planned jobs from
             // prior days BEFORE the begin pass (FIFO: a pending job names
@@ -2138,7 +2160,7 @@ namespace LandLedgers.Orchestration.Systems
                 transferableLotIds.Add(lotId);
             }
 
-            if (openJobs.Count == 0 && transferableLotIds.Count == 0)
+            if (openJobs.Count == 0 && transferableLotIds.Count == 0 && categoryMovedUnits == 0)
             {
                 LogSawmillTransferWarningOnce("nothing-to-transfer",
                     "Sawmill-to-yard transfer: no untransferred lots in the mill yard and no open jobs to re-attempt.");
@@ -2199,6 +2221,81 @@ namespace LandLedgers.Orchestration.Systems
 
             // 7. Summary.
             Debug.Log($"[SawmillTransfer] Day {absoluteDayIndex}: re-attempted {reattemptedCount} open job(s), began {begunCount} new job(s), {transferredCount} job(s) transferred ({settledCents}c settled wholesale), {failedCount} job(s) failed. {string.Join(" | ", diag)}", this);
+        }
+
+        /// <summary>
+        /// Lane 9e (F7-2): the support-node category-stock leg. The weekly
+        /// node production syncs node lumber into the mill runtime's
+        /// category stock; this leg moves it into yard purchase lots so it
+        /// can be sold at retail. A paid wholesale purchase at the
+        /// driver's wholesale price, capped at the scalar transfer's
+        /// weekly max. Conservation: consume mill stock first, debit the
+        /// yard second; any intake failure refunds the yard and restores
+        /// the mill stock, so no lumber or cash is created or lost. The
+        /// intake species is white pine: the node's timber is the local
+        /// stand under the decided DEF-072 baseline (eastern white pine,
+        /// 80 years to merchantable maturity). Returns the units moved
+        /// (0 when nothing moved).
+        /// </summary>
+        private int TransferSawmillCategoryLumberToYard(
+            BusinessInstanceState millBusiness, BusinessInstanceState yardBusiness,
+            LumberYardShopRuntime yard, SawmillToYardTransferDriver driver,
+            int absoluteDayIndex, List<string> diag)
+        {
+            diag = diag ?? new List<string>();
+            CategoryStockState millLumber = millBusiness?.RuntimeState?.GetCategoryStock(SharedBusinessRuntimeManager.CategoryLumber);
+            int available = millLumber != null ? Math.Max(0, millLumber.CurrentStockUnits) : 0;
+            if (available <= 0)
+            {
+                diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: no support-node category lumber to move — mill category stock is empty.");
+                return 0;
+            }
+
+            int unitCost = SawmillToYardTransferDriver.WholesaleLumberUnitCostCents;
+            int affordable = unitCost > 0 ? yardBusiness.RuntimeState.CurrentCashCents / unitCost : 0;
+            int units = Math.Min(available, Math.Min(affordable, SharedBusinessRuntimeManager.SawmillToLumberYardWeeklyMaxUnits));
+            if (units <= 0)
+            {
+                diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: support-node category lumber ({available}u) stays at the mill — the yard holds {yardBusiness.RuntimeState.CurrentCashCents}c, below the {unitCost}c/unit wholesale price.");
+                return 0;
+            }
+
+            if (!millBusiness.RuntimeState.TryConsumeCategoryStockUnits(SharedBusinessRuntimeManager.CategoryLumber, units, out int consumed) || consumed <= 0)
+            {
+                diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: support-node category lumber could not be consumed ({units}u requested) — nothing moved, nothing charged.");
+                return 0;
+            }
+
+            // The consume may clamp below the request; settle exactly what moved.
+            int priceCents = consumed * unitCost;
+            string debitRefusal = driver.YardCash.TryDebit(priceCents, $"sawmill-to-yard category lumber: {consumed} units at {unitCost}c each");
+            if (!string.IsNullOrWhiteSpace(debitRefusal))
+            {
+                millBusiness.RuntimeState.AddCategoryStockUnits(SharedBusinessRuntimeManager.CategoryLumber, consumed);
+                diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: yard debit failed for {consumed}u support-node category lumber ({debitRefusal}) — {consumed}u restored to mill category stock.");
+                return 0;
+            }
+
+            string intakeRefusal = yard.ReceiveLumberPurchase(
+                consumed, "white pine", LumberYardGradeCatalog.DefaultGradeId, millBusiness.InstanceId,
+                "weekly support-node production (category stock)", absoluteDayIndex, unitCost, diag);
+            if (!string.IsNullOrWhiteSpace(intakeRefusal))
+            {
+                driver.YardCash.Credit(priceCents, $"sawmill-to-yard category lumber refund: yard intake refused for {consumed}u");
+                millBusiness.RuntimeState.AddCategoryStockUnits(SharedBusinessRuntimeManager.CategoryLumber, consumed);
+                diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: yard intake refused for {consumed}u support-node category lumber ({intakeRefusal}) — yard refunded {priceCents}c and {consumed}u restored to mill category stock.");
+                return 0;
+            }
+
+            string creditRefusal = driver.MillCash.Credit(priceCents, $"sawmill-to-yard category lumber: {consumed} units at {unitCost}c each");
+            if (!string.IsNullOrWhiteSpace(creditRefusal))
+            {
+                diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: DISPUTED — {consumed}u support-node category lumber reached the yard and the yard paid {priceCents}c, but the mill credit failed ({creditRefusal}). Reconcile before retrying.");
+                return consumed;
+            }
+
+            diag.Add($"[SawmillTransfer] Day {absoluteDayIndex}: moved {consumed}u support-node category lumber to yard lots ({priceCents}c wholesale).");
+            return consumed;
         }
 
         /// <summary>
@@ -4021,6 +4118,7 @@ namespace LandLedgers.Orchestration.Systems
             // before B60 registers, then register the store later.
             SeedLocalGeneralStoreKnowledge();
             SeedLocalBakeryKnowledge();
+            SeedLocalFuelDealerKnowledge();
             if (hub == null || populationManager?.State == null || householdMemberships == null || supplierDirectory == null)
             {
                 return;
@@ -4067,7 +4165,10 @@ namespace LandLedgers.Orchestration.Systems
                         BusinessInstanceState found;
                         return sharedBusinessRuntime.TryFindByInstanceId(id, out found) ? found.RuntimeState : null;
                     },
-                    chargeRecorder: foodChargeReconciliation);
+                    chargeRecorder: foodChargeReconciliation,
+                    // Lane 9e: the loop holds retail stock on the ONE
+                    // reservation authority; null until the hub owns it.
+                    reservationAuthority: hub.ReservationAuthority);
             }
             else
             {
@@ -4080,6 +4181,10 @@ namespace LandLedgers.Orchestration.Systems
             // the recorder, and the ctor argument above only applies at
             // construction. Null until the first DriveDailyNeeds runs.
             householdShoppingLoop.ChargeRecorder = foodChargeReconciliation;
+            // Lane 9e: (re)bind the reservation authority every build, like
+            // the charge recorder above — the loop may have been constructed
+            // before the hub owned the authority.
+            householdShoppingLoop.ReservationAuthority = hub.ReservationAuthority;
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             householdShoppingLoop.DevelopmentTraceObserver = shoppingEvent => hub.ActivityTrace?.RecordShoppingEvent(shoppingEvent);
 #endif
@@ -4425,6 +4530,21 @@ namespace LandLedgers.Orchestration.Systems
         }
 
         /// <summary>
+        /// Lane 9e: the fuel dealer is fully wired as a supplier but had no
+        /// seller-knowledge seeding, so no household ever learned of it. Seed
+        /// it the way the bakery's is seeded (same guards, same call sites).
+        /// </summary>
+        private void SeedLocalFuelDealerKnowledge()
+        {
+            if (populationManager?.State?.people == null || supplierDirectory == null || sellerKnowledge == null)
+                return;
+
+            int dayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
+            SeedLocalFuelDealerKnowledge(
+                populationManager.State.people, supplierDirectory.All, sellerKnowledge, dayIndex);
+        }
+
+        /// <summary>
         /// Pure policy seam used to protect the generic placeholder id.
         /// A registered adapter whose business id fell back to
         /// "general-store" (the trading port's fallback when no Business
@@ -4497,6 +4617,22 @@ namespace LandLedgers.Orchestration.Systems
                         "local bakery", dayIndex);
                 }
             }
+        }
+
+        /// <summary>
+        /// Lane 9e: local residents know the specifically identified,
+        /// building-backed town fuel dealer. Delegates to
+        /// FuelDealerKnowledgeSeeding (the harness-compiled seam); the
+        /// dealer adapter marks itself with IFuelDealerSupplier so the
+        /// seam can recognise it without depending on the adapter type.
+        /// </summary>
+        public static void SeedLocalFuelDealerKnowledge(
+            IEnumerable<PersonState> people,
+            IEnumerable<IGoodsSupplier> suppliers,
+            ShopperSellerKnowledge knowledge,
+            int dayIndex)
+        {
+            FuelDealerKnowledgeSeeding.SeedLocalFuelDealerKnowledge(people, suppliers, knowledge, dayIndex);
         }
 
         /// <summary>

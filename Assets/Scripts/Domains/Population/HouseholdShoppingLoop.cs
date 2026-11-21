@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Financing;
 using LandLedgers.Economy.Freight;
 using LandLedgers.Economy.FreightFuel;
@@ -154,6 +155,22 @@ namespace LandLedgers.Population
         {
             get => chargeRecorder;
             set => chargeRecorder = value;
+        }
+
+        /// <summary>
+        /// Lane 9e: the unified reservation authority for retail stock holds
+        /// (store shared-stock, flour-lot cases). Null = unwired: evaluation
+        /// plans against live stock and the settle-time stock check remains
+        /// the only guard (today's behavior exactly). Bound by the driver;
+        /// rebindable like ChargeRecorder.
+        /// </summary>
+        private IUnifiedReservationAuthority reservationAuthority;
+
+        /// <summary>Lane 9e: reservation authority, bound by the driver. Null holds nothing.</summary>
+        public IUnifiedReservationAuthority ReservationAuthority
+        {
+            get => reservationAuthority;
+            set => reservationAuthority = value;
         }
 
         /// <summary>
@@ -618,7 +635,8 @@ namespace LandLedgers.Population
             OffMapJourneyAuthority offMapJourneys = null,
             Func<IGoodsSupplier, string> carrierBusinessIdForSupplier = null,
             Func<string, BusinessRuntimeState> carrierRuntimeResolver = null,
-            HouseholdFoodChargeReconciliation chargeRecorder = null)
+            HouseholdFoodChargeReconciliation chargeRecorder = null,
+            IUnifiedReservationAuthority reservationAuthority = null)
         {
             this.population = population ?? throw new ArgumentNullException(nameof(population));
             this.membership = membership ?? throw new ArgumentNullException(nameof(membership));
@@ -639,6 +657,7 @@ namespace LandLedgers.Population
             this.carrierBusinessIdForSupplier = carrierBusinessIdForSupplier;
             this.carrierRuntimeResolver = carrierRuntimeResolver;
             this.chargeRecorder = chargeRecorder;
+            this.reservationAuthority = reservationAuthority;
         }
 
         /// <summary>
@@ -833,10 +852,26 @@ namespace LandLedgers.Population
             }
 
             // ---- Step 5: schedule the trip through the real TaskAuthority. ----
+            // Lane 9e: hold the planned store units on the unified authority
+            // from commit until the counter settles (released right after
+            // SettleAtCounter below — the sale has consumed the units, or
+            // the failure leaves the need open for a fresh plan). A refusal
+            // fails honestly: the need stays open, no cash moves.
+            string stockReservationId = TryReservePlannedStockUnits(
+                chosen, need, $"sync-{need.HouseholdId}-{need.NeedSequence}-{dayIndex}",
+                dayIndex, options, estimateMinutes, diag, out string stockRefusal);
+            if (reservationAuthority != null && stockReservationId == null && stockRefusal != null)
+            {
+                scheduleTracker.Release(reservationId);
+                return Fail(result, need, shopperId, dayIndex,
+                    $"'{chosen.Supplier.SupplierName}' cannot hold {chosen.UnitsPlanned}u {need.ItemId} — {stockRefusal}", diag, options);
+            }
+
             EntityId shopperEid = personEntityId(shopperId);
             var trip = new PlannedTrip();
             if (!PlanTripLegs(trip, result, need, shopperId, shopperEid, shopperHome, chosen, dayIndex, options, diag))
             {
+                RetailStockReservation.Release(reservationAuthority, stockReservationId);
                 scheduleTracker.Release(reservationId);
                 return result;
             }
@@ -846,6 +881,7 @@ namespace LandLedgers.Population
             // ---- Step 6: travel out through the REAL Journey/Task system. ----
             if (!ExecuteTaskLeg(trip.Outbound, result, need, shopperId, dayIndex, "outbound", diag, options))
             {
+                RetailStockReservation.Release(reservationAuthority, stockReservationId);
                 scheduleTracker.Release(reservationId);
                 return result;
             }
@@ -866,6 +902,7 @@ namespace LandLedgers.Population
                 ExecuteTaskLeg(trip.Return, result, need, shopperId, dayIndex, "return-empty", diag, options);
                 SetPersonLocation(shopperId, shopperHome, options);
                 SetScheduleState(shopper, PopulationScheduleState.AtHome);
+                RetailStockReservation.Release(reservationAuthority, stockReservationId);
                 scheduleTracker.Release(reservationId);
                 result.Rescheduled = true;
                 return Fail(result, need, shopperId, dayIndex,
@@ -876,6 +913,7 @@ namespace LandLedgers.Population
             // ---- Step 8: in-store time is real work time. ----
             if (!ExecuteTaskLeg(trip.InStore, result, need, shopperId, dayIndex, "in-store", diag, options))
             {
+                RetailStockReservation.Release(reservationAuthority, stockReservationId);
                 scheduleTracker.Release(reservationId);
                 return result;
             }
@@ -884,6 +922,9 @@ namespace LandLedgers.Population
             // real sale with partial-fill true-up, custody batch). One
             // conservation logic shared with the real-time driver.
             SettlementOutcome counter = SettleAtCounter(result, trip, need, chosen, shopperId, dayIndex, diag, options);
+            // Lane 9e: the hold ends at settlement — the sale consumed the
+            // units, or the failure leaves the need open for a fresh plan.
+            RetailStockReservation.Release(reservationAuthority, stockReservationId);
             if (!counter.Success)
             {
                 ExecuteTaskLeg(trip.Return, result, need, shopperId, dayIndex, "return-empty", diag, options);
@@ -2547,11 +2588,23 @@ namespace LandLedgers.Population
 
             trip.Candidate = chosen;
 
+            // Lane 9e: hold the planned store units for the real-time trip —
+            // from planning until the trip closes (Done) or aborts, released
+            // by ReleaseTripWindows. A refusal fails the plan honestly.
+            trip.StockReservationId = TryReservePlannedStockUnits(
+                chosen, need, trip.TripId, dayIndex, options, estimateMinutes, diag, out string stockRefusal);
+            if (reservationAuthority != null && string.IsNullOrWhiteSpace(trip.StockReservationId) && stockRefusal != null)
+            {
+                return FailPlan(trip, need, shopperId,
+                    $"'{chosen.Supplier.SupplierName}' cannot hold {chosen.UnitsPlanned}u {need.ItemId} — {stockRefusal} Need stays open.", diag);
+            }
+
             // ---- Step 5: schedule the trip through the real TaskAuthority. ----
             EntityId shopperEid = personEntityId(shopperId);
             var legs = new PlannedTrip();
             if (!PlanTripLegs(legs, result, need, shopperId, shopperEid, shopperHome, chosen, dayIndex, options, diag))
             {
+                ReleaseTripStockReservation(trip);
                 trip.State = PlannedShoppingTrip.TripState.Failed;
                 trip.FailureReason = result.FailureReason ?? "Trip leg planning failed.";
                 return trip;
@@ -2574,6 +2627,7 @@ namespace LandLedgers.Population
             {
                 CancelPlannedLegs(legs);
                 options.DepartureMinuteOfDay = requestedDeparture;
+                ReleaseTripStockReservation(trip);
 
                 trip.State = PlannedShoppingTrip.TripState.Failed;
                 if (!tripHistory.Contains(result))
@@ -2684,6 +2738,9 @@ namespace LandLedgers.Population
         private PlannedShoppingTrip FailPlan(
             PlannedShoppingTrip trip, HouseholdPurchasingNeed need, int shopperId, string reason, List<string> diag)
         {
+            // Lane 9e: defensive — every FailPlan call today precedes the
+            // stock hold, but the plan funnel must never strand one.
+            ReleaseTripStockReservation(trip);
             trip.State = PlannedShoppingTrip.TripState.Failed;
             trip.FailureReason = reason;
             AddEvent(trip.Result, trip.DayIndex, ShoppingEventKind.Failure, shopperId, need, reason,
@@ -2712,6 +2769,68 @@ namespace LandLedgers.Population
             }
 
             trip.WindowReservationIds.Clear();
+            // Lane 9e: the trip's stock hold ends when the trip closes
+            // (Done, via ReceiveAtHome) or aborts (AbortTrip funnels
+            // here) — the sale has consumed the units, or the failure
+            // leaves the need open for a fresh plan.
+            ReleaseTripStockReservation(trip);
+        }
+
+        /// <summary>
+        /// Lane 9e: reserves a candidate's planned store units on the
+        /// unified authority (owner = trip id, window = departure to
+        /// return + margin). Returns the reservation id, or null when the
+        /// authority is unwired, the supplier cannot be keyed, or the
+        /// request is empty — in which case the trip proceeds unheld
+        /// (today's behavior) and the settle-time stock check remains the
+        /// guard. A real authority refusal sets <paramref name="refusal"/>
+        /// and the caller must fail the trip honestly.
+        /// </summary>
+        private string TryReservePlannedStockUnits(
+            ShoppingCandidate chosen, HouseholdPurchasingNeed need, string ownerTaskId,
+            int dayIndex, ShoppingLoopOptions options, int estimateMinutes, List<string> diag,
+            out string refusal)
+        {
+            refusal = null;
+            if (reservationAuthority == null || chosen == null || need == null || chosen.UnitsPlanned <= 0
+                || chosen.Supplier == null
+                || string.IsNullOrWhiteSpace(chosen.Supplier.SupplierBusinessId)
+                || string.IsNullOrWhiteSpace(need.ItemId)
+                || string.IsNullOrWhiteSpace(ownerTaskId))
+            {
+                return null;
+            }
+
+            int freshStock = chosen.ItemSupplier.ItemStockUnits(need.ItemId);
+            float start = RetailStockReservation.GameSeconds(dayIndex, options.DepartureMinuteOfDay);
+            float end = start + Math.Max(1, estimateMinutes + 120) * 60f;
+            var holdDiag = new List<string>();
+            string reservationId = RetailStockReservation.TryReserveUnits(
+                reservationAuthority, chosen.Supplier.SupplierBusinessId, need.ItemId,
+                chosen.UnitsPlanned, freshStock, ownerTaskId,
+                $"shopping trip for H{need.HouseholdId}", start, end, holdDiag);
+            if (reservationId == null)
+            {
+                refusal = holdDiag.Count > 0 ? holdDiag[0] : "retail stock reservation refused";
+                diag?.Add($"Day {dayIndex}: stock hold refused for '{chosen.Supplier.SupplierName}' — {refusal}. Need stays open.");
+                return null;
+            }
+
+            diag?.Add($"Day {dayIndex}: held {chosen.UnitsPlanned}u {need.ItemId} at '{chosen.Supplier.SupplierName}' " +
+                $"(reservation {reservationId}; releases at settlement, abort, or trip close).");
+            return reservationId;
+        }
+
+        /// <summary>Lane 9e: releases a trip's stock hold and clears the id (idempotent).</summary>
+        private void ReleaseTripStockReservation(PlannedShoppingTrip trip)
+        {
+            if (trip == null || string.IsNullOrWhiteSpace(trip.StockReservationId))
+            {
+                return;
+            }
+
+            RetailStockReservation.Release(reservationAuthority, trip.StockReservationId);
+            trip.StockReservationId = string.Empty;
         }
 
         /// <summary>
@@ -3716,6 +3835,20 @@ namespace LandLedgers.Population
                 }
 
                 int stock = itemSupplier.ItemStockUnits(need.ItemId);
+                // Lane 9e: available to promise — net out live holds on this
+                // supplier's stock of this item at the departure instant, so
+                // two trips planned in the same tick cannot both promise the
+                // last units. In store units throughout (flour sacks
+                // included): reservations are recorded in store units, and
+                // the settle-time stock check remains the backstop for paths
+                // that never reserve.
+                if (reservationAuthority != null)
+                {
+                    stock = RetailStockReservation.AvailableUnits(
+                        reservationAuthority, supplier.SupplierBusinessId, need.ItemId, stock,
+                        RetailStockReservation.GameSeconds(dayIndex, options.DepartureMinuteOfDay));
+                }
+
                 int price = itemSupplier.ItemPricePerUnitCents(need.ItemId);
                 if (stock <= 0)
                 {

@@ -46,7 +46,7 @@ using LandLedgers.Population;
 namespace LandLedgers.Economy.Businesses.FuelDealer
 {
     /// <summary>Fuel Dealer supplier adapter over provenance-tracked intake lots.</summary>
-    public sealed class Series2FuelDealerSupplierAdapter : IItemResolvingSupplier, IItemCatalogSupplier, IOffersTradeCredit
+    public sealed class Series2FuelDealerSupplierAdapter : IItemResolvingSupplier, IItemCatalogSupplier, IOffersTradeCredit, IFuelDealerSupplier
     {
         private readonly FuelYardByproductIntake intake;
         private readonly IBusinessCashPort cash;

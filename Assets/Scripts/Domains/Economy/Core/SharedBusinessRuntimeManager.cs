@@ -39,7 +39,10 @@ namespace LandLedgers.Economy
         private const string CategoryHardware = "tools_hardware";
         private const string CategoryStandingTimber = "standing_timber";
         private const string CategorySawmillLogs = "sawmill_logs";
-        private const string CategoryLumber = "lumber";
+        // Lane 9e: internal so the sawmill-to-yard transfer drive can read
+        // the same category key and weekly cap as the (unwired) scalar
+        // transfer — one cap, one price, no duplicated magic numbers.
+        internal const string CategoryLumber = "lumber";
         private const string CategorySlabsOffcuts = "slabs_offcuts";
         private const string CategoryBoardingLodging = "boarding_lodging";
         private const string CategoryLiveryFeedUpkeep = "livery_feed_upkeep";
@@ -80,7 +83,7 @@ namespace LandLedgers.Economy
         private const int MineOffMapSaleMaxUnits = 8;
         private const int SawmillOffcutLocalOutletMaxUnits = 12;
         private const int SawmillSlabsOffcutsPerLog = 1;
-        private const int SawmillToLumberYardWeeklyMaxUnits = 80;
+        internal const int SawmillToLumberYardWeeklyMaxUnits = 80;
         private const int SawmillOffMapLogBuyMaxUnits = 6;
         private const int SawmillOffMapLumberSellMaxUnits = 24;
         private const int LumberYardOffMapBuyMaxUnits = 40;
@@ -2361,9 +2364,18 @@ namespace LandLedgers.Economy
             // actually consumed first and revenue posts only for the units
             // deducted; the linked support mirror is then re-synced FROM the
             // business so the mirror shows the post-sale stock.
+            // Lane 9e (F7-2): the runtime owns live stock; the node is the
+            // mirror (see SyncLinkedSawmillSupportFromBusiness). The old
+            // pre-sale runtime-from-node sync RESURRECTED category lumber
+            // consumed mid-week — e.g. by the yard transfer leg — and the
+            // sale then sold it a second time. Hydrate only when the
+            // runtime has no tracked inventory at all (first sale before
+            // any weekly resolution); the post-sale mirror below keeps the
+            // node in step. Rollback needs no pre-sale sync: the snapshot
+            // restores both the runtime categories and the node together.
             if (linkedSawmillSupportNode != null)
             {
-                SyncSawmillBusinessStockFromSupport(sawmill.RuntimeState, linkedSawmillSupportNode);
+                HydrateSawmillBusinessStockFromSupportIfMissing(sawmill.RuntimeState, linkedSawmillSupportNode);
             }
 
             int mirroredConsumed = sawmill.RuntimeState.SettleCategoryStockSale(
@@ -4464,6 +4476,18 @@ namespace LandLedgers.Economy
 
             BusinessRuntimeState runtime = business.RuntimeState;
             EnsureSawmillBusinessStock(runtime, sawmill);
+            // Lane 9e (F7-2): regrow the node's standing timber before
+            // cutting — the node is the only timber path in a release
+            // build, and without regrowth it exhausts in ~8 weeks. The
+            // drive is year-stepped and idempotent, so calling it weekly
+            // is silent except in a year a cohort matures or establishes.
+            var regrowthDiag = new List<string>();
+            sawmill.DriveTimberRegrowth(CurrentDayIndex, regrowthDiag);
+            foreach (string regrowthLine in regrowthDiag)
+            {
+                AppendSummarySegment(summary, regrowthLine);
+            }
+
             List<string> blockedReasons = new();
             SeedBlockedReasons(runtime, blockedReasons);
             AppendStaffingBlockedReasons(runtime, blockedReasons);

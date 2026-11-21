@@ -54,6 +54,14 @@ namespace LandLedgers.Population
         public int UnitsSettled;
         public int DeliveryMinutes;
         public List<string> WindowReservationIds = new List<string>();
+        /// <summary>
+        /// Lane 9e: the unified-authority id of this trip's retail stock
+        /// hold (empty when unwired or unheld). Released by the loop's
+        /// ReleaseTripWindows at close/abort; persisted so a restored trip
+        /// still names its live hold. The authority's own holds persist
+        /// separately; an unknown id releases as a no-op.
+        /// </summary>
+        public string StockReservationId = string.Empty;
 
         // Route liveness is trip state, not callback state. These values are
         // persisted so a missing due-event map entry or Save/Continue cannot
@@ -124,6 +132,9 @@ namespace LandLedgers.Population
         public int UnitsSettled;
         public int DeliveryMinutes;
         public List<string> WindowReservationIds = new List<string>();
+        // Lane 9e: the trip's retail stock hold id (empty when unwired or
+        // unheld). Additive; old saves read empty and hold nothing.
+        public string StockReservationId = string.Empty;
         public EntityId OutboundTaskId;
         public EntityId InStoreTaskId;
         public EntityId ReturnTaskId;
@@ -2256,6 +2267,7 @@ namespace LandLedgers.Population
                 UnitsSettled = trip.UnitsSettled,
                 DeliveryMinutes = trip.DeliveryMinutes,
                 WindowReservationIds = new List<string>(trip.WindowReservationIds ?? new List<string>()),
+                StockReservationId = trip.StockReservationId ?? string.Empty,
                 OutboundTaskId = trip.OutboundTaskId,
                 InStoreTaskId = trip.InStoreTaskId,
                 ReturnTaskId = trip.ReturnTaskId,
@@ -2322,6 +2334,7 @@ namespace LandLedgers.Population
                 UnitsSettled = dto.UnitsSettled,
                 DeliveryMinutes = dto.DeliveryMinutes,
                 WindowReservationIds = new List<string>(dto.WindowReservationIds ?? new List<string>()),
+                StockReservationId = dto.StockReservationId ?? string.Empty,
                 OutboundTaskId = dto.OutboundTaskId,
                 InStoreTaskId = dto.InStoreTaskId,
                 ReturnTaskId = dto.ReturnTaskId,

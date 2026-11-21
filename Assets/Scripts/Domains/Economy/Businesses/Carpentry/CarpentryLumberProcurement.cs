@@ -158,6 +158,20 @@ namespace LandLedgers.Economy.Businesses.Carpentry
                 return false;
             }
 
+            // Lane 9e: hold the quoted units on the unified authority
+            // between quote and sale, so a second buyer cannot take the
+            // same lots while this workshop is paying. A refusal fails
+            // before any money moves. The hold releases after the sale
+            // attempt below — success consumes the units, refusal refunds.
+            string quoteOwnerId = $"carpentry-procurement:{workshop.InstanceId}";
+            List<string> quoteReservationIds = yard.TryReserveQuotedUnits(
+                units, null, null, dayIndex, quoteOwnerId, diag);
+            if (quoteReservationIds == null)
+            {
+                error = $"Carpentry lumber procurement for '{buyerLabel}' refused: the lumber yard could not hold {units} lumber units for the quote — nothing was bought.";
+                return false;
+            }
+
             string debitRefusal = workshopCash.TryDebit(totalCents,
                 $"Carpentry lumber purchase: {units} units from the lumber yard at {unitPriceCents}c each");
             if (!string.IsNullOrWhiteSpace(debitRefusal))
@@ -167,9 +181,11 @@ namespace LandLedgers.Economy.Businesses.Carpentry
             }
 
             LumberYardSaleRecord sale = yard.TrySellLumberRetail(
-                buyerLabel, units, null, null, unitPriceCents, dayIndex, diag);
+                buyerLabel, units, null, null, unitPriceCents, dayIndex, diag,
+                reservationOwnerTaskId: quoteOwnerId);
             if (sale == null)
             {
+                yard.ReleaseQuotedUnits(quoteReservationIds);
                 string refundRefusal = workshopCash.Credit(totalCents,
                     $"Carpentry lumber purchase refund: the yard sale for {units} units was refused");
                 if (!string.IsNullOrWhiteSpace(refundRefusal))
@@ -180,6 +196,9 @@ namespace LandLedgers.Economy.Businesses.Carpentry
                 error = $"Carpentry lumber procurement for '{buyerLabel}' refused: the yard refused the sale — the workshop was refunded {totalCents}c in full.";
                 return false;
             }
+
+            // Lane 9e: the sale consumed the units — the quote hold ends here.
+            yard.ReleaseQuotedUnits(quoteReservationIds);
 
             string creditRefusal = yardCash.Credit(sale.TotalCents,
                 $"Carpentry lumber sale {sale.SaleId}: {units} units to '{buyerLabel}' at {unitPriceCents}c each");

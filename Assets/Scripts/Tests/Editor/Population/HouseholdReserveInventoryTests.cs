@@ -108,6 +108,48 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void HeatingAndThermalStateRoundTripsThroughPopulationSave()
+        {
+            GameObject sourceObject = new("Heating Save Source");
+            GameObject targetObject = new("Heating Save Target");
+            try
+            {
+                PopulationManager source = sourceObject.AddComponent<PopulationManager>();
+                HouseholdState household = CreateHousehold();
+                household.heatRetentionTier = HouseholdHeatRetentionTier.Tight;
+                household.stoveTier = HouseholdStoveTier.Efficient;
+                household.homeFloorAreaM2 = 90f;
+                household.homeStoreys = 2;
+                household.preferredFuel = HouseholdFuelType.Wood;
+                household.lastWinterStrain01 = 0.42f;
+                household.lastHeatingPressure01 = 0.62f;
+                household.lastHeatingFuelUseUnits = 5;
+                household.lastHeatingFuelShortfallUnits = 2;
+                source.State.households.Add(household);
+
+                PopulationSaveDto dto = source.CaptureSaveDto();
+                PopulationManager target = targetObject.AddComponent<PopulationManager>();
+                target.LoadFromSaveDto(dto);
+
+                HouseholdState restored = target.State.households[0];
+                Assert.AreEqual(HouseholdHeatRetentionTier.Tight, restored.heatRetentionTier);
+                Assert.AreEqual(HouseholdStoveTier.Efficient, restored.stoveTier);
+                Assert.AreEqual(90f, restored.homeFloorAreaM2, 0.001f);
+                Assert.AreEqual(2, restored.homeStoreys);
+                Assert.AreEqual(HouseholdFuelType.Wood, restored.preferredFuel);
+                Assert.AreEqual(0.42f, restored.lastWinterStrain01, 0.001f);
+                Assert.AreEqual(0.62f, restored.lastHeatingPressure01, 0.001f);
+                Assert.AreEqual(5, restored.lastHeatingFuelUseUnits);
+                Assert.AreEqual(2, restored.lastHeatingFuelShortfallUnits);
+            }
+            finally
+            {
+                Object.DestroyImmediate(sourceObject);
+                Object.DestroyImmediate(targetObject);
+            }
+        }
+
+        [Test]
         public void WinterHeatingConsumesFuelAndRecordsPressure()
         {
             HouseholdState household = CreateHousehold();

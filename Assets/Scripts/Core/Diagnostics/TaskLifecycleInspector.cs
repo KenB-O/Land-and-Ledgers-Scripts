@@ -354,9 +354,10 @@ namespace LandLedgers.Diagnostics
                     + snapshot.RemainingMinutes + ". An interrupted task that is never re-queued is a strand, not a queue.";
                 if (IsFuelHandling(snapshot))
                 {
-                    result.RepairOwner = "Lane 9c (Firewood authoring is Codex/scene-side; Muse fallback A4 — never alias the porch point as Firewood)";
-                    result.SourceNote = "C R-18 SOLVED: the retained-run T9/T10/T170 (60-day) and T8/T9/T11 (5-day) "
-                        + "interrupted domestic.fuel-handling tasks, never re-queued, missing Firewood activity point (checklist CI-5F80FDC40F).";
+                    result.RepairOwner = "DomesticLaborDriver recovery plus authored residential activity access";
+                    result.SourceNote = "Historical CI-5F80FDC40F evidence: retained-run T9/T10/T170 (60-day) and T8/T9/T11 "
+                        + "(5-day) fuel-handling tasks were interrupted while the shared home prefab lacked a Firewood point. "
+                        + "The integration prefab now authors 'firewood-handling'; verify current instance routing before attributing a new stall.";
                 }
                 else
                 {
@@ -1056,9 +1057,9 @@ namespace LandLedgers.Diagnostics
         {
             if (!string.IsNullOrWhiteSpace(recoveryState) && recoveryState.IndexOf("DomesticLaborDriver", StringComparison.Ordinal) >= 0)
             {
-                return "DomesticLaborDriver (domestic work authority) — ResolveDomesticActivityMovement requires a "
-                    + "BuildingActivityLocationType.Firewood point; the Natural Wood house prefab authors bed, stove, "
-                    + "cleaning, two storage and porch-dropoff points, but no Firewood point (checklist CI-5F80FDC40F).";
+                return "DomesticLaborDriver (domestic work authority) — the shared House Natural Wood prefab now authors "
+                    + "the distinct exterior 'firewood-handling' point (historical missing-point evidence: "
+                    + "checklist CI-5F80FDC40F); its physical route and fuel transfer still require live verification.";
             }
             if (!string.IsNullOrWhiteSpace(definitionId) && definitionId.StartsWith("domestic.", StringComparison.Ordinal))
                 return "DomesticLaborDriver (domestic work authority)";

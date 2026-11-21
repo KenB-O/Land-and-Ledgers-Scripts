@@ -683,7 +683,15 @@ namespace LandLedgers.Editor.Economy
                     personEntityId: pid => EntityId.For(EntityKind.Person, pid),
                     spendingPolicyProvider: null);
                 LoopOptions = options;
-                Driver = new ShoppingTripDriver(Loop);
+                Driver = new ShoppingTripDriver(Loop,
+                    startPhysicalRoute: (personId, destination) =>
+                    {
+                        Locations[personId] = destination;
+                        return true;
+                    },
+                    hasPhysicallyArrived: (personId, destination) =>
+                        Locations.TryGetValue(personId, out string location)
+                        && string.Equals(location, destination, StringComparison.Ordinal));
                 Ledgers.GetOrCreate(HouseholdId).RecordInflow(0, 50000,
                     HouseholdIncomeSource.WageEmployment, "emp-1", "seed wages", "test");
 

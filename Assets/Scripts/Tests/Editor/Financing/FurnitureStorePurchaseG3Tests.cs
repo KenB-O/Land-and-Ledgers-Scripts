@@ -830,7 +830,8 @@ namespace LandLedgers.Editor.Economy
             Assert.IsNull(buyerRegister.LiveBindingFor(buyerRegister.Assets[0].AssetId));
             Assert.AreEqual("household:" + BuyerHousehold, buyerRegister.Assets[0].LocationId,
                 "the delivered item remains physically represented in household custody");
-            StringAssert.Contains("No production furnishing.install task outcome is wired", order.InstallationBlockedReason);
+            Assert.IsTrue(string.IsNullOrEmpty(order.InstallationBlockedReason),
+                "The authored placement is available; receipt remains in household custody until the separate furnishing.install task is completed.");
             Assert.AreEqual(40000 - 339, buyerLedger.GetBalanceCents(), "reconciliation does not duplicate payment");
             Assert.AreEqual(1, owner.AllShipments().Count, "shipment identity survives the complete lifecycle");
         }

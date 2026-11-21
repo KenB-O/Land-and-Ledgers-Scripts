@@ -32,8 +32,8 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(9 * 60, departures[0]);
             Assert.AreEqual(11 * 60, departures[8]);
             Assert.AreEqual(14 * 60, departures[9]);
-            Assert.AreEqual(16 * 60 + 15, departures[departures.Count - 1],
-                "The full 95-minute estimate must finish before the 18:00 close/sleep boundary.");
+            Assert.AreEqual(16 * 60, departures[departures.Count - 1],
+                "The preferred afternoon shopping window ends at 16:00; each listed trip still fits before the 18:00 close/sleep boundary.");
             Assert.IsFalse(departures.Contains(12 * 60), "The preferred production policy has no noon departure.");
 
             List<int> lateRequest = HouseholdShoppingLoop.EnumerateCandidateDepartures(
@@ -148,7 +148,7 @@ namespace LandLedgers.EditorTests.Population
             });
 
             var schedules = new PersonScheduleTracker();
-            Assert.IsNull(schedules.TryReserve(1, PersonActivityKind.JobSeeking, 0, 700, 60,
+            Assert.IsNull(schedules.TryReserve(1, PersonActivityKind.JobSeeking, 0, 480, 60,
                 "legitimate job search"));
             int chosen = ShopperAssignmentPolicy.ChooseShopper(
                 population, new List<int> { 1, 2 }, 0, 480, 60, schedules, null, null, out string reason);
@@ -182,12 +182,16 @@ namespace LandLedgers.EditorTests.Population
                 "Selecting the alternate shopper must not cancel or interrupt the original work.");
         }
 
-        private sealed class FakeStorePort : IGeneralStoreTradingPort, IPaidStoreReceivingPort
+        private sealed class FakeStorePort : IItemLevelGeneralStoreTradingPort, IPaidStoreReceivingPort
         {
             public string StoreBusinessId { get; set; } = "store-1";
             public string StoreName { get; set; } = "General Store";
             public string LocationId { get; set; } = "store";
             public Dictionary<string, int> Stock = new Dictionary<string, int>();
+            // This fixture exercises the current SKU-backed shopping path.
+            // Category totals remain a readout; they are never treated as
+            // proof that staple_food contains a particular product.
+            public Dictionary<string, int> ItemStock = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             public Dictionary<string, int> Prices = new Dictionary<string, int>();
             public Dictionary<string, int> Targets = new Dictionary<string, int>();
             public List<GeneralStoreCategoryOffer> OfferList = new List<GeneralStoreCategoryOffer>();
@@ -211,6 +215,45 @@ namespace LandLedgers.EditorTests.Population
             public int CategoryStockUnits(string categoryId) => Stock.TryGetValue(categoryId, out int s) ? s : 0;
             public int CategoryTargetStockUnits(string categoryId) => Targets.TryGetValue(categoryId, out int t) ? t : 0;
             public int CategoryPricePerUnitCents(string categoryId) => Prices.TryGetValue(categoryId, out int p) ? p : 0;
+
+            public void SetItemStockUnits(string itemId, int units)
+            {
+                GeneralStoreCategoryOffer offer = FindOffer(itemId);
+                if (offer == null) throw new ArgumentException($"No fixture offer exists for SKU '{itemId}'.", nameof(itemId));
+                ItemStock[itemId] = Math.Max(0, units);
+                Stock[offer.CategoryId] = ItemStock[itemId] * Math.Max(1, offer.StoreUnitsPerItemUnit);
+            }
+
+            public bool UsesItemLevelInventory(string itemId) => FindOffer(itemId) != null;
+            public int ItemStockUnits(string itemId) => ItemStock.TryGetValue(itemId ?? string.Empty, out int units)
+                ? units / Math.Max(1, StoreUnitsPerItem(itemId)) : 0;
+            public int ItemPricePerUnitCents(string itemId) =>
+                CategoryPricePerUnitCents(FindOffer(itemId)?.CategoryId) * Math.Max(1, StoreUnitsPerItem(itemId));
+            public bool TryConsumeItemStockUnits(string itemId, int units, out int consumedUnits)
+            {
+                consumedUnits = 0;
+                GeneralStoreCategoryOffer offer = FindOffer(itemId);
+                if (offer == null || units <= 0) return false;
+                int have = ItemStockUnits(itemId);
+                consumedUnits = Math.Min(units, have);
+                if (consumedUnits <= 0) return false;
+                ItemStock[itemId] = (have - consumedUnits) * Math.Max(1, offer.StoreUnitsPerItemUnit);
+                Stock[offer.CategoryId] = Math.Max(0,
+                    CategoryStockUnits(offer.CategoryId) - consumedUnits * Math.Max(1, offer.StoreUnitsPerItemUnit));
+                return true;
+            }
+            public void RecordItemCashSettlement(string categoryId, int unitsSold, int revenueCents) =>
+                RecordCashSettlement(categoryId, unitsSold, revenueCents);
+
+            private GeneralStoreCategoryOffer FindOffer(string itemId)
+            {
+                if (string.IsNullOrWhiteSpace(itemId)) return null;
+                foreach (GeneralStoreCategoryOffer offer in OfferList)
+                    if (offer?.OfferedItemIds != null && offer.OfferedItemIds.Contains(itemId)) return offer;
+                return null;
+            }
+
+            private int StoreUnitsPerItem(string itemId) => Math.Max(1, FindOffer(itemId)?.StoreUnitsPerItemUnit ?? 1);
 
             public bool TryConsumeStoreUnits(string categoryId, int units, out int consumedUnits)
             {
@@ -248,8 +291,24 @@ namespace LandLedgers.EditorTests.Population
                 int units, int costCents, string provenance, int dayIndex)
             {
                 if (CurrentCashCents < costCents) return "cannot afford";
-                string problem = ReceiveStock(categoryId, units, provenance);
-                return problem ?? SpendCash(costCents, provenance);
+                if (string.IsNullOrWhiteSpace(itemId))
+                {
+                    foreach (GeneralStoreCategoryOffer legacyOffer in OfferList)
+                    {
+                        if (legacyOffer == null
+                            || !string.Equals(legacyOffer.CategoryId, categoryId, StringComparison.Ordinal)
+                            || legacyOffer.OfferedItemIds == null
+                            || legacyOffer.OfferedItemIds.Count != 1) continue;
+                        string legacyProblem = ReceiveStock(categoryId, units, provenance);
+                        return legacyProblem ?? SpendCash(costCents, provenance);
+                    }
+                    return "the fixture will only accept a pooled receipt for a single-SKU category";
+                }
+                GeneralStoreCategoryOffer offer = FindOffer(itemId);
+                if (offer == null || !string.Equals(offer.CategoryId, categoryId, StringComparison.Ordinal))
+                    return "the fixture has no matching identified SKU offer";
+                SetItemStockUnits(itemId, ItemStockUnits(itemId) + units);
+                return SpendCash(costCents, provenance);
             }
 
             public string ReceiveStock(string categoryId, int units, string provenanceLabel)
@@ -363,8 +422,9 @@ namespace LandLedgers.EditorTests.Population
                     CategoryId = "staple_food",
                     OfferedItemIds = new List<string> { HouseholdItemCatalog.FlourId },
                     StoreUnitsPerItemUnit = 1,
+                    UsesItemLevelInventory = true,
                 });
-                f.Port.Stock["staple_food"] = 100;
+                f.Port.SetItemStockUnits(HouseholdItemCatalog.FlourId, 100);
                 f.Port.Prices["staple_food"] = 120;
                 f.Port.Targets["staple_food"] = 100;
 
@@ -597,7 +657,17 @@ namespace LandLedgers.EditorTests.Population
         {
             Fixture f = Fixture.Create();
             f.Fund(10000);
-            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            f.Port.OfferList.Add(new GeneralStoreCategoryOffer
+            {
+                CategoryId = "retail_bread",
+                OfferedItemIds = new List<string> { HouseholdItemCatalog.BreadId },
+                StoreUnitsPerItemUnit = 1,
+                UsesItemLevelInventory = true,
+            });
+            f.Port.SetItemStockUnits(HouseholdItemCatalog.BreadId, 10);
+            f.Port.Prices["retail_bread"] = 75;
+            f.Port.Targets["retail_bread"] = 10;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.BreadId, 10);
             ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
             Assert.IsTrue(result.Success, result.FailureReason);
 
@@ -613,7 +683,7 @@ namespace LandLedgers.EditorTests.Population
                 null);
 
             Assert.Greater(meals.MealsServed, 0, "no meals served from purchased goods");
-            Assert.Less(f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.FlourId), 10);
+            Assert.Less(f.Inventories.GetOrCreate(7).GetAvailableUnits(HouseholdItemCatalog.BreadId), 10);
         }
 
         // ---------- C4 failure modes ----------
@@ -622,7 +692,7 @@ namespace LandLedgers.EditorTests.Population
         public void ExecuteBatch_UnstockedKnownSeller_ExplainsShortageWithoutCreatingSale()
         {
             Fixture f = Fixture.Create();
-            f.Port.Stock["staple_food"] = 0;
+            f.Port.SetItemStockUnits(HouseholdItemCatalog.FlourId, 0);
             HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 1);
 
             HouseholdShoppingLoop.BatchShoppingResult result =
@@ -707,7 +777,7 @@ namespace LandLedgers.EditorTests.Population
         {
             Fixture f = Fixture.Create();
             f.Fund(10000);
-            f.Port.Stock["staple_food"] = 3; // only 3u available
+            f.Port.SetItemStockUnits(HouseholdItemCatalog.FlourId, 3); // only 3u available
             HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
 
             ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
@@ -744,7 +814,7 @@ namespace LandLedgers.EditorTests.Population
         {
             Fixture f = Fixture.Create();
             f.Fund(10000);
-            f.Port.Stock["staple_food"] = 3; // only 3u available
+            f.Port.SetItemStockUnits(HouseholdItemCatalog.FlourId, 3); // only 3u available
             HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
 
             ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
@@ -780,7 +850,7 @@ namespace LandLedgers.EditorTests.Population
         {
             Fixture f = Fixture.Create();
             f.Fund(10000);
-            f.Port.Stock["staple_food"] = 0;
+            f.Port.SetItemStockUnits(HouseholdItemCatalog.FlourId, 0);
             HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 1);
 
             ShoppingTripResult result = f.Loop.ExecuteNeed(need, f.Day, f.Options());
@@ -803,8 +873,9 @@ namespace LandLedgers.EditorTests.Population
                 CategoryId = "retail_bread",
                 OfferedItemIds = new List<string> { HouseholdItemCatalog.BreadId },
                 StoreUnitsPerItemUnit = 1,
+                UsesItemLevelInventory = true,
             });
-            f.Port.Stock["retail_bread"] = 2;
+            f.Port.SetItemStockUnits(HouseholdItemCatalog.BreadId, 2);
             f.Port.Prices["retail_bread"] = 75;
             f.Port.Targets["retail_bread"] = 2;
 
@@ -971,7 +1042,7 @@ namespace LandLedgers.EditorTests.Population
             f.Fund(20000);
             f.Port.OffersDeliveryValue = true;
             f.Port.DeliveryFeeValue = 200;
-            f.Port.Stock["staple_food"] = 200;
+            f.Port.SetItemStockUnits(HouseholdItemCatalog.FlourId, 200);
             HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 60);
 
             GoodsCustodyState custodyAtTrip = GoodsCustodyState.InHand;
@@ -1080,20 +1151,21 @@ namespace LandLedgers.EditorTests.Population
         [Test]
         public void StoreRestock_LowStock_OrdersShipsReceivesWithProvenance()
         {
+            const string flourCategory = "flour"; // unique legacy category; staple_food is an intentionally pooled multi-SKU category.
             var port = new FakeStorePort();
             port.OfferList.Add(new GeneralStoreCategoryOffer
             {
-                CategoryId = "staple_food",
+                CategoryId = flourCategory,
                 OfferedItemIds = new List<string> { HouseholdItemCatalog.FlourId },
             });
-            port.Stock["staple_food"] = 10;
-            port.Targets["staple_food"] = 100;
+            port.Stock[flourCategory] = 10;
+            port.Targets[flourCategory] = 100;
             port.CashBalance = 50000;
-            port.Prices["staple_food"] = 120; // Explicit profitable retail fixture; zero is not an authored offer.
+            port.Prices[flourCategory] = 120; // Explicit profitable retail fixture; zero is not an authored offer.
 
             var upstream = new FakeUpstreamSupplier();
-            upstream.Stock["staple_food"] = 1000;
-            upstream.Quotes["staple_food"] = 80;
+            upstream.Stock[flourCategory] = 1000;
+            upstream.Quotes[flourCategory] = 80;
 
             var restock = new StoreRestockService();
             restock.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 0, 0.35f);
@@ -1108,13 +1180,13 @@ namespace LandLedgers.EditorTests.Population
             // No stock appears before the lead time elapses.
             var diag = new List<string>();
             restock.AdvanceDay(port, new List<IUpstreamGoodsSupplier> { upstream }, 1, diag);
-            Assert.AreEqual(10, port.CategoryStockUnits("staple_food"));
+            Assert.AreEqual(10, port.CategoryStockUnits(flourCategory));
 
             // Day 2: the order ships from REAL upstream stock and is received.
             restock.AdvanceDay(port, new List<IUpstreamGoodsSupplier> { upstream }, 2, diag);
             Assert.AreEqual(StoreProcurementStage.Received, order.Stage);
-            Assert.AreEqual(100, port.CategoryStockUnits("staple_food"));
-            Assert.AreEqual(1000 - 90, upstream.AvailableUnits("staple_food"), "upstream stock must decrease");
+            Assert.AreEqual(100, port.CategoryStockUnits(flourCategory));
+            Assert.AreEqual(1000 - 90, upstream.AvailableUnits(flourCategory), "upstream stock must decrease");
             Assert.AreEqual(50000 - 90 * 80, port.CashBalance, "store pays real cash on receipt");
             Assert.AreEqual(1, restock.Deliveries.Count);
             StringAssert.Contains(order.OrderId, restock.Deliveries[0].Provenance);
@@ -1124,27 +1196,28 @@ namespace LandLedgers.EditorTests.Population
         [Test]
         public void StoreRestock_UnaffordableDelivery_WaitsWithoutInvisibleStock()
         {
+            const string flourCategory = "flour";
             var port = new FakeStorePort();
-            port.Prices["staple_food"] = 120;
+            port.Prices[flourCategory] = 120;
             port.OfferList.Add(new GeneralStoreCategoryOffer
             {
-                CategoryId = "staple_food",
+                CategoryId = flourCategory,
                 OfferedItemIds = new List<string> { HouseholdItemCatalog.FlourId },
             });
-            port.Stock["staple_food"] = 10;
-            port.Targets["staple_food"] = 100;
+            port.Stock[flourCategory] = 10;
+            port.Targets[flourCategory] = 100;
             port.CashBalance = 100; // cannot afford 90u @ 80c
 
             var upstream = new FakeUpstreamSupplier();
-            upstream.Stock["staple_food"] = 1000;
-            upstream.Quotes["staple_food"] = 80;
+            upstream.Stock[flourCategory] = 1000;
+            upstream.Quotes[flourCategory] = 80;
 
             var restock = new StoreRestockService();
             restock.EvaluateRestock(port, new List<IUpstreamGoodsSupplier> { upstream }, 0, 0.35f);
             var diag = new List<string>();
             restock.AdvanceDay(port, new List<IUpstreamGoodsSupplier> { upstream }, 2, diag);
 
-            Assert.AreEqual(10, port.CategoryStockUnits("staple_food"), "unaffordable delivery must not book stock");
+            Assert.AreEqual(10, port.CategoryStockUnits(flourCategory), "unaffordable delivery must not book stock");
             Assert.AreEqual(100, port.CashBalance);
             Assert.AreEqual(StoreProcurementStage.InTransit, restock.Orders[0].Stage);
         }

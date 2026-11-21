@@ -164,6 +164,7 @@ namespace LandLedgers.Editor.Economy
         {
             var diag = new List<string>();
             var runtime = StockedShop(diag);
+            runtime.SupplyProtection = BakerySupplyProtectionPolicy.ProtectWholesaleContracts;
             Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.BreadLoafId, 1, 300, diag));
             Assert.AreEqual(1, WorkDay(runtime, 300, diag));
             Assert.IsNull(runtime.AddWholesaleAccount(BoardingHouseAccount(units: 24, dueDay: 300), diag));

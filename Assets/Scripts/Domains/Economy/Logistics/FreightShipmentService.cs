@@ -1310,6 +1310,26 @@ namespace LandLedgers.Economy.Logistics
         }
 
         /// <summary>
+        /// A delayed Unloading shipment is resumable only while its owned
+        /// unload task is still live. Without that task, the driver cannot
+        /// accrue unloading work from the resumed state; normal stale-task
+        /// recovery must first return it to Arrived so a new unload task can
+        /// be opened through BeginUnloading.
+        /// </summary>
+        public bool HasLiveUnloadTask(LogisticsShipmentState shipment, FreightShipmentHooks hooks)
+        {
+            if (shipment == null || hooks?.Tasks == null
+                || !unloadTasks.TryGetValue(shipment.ShipmentId, out EntityId taskId))
+                return false;
+
+            WorkTask task = hooks.Tasks.FindTask(taskId);
+            return task != null
+                && task.Status != TaskStatus.Complete
+                && task.Status != TaskStatus.Failed
+                && task.Status != TaskStatus.Cancelled;
+        }
+
+        /// <summary>
         /// DEF-070 (Decision 13): the terminal disposition for a shipment whose
         /// driver has given up on it. A Delayed state is only honest when a
         /// driver will resume the shipment; construction shipments have no

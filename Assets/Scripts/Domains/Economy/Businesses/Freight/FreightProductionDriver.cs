@@ -587,18 +587,16 @@ namespace LandLedgers.Economy.Freight
                             break;
                         }
                         // Slice A1 (QA-02): Delayed is retryable, not terminal.
-                        // Resume when the recorded resume state is one the tick
-                        // can drive from (Planned, Loading, InTransit, Arrived);
-                        // a resume state of Unloading cannot proceed without an
-                        // open unload task, so it waits with a diagnostic. The
-                        // resumed shipment advances on the next tick; a
-                        // permanently refusing receiver therefore retries at
-                        // most once per day and stays visible in diagnostics.
+                        // Resume only into stages this driver can continue.
+                        // Unloading requires its existing live unload task;
+                        // without one, leave the shipment visible in Delayed
+                        // rather than entering a stage that cannot accrue work.
                         if (shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Planned
                             || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Loading
                             || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.InTransit
                             || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Arrived
-                            || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Unloading
+                            || (shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Unloading
+                                && service.HasLiveUnloadTask(shipment, hooks))
                             || shipment.resumeStateAfterDelay == LogisticsShipmentStatus.Partial)
                         {
                             service.ResumeShipment(shipment, hooks);

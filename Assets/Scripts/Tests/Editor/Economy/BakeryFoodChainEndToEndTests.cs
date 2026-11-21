@@ -49,10 +49,13 @@ namespace LandLedgers.Editor.Economy
         // production interface over the same BusinessRuntimeState the
         // wholesale cash port uses, so wholesale cash and retail cash
         // reconcile in ONE runtime.
-        private sealed class RuntimeStorePort : IGeneralStoreTradingPort
+        private sealed class RuntimeStorePort : IItemLevelGeneralStoreTradingPort, IIdentifiedRetailStockReceivingPort
         {
             public BusinessRuntimeState Runtime;
             public Dictionary<string, int> Prices = new Dictionary<string, int>();
+            public Dictionary<string, int> ItemStock = new Dictionary<string, int>(StringComparer.Ordinal);
+            public Dictionary<string, int> ItemPrices = new Dictionary<string, int>(StringComparer.Ordinal);
+            public HashSet<string> ReceivedRetailLotIds = new HashSet<string>(StringComparer.Ordinal);
             public int Cap = int.MaxValue;
             public List<GeneralStoreCategoryOffer> OfferList = new List<GeneralStoreCategoryOffer>();
 
@@ -80,6 +83,29 @@ namespace LandLedgers.Editor.Economy
             {
                 return Prices.TryGetValue(categoryId, out int p) ? p : 0;
             }
+            public bool UsesItemLevelInventory(string itemId) =>
+                string.Equals(itemId, HouseholdItemCatalog.BreadId, StringComparison.Ordinal);
+            public int ItemStockUnits(string itemId) =>
+                ItemStock.TryGetValue(itemId ?? string.Empty, out int units) ? units : 0;
+            public int ItemPricePerUnitCents(string itemId) =>
+                ItemPrices.TryGetValue(itemId ?? string.Empty, out int price) ? price : 0;
+            public bool TryConsumeItemStockUnits(string itemId, int units, out int consumedUnits)
+            {
+                consumedUnits = 0;
+                int have = ItemStockUnits(itemId);
+                int take = Math.Min(Math.Max(0, units), have);
+                if (take <= 0 || Runtime == null
+                    || !Runtime.TryConsumeCategoryStockUnits("staple_food", take, out int categoryUnits)
+                    || categoryUnits != take)
+                    return false;
+                ItemStock[itemId] = have - take;
+                consumedUnits = take;
+                return true;
+            }
+            public void RecordItemCashSettlement(string categoryId, int unitsSold, int revenueCents)
+            {
+                if (Runtime != null) Runtime.RecordGenericRetailSettlement(categoryId, unitsSold, revenueCents);
+            }
             public bool TryConsumeStoreUnits(string categoryId, int units, out int consumedUnits)
             {
                 consumedUnits = 0;
@@ -103,6 +129,20 @@ namespace LandLedgers.Editor.Economy
                 if (units > Cap) return $"capped port refuses {units}u (cap {Cap})";
                 int accepted = Runtime.AddCategoryStockUnits(categoryId, units);
                 if (accepted < units) return $"store accepted {accepted}/{units}u {categoryId}: category full.";
+                return null;
+            }
+            public string ReceiveRetailItemLot(string lotId, string itemId, string categoryId, string unitLabel,
+                int units, string provenance, int dayIndex)
+            {
+                if (Runtime == null) return "Store runtime unavailable.";
+                if (!UsesItemLevelInventory(itemId) || !string.Equals(categoryId, "staple_food", StringComparison.Ordinal))
+                    return $"No identified receiving rule for '{itemId}' in '{categoryId}'.";
+                if (units <= 0 || string.IsNullOrWhiteSpace(lotId)) return "Identified bread receipt needs a lot id and positive units.";
+                if (ReceivedRetailLotIds.Contains(lotId)) return $"Retail lot '{lotId}' was already received.";
+                int accepted = Runtime.AddCategoryStockUnits(categoryId, units);
+                if (accepted != units) return $"Store accepted {accepted}/{units}u {itemId}: category full.";
+                ItemStock[itemId] = ItemStockUnits(itemId) + units;
+                ReceivedRetailLotIds.Add(lotId);
                 return null;
             }
             public int CategoryReceivableUnits(string categoryId)
@@ -174,11 +214,13 @@ namespace LandLedgers.Editor.Economy
             s.BakeryRuntime.AddCashCents(bakeryCash);
             s.StorePort = new RuntimeStorePort { Runtime = s.StoreRuntime };
             s.StorePort.Prices["staple_food"] = 5;
+            s.StorePort.ItemPrices[HouseholdItemCatalog.BreadId] = 5;
             s.StorePort.OfferList.Add(new GeneralStoreCategoryOffer
             {
                 CategoryId = "staple_food",
                 OfferedItemIds = new List<string> { HouseholdItemCatalog.BreadId },
                 StoreUnitsPerItemUnit = 1,
+                UsesItemLevelInventory = true,
             });
             s.ProductionDriver = new Series2BakeryProductionDriver(
                 s.Bakery, new Series2InStockBakeryFuelSource(s.Bakery));
@@ -372,6 +414,7 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(1, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.NotionsItemId), "notions 2 -> 1");
             Assert.AreEqual(1, s.Bakery.FuelStock.UnitsOnHand(BakeryBreadCatalog.FuelItemId), "fuel 2 -> 1");
             Assert.AreEqual(24, s.StoreRuntime.GetCategoryStock("staple_food").CurrentStockUnits, "live pool 0 -> 24");
+            Assert.AreEqual(24, s.StorePort.ItemStockUnits(HouseholdItemCatalog.BreadId), "the same receipt carries 24 identified bread units");
             Assert.AreEqual(2048, s.BakeryRuntime.CurrentCashCents, "bakery 2,000 + 48c wholesale");
             Assert.AreEqual(4952, s.StoreRuntime.CurrentCashCents, "store 5,000 - 48c wholesale");
             Assert.AreEqual(1, s.Bakery.WholesaleDeliveries.Count, "exactly one delivery record");
@@ -390,6 +433,7 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(30, trip.BuyerOutflowCents, "6 loaves x 5c");
             Assert.AreEqual(string.Empty, trip.PartialFillReason, "full purchase, no partial-fill reason");
             Assert.AreEqual(18, s.StoreRuntime.GetCategoryStock("staple_food").CurrentStockUnits, "live pool 24 -> 18");
+            Assert.AreEqual(18, s.StorePort.ItemStockUnits(HouseholdItemCatalog.BreadId), "retail consumes six identified bread units");
             Assert.AreEqual(970, s.Ledgers.GetOrCreate(HouseholdId).GetBalanceCents(), "household 1,000 - 30c");
             Assert.AreEqual(4982, s.StoreRuntime.CurrentCashCents, "store 4,952 + 30c retail");
             HouseholdInventory inventory = s.Inventories.GetOrCreate(HouseholdId);

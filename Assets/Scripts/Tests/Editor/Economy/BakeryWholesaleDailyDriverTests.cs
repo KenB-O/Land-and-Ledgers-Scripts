@@ -407,6 +407,7 @@ namespace LandLedgers.Editor.Economy
         public void RunDay_FinishedWholesaleStockTransfersWithoutFalseEmptyProductionRefusal()
         {
             Slice s = NewSlice();
+            s.Bakery.SupplyProtection = BakerySupplyProtectionPolicy.ProtectWholesaleContracts;
             InstallOven(s);
             SeedInputs(s, flourLb: 24, notions: 2, fuel: 2);
             Assert.IsNotNull(s.ProductionDriver.PlanBatches(
@@ -555,7 +556,7 @@ namespace LandLedgers.Editor.Economy
             var supplier = new OffMapAidBusinessRuntime(supplierDefinition);
             Assert.IsNull(supplier.TryPlaceOrder("failed-flour", BakeryInstanceId, BakeryInstanceId,
                 1, new Series2BusinessRuntimeCashPort(s.BakeryRuntime), 1, out OffMapAidCargoLot lot));
-            Assert.IsNull(supplier.CommitFreightPickup(lot.LotId, "failed-flour-shipment", 2));
+            Assert.IsNull(supplier.CommitFreightPickup(lot.LotId, "failed-flour-shipment", 1));
 
             var failedShipment = new LogisticsShipmentState
             {
@@ -965,6 +966,7 @@ namespace LandLedgers.Editor.Economy
         public void WholesaleDelivery_ConsumesFinishedOutputAcrossMultipleLots_AndSettlesOnce()
         {
             Slice s = NewSlice();
+            s.Bakery.SupplyProtection = BakerySupplyProtectionPolicy.ProtectWholesaleContracts;
             InstallOven(s);
             SeedInputs(s, 24, 2, 2);
 

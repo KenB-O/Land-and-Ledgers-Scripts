@@ -536,7 +536,13 @@ namespace LandLedgers.EditorTests.Population
             // the carrier still performed the delivery.
             Fixture f = DeliveryFixture(CarrierBinding.Bound, 250);
             f.Fund(10000);
-            f.Port.Stock["staple_food"] = 55;
+            // The shopper's flour need is SKU-specific. A pooled staple-food
+            // category cannot prove that the store has flour available.
+            f.Port.ItemLevelItems.Add(HouseholdItemCatalog.FlourId);
+            f.Port.ItemStock[HouseholdItemCatalog.FlourId] = 55;
+            f.Port.ItemPrices[HouseholdItemCatalog.FlourId] = 120;
+            f.Port.Stock["staple_food"] = 55; // category projection of the 55u flour SKU, not separate inventory
+            f.Port.OfferList[0].UsesItemLevelInventory = true;
             HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 60);
             int storeCashBefore = f.StoreCash();
 
@@ -548,7 +554,8 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(55, batch.UnitsAcquiredTotal);
             Assert.AreEqual(10000 - 6850, f.Balance(), "Household pays 55u goods + the full fee.");
             Assert.AreEqual(storeCashBefore + 6600, f.StoreCash(), "Store posts the 55u actually sold.");
-            Assert.AreEqual(6600, f.Port.RecordedCashRevenue);
+            Assert.AreEqual(6600, f.Port.RecordedItemCashRevenue,
+                "The item-level settlement path records revenue against the identified flour SKU.");
             Assert.AreEqual(250, f.Carrier.CurrentCashCents, "Freight stands on a partial fill.");
             ShoppingTripResult result = SingleResult(batch);
             Assert.AreEqual(6850, result.BuyerOutflowCents);

@@ -156,6 +156,11 @@ namespace LandLedgers.EditorTests.Economy
                 ActivateAllWorkers(carrier);
                 SetStock(seller, "meat", 8);
                 SetStock(buyer, "meat", 0);
+                // This is the fully-paid settlement case. The retail
+                // inventory cost and freight charge together require 1,075c
+                // of real payer cash; without it, freight correctly becomes
+                // a payable and is not counted as a cash transfer expense.
+                buyer.RuntimeState.SetCurrentCashCents(1075);
                 SetBusinesses(sharedRuntime, new List<BusinessInstanceState> { seller, buyer, carrier });
                 SetPrivateField(logisticsRuntime, "sharedBusinessRuntime", sharedRuntime);
 

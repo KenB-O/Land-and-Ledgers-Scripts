@@ -2480,7 +2480,12 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(1, g.Driver.ActiveTrips.Count);
             Assert.AreEqual("trip-100-1", g.Driver.ActiveTrips[0].TripId);
 
-            g.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            // The restored trip still owns the open flour need, and the need
+            // registry coalesces open obligations by household and exact item.
+            // Use a different stocked SKU to create a genuinely new obligation.
+            g.Store.Stock[HouseholdItemCatalog.SaltId] = 100;
+            g.Store.Prices[HouseholdItemCatalog.SaltId] = 120;
+            g.OpenNeed(HouseholdItemCatalog.SaltId, 10);
             g.Driver.PlanForHousehold(Fixture.HouseholdId, g.Needs, Fixture.Day, g.LoopOptions, g.Diag);
             Assert.AreEqual(2, g.Driver.ActiveTrips.Count);
             Assert.AreEqual("trip-100-3", g.Driver.ActiveTrips[1].TripId);
@@ -3539,8 +3544,8 @@ namespace LandLedgers.Editor.Population
             restored.Tracker.LoadFromSaveDto(source.Tracker.CaptureSaveDto());
             restored.DueEvents.LoadFromSaveDto(source.DueEvents.CaptureSaveDto());
             restored.Driver.LoadFromSaveDto(source.Driver.CaptureSaveDto());
-            Assert.AreEqual(0, restored.Needs.GetOpenNeeds(Fixture.HouseholdId).Count,
-                "fixture simulates a partial/legacy save where the need registry row is absent");
+            Assert.AreEqual(1, restored.Needs.GetOpenNeeds(Fixture.HouseholdId).Count,
+                "driver restoration immediately reattaches the saved trip need when the registry snapshot is absent");
 
             restored.Driver.RehydrateAfterLoad(restored.Tasks, id => (IGoodsSupplier)restored.Store,
                 Fixture.Day, start + 610 * 60f, restored.DueEvents, restored.Diag);

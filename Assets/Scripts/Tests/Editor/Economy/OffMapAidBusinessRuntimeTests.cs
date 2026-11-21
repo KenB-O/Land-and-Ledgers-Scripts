@@ -107,6 +107,9 @@ public sealed class OffMapAidBusinessRuntimeTests
 
         Assert.IsTrue(adapter.ReceiveCargoLot(shipment, sourceLot.PackageUnits, 1, out string duplicateReason), duplicateReason);
         Assert.AreEqual(1, bakery.FlourStock.Lots.Count, "A repeated shipment receipt must not duplicate the flour lot.");
-        Assert.AreEqual(220, supplier.GetInventoryUnits("bakery_flour_sack"));
+        // The paid order already debited one 10 lb sack from the supplier.
+        // Freight pickup and destination receipt transfer that same lot;
+        // they do not debit the supplier a second time.
+        Assert.AreEqual(450, supplier.GetInventoryUnits("bakery_flour_sack"));
     }
 }

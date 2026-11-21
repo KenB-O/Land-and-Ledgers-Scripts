@@ -118,9 +118,13 @@ namespace LandLedgers.Editor.Economy
             driver.AdvanceTick(3600f, hooks, EntityId.Invalid, diag);
             Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.Status,
                 "transit needs no handler — only loading and unloading do");
-            // And the arrived shipment now waits loudly for a handler.
+            // The arrival is real. With no worker available, the second tick
+            // uses the newer DEF-071 bounded retry state rather than leaving
+            // an undrivable Arrived shipment silently open forever.
             driver.AdvanceTick(3600f, hooks, EntityId.Invalid, diag);
-            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.Status);
+            Assert.AreEqual(LogisticsShipmentStatus.Delayed, shipment.Status);
+            Assert.AreEqual(LogisticsShipmentStatus.Arrived, shipment.resumeStateAfterDelay);
+            Assert.AreEqual(1, shipment.DelayCycles);
             bool named = false;
             foreach (string line in diag)
                 if (line.Contains("wait for a handler")) named = true;

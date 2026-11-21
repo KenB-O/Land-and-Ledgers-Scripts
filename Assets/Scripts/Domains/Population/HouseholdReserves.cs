@@ -418,8 +418,28 @@ namespace LandLedgers.Population
                     consumedUnits += take;
                     remaining -= take;
                 }
-                int fromReserve = Math.Min(remaining, Math.Max(0, reserve.currentUnits));
-                reserve.currentUnits = Math.Max(0, reserve.currentUnits - fromReserve);
+                int fromReserve;
+                if (stoves.Inventory != null)
+                {
+                    fromReserve = Math.Min(remaining, Math.Max(0,
+                        stoves.Inventory.GetAvailableUnits(HouseholdItemCatalog.FuelWoodId)));
+                    if (fromReserve > 0)
+                    {
+                        string refusal = stoves.Inventory.Consume(HouseholdItemCatalog.FuelWoodId,
+                            fromReserve, absoluteDayIndex, "household heating burn", "daily heating", null);
+                        if (refusal == null)
+                        {
+                            HouseholdInventoryReserveBridge.MirrorLotConsumptionToReserve(
+                                household, HouseholdItemCatalog.FuelWoodId, fromReserve);
+                        }
+                        else fromReserve = 0;
+                    }
+                }
+                else
+                {
+                    fromReserve = Math.Min(remaining, Math.Max(0, reserve.currentUnits));
+                    reserve.currentUnits = Math.Max(0, reserve.currentUnits - fromReserve);
+                }
                 consumedUnits += fromReserve;
             }
             else
@@ -597,6 +617,13 @@ namespace LandLedgers.Population
 
             household.EnsureHouseholdReservesInitialized(
                 migrateLegacyFoodReserve: household.reserves == null || household.reserves.Count == 0);
+            if (stoves?.Inventory != null)
+            {
+                // Fuel category units are a compatibility mirror; seed old
+                // reserve-only stock as physical lots once before spending.
+                HouseholdInventoryReserveBridge.SeedLotsFromReserves(
+                    household, stoves.Inventory, absoluteDayIndex, null);
+            }
             if (household.lastReserveDepletionDayIndex == absoluteDayIndex)
             {
                 return 0;

@@ -2855,12 +2855,17 @@ namespace LandLedgers.Population
             if (trip == null || trip.Candidate?.Supplier == null)
             {
                 refusal = "trip or supplier is missing";
+                if (trip != null) trip.LastServiceRefusal = refusal;
                 return false;
             }
             if (trip.ServiceTaskId.IsValid)
             {
                 WorkTask existing = tasks.FindTask(trip.ServiceTaskId);
-                if (existing != null && existing.Status == TaskStatus.InProgress) return true;
+                if (existing != null && existing.Status == TaskStatus.InProgress)
+                {
+                    trip.LastServiceRefusal = string.Empty;
+                    return true;
+                }
                 trip.ServiceTaskId = default;
                 trip.ServiceTaskPlannedMinutes = 0;
             }
@@ -2872,6 +2877,7 @@ namespace LandLedgers.Population
                 || !string.Equals(queue.Waiting[0].CustomerRef, customerRef, StringComparison.Ordinal))
             {
                 refusal = "customer is not at the head of the live store queue";
+                trip.LastServiceRefusal = refusal;
                 return false;
             }
 
@@ -2884,6 +2890,7 @@ namespace LandLedgers.Population
             if (clerkCandidates.Count == 0)
             {
                 refusal = "no physically present service clerk is available";
+                trip.LastServiceRefusal = refusal;
                 return false;
             }
 
@@ -2910,11 +2917,13 @@ namespace LandLedgers.Population
 
                 trip.ServiceTaskId = task.TaskId;
                 trip.ServiceTaskPlannedMinutes = task.PlannedMinutes;
+                trip.LastServiceRefusal = string.Empty;
                 diag?.Add($"HouseholdShoppingLoop: P{clerkPersonId} began counter service for {customerRef} at '{trip.Candidate.Supplier.SupplierName}'.");
                 return true;
             }
 
             refusal = lastRefusal ?? "no valid physically present service clerk candidates";
+            trip.LastServiceRefusal = refusal;
             return false;
         }
 

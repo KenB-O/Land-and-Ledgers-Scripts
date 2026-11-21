@@ -75,15 +75,14 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 sacks = availableSacks;
             }
 
-            // The daily planner passes a net uncovered quantity. Other callers
-            // retain the duplicate guard — but only for lots still awaiting
-            // pickup. A committed lot is already aboard freight for the need
-            // it was ordered for; it does not cover a new order (DEF-070: a
-            // merchant with flour in transit orders the next sack, and a
-            // delayed haul must not brick reordering). The duplicate guard
-            // still blocks a second order while an uncommitted lot is
-            // outstanding, and the shipment/lot binding refuses the same lot
-            // shipping twice.
+            // The daily planner passes a net uncovered quantity after checking
+            // the authoritative freight status of committed lots. This local
+            // duplicate guard applies only to uncommitted lots, which have not
+            // yet been bound to freight; committed live freight is cover, while
+            // a lot attached to a terminal failed shipment is excluded by the
+            // planner so a paid replacement can be ordered through this same
+            // cash/lot authority. Shipment/lot binding still refuses shipping
+            // the same lot twice.
             if (!outstandingAlreadyCounted)
             {
                 OffMapAidCargoLot outstanding = null;

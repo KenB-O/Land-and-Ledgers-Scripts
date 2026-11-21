@@ -77,12 +77,14 @@ namespace LandLedgers.Population
     /// gate checks the first currently usable one as the
     /// representative, so a broken stove never blocks a working one.
     ///
-    /// Fuel custody (plan §3.4, §5.1): the household fuel-wood reserve
-    /// is the only fuel stock. Feeding a stove moves units reserve -&gt;
-    /// stove store; cooking/heating completion (B3) debits the store;
-    /// a unit is in exactly one place at any time — TotalFuelWoodUnits
-    /// (reserve + installed stores + fuel in uninstalled stoves) is
-    /// the reconciliation read, and it never double-counts. Fuel in a
+    /// Fuel custody (plan §3.4, §5.1): household fuel-wood lots are the
+    /// physical stock authority and the reserve is their compatibility
+    /// mirror. Feeding a stove moves units from household lots/reserve
+    /// into the stove store; cooking/heating completion (B3) debits the
+    /// store. A unit is in exactly one place at any time —
+    /// TotalFuelWoodUnits (reserve mirror + installed stores + fuel in
+    /// uninstalled stoves) is the reconciliation read, and it never
+    /// double-counts. Fuel in a
     /// removed stove travels with the stove: it is kept as orphaned
     /// fuel, reported by Validate, reclaimable with
     /// TryReturnStoveFuelToReserve, and restored into the stove if it
@@ -130,6 +132,8 @@ namespace LandLedgers.Population
         public HouseholdFurnishingRegister Furnishings;
         /// <summary>The household's home building instance id.</summary>
         public int HomeBuildingInstanceId = -1;
+        /// <summary>Physical household lot authority, rebound by the systems hub and not separately persisted.</summary>
+        public HouseholdInventory Inventory;
 
         private readonly List<HouseholdStove> stoves = new List<HouseholdStove>();
         /// <summary>Fuel in stoves that are no longer installed, by asset id — it travels with the stove, never silently dropped.</summary>
@@ -286,11 +290,11 @@ namespace LandLedgers.Population
         }
 
         /// <summary>
-        /// Moves fuel-wood units from the household reserve into one
-        /// installed stove's store (the retrieval step's custody move,
-        /// plan §5.1 step 3 — the trip itself is B3). The reserve is
-        /// debited exactly what the store is credited: a unit is in
-        /// exactly one place. Refuses loudly when the stove is not
+        /// Moves fuel-wood units from household stock into one installed
+        /// stove's store (the retrieval step's custody move, plan §5.1
+        /// step 3 — the trip itself is B3). When the physical lot authority
+        /// is bound, matching lots and the reserve mirror are debited by
+        /// exactly what the store is credited. Refuses loudly when the stove is not
         /// installed, the units are not positive, there is no household
         /// or no fuel-wood reserve, or the reserve is short — and moves
         /// nothing on refusal. Returns null on success.
@@ -312,9 +316,24 @@ namespace LandLedgers.Population
                 return $"HouseholdStoveRegistry.TryFeedStove: household {HouseholdId} has no fuel-wood reserve — nothing to feed stove {stoveAssetId} from.";
             if (reserve.currentUnits < units)
                 return $"HouseholdStoveRegistry.TryFeedStove: household {HouseholdId} reserve holds {reserve.currentUnits} fuel-wood units, fewer than the {units} requested for stove {stoveAssetId} — nothing moved.";
-            reserve.currentUnits -= units;
+            if (Inventory != null)
+            {
+                string lotRefusal = Inventory.Consume(HouseholdItemCatalog.FuelWoodId, units,
+                    Math.Max(0, household.lastReserveDepletionDayIndex), "stove feed transfer",
+                    "stove " + stoveAssetId, null);
+                if (lotRefusal != null)
+                    return $"HouseholdStoveRegistry.TryFeedStove: physical household fuel lots cannot support the transfer — {lotRefusal}";
+                HouseholdInventoryReserveBridge.MirrorLotConsumptionToReserve(
+                    household, HouseholdItemCatalog.FuelWoodId, units);
+                diagnostics.Add($"HouseholdStoveRegistry: transferred {units} fuel-wood unit(s) from household lots to stove {stoveAssetId}.");
+            }
+            else
+            {
+                // Compatibility for isolated legacy callers without the lot authority.
+                reserve.currentUnits -= units;
+            }
             stove.FuelWoodUnitsOnHand += units;
-            diagnostics.Add($"HouseholdStoveRegistry: fed {units} fuel-wood unit(s) from household {HouseholdId} reserve to stove {stoveAssetId} (store now {stove.FuelWoodUnitsOnHand}).");
+            diagnostics.Add($"HouseholdStoveRegistry: fed {units} fuel-wood unit(s) from household {HouseholdId} stock to stove {stoveAssetId} (store now {stove.FuelWoodUnitsOnHand}).");
             return null;
         }
 
@@ -362,6 +381,14 @@ namespace LandLedgers.Population
                 return $"HouseholdStoveRegistry.TryReturnStoveFuelToReserve: household {HouseholdId} has no fuel-wood reserve — nowhere to return stove {stoveAssetId} fuel to.";
             int units = FuelWoodUnitsOnHand(stoveAssetId);
             if (units <= 0) return null;
+            if (Inventory != null)
+            {
+                string lotRefusal = Inventory.AddLot(HouseholdItemCatalog.FuelWoodId, units,
+                    Math.Max(0, household.lastReserveDepletionDayIndex),
+                    "fuel returned from stove " + stoveAssetId);
+                if (lotRefusal != null)
+                    return $"HouseholdStoveRegistry.TryReturnStoveFuelToReserve: stove custody remains unchanged because the household lot refused the return — {lotRefusal}";
+            }
             HouseholdStove stove = FindStove(stoveAssetId);
             if (stove != null)
                 stove.FuelWoodUnitsOnHand = 0;

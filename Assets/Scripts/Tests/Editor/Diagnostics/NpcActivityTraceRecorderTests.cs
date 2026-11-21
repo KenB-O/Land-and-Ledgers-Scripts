@@ -386,7 +386,9 @@ namespace LandLedgers.EditorTests.Diagnostics
 
             trace.RecordMovement(8, 2, 90, "refused", "PathFailed", "building:0", 0,
                 reason: "No walkable destination", destinationBuildingId: 0,
-                scheduleState: "GoingShopping", moverState: "ArrivedVisible");
+                scheduleState: "GoingShopping", moverState: "ArrivedVisible",
+                currentDestinationBuildingId: 9,
+                physicalGridX: 12, physicalGridZ: 34, physicalCellBuildingId: 9);
             trace.RecordMovement(8, 2, 95, "started", "Moving", "building:0", 24,
                 routeId: "P8:route:4", destinationBuildingId: 0, routeGeneration: 4,
                 routeMode: "Scheduled", scheduleState: "GoingShopping", moverState: "Moving",
@@ -395,9 +397,16 @@ namespace LandLedgers.EditorTests.Diagnostics
                 shoppingTripId: "trip-2-77");
 
             NpcActivityTraceEvent refused = trace.Events[0];
+            Assert.AreEqual(2, refused.schemaVersion);
             Assert.AreEqual("P8", refused.personId);
             Assert.AreEqual(51, refused.householdId);
             Assert.AreEqual(0, refused.destinationBuildingId);
+            Assert.AreEqual(0, refused.requestedTargetBuildingId);
+            Assert.AreEqual(9, refused.currentDestinationBuildingId,
+                "A failed seller route must retain the actor's prior logical building separately from the requested seller.");
+            Assert.AreEqual(12, refused.physicalGridX);
+            Assert.AreEqual(34, refused.physicalGridZ);
+            Assert.AreEqual(9, refused.physicalCellBuildingId);
             Assert.AreEqual("PathFailed", refused.movementStatus);
             Assert.AreEqual("No walkable destination", refused.reason);
             Assert.IsFalse(refused.hasRouteDestination, "A refused route must not claim a resolved path destination.");

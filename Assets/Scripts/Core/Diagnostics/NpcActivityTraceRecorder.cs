@@ -15,7 +15,7 @@ namespace LandLedgers.Diagnostics
     [Serializable]
     public sealed class NpcActivityTraceEvent
     {
-        public int schemaVersion = 1;
+        public int schemaVersion = 2;
         public long sequence;
         public string sessionId;
         public string eventType;
@@ -43,6 +43,14 @@ namespace LandLedgers.Diagnostics
         public float distanceRemainingMeters;
         public float estimatedArrivalSeconds;
         public int destinationBuildingId = -1;
+        // Additive, unambiguous fields. destinationBuildingId is retained for
+        // older readers; movement events use it as the requested target while
+        // person snapshots use it as the current logical location.
+        public int requestedTargetBuildingId = -1;
+        public int currentDestinationBuildingId = -1;
+        public int physicalGridX = -1;
+        public int physicalGridZ = -1;
+        public int physicalCellBuildingId = -1;
         public int routeGeneration = -1;
         public int routeWaypointIndex = -1;
         public int routeWaypointCount;
@@ -322,7 +330,8 @@ namespace LandLedgers.Diagnostics
             string scheduleState = null, string moverState = null, Vector3? routeDestination = null,
             string activityLocationId = null, Vector3? worldPosition = null,
             bool moverVisible = false, bool routeActive = false, WorkTask associatedTask = null,
-            string shoppingTripId = null)
+            string shoppingTripId = null, int currentDestinationBuildingId = -1,
+            int physicalGridX = -1, int physicalGridZ = -1, int physicalCellBuildingId = -1)
         {
             if (!Monitoring || Level < NpcTraceLevel.Detailed) return;
             bool taskDirected = string.Equals(routeMode, "TaskDirected", StringComparison.OrdinalIgnoreCase);
@@ -359,6 +368,11 @@ namespace LandLedgers.Diagnostics
                 detail = "status=" + (status ?? string.Empty) + "; remainingMeters=" + remainingDistance.ToString("0.##") + "; route=" + (routeId ?? string.Empty),
                 reason = reason ?? string.Empty,
                 destinationBuildingId = destinationBuildingId,
+                requestedTargetBuildingId = destinationBuildingId,
+                currentDestinationBuildingId = currentDestinationBuildingId,
+                physicalGridX = physicalGridX,
+                physicalGridZ = physicalGridZ,
+                physicalCellBuildingId = physicalCellBuildingId,
                 routeGeneration = routeGeneration,
                 routeIdentity = routeId ?? string.Empty,
                 routeMode = routeMode ?? string.Empty,
@@ -437,6 +451,7 @@ namespace LandLedgers.Diagnostics
                 householdId = householdId,
                 activity = activity ?? string.Empty,
                 destinationBuildingId = destinationBuildingId,
+                currentDestinationBuildingId = destinationBuildingId,
                 hasWorldPosition = includePhysicalPosition && worldPosition.HasValue,
                 positionX = includePhysicalPosition && worldPosition.HasValue ? worldPosition.Value.x : 0f,
                 positionY = includePhysicalPosition && worldPosition.HasValue ? worldPosition.Value.y : 0f,

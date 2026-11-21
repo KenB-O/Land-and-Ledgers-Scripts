@@ -681,6 +681,10 @@ namespace LandLedgers.Orchestration.Systems
                 registry = HouseholdStoveRegistry.CreateDerived(householdId, FurnishingRegisterFor(householdId));
                 householdStoveRegistries[householdId] = registry;
             }
+            // The reserve is a compatibility mirror; household item lots are
+            // the physical stock authority. Rebind the transient inventory
+            // together with the derived stove registry after load.
+            registry.Inventory = HouseholdInventories.GetOrCreate(householdId);
             return registry;
         }
 

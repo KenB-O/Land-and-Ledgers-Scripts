@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Reflection;
 using LandLedgers.Economy;
+using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Businesses.GeneralStore;
 using LandLedgers.Orchestration.Systems;
@@ -129,6 +130,35 @@ namespace LandLedgers.EditorTests.Orchestration
             Assert.AreEqual(-1, SimulationDrivers.FirstEligibleStagedBakeryWorkerId(
                 new[] { 2, 7 }, personId => false),
                 "No worker candidate may be fabricated when every legitimate candidate is occupied or unavailable.");
+        }
+
+        [Test]
+        public void WorkshopMadeCustodyFurniture_IsReportedWithoutTreatingOtherGoodsAsInstallable()
+        {
+            MethodInfo method = typeof(SimulationDrivers).GetMethod(
+                "HasInstallableCustodyFurniture", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.IsNotNull(method, "The custody warning predicate must remain available.");
+
+            var register = new HouseholdFurnishingRegister();
+            register.Assets.Add(new EquipmentAsset
+            {
+                AssetId = "purchased-bed-1",
+                Kind = "bed",
+                Condition01 = 1f,
+                MadeByBusinessId = string.Empty,
+            });
+            Assert.IsFalse((bool)method.Invoke(null, new object[] { register }),
+                "An uninstalled item without workshop provenance must not be mislabeled as workshop-made.");
+
+            register.Assets.Add(new EquipmentAsset
+            {
+                AssetId = "workshop-table-1",
+                Kind = "table",
+                Condition01 = 1f,
+                MadeByBusinessId = "carpentry-shop-1",
+            });
+            Assert.IsTrue((bool)method.Invoke(null, new object[] { register }),
+                "A usable, unreserved workshop-made asset lacking a live placement must remain in custody and be reported.");
         }
 
         private static bool ClassifyDueEventDiagnostic(string message)

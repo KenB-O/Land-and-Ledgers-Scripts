@@ -3,19 +3,172 @@ using LandLedgers.World;
 using NUnit.Framework;
 using System.Reflection;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.TestTools;
+using UnityEditor;
 
 namespace LandLedgers.EditorTests.Pathing
 {
     public sealed class AgentMoverTests
     {
+        [Test]
+        public void InteriorDepartureReportsExteriorFailureAfterInteriorRouteWasFound()
+        {
+            string reason = AgentMover.ResolveInteriorDoorToDoorFailure(
+                sawOutdoorThresholdStart: false,
+                foundWalkableInteriorRoute: true,
+                lastInteriorFailure: "Point is outside the authored walkable floor area on floor 0.",
+                lastExteriorFailure: "entrance 'main-entrance' exterior probe (12, 8) -> (30, 8) failed (NoPath: disconnected).",
+                target: new GridCoord(30, 8));
+
+            StringAssert.Contains("A walkable interior route to an authored entrance exists", reason);
+            StringAssert.Contains("requested destination (30, 8)", reason);
+            StringAssert.Contains("exterior probe (12, 8) -> (30, 8) failed (NoPath: disconnected)", reason);
+            StringAssert.DoesNotContain("outside the authored walkable floor", reason,
+                "A stale rejected entrance must not mask the later exterior graph failure.");
+        }
+
+        [Test]
+        public void InteriorDepartureKeepsFloorFailureWhenNoEntranceHasReachableInterior()
+        {
+            string reason = AgentMover.ResolveInteriorDoorToDoorFailure(
+                sawOutdoorThresholdStart: false,
+                foundWalkableInteriorRoute: false,
+                lastInteriorFailure: "Point is outside the authored walkable floor area on floor 0.",
+                lastExteriorFailure: "",
+                target: new GridCoord(30, 8));
+
+            Assert.AreEqual("Point is outside the authored walkable floor area on floor 0.", reason);
+        }
+
         [TestCase(0f, 1.25f)]
         [TestCase(1.1f, 1.65f)]
         [TestCase(2f, 3f)]
         public void BuildingActivityStagingRadiusIsOneSharedDoorwayThreshold(float clearWidth, float expected)
         {
             Assert.AreEqual(expected, AgentMover.BuildingActivityStagingRadius(clearWidth), 0.001f);
+        }
+
+        [TestCase(false, "authored door threshold", 0)]
+        [TestCase(true, "authored porch activity", 0)]
+        [TestCase(false, "rotated authored door threshold", 90)]
+        [TestCase(true, "rotated authored porch activity", 90)]
+        [TestCase(false, "rotated authored door threshold", 180)]
+        [TestCase(true, "rotated authored porch activity", 180)]
+        [TestCase(false, "rotated authored door threshold", 270)]
+        [TestCase(true, "rotated authored porch activity", 270)]
+        public void AuthoredOutdoorOriginRoutesOutwardWithoutInteriorFloorStartValidation(
+            bool startAtPorch, string originDescription, int rotationDegrees)
+        {
+            const string prefabPath = "Assets/Environment/Buildings/House Natural Wood.prefab";
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            Assert.IsNotNull(prefab, "The authored household doorway fixture must be available.");
+            var cleanup = new List<Object>();
+            try
+            {
+                GameObject buildingObject = Object.Instantiate(prefab);
+                cleanup.Add(buildingObject);
+                buildingObject.transform.SetPositionAndRotation(new Vector3(10f, 0f, -20f),
+                    Quaternion.Euler(0f, rotationDegrees, 0f));
+                BuildingFootprintAuthority authority = buildingObject.GetComponent<BuildingFootprintAuthority>();
+                Assert.IsNotNull(authority);
+                BuildingEntrancePairAuthoring entrance = authority.EntrancePairs
+                    .SingleOrDefault(x => x != null && x.id == "main-entrance");
+                Assert.IsNotNull(entrance);
+                BuildingActivityLocationAuthoring porch = authority.ActivityLocations
+                    .SingleOrDefault(x => x != null && x.id == "porch-dropoff");
+                Assert.IsNotNull(porch);
+
+                GameObject worldObject = new("Authored doorway route test world");
+                cleanup.Add(worldObject);
+                TownWorldController world = worldObject.AddComponent<TownWorldController>();
+                TownGrid grid = new(120, 120, 2f, new Vector3(-120f, 0f, -120f));
+                typeof(TownWorldController).GetField("grid", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.SetValue(world, grid);
+                for (int z = 0; z < grid.Depth; z++)
+                for (int x = 0; x < grid.Width; x++) grid.SetCell(new GridCoord(x, z), BuildableCell());
+
+                Vector3 outdoor = authority.transform.TransformPoint(entrance.outdoorApproachLocal);
+                GridCoord thresholdCell = grid.WorldToCoord(outdoor);
+                TownCell buildingCell = grid.GetCell(thresholdCell);
+                buildingCell.occupancy = CellOccupancy.Building;
+                buildingCell.buildingId = 9;
+                grid.SetCell(thresholdCell, buildingCell);
+                Vector3 porchPosition = authority.transform.TransformPoint(porch.positionLocal);
+                GridCoord porchCell = grid.WorldToCoord(porchPosition);
+                TownCell porchBuildingCell = grid.GetCell(porchCell);
+                porchBuildingCell.occupancy = CellOccupancy.Building;
+                porchBuildingCell.buildingId = 9;
+                grid.SetCell(porchCell, porchBuildingCell);
+
+                GameObject pathingObject = new("Authored doorway route test pathing");
+                cleanup.Add(pathingObject);
+                PathingSettings settings = ScriptableObject.CreateInstance<PathingSettings>();
+                settings.logFailedRequests = false;
+                cleanup.Add(settings);
+                PathingManager pathing = pathingObject.AddComponent<PathingManager>();
+                pathing.Configure(world, settings);
+
+                GameObject actor = new("Authored outdoor origin route test actor");
+                cleanup.Add(actor);
+                AgentMover mover = actor.AddComponent<AgentMover>();
+                mover.Configure(pathing);
+                actor.transform.position = startAtPorch ? porchPosition : outdoor;
+                mover.ShowAtCurrentLocation();
+                Physics.SyncTransforms();
+                GridCoord targetCell = new(100, 60);
+                Vector3 physicalStart = actor.transform.position;
+                BuildingAnchor target = new() { type = AnchorType.FrontDoor, coord = targetCell };
+
+                Assert.IsTrue(AgentMover.IsAtAuthorizedOutdoorOrigin(authority, physicalStart), originDescription);
+                Assert.IsTrue(grid.GetCell(grid.WorldToCoord(physicalStart)).HasBuilding,
+                    "The fixture must exercise an authored outdoor point whose coarse pathing cell overlaps the building raster.");
+                Assert.IsTrue(mover.BeginInteriorDoorToDoor(authority, target, out string refusal),
+                    originDescription + ": " + refusal);
+                Assert.IsTrue(mover.IsRouteActive);
+                Assert.AreEqual(physicalStart, actor.transform.position,
+                    "Starting the route must preserve the actor's real authored outdoor position without a snap or projection.");
+                Assert.AreEqual(pathing.CoordToPathWorld(targetCell), mover.RouteDestinationWorld);
+
+                if (startAtPorch)
+                {
+                    GameObject returningActor = new("Porch resident returning indoors");
+                    cleanup.Add(returningActor);
+                    AgentMover returningMover = returningActor.AddComponent<AgentMover>();
+                    returningMover.Configure(pathing);
+                    returningActor.transform.position = porchPosition;
+                    returningMover.ShowAtCurrentLocation();
+                    Physics.SyncTransforms();
+                    Assert.IsTrue(authority.TryBuildInteriorActivityRoute("main-entrance", "cleaning",
+                        out List<Vector3> cleaningPath, out string activityRouteFailure), activityRouteFailure);
+                    Assert.IsTrue(returningMover.BeginBuildingActivityRoute(authority,
+                        "main-entrance", "cleaning"),
+                        "A resident at the authored porch must be able to follow the physical door and interior route.");
+                    Assert.IsTrue(returningMover.IsRouteActive);
+                    Assert.AreEqual(porchPosition, returningActor.transform.position,
+                        "Beginning the return route must not teleport the resident onto the doorway threshold.");
+                    Assert.AreEqual(cleaningPath[^1], returningMover.RouteDestinationWorld,
+                        "The route must terminate at the authored interior activity location.");
+
+                    GameObject unverifiedOriginActor = new("Unverified resident origin");
+                    cleanup.Add(unverifiedOriginActor);
+                    AgentMover unverifiedOriginMover = unverifiedOriginActor.AddComponent<AgentMover>();
+                    unverifiedOriginMover.Configure(pathing);
+                    unverifiedOriginActor.transform.position = authority.transform.TransformPoint(
+                        entrance.indoorPositionLocal);
+                    unverifiedOriginMover.ShowAtCurrentLocation();
+                    Assert.IsFalse(unverifiedOriginMover.BeginBuildingActivityRoute(authority,
+                            "main-entrance", "cleaning"),
+                        "A doorway route must not authorize an arbitrary interior or footprint-overlap origin.");
+                    Assert.IsFalse(unverifiedOriginMover.IsRouteActive);
+                }
+            }
+            finally
+            {
+                for (int i = cleanup.Count - 1; i >= 0; i--)
+                    if (cleanup[i] != null) Object.DestroyImmediate(cleanup[i]);
+            }
         }
 
         [Test]

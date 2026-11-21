@@ -23,6 +23,7 @@ using LandLedgers.Economy.Businesses.Logging;
 using LandLedgers.Economy.Businesses.LumberYard;
 using LandLedgers.Economy.Businesses.Sawmill;
 using LandLedgers.Economy.Freight;
+using LandLedgers.Economy.Logistics;
 using LandLedgers.Economy.BreadDrivers;
 using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Trade;
@@ -382,6 +383,7 @@ namespace LandLedgers.Orchestration.Systems
         private readonly HashSet<string> hardwareImportWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> glassImportWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> sawmillProductionWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<int> furnitureCustodyAwaitingTaskNotices = new HashSet<int>();
         private readonly HashSet<string> fellingWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> logHaulWarningsLogged = new HashSet<string>(StringComparer.Ordinal);
         private EmbodiedPurchaseExecutor purchaseExecutor;
@@ -8093,11 +8095,10 @@ namespace LandLedgers.Orchestration.Systems
                         && !string.Equals(previousInstallationBlock, pending.InstallationBlockedReason, StringComparison.Ordinal))
                         Debug.Log($"[SimulationDrivers] furniture order '{pending.PurchaseId}' retains delivered item(s) in household {candidate.HouseholdId} custody: {pending.InstallationBlockedReason}", this);
                 }
-                int installed = purchaseDriver.TryInstallCustodyPieces(candidate.Furnishings,
-                    candidate.HomeBuildingId, building, diag);
-                if (installed > 0)
+                if (HasInstallableCustodyFurniture(candidate.Furnishings)
+                    && furnitureCustodyAwaitingTaskNotices.Add(candidate.HouseholdId))
                 {
-                    Debug.Log($"[SimulationDrivers] furniture purchase day {absoluteDayIndex}: household {candidate.HouseholdId} installed {installed} workshop-made custody piece(s) in building {candidate.HomeBuildingId}.", this);
+                    Debug.LogWarning($"[SimulationDrivers] household {candidate.HouseholdId} retains workshop-made furniture in household custody; no furnishing.install TaskAuthority outcome is wired, so no installation labor or placement is credited.", this);
                 }
                 if (hasPendingFurnitureOrder) continue;
                 if (hub.Journeys == null)
@@ -8179,6 +8180,18 @@ namespace LandLedgers.Orchestration.Systems
                 if (register.LiveBindingFor(asset.AssetId) != null) continue;
                 if (!asset.IsUsable || asset.IsReserved) continue;
                 return true;
+            }
+            return false;
+        }
+
+        private static bool HasInstallableCustodyFurniture(HouseholdFurnishingRegister register)
+        {
+            if (register?.Assets == null) return false;
+            foreach (EquipmentAsset asset in register.Assets)
+            {
+                if (asset == null || !asset.IsUsable || asset.IsReserved) continue;
+                if (string.IsNullOrWhiteSpace(asset.MadeByBusinessId)) continue;
+                if (register.LiveBindingFor(asset.AssetId) == null) return true;
             }
             return false;
         }
@@ -8610,7 +8623,8 @@ namespace LandLedgers.Orchestration.Systems
             DriveMillbrookFreightNegotiation(absoluteDayIndex);
         }
 
-        private void BindFurniturePurchaseFreightHooks(FreightShipmentHooks hooks)
+        private void BindFurniturePurchaseFreightHooks(
+            LandLedgers.Economy.Logistics.FreightShipmentHooks hooks)
         {
             if (hooks == null || hub == null || FreightProduction?.Service == null) return;
             Dictionary<string, FurniturePurchaseOrder> ordersByShipment = new Dictionary<string, FurniturePurchaseOrder>(StringComparer.Ordinal);
@@ -14002,6 +14016,26 @@ namespace LandLedgers.Orchestration.Systems
             // to trigger advance buying from the same-day local counter.
             const bool importFlourOrderPathExists = false;
             int flourCatalogTransitDays = ImportCatalog.Get(BakeryFlourSupply.FlourMaterialId)?.TransitDays ?? 0;
+            // Build one status snapshot from the freight authority for this
+            // synchronous planning pass. AllShipments returns a new list, so
+            // calling it from the per-lot resolver would repeatedly allocate
+            // and rescan retained freight history as the town ages.
+            Func<string, LogisticsShipmentState> findFreightShipment = null;
+            FreightProductionDriver freightAuthority = FreightProduction;
+            if (freightAuthority != null)
+            {
+                var shipmentsById = new Dictionary<string, LogisticsShipmentState>(StringComparer.Ordinal);
+                foreach (LogisticsShipmentState shipment in freightAuthority.AllShipments())
+                {
+                    if (shipment == null || string.IsNullOrWhiteSpace(shipment.ShipmentId)
+                        || shipmentsById.ContainsKey(shipment.ShipmentId)) continue;
+                    shipmentsById.Add(shipment.ShipmentId, shipment);
+                }
+                findFreightShipment = shipmentId => !string.IsNullOrWhiteSpace(shipmentId)
+                    && shipmentsById.TryGetValue(shipmentId, out LogisticsShipmentState shipment)
+                    ? shipment
+                    : null;
+            }
             var inputs = new BakeryWholesaleDailyInputs
             {
                 Bakery = bakery,
@@ -14026,6 +14060,7 @@ namespace LandLedgers.Orchestration.Systems
                 OpenHouseholdBreadNeedUnits = CountOpenHouseholdBreadNeedUnits(hub?.PurchasingNeeds),
                 MillbrookQuote = millbrookQuote,
                 MillbrookSupplier = millbrookAidRuntime,
+                FindFreightShipment = findFreightShipment,
                 ImportFlourPricePerLbCents = importFlourPricePerLbCents,
                 ImportTransitDays = importFlourTransitDays,
                 ImportOrderPathExists = importFlourOrderPathExists,

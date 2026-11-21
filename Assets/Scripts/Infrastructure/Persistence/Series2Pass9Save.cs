@@ -1399,15 +1399,15 @@ namespace LandLedgers.Persistence
                     dto.HouseholdFurnishingRegisters.Add(CopyHouseholdFurnishingRegister(register));
                 }
             }
+            else if (diag != null)
+            {
+                diag.Add("Series2Pass9Save: no household furnishing registers supplied; furnishing section saved empty.");
+            }
 
             foreach (FurniturePurchaseOrder order in FurniturePurchaseOrders ?? new List<FurniturePurchaseOrder>())
             {
                 if (order == null) continue;
                 dto.FurniturePurchaseOrders.Add(CaptureFurniturePurchase(order));
-            }
-            else if (diag != null)
-            {
-                diag.Add("Series2Pass9Save: no household furnishing registers supplied; furnishing section saved empty.");
             }
 
             // B2: stove fuel stores. Deep-copied, so later live mutation

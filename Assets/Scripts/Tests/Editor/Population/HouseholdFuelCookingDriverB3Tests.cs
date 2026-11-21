@@ -623,6 +623,62 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void HeatingAndStoveCustody_ConsumeAndReturnTheSamePhysicalFuelLots()
+        {
+            HouseholdStoveRegistry stoves = MakeStoveRegistry("B3 lot conservation building");
+            HouseholdState household = CreateHouseholdWithFuelReserve(HouseholdId, 10);
+            HouseholdInventory inventory = new HouseholdInventory(HouseholdId);
+            Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.FuelWoodId, 10, JanuaryDay,
+                "paid fuel dealer receipt"));
+            inventory.State.SeededFromReserves = true;
+            stoves.Inventory = inventory;
+
+            var diag = new List<string>();
+            Assert.IsNull(stoves.TryFeedStove("stove-1", 4, household, diag));
+            Assert.AreEqual(6, inventory.GetAvailableUnits(HouseholdItemCatalog.FuelWoodId),
+                "feeding moves the same units out of household lots and into stove custody");
+            Assert.AreEqual(6, household.GetReserve("fuel_wood").currentUnits,
+                "the reserve remains a mirror of the remaining household lot stock");
+            Assert.AreEqual(4, stoves.FuelWoodUnitsOnHand("stove-1"));
+
+            int consumed = HouseholdHeatingEvaluator.ResolveDailyHeatingUse(
+                household, household.GetReserve("fuel_wood"), JanuaryDay,
+                CalendarAnchor.Default, stoves);
+            Assert.AreEqual(3, consumed);
+            Assert.AreEqual(6, inventory.GetAvailableUnits(HouseholdItemCatalog.FuelWoodId),
+                "the burn used fuel already transferred into the stove; it must not debit pantry lots twice");
+            Assert.AreEqual(1, stoves.FuelWoodUnitsOnHand("stove-1"));
+
+            Assert.IsNull(stoves.TryReturnStoveFuelToReserve("stove-1", household, diag));
+            Assert.AreEqual(7, inventory.GetAvailableUnits(HouseholdItemCatalog.FuelWoodId),
+                "returning unburned stove fuel restores the real household lot quantity");
+            Assert.AreEqual(7, household.GetReserve("fuel_wood").currentUnits);
+            Assert.AreEqual(0, stoves.FuelWoodUnitsOnHand("stove-1"));
+        }
+
+        [Test]
+        public void Heating_ReserveBurnConsumesTheMatchingPhysicalFuelLot()
+        {
+            HouseholdStoveRegistry stoves = MakeStoveRegistry("B3 reserve burn lot building");
+            HouseholdState household = CreateHouseholdWithFuelReserve(HouseholdId, 10);
+            HouseholdInventory inventory = new HouseholdInventory(HouseholdId);
+            Assert.IsNull(inventory.AddLot(HouseholdItemCatalog.FuelWoodId, 10, JanuaryDay,
+                "paid fuel dealer receipt"));
+            inventory.State.SeededFromReserves = true;
+            stoves.Inventory = inventory;
+
+            int consumed = HouseholdHeatingEvaluator.ResolveDailyHeatingUse(
+                household, household.GetReserve("fuel_wood"), JanuaryDay,
+                CalendarAnchor.Default, stoves);
+
+            Assert.AreEqual(3, consumed);
+            Assert.AreEqual(7, inventory.GetAvailableUnits(HouseholdItemCatalog.FuelWoodId),
+                "direct reserve burn must consume actual owned fuel lots");
+            Assert.AreEqual(7, household.GetReserve("fuel_wood").currentUnits,
+                "the reserve mirror falls by the same physical quantity");
+        }
+
+        [Test]
         public void SaveLoad_FuelTripMidTripRoundTripsWithHoldIntactAndCompletesAfterRestore()
         {
             var f = new DriverFixture();

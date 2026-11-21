@@ -62,6 +62,74 @@ namespace LandLedgers.EditorTests.Population
                 "A position outside the authored walkable interior must not become an interior path start merely because its coarse grid cell overlaps the footprint.");
         }
 
+        [Test]
+        public void NaturalWoodHouse_ExteriorDoorwayThresholdIsRecognizedWithoutCallingItInterior()
+        {
+            const string prefabPath = "Assets/Environment/Buildings/House Natural Wood.prefab";
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            Assert.IsNotNull(prefab);
+            BuildingFootprintAuthority authority = prefab.GetComponent<BuildingFootprintAuthority>();
+            Assert.IsNotNull(authority);
+            BuildingEntrancePairAuthoring entrance = authority.EntrancePairs
+                .SingleOrDefault(x => x != null && x.id == "main-entrance");
+            Assert.IsNotNull(entrance);
+
+            Vector3 outdoor = authority.transform.TransformPoint(entrance.outdoorApproachLocal);
+            Vector3 indoor = authority.transform.TransformPoint(entrance.indoorPositionLocal);
+            Assert.IsTrue(AgentMover.IsAtAuthoredOutdoorApproach(authority, outdoor, entrance.id),
+                "The exact authored outside threshold remains a physical start even when its coarse grid cell is assigned to the building.");
+            Assert.IsFalse(AgentMover.IsAtAuthoredOutdoorApproach(authority, indoor, entrance.id),
+                "The indoor threshold must still use authored walkable-floor validation.");
+            Assert.IsFalse(AgentMover.IsAtAuthoredOutdoorApproach(authority,
+                    outdoor + Vector3.right, entrance.id),
+                "The doorway exception must not expand into an arbitrary building-footprint start radius.");
+        }
+
+        [Test]
+        public void AuthorizedPhysicalOriginResolvesToItsOwningBuilding()
+        {
+            Assert.AreEqual(0, PopulationPathingDirector.ResolveAuthorizedPhysicalOriginBuildingId(
+                    physicalCellBuildingId: 0,
+                    physicalCellHasBuilding: true,
+                    actorAtAuthorizedOrigin: true,
+                    hasAuthorizedRoute: true),
+                "A real, authorized physical start resolves to its actual owning building.");
+            Assert.AreEqual(-1, PopulationPathingDirector.ResolveAuthorizedPhysicalOriginBuildingId(
+                    physicalCellBuildingId: 0,
+                    physicalCellHasBuilding: true,
+                    actorAtAuthorizedOrigin: true,
+                    hasAuthorizedRoute: false),
+                "A physical position without an authored valid route must remain blocked.");
+            Assert.AreEqual(-1, PopulationPathingDirector.ResolveAuthorizedPhysicalOriginBuildingId(
+                    physicalCellBuildingId: 0,
+                    physicalCellHasBuilding: false,
+                    actorAtAuthorizedOrigin: true,
+                    hasAuthorizedRoute: true),
+                "A building-cell match alone cannot authorize entry or interior movement.");
+        }
+
+        [Test]
+        public void ExteriorRouteRefusal_RecordsPhysicalAndLogicalOriginsSeparately()
+        {
+            string diagnostic = PopulationPathingDirector.FormatExteriorRouteRefusal(
+                personId: 7,
+                worldPosition: new Vector3(-67.806f, 1.392f, -5.464f),
+                actorCell: new GridCoord(12, 34),
+                hasPhysicalBuilding: true,
+                physicalBuildingId: 9,
+                logicalDestinationBuildingId: 0,
+                homeBuildingId: 9,
+                targetBuildingId: 0,
+                targetDoorCell: new GridCoord(44, 55));
+
+            StringAssert.Contains("P7", diagnostic);
+            StringAssert.Contains("physicalBuilding=9", diagnostic);
+            StringAssert.Contains("logicalDestination=0", diagnostic);
+            StringAssert.Contains("home=9", diagnostic);
+            StringAssert.Contains("targetBuilding=0", diagnostic);
+            StringAssert.Contains("actorCell=(12, 34)", diagnostic);
+        }
+
         [TestCase("task-1", 4, "stove", "task-1", "stove", 4, true)]
         [TestCase("task-1", 4, "stove", "task-2", "stove", 4, false)]
         [TestCase("task-1", 4, "stove", "task-1", "stove", 5, false)]
@@ -364,6 +432,29 @@ namespace LandLedgers.EditorTests.Population
         }
 
         [Test]
+        public void FreightReceivingRefusalDiagnosticCapturesPhysicalOriginClassification()
+        {
+            string diagnostic = PopulationPathingDirector.FormatFreightHandlerOriginDiagnostic(
+                7, new Vector3(4.25f, 0.83f, 12.5f), 14, 42, 1,
+                insideFootprint: true,
+                insideFloorZero: false,
+                authorizedOutdoorOrigin: false,
+                currentDestinationBuildingId: 6,
+                homeBuildingId: 7,
+                workplaceBuildingId: 6,
+                scheduleState: "AtWork",
+                routeMode: "TaskDirected",
+                moverVisible: true,
+                routeActive: false);
+
+            StringAssert.Contains("P7 position=(4.25,0.83,12.50)", diagnostic);
+            StringAssert.Contains("grid=(14,42) cellBuilding=1", diagnostic);
+            StringAssert.Contains("insideFootprint=True insideFloor0=False authorizedOutdoorOrigin=False", diagnostic);
+            StringAssert.Contains("currentDestination=6 home=7 workplace=6", diagnostic);
+            StringAssert.Contains("schedule=AtWork routeMode=TaskDirected visible=True routeActive=False", diagnostic);
+        }
+
+        [Test]
         public void FreightExteriorStationInsideBuildingFootprintUsesDoorwayFallback()
         {
             GameObject worldObject = new("Freight receiving world");
@@ -470,6 +561,35 @@ namespace LandLedgers.EditorTests.Population
 
             Assert.AreEqual(435f / 1440f, departure, 0.00001f,
                 "a 7:45 start with a 15-minute route leaves by 7:15 after preparation and arrival buffer");
+        }
+
+        [Test]
+        public void WorkCommuteTimingHonorsAnOwnersManagingReservation()
+        {
+            const int personId = 17;
+            const int dayIndex = 23;
+            PersonScheduleTracker schedules = new();
+            Assert.IsNull(schedules.TryReserve(personId, PersonActivityKind.Managing, dayIndex,
+                540, 60, "management duties"));
+
+            Assert.AreEqual(540, PopulationPathingDirector.FindFirstScheduledWorkAttendanceMinute(
+                schedules, personId, dayIndex),
+                "a Managing-only schedule must control the existing workplace route's departure, not the generic occupation rhythm");
+            Assert.IsNull(schedules.TryReserve(personId, PersonActivityKind.Work, dayIndex,
+                600, 480, "work shift"));
+            Assert.AreEqual(540, PopulationPathingDirector.FindFirstScheduledWorkAttendanceMinute(
+                schedules, personId, dayIndex),
+                "a later Work reservation must not displace the earlier Managing reservation");
+            Assert.IsNull(schedules.TryReserve(personId, PersonActivityKind.Work, dayIndex,
+                510, 30, "earlier work shift"));
+            Assert.AreEqual(510, PopulationPathingDirector.FindFirstScheduledWorkAttendanceMinute(
+                schedules, personId, dayIndex),
+                "an earlier legitimate Work reservation still takes precedence over a later Managing block");
+            Assert.AreEqual(int.MaxValue, PopulationPathingDirector.FindFirstScheduledWorkAttendanceMinute(
+                schedules, personId, dayIndex + 1),
+                "a reservation on another day must not affect this day's commute");
+            Assert.AreEqual(int.MaxValue, PopulationPathingDirector.FindFirstScheduledWorkAttendanceMinute(
+                schedules, personId, dayIndex - 1));
         }
 
         [Test]

@@ -19,6 +19,54 @@ namespace LandLedgers.Pathing
         public static float BuildingActivityStagingRadius(float clearWidthMeters) =>
             Mathf.Max(1.25f, Mathf.Max(0f, clearWidthMeters) * 1.5f);
 
+        /// <summary>
+        /// A coarse town-grid cell may still be marked as a building where an
+        /// authored exterior doorway threshold lies. Only the actual authored
+        /// approach point is accepted as an outdoor route origin in that case.
+        /// </summary>
+        internal static bool IsAtAuthoredOutdoorApproach(BuildingFootprintAuthority authority,
+            Vector3 actorWorldPosition, string entranceId = null, float toleranceMeters = 0.35f)
+        {
+            if (authority == null || authority.EntrancePairs == null) return false;
+            float tolerance = Mathf.Max(0.05f, toleranceMeters);
+            foreach (BuildingEntrancePairAuthoring candidate in authority.EntrancePairs)
+            {
+                if (candidate == null
+                    || (!string.IsNullOrWhiteSpace(entranceId)
+                        && !string.Equals(candidate.id, entranceId, StringComparison.Ordinal))
+                    || !authority.TryGetEntrancePair(candidate.id, out BuildingEntrancePairAuthoring entrance, out _))
+                    continue;
+                Vector3 outdoor = authority.transform.TransformPoint(entrance.outdoorApproachLocal);
+                Vector2 actorXZ = new(actorWorldPosition.x, actorWorldPosition.z);
+                Vector2 outdoorXZ = new(outdoor.x, outdoor.z);
+                if (Vector2.Distance(actorXZ, outdoorXZ) <= tolerance
+                    && Mathf.Abs(actorWorldPosition.y - outdoor.y) <= 0.75f) return true;
+            }
+            return false;
+        }
+
+        internal static bool IsAtAuthoredOutdoorActivityLocation(BuildingFootprintAuthority authority,
+            Vector3 actorWorldPosition, float toleranceMeters = 0.35f)
+        {
+            if (authority == null || authority.ActivityLocations == null) return false;
+            float tolerance = Mathf.Max(0.05f, toleranceMeters);
+            Vector2 actorXZ = new(actorWorldPosition.x, actorWorldPosition.z);
+            foreach (BuildingActivityLocationAuthoring activity in authority.ActivityLocations)
+            {
+                if (activity == null || activity.type != BuildingActivityLocationType.Porch
+                    || activity.requiresWalkableInterior) continue;
+                Vector3 authored = authority.transform.TransformPoint(activity.positionLocal);
+                if (Vector2.Distance(actorXZ, new Vector2(authored.x, authored.z)) <= tolerance
+                    && Mathf.Abs(actorWorldPosition.y - authored.y) <= 0.75f) return true;
+            }
+            return false;
+        }
+
+        internal static bool IsAtAuthorizedOutdoorOrigin(BuildingFootprintAuthority authority,
+            Vector3 actorWorldPosition, float toleranceMeters = 0.35f) =>
+            IsAtAuthoredOutdoorApproach(authority, actorWorldPosition, null, toleranceMeters)
+            || IsAtAuthoredOutdoorActivityLocation(authority, actorWorldPosition, toleranceMeters);
+
         private enum AgentMoveState
         {
             Hidden = 0,
@@ -392,10 +440,10 @@ namespace LandLedgers.Pathing
         }
 
         /// <summary>
-        /// Leaves an authorized interior point through an authored entrance, then
-        /// follows the ordinary exterior path graph to the target. A building cell
-        /// is accepted only as the resident's real indoor origin and only after the
-        /// building's floor and furniture-exclusion authority validates it.
+        /// Leaves an authorized interior point, or an actor already standing at
+        /// the authored outdoor threshold, then follows the ordinary exterior
+        /// path graph to the target. A building cell is never accepted as an
+        /// exterior origin merely because it is near a door.
         /// </summary>
         public bool BeginInteriorDoorToDoor(BuildingFootprintAuthority sourceAuthority,
             BuildingAnchor target, out string reason)
@@ -416,6 +464,9 @@ namespace LandLedgers.Pathing
             }
 
             string lastInteriorFailure = "No authored entrance has a valid interior route from the resident.";
+            string lastExteriorFailure = string.Empty;
+            bool foundWalkableInteriorRoute = false;
+            bool sawOutdoorThresholdStart = false;
             foreach (BuildingEntrancePairAuthoring entranceCandidate in sourceAuthority.EntrancePairs)
             {
                 if (entranceCandidate == null) continue;
@@ -427,15 +478,49 @@ namespace LandLedgers.Pathing
                 }
 
                 Vector3 indoor = sourceAuthority.transform.TransformPoint(entrance.indoorPositionLocal);
-                if (!sourceAuthority.TryBuildInteriorPath(transform.position, indoor,
+                Vector3 authoredOutdoor = sourceAuthority.transform.TransformPoint(entrance.outdoorApproachLocal);
+                bool startsAtOutdoorApproach = IsAtAuthoredOutdoorApproach(
+                    sourceAuthority, transform.position, entrance.id);
+                bool startsAtPorchActivity = !startsAtOutdoorApproach
+                    && IsAtAuthoredOutdoorActivityLocation(sourceAuthority, transform.position);
+                bool startsAtAuthoredOutdoorOrigin = startsAtOutdoorApproach || startsAtPorchActivity;
+                sawOutdoorThresholdStart |= startsAtAuthoredOutdoorOrigin;
+                List<Vector3> interiorPath;
+                if (startsAtOutdoorApproach)
+                {
+                    // The actor is already physically at the authored exterior
+                    // threshold. Do not route that position through interior
+                    // floor validation just because its coarse grid cell belongs
+                    // to the building raster.
+                    interiorPath = new List<Vector3> { transform.position };
+                }
+                else if (startsAtPorchActivity)
+                {
+                    // An authored porch activity is outdoors even when the
+                    // coarse grid still assigns its cell to the house. Travel
+                    // to the authored door approach only when the world has a
+                    // clear physical segment along the porch.
+                    if (Physics.Linecast(transform.position + Vector3.up * 0.8f,
+                            authoredOutdoor + Vector3.up * 0.8f, out _, ~0,
+                            QueryTriggerInteraction.Ignore))
+                    {
+                        lastInteriorFailure = "The authored porch point is obstructed from the doorway's outdoor approach.";
+                        continue;
+                    }
+                    interiorPath = new List<Vector3> { transform.position, authoredOutdoor };
+                }
+                else if (!sourceAuthority.TryBuildInteriorPath(transform.position, indoor,
                     entrance.floorIndex, entrance.functionalSpaceId,
-                    out List<Vector3> interiorPath, out string interiorFailure))
+                    out interiorPath, out string interiorFailure))
                 {
                     lastInteriorFailure = interiorFailure;
                     continue;
                 }
+                else
+                {
+                    foundWalkableInteriorRoute = true;
+                }
 
-                Vector3 authoredOutdoor = sourceAuthority.transform.TransformPoint(entrance.outdoorApproachLocal);
                 Vector3 outward = authoredOutdoor - indoor;
                 outward.y = 0f;
                 if (outward.sqrMagnitude < 0.0001f) continue;
@@ -454,13 +539,18 @@ namespace LandLedgers.Pathing
 
                     PathingRequest probe = PathingRequest.CreateProbe(exteriorCoord, target.coord,
                         this, $"{name} interior departure", PathingProfile.Pedestrian);
-                    if (!pathingManager.TryFindPath(probe, out PathingResult exteriorPath)) continue;
+                    if (!pathingManager.TryFindPath(probe, out PathingResult exteriorPath))
+                    {
+                        lastExteriorFailure = $"entrance '{entrance.id}' exterior probe {exteriorCoord} -> {target.coord} "
+                            + $"failed ({exteriorPath?.FailureCategory}: {exteriorPath?.FailureReason}).";
+                        continue;
+                    }
 
                     List<Vector3> completeRoute = new(interiorPath.Count + exteriorPath.Path.Count + 2);
                     completeRoute.AddRange(interiorPath);
                     // Preserve the authored threshold as a physical waypoint before
                     // stepping outward to the first navigable exterior cell.
-                    if (Vector3.Distance(completeRoute[^1], authoredOutdoor) > 0.01f)
+                    if (!startsAtAuthoredOutdoorOrigin && Vector3.Distance(completeRoute[^1], authoredOutdoor) > 0.01f)
                         completeRoute.Add(authoredOutdoor);
                     if (Vector3.Distance(completeRoute[^1], exterior) > 0.01f)
                         completeRoute.Add(exterior);
@@ -475,8 +565,24 @@ namespace LandLedgers.Pathing
                 }
             }
 
-            reason = lastInteriorFailure;
+            reason = ResolveInteriorDoorToDoorFailure(sawOutdoorThresholdStart,
+                foundWalkableInteriorRoute, lastInteriorFailure, lastExteriorFailure, target.coord);
             return false;
+        }
+
+        internal static string ResolveInteriorDoorToDoorFailure(bool sawOutdoorThresholdStart,
+            bool foundWalkableInteriorRoute, string lastInteriorFailure,
+            string lastExteriorFailure, GridCoord target)
+        {
+            if (sawOutdoorThresholdStart)
+                return $"The resident is at an authored outdoor doorway threshold, but no traversable exterior route reaches requested destination {target}.";
+            if (foundWalkableInteriorRoute)
+                return string.IsNullOrWhiteSpace(lastExteriorFailure)
+                    ? $"A walkable interior route to an authored entrance exists, but no traversable exterior route reaches requested destination {target}."
+                    : $"A walkable interior route to an authored entrance exists, but no traversable exterior route reaches requested destination {target}; {lastExteriorFailure}";
+            return string.IsNullOrWhiteSpace(lastInteriorFailure)
+                ? "No authored entrance has a valid interior route from the resident."
+                : lastInteriorFailure;
         }
 
         /// <summary>Routes an already visible actor between two navigable world cells.</summary>
@@ -552,8 +658,15 @@ namespace LandLedgers.Pathing
                 || !authority.TryBuildInteriorActivityRoute(entranceId, activityId, out List<Vector3> interiorPath, out _)) return false;
             Vector3 outdoor = authority.transform.TransformPoint(entrance.outdoorApproachLocal);
             float stagingRadius = BuildingActivityStagingRadius(entrance.clearWidthMeters);
-            if (Vector3.Distance(transform.position, outdoor) > stagingRadius) return false;
-            List<Vector3> route = new() { outdoor };
+            bool atOutdoorThreshold = Vector3.Distance(transform.position, outdoor) <= stagingRadius;
+            bool atAuthoredPorch = !atOutdoorThreshold
+                && IsAtAuthoredOutdoorActivityLocation(authority, transform.position);
+            if (!atOutdoorThreshold && !atAuthoredPorch) return false;
+            if (atAuthoredPorch && Physics.Linecast(transform.position + Vector3.up * 0.8f,
+                    outdoor + Vector3.up * 0.8f, out _, ~0, QueryTriggerInteraction.Ignore)) return false;
+            List<Vector3> route = atAuthoredPorch
+                ? new List<Vector3> { transform.position, outdoor }
+                : new List<Vector3> { outdoor };
             route.AddRange(interiorPath);
             BuildingDoorAnimator doorway = ResolveDoorAnimator(authority, entrance);
             StartWorldRoute(route, new BuildingAnchor { type = AnchorType.FrontDoor,

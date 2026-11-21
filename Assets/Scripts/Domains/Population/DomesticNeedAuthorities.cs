@@ -102,9 +102,9 @@ namespace LandLedgers.Population
         /// Fuel-handling need: true when the household burns fuel today AND
         /// has fuel on hand to handle. The burn is the heating authority's
         /// own forecast (HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits:
-        /// season strain by month, member load, heat-retention and stove
-        /// multipliers) — zero outside heating season, at least one unit in
-        /// season. The on-hand check reads the fuel-wood reserve directly
+        /// temperature-driven since the heating lane, Nov 20 2026 — zero in
+        /// warm weather, at least one unit when heating is needed). The
+        /// on-hand check reads the fuel-wood reserve directly
         /// (no initialisation side effect, mirroring DailyNeedsService's
         /// private FindReserve): a household with no fuel has nothing to
         /// handle, and its shortfall is a procurement need, not a handling
@@ -112,14 +112,21 @@ namespace LandLedgers.Population
         /// already deducted or not, fuel remaining on hand still needs
         /// handling to reach the stove.
         /// </summary>
-        public static bool FuelHandlingNeeded(HouseholdState household, int dayIndex)
+        /// Heating lane (Nov 20 2026): the day's exterior mean temperature
+        /// may be passed in; otherwise the day's temperature is resolved
+        /// with the default scenario seed.
+        /// </summary>
+        public static bool FuelHandlingNeeded(HouseholdState household, int dayIndex, float? exteriorMeanCelsius = null)
         {
             if (household == null)
             {
                 return false;
             }
 
-            if (HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(household, dayIndex) <= 0)
+            int forecastBurn = exteriorMeanCelsius.HasValue
+                ? HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(household, exteriorMeanCelsius.Value)
+                : HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(household, dayIndex);
+            if (forecastBurn <= 0)
             {
                 return false;
             }

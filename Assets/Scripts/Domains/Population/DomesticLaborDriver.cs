@@ -108,6 +108,16 @@ namespace LandLedgers.Population
             /// </summary>
             public HouseholdInventory Inventory;
             /// <summary>
+            /// Heating lane (Nov 20 2026): the exterior mean temperature of
+            /// the forecast day the fuel trip carries for (tomorrow's burn),
+            /// in C. Null means unknown — the driver resolves the forecast
+            /// day's temperature with the default scenario seed. Callers
+            /// that already resolved the day's temperature (the daily
+            /// drive, tests pinning the burn) pass it in so the cargo
+            /// matches the burn the stove store will feed next.
+            /// </summary>
+            public float? FuelForecastExteriorMeanCelsius;
+            /// <summary>
             /// B3: the meal authority, when the caller has it (constructed
             /// from hub.MealLog). The cooking settlement records
             /// production through it. Null means unknown — cooking
@@ -235,6 +245,10 @@ namespace LandLedgers.Population
         private readonly Dictionary<int, HouseholdStoveRegistry> stovesByHousehold = new Dictionary<int, HouseholdStoveRegistry>();
         private readonly Dictionary<int, HouseholdInventory> inventoryByHousehold = new Dictionary<int, HouseholdInventory>();
         private readonly Dictionary<int, HouseholdMealService> mealServiceByHousehold = new Dictionary<int, HouseholdMealService>();
+        // Heating lane (Nov 20 2026): per-household forecast temperature for
+        // the fuel trip cargo (transient, never persisted — same lifecycle
+        // as the other per-household context maps below).
+        private readonly Dictionary<int, float> fuelForecastTemperatureByHousehold = new Dictionary<int, float>();
 
         /// <summary>
         /// Campaign C-24 (DEF-010, Decision 6): the household cleanliness
@@ -298,6 +312,7 @@ namespace LandLedgers.Population
             if (inputs.Stoves != null) stovesByHousehold[inputs.HouseholdId] = inputs.Stoves;
             if (inputs.Inventory != null) inventoryByHousehold[inputs.HouseholdId] = inputs.Inventory;
             if (inputs.MealService != null) mealServiceByHousehold[inputs.HouseholdId] = inputs.MealService;
+            if (inputs.FuelForecastExteriorMeanCelsius.HasValue) fuelForecastTemperatureByHousehold[inputs.HouseholdId] = inputs.FuelForecastExteriorMeanCelsius.Value;
 
             // Pass IX (A2-04): yesterday's unstarted plans are stale — prune
             // before planning today so the persisted list cannot grow
@@ -906,10 +921,18 @@ namespace LandLedgers.Population
         /// burn forecast, and no meal-prep — or when the reserve is
         /// empty.
         /// </summary>
-        public static int ComputeFuelTripCargo(HouseholdState household, int dayIndex, HouseholdStoveRegistry stoves, bool hasMealPrepToday)
+        /// Heating lane (Nov 20 2026): the forecast day's exterior mean
+        /// temperature may be passed in; otherwise the day's temperature is
+        /// resolved with the default scenario seed. The forecast and the
+        /// burn use the same temperature-driven formula, so the trip cargo
+        /// matches the burn the stove store will feed next.
+        /// </summary>
+        public static int ComputeFuelTripCargo(HouseholdState household, int dayIndex, HouseholdStoveRegistry stoves, bool hasMealPrepToday, float? exteriorMeanCelsius = null)
         {
             if (household == null || stoves == null) return 0;
-            int heating = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(household, dayIndex + 1);
+            int heating = exteriorMeanCelsius.HasValue
+                ? HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(household, exteriorMeanCelsius.Value)
+                : HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(household, dayIndex + 1);
             int cooking = hasMealPrepToday ? HouseholdStoveRegistry.FuelUnitsPerMealPrepSession : 0;
             int wanted = heating + cooking;
             if (wanted <= 0) return 0;
@@ -974,7 +997,10 @@ namespace LandLedgers.Population
             if (stoves.Stoves.Count == 0)
                 return "no installed stove.";
             HouseholdStove stove = stoves.Stoves[0];
-            int cargo = ComputeFuelTripCargo(household, flight.DayIndex, stoves, HasMealPrepToday(flight.HouseholdId, flight.DayIndex));
+            float? forecastTemperature = fuelForecastTemperatureByHousehold.TryGetValue(flight.HouseholdId, out float storedTemperature)
+                ? storedTemperature
+                : (float?)null;
+            int cargo = ComputeFuelTripCargo(household, flight.DayIndex, stoves, HasMealPrepToday(flight.HouseholdId, flight.DayIndex), forecastTemperature);
             if (cargo <= 0)
                 return "no fuel to carry (reserve empty or no burn forecast).";
             flight.FuelUnitsInTransit = cargo;
@@ -1653,6 +1679,7 @@ namespace LandLedgers.Population
             stovesByHousehold.Clear();
             inventoryByHousehold.Clear();
             mealServiceByHousehold.Clear();
+            fuelForecastTemperatureByHousehold.Clear();
             if (dto == null)
             {
                 return;

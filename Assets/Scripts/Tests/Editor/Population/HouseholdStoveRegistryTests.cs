@@ -483,14 +483,13 @@ namespace LandLedgers.Editor.Population
             // R-2 (plan §13): an installed standard stove must burn
             // exactly like a legacy Basic household, and an installed
             // stove must override a stale Efficient legacy field.
-            // Day 306 is January (the default anchor is 1880-03-01, so
-            // day 306 is 1881-01-01, strain 1.0): at that scale a
-            // 4-member household burns 3 units on Basic and 2 on
-            // Efficient, so the tier difference is visible in integers.
-            // Day 0 is March (shoulder strain 0.45), where both tiers
-            // ceil to 1 unit and the difference is invisible — the
-            // multiplier is real, the integer rounding hides it.
-            const int januaryDay = 306;
+            // Heating lane (Nov 20 2026): the burn is temperature-driven,
+            // so the comparison is pinned to an explicit cold January day
+            // (-20 C): at that differential a 4-member household burns 4
+            // units on Basic and 3 on Efficient, so the tier difference is
+            // visible in integers. (At the January mean the size factor
+            // pushes both tiers to 3 and the rounding hides the difference
+            // — the multiplier is real, the integer rounding hides it.)
             HouseholdState legacyBasic = CreateHousehold(7, HouseholdStoveTier.Basic);
             HouseholdState legacyEfficient = CreateHousehold(8, HouseholdStoveTier.Efficient);
 
@@ -507,10 +506,10 @@ namespace LandLedgers.Editor.Population
             installedBasic.stoveTier = stoves.DeriveStoveTier(installedBasic);
             staleEfficient.stoveTier = stoves.DeriveStoveTier(staleEfficient);
 
-            int legacyBasicUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(legacyBasic, januaryDay);
-            int installedBasicUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(installedBasic, januaryDay);
-            int legacyEfficientUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(legacyEfficient, januaryDay);
-            int staleEfficientUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(staleEfficient, januaryDay);
+            int legacyBasicUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(legacyBasic, -20f);
+            int installedBasicUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(installedBasic, -20f);
+            int legacyEfficientUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(legacyEfficient, -20f);
+            int staleEfficientUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(staleEfficient, -20f);
             Assert.AreEqual(legacyBasicUse, installedBasicUse,
                 "An installed standard stove burns the same as a legacy Basic stove.");
             Assert.IsTrue(legacyEfficientUse < legacyBasicUse,

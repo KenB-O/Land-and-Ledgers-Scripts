@@ -144,8 +144,8 @@ namespace LandLedgers.Population
         /// with the given exterior mean temperature. 0 when no heating is
         /// needed, otherwise at least 1 unit (a fire is either lit or it
         /// is not). Calibration anchors: a 4-person Basic household at the
-        /// January mean (-10.7 C) burns 3; at the July mean (21.8 C) burns 0;
-        /// at the April mean (6.2 C) burns 1.
+        /// January mean (-10.7 C) burns 3; a 2-person Basic household at the
+        /// April mean (6.2 C) burns 1; at the July mean (21.8 C) burns 0.
         /// </summary>
         public static int CalculateDailyFuelUseUnits(HouseholdThermalProfile profile, float exteriorMeanCelsius)
         {

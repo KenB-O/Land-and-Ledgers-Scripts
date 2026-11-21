@@ -261,23 +261,26 @@ namespace LandLedgers.Editor.Population
             HouseholdState household = CreateHouseholdWithFuelReserve(HouseholdId, 10);
             HouseholdStoveRegistry stoves = MakeStoveRegistry("B3 cargo building");
             // Day 306 is January (the default anchor is 1880-03-01, so
-            // day 306 is 1881-01-01, strain 1.0): a 4-member Basic
-            // household burns 3 (the B2 pin). The trip carries tomorrow's
-            // burn plus one cooking unit when a meal-prep task is planned.
-            Assert.AreEqual(3, HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(household, JanuaryDay + 1),
-                "January 4-member Basic burns 3 — the B2 heating pin.");
-            Assert.AreEqual(4, DomesticLaborDriver.ComputeFuelTripCargo(household, JanuaryDay, stoves, hasMealPrepToday: true));
-            Assert.AreEqual(3, DomesticLaborDriver.ComputeFuelTripCargo(household, JanuaryDay, stoves, hasMealPrepToday: false));
+            // day 306 is 1881-01-01). Heating lane (Nov 20 2026): the burn
+            // is temperature-driven, so the B2 pin is stated at the January
+            // mean (-10.7 C): a 4-member Basic household burns 3. The trip
+            // carries tomorrow's burn plus one cooking unit when a meal-prep
+            // task is planned. The forecast temperature is passed explicitly
+            // so the pin tests the formula, not one seeded day's draw.
+            Assert.AreEqual(3, HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(household, -10.7f),
+                "January 4-member Basic burns 3 at the January mean — the B2 heating pin.");
+            Assert.AreEqual(4, DomesticLaborDriver.ComputeFuelTripCargo(household, JanuaryDay, stoves, hasMealPrepToday: true, -10.7f));
+            Assert.AreEqual(3, DomesticLaborDriver.ComputeFuelTripCargo(household, JanuaryDay, stoves, hasMealPrepToday: false, -10.7f));
             household.GetReserve("fuel_wood").currentUnits = 2;
-            Assert.AreEqual(2, DomesticLaborDriver.ComputeFuelTripCargo(household, JanuaryDay, stoves, hasMealPrepToday: true),
+            Assert.AreEqual(2, DomesticLaborDriver.ComputeFuelTripCargo(household, JanuaryDay, stoves, hasMealPrepToday: true, -10.7f),
                 "the cargo is capped by the reserve on hand");
-            Assert.AreEqual(0, DomesticLaborDriver.ComputeFuelTripCargo(household, JanuaryDay, null, hasMealPrepToday: true));
-            Assert.AreEqual(0, DomesticLaborDriver.ComputeFuelTripCargo(null, JanuaryDay, stoves, hasMealPrepToday: true));
-            // July burns nothing: the trip carries only the cooking unit.
+            Assert.AreEqual(0, DomesticLaborDriver.ComputeFuelTripCargo(household, JanuaryDay, null, hasMealPrepToday: true, -10.7f));
+            Assert.AreEqual(0, DomesticLaborDriver.ComputeFuelTripCargo(null, JanuaryDay, stoves, hasMealPrepToday: true, -10.7f));
+            // July burns nothing at the July mean (21.8 C): the trip carries only the cooking unit.
             int julyDay = CalendarAnchor.Default.ToAbsoluteDay(1880, 7, 15);
-            Assert.AreEqual(0, HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(household, julyDay));
-            Assert.AreEqual(1, DomesticLaborDriver.ComputeFuelTripCargo(household, julyDay, stoves, hasMealPrepToday: true));
-            Assert.AreEqual(0, DomesticLaborDriver.ComputeFuelTripCargo(household, julyDay, stoves, hasMealPrepToday: false));
+            Assert.AreEqual(0, HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(household, 21.8f));
+            Assert.AreEqual(1, DomesticLaborDriver.ComputeFuelTripCargo(household, julyDay, stoves, hasMealPrepToday: true, 21.8f));
+            Assert.AreEqual(0, DomesticLaborDriver.ComputeFuelTripCargo(household, julyDay, stoves, hasMealPrepToday: false, 21.8f));
         }
 
         [Test]
@@ -290,6 +293,7 @@ namespace LandLedgers.Editor.Population
             var diag = new List<string>();
             DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(HouseholdId, household, stoves, inventory, 3, 4);
             inputs.FuelWoodReserveUnits = 10;
+            inputs.FuelForecastExteriorMeanCelsius = -10.7f; // Heating lane: January mean, so the cargo pin (3 heating + 1 cooking) tests the formula, not one seeded day.
             f.Driver.DriveDay(inputs, JanuaryDay, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
             Assert.AreEqual(1, f.Driver.Pending.Count(t => t.DefinitionId == DomesticTaskCatalog.FuelHandlingId),
                 "the fuel-handling task is planned");
@@ -342,6 +346,7 @@ namespace LandLedgers.Editor.Population
             var diag = new List<string>();
             DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(HouseholdId, household, stoves, inventory, 3, 4);
             inputs.FuelWoodReserveUnits = 10;
+            inputs.FuelForecastExteriorMeanCelsius = -10.7f; // Heating lane: January mean, so the cargo pin (3 heating + 1 cooking) tests the formula, not one seeded day.
             f.Driver.DriveDay(inputs, JanuaryDay, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
 
             var route = new StubRoute { Leg1 = DomesticActivityMovementResult.Unsupported };
@@ -373,6 +378,7 @@ namespace LandLedgers.Editor.Population
             var diag = new List<string>();
             DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(HouseholdId, household, stoves, inventory, 3, 4);
             inputs.FuelWoodReserveUnits = 10;
+            inputs.FuelForecastExteriorMeanCelsius = -10.7f; // Heating lane: January mean, so the cargo pin (3 heating + 1 cooking) tests the formula, not one seeded day.
             f.Driver.DriveDay(inputs, JanuaryDay, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
 
             var route = new StubRoute();
@@ -560,7 +566,7 @@ namespace LandLedgers.Editor.Population
             int totalBefore = stoves.TotalFuelWoodUnits(household);
             Assert.AreEqual(10, totalBefore);
             int consumed = HouseholdHeatingEvaluator.ResolveDailyHeatingUse(
-                household, household.GetReserve("fuel_wood"), JanuaryDay, CalendarAnchor.Default, stoves);
+                household, household.GetReserve("fuel_wood"), JanuaryDay, CalendarAnchor.Default, stoves, -10.7f);
             Assert.AreEqual(3, consumed, "January 4-member Basic burns 3 (the B2 pin).");
             Assert.AreEqual(1, stoves.FuelWoodUnitsOnHand("stove-1"), "the store pays first");
             Assert.AreEqual(6, household.GetReserve("fuel_wood").currentUnits, "the reserve is untouched while the store covers the burn");
@@ -576,7 +582,7 @@ namespace LandLedgers.Editor.Population
             HouseholdState household = CreateHouseholdWithFuelReserve(HouseholdId, 10);
             int totalBefore = stoves.TotalFuelWoodUnits(household);
             int consumed = HouseholdHeatingEvaluator.ResolveDailyHeatingUse(
-                household, household.GetReserve("fuel_wood"), JanuaryDay, CalendarAnchor.Default, stoves);
+                household, household.GetReserve("fuel_wood"), JanuaryDay, CalendarAnchor.Default, stoves, -10.7f);
             Assert.AreEqual(3, consumed);
             Assert.AreEqual(0, stoves.FuelWoodUnitsOnHand("stove-1"));
             Assert.AreEqual(7, household.GetReserve("fuel_wood").currentUnits);
@@ -592,7 +598,7 @@ namespace LandLedgers.Editor.Population
             Assert.IsNull(stoves.TryFeedStove("stove-1", 2, household, diag));
             int totalBefore = stoves.TotalFuelWoodUnits(household);
             int consumed = HouseholdHeatingEvaluator.ResolveDailyHeatingUse(
-                household, household.GetReserve("fuel_wood"), JanuaryDay, CalendarAnchor.Default, stoves);
+                household, household.GetReserve("fuel_wood"), JanuaryDay, CalendarAnchor.Default, stoves, -10.7f);
             Assert.AreEqual(3, consumed);
             Assert.AreEqual(0, stoves.FuelWoodUnitsOnHand("stove-1"), "the store is emptied first");
             Assert.AreEqual(7, household.GetReserve("fuel_wood").currentUnits, "the remainder comes from the reserve");
@@ -604,7 +610,7 @@ namespace LandLedgers.Editor.Population
         {
             HouseholdState household = CreateHouseholdWithFuelReserve(HouseholdId, 10);
             int consumed = HouseholdHeatingEvaluator.ResolveDailyHeatingUse(
-                household, household.GetReserve("fuel_wood"), JanuaryDay, CalendarAnchor.Default);
+                household, household.GetReserve("fuel_wood"), JanuaryDay, CalendarAnchor.Default, exteriorMeanCelsius: -10.7f);
             Assert.AreEqual(3, consumed);
             Assert.AreEqual(7, household.GetReserve("fuel_wood").currentUnits, "without a registry the burn debits the reserve as today");
         }
@@ -616,7 +622,7 @@ namespace LandLedgers.Editor.Population
             HouseholdState household = CreateHouseholdWithFuelReserve(HouseholdId, 10);
             var diag = new List<string>();
             Assert.IsNull(stoves.TryFeedStove("stove-1", 4, household, diag));
-            HouseholdReserveEvaluator.ResolveDailyUse(household, JanuaryDay, CalendarAnchor.Default, stoves);
+            HouseholdReserveEvaluator.ResolveDailyUse(household, JanuaryDay, CalendarAnchor.Default, stoves, exteriorMeanCelsius: -10.7f);
             Assert.AreEqual(1, stoves.FuelWoodUnitsOnHand("stove-1"), "the store pays first through the evaluator");
             Assert.AreEqual(6, household.GetReserve("fuel_wood").currentUnits);
             Assert.AreEqual(3, household.lastHeatingFuelUseUnits);
@@ -632,6 +638,7 @@ namespace LandLedgers.Editor.Population
             var diag = new List<string>();
             DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(HouseholdId, household, stoves, inventory, 3, 4);
             inputs.FuelWoodReserveUnits = 10;
+            inputs.FuelForecastExteriorMeanCelsius = -10.7f; // Heating lane: January mean, so the cargo pin (3 heating + 1 cooking) tests the formula, not one seeded day.
             f.Driver.DriveDay(inputs, JanuaryDay, f.Tasks, f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag);
 
             var route = new StubRoute();

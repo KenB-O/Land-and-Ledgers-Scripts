@@ -140,16 +140,17 @@ namespace LandLedgers.EditorTests.Population
             shoulder.EnsureHouseholdReservesInitialized(true);
             warm.EnsureHouseholdReservesInitialized(true);
 
-            // The Pass V calendar is Gregorian and absolute day 0 is the
-            // March 1 anchor; the old 28-day-month values (0/56/84) no
-            // longer represent winter/shoulder/warm dates.
-            int winterDay = CalendarAnchor.Default.ToAbsoluteDay(1880, 12, 15);
-            int shoulderDay = CalendarAnchor.Default.ToAbsoluteDay(1880, 3, 15);
-            int warmDay = CalendarAnchor.Default.ToAbsoluteDay(1880, 4, 15);
-
-            HouseholdReserveEvaluator.ResolveDailyUse(winter, winterDay);
-            HouseholdReserveEvaluator.ResolveDailyUse(shoulder, shoulderDay);
-            HouseholdReserveEvaluator.ResolveDailyUse(warm, warmDay);
+            // Heating lane (Nov 20 2026): strain is driven by the day's
+            // exterior temperature, not the month — so the seasons are
+            // pinned to explicit temperatures. The old "April = 0 strain"
+            // is gone: a 6.2 C April mean still needs a morning fire, so
+            // the warm case is a July mean instead. Winter (January mean
+            // -10.7 C) strains hardest, a shoulder mean (-1.1 C) less, and
+            // a warm July mean (21.8 C, above the 15 C heating base) not
+            // at all.
+            HouseholdReserveEvaluator.ResolveDailyUse(winter, 0, exteriorMeanCelsius: -10.7f);
+            HouseholdReserveEvaluator.ResolveDailyUse(shoulder, 0, exteriorMeanCelsius: -1.1f);
+            HouseholdReserveEvaluator.ResolveDailyUse(warm, 0, exteriorMeanCelsius: 21.8f);
 
             Assert.Greater(winter.lastWinterStrain01, shoulder.lastWinterStrain01);
             Assert.Greater(shoulder.lastWinterStrain01, 0f);
@@ -169,10 +170,13 @@ namespace LandLedgers.EditorTests.Population
             drafty.EnsureHouseholdReservesInitialized(true);
             efficient.EnsureHouseholdReservesInitialized(true);
 
-            int draftyUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(drafty, 0);
-            int efficientUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(efficient, 0);
-            HouseholdReserveEvaluator.ResolveDailyUse(drafty, 0);
-            HouseholdReserveEvaluator.ResolveDailyUse(efficient, 0);
+            // Heating lane (Nov 20 2026): the comparison is pinned to the
+            // explicit January mean (-10.7 C) so it tests the formula, not
+            // one seeded day's draw.
+            int draftyUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(drafty, -10.7f);
+            int efficientUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(efficient, -10.7f);
+            HouseholdReserveEvaluator.ResolveDailyUse(drafty, 0, exteriorMeanCelsius: -10.7f);
+            HouseholdReserveEvaluator.ResolveDailyUse(efficient, 0, exteriorMeanCelsius: -10.7f);
 
             Assert.Greater(draftyUse, efficientUse);
             Assert.Greater(drafty.lastWinterStrain01, efficient.lastWinterStrain01);

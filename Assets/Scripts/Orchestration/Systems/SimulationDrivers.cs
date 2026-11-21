@@ -9683,6 +9683,17 @@ namespace LandLedgers.Orchestration.Systems
             }
 
             CalendarAnchor anchor = timeManager.Settings != null ? timeManager.TimelineAnchor : CalendarAnchor.Default;
+            // Heating lane (Nov 20 2026): the day's exterior temperature,
+            // resolved ONCE per day from the world's weather seed (0 means
+            // unset and resolves to the scenario seed, 1886) and passed into
+            // the reserve resolution, so every household's burn reads the
+            // same day. The temperature is a pure function of (seed, day),
+            // so Save/Continue reproduces it from the persisted seed.
+            ExteriorTemperatureAuthority.DailyExteriorTemperature exterior =
+                ExteriorTemperatureAuthority.GetDailyTemperature(hub.WeatherSeed, absoluteDayIndex, anchor);
+            Debug.Log($"[SimulationDrivers] Exterior temperature day {absoluteDayIndex}: " +
+                $"high {exterior.HighC:F1}C / low {exterior.LowC:F1}C / mean {exterior.MeanC:F1}C " +
+                $"(anomaly {exterior.AnomalyC:F1}C).", this);
             // The physical household food authority flag: the same
             // condition the shopping-loop wiring uses
             // (householdShoppingLoop != null). Until the first
@@ -9702,7 +9713,8 @@ namespace LandLedgers.Orchestration.Systems
                     absoluteDayIndex,
                     anchor,
                     ResolveHouseholdStoves(household),
-                    foodInventoryIsAuthoritative);
+                    foodInventoryIsAuthoritative,
+                    exterior.MeanC);
                 household.demandSnapshot = HouseholdReserveEvaluator.BuildDemandSnapshot(household);
             }
 

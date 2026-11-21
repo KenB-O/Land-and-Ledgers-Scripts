@@ -481,6 +481,14 @@ namespace LandLedgers.Persistence
         public int lifetimeMedicalSpendCents;
         public HouseholdHeatRetentionTier heatRetentionTier = HouseholdHeatRetentionTier.Basic;
         public HouseholdStoveTier stoveTier = HouseholdStoveTier.Basic;
+        /// <summary>
+        /// Heating lane (Nov 20 2026): total heated floor area in m2.
+        /// Additive field; old saves load 0 and the thermal model derives
+        /// the area from the household's member count instead.
+        /// </summary>
+        public float homeFloorAreaM2;
+        /// <summary>Heating lane (Nov 20 2026): storeys of the home (1 by default).</summary>
+        public int homeStoreys = 1;
         public HouseholdFuelType preferredFuel = HouseholdFuelType.Wood;
         public float lastWinterStrain01;
         public float lastHeatingPressure01;

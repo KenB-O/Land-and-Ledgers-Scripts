@@ -147,10 +147,13 @@ namespace LandLedgers.Editor.Population
         [Test]
         public void FuelHandlingNeeded_July_NoBurn_ReturnsFalse()
         {
-            // Outside heating season the heating authority forecasts zero
-            // burn — even with a full fuel reserve there is nothing to handle.
+            // Heating lane (Nov 20 2026): at the July mean (21.8 C) the
+            // heating authority forecasts zero burn — even with a full fuel
+            // reserve there is nothing to handle. Pinned to the explicit
+            // July mean, not the seeded day: a -2.5 sigma July day would
+            // otherwise burn fuel and flake this test.
             HouseholdState household = HouseholdWithFuel(5);
-            Assert.IsFalse(DomesticNeedAuthorities.FuelHandlingNeeded(household, JulyDay()));
+            Assert.IsFalse(DomesticNeedAuthorities.FuelHandlingNeeded(household, JulyDay(), 21.8f));
         }
 
         [Test]
@@ -385,13 +388,18 @@ namespace LandLedgers.Editor.Population
 
         private static int JanuaryDay()
         {
-            // Month 1: full heating strain (GetSeasonStrain01 = 1).
+            // Heating lane (Nov 20 2026): mid-January, deep winter — the
+            // temperature-driven burn is always positive here (the January
+            // mean is -10.7 C and even a +3 sigma day stays well below the
+            // 15 C heating base).
             return CalendarAnchor.Default.ToAbsoluteDay(1881, 1, 15);
         }
 
         private static int JulyDay()
         {
-            // Month 7: no heating strain (GetSeasonStrain01 = 0).
+            // Heating lane (Nov 20 2026): mid-July. The seeded day's mean
+            // is almost always above the 15 C heating base, but the July
+            // test pins the explicit July mean instead of relying on the draw.
             return CalendarAnchor.Default.ToAbsoluteDay(1880, 7, 15);
         }
 

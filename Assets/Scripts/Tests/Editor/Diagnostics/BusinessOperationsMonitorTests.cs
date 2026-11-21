@@ -297,6 +297,13 @@ namespace LandLedgers.EditorTests.Diagnostics
                 "The cause must name the missing seeding by its exact name.");
             Assert.IsTrue(blocker.Cause.Contains("Lane 9e"),
                 "Seeding is Lane 9e's repair; this lane surfaces it and does not implement it.");
+            // Fix (F2): the cause must describe the actual failure mode (no
+            // household knows the dealer), not the now-false claim that the
+            // seeding method does not exist anywhere.
+            Assert.IsTrue(blocker.Cause.Contains("no household knows"),
+                "The cause must say what actually failed: no household knows the dealer.");
+            Assert.IsFalse(blocker.Cause.Contains("exists anywhere"),
+                "The cause must not claim the seeding method does not exist; Lane 9e landed it.");
         }
 
         [Test]

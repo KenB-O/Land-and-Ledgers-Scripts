@@ -463,7 +463,7 @@ namespace LandLedgers.Editor.Diagnostics
                 if (business.BusinessType == BusinessType.FuelDealer && dealerRuntime != null
                     && string.Equals(dealerRuntime.DealerBusinessId, business.InstanceId, StringComparison.Ordinal))
                 {
-                    snapshot.FuelDealer = BuildFuelDealerDetail(shared, business, dealerRuntime);
+                    snapshot.FuelDealer = BuildFuelDealerDetail(shared, business, dealerRuntime, hub != null ? hub.ShoppingLoop : null);
                 }
 
                 snapshots.Add(snapshot);
@@ -638,7 +638,8 @@ namespace LandLedgers.Editor.Diagnostics
         }
 
         private static FuelDealerOperationsDetail BuildFuelDealerDetail(
-            SharedBusinessRuntimeManager shared, BusinessInstanceState business, FuelDealerRuntime dealer)
+            SharedBusinessRuntimeManager shared, BusinessInstanceState business, FuelDealerRuntime dealer,
+            HouseholdShoppingLoop loop)
         {
             var detail = new FuelDealerOperationsDetail
             {
@@ -646,9 +647,12 @@ namespace LandLedgers.Editor.Diagnostics
                 TargetStockIntakeUnits = dealer.TargetStockIntakeUnits,
                 ReorderPointIntakeUnits = dealer.ReorderPointIntakeUnits,
                 RetailPriceCentsPerBundle = shared.GetConfiguredCategorySalePriceCents(business, "fuel_wood"),
-                // D-18 (source-grounded): no SeedLocalFuelDealerKnowledge exists
-                // anywhere in Assets/Scripts; seeding is Lane 9e's repair.
-                SellerKnowledgeSeeded = false,
+                // D-18 (source-grounded): Lane 9e seeds dealer knowledge at
+                // startup (SeedLocalFuelDealerKnowledge via
+                // ShopperSellerKnowledge.LearnSupplier). The flag reflects
+                // live knowledge records for this dealer, not an assumption:
+                // true only when at least one resident knows the dealer.
+                SellerKnowledgeSeeded = IsDealerKnownByAnyHousehold(loop, dealer.DealerBusinessId, business.InstanceId),
             };
 
             int outstanding = 0;
@@ -676,6 +680,25 @@ namespace LandLedgers.Editor.Diagnostics
             }
             detail.RetailSalesRecorded = retailSales;
             return detail;
+        }
+
+        /// <summary>D-18 (fix F2): true only when at least one resident's
+        /// seller-knowledge record names this dealer (by its dealer business
+        /// id, falling back to the business instance id). A missing loop or
+        /// empty knowledge store reads as unseeded, not as seeded.</summary>
+        private static bool IsDealerKnownByAnyHousehold(HouseholdShoppingLoop loop, string dealerBusinessId, string businessInstanceId)
+        {
+            if (loop == null || loop.SellerKnowledge == null || loop.SellerKnowledge.Records == null)
+                return false;
+            foreach (KnownSupplierRecord record in loop.SellerKnowledge.Records)
+            {
+                if (record == null)
+                    continue;
+                if (string.Equals(record.SupplierBusinessId, dealerBusinessId, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(record.SupplierBusinessId, businessInstanceId, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
         }
 
         private static List<BusinessSettlementCadence> BuildCadences(

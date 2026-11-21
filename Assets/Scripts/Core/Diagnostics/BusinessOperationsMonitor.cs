@@ -527,11 +527,12 @@ namespace LandLedgers.Diagnostics
                 blockers.Add(new BusinessBlocker(
                     "D-18", key,
                     "Fuel dealer has no live customers reachable",
-                    "SimulationDrivers seeds only SeedLocalGeneralStoreKnowledge and SeedLocalBakeryKnowledge; "
-                    + "no SeedLocalFuelDealerKnowledge exists anywhere in Assets/Scripts, so households cannot "
-                    + "discover the registered dealer as a fuel_wood seller. The dealer is registered, stocked, "
-                    + "staffed and queue-equipped (D-17, D-21) but never known. Seeding is Lane 9e's repair, "
-                    + "not this lane's — surfaced here, not implemented here.",
+                    "Seller knowledge is seeded per business at startup; the fuel-dealer seeding "
+                    + "(SeedLocalFuelDealerKnowledge, Lane 9e) recorded no household knowledge for this dealer, "
+                    + "so no household knows it as a fuel_wood seller and households cannot discover the "
+                    + "registered dealer. The dealer is registered, stocked, staffed and queue-equipped "
+                    + "(D-17, D-21) but never known. When this blocker fires, check that the seeding call "
+                    + "ran for this dealer business id.",
                     "SimulationDrivers (seller-knowledge seeding)",
                     "SellerKnowledgeSeeded = false; retail sales recorded = " + detail.RetailSalesRecorded + ".",
                     IncidentSeverity.Warning, false));

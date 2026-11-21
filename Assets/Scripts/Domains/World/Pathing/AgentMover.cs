@@ -369,7 +369,7 @@ namespace LandLedgers.Pathing
             ResetProceduralVisualPose(true);
         }
 
-        public bool BeginDoorToDoor(BuildingAnchor start, BuildingAnchor target, bool hideWhenArrived = true, BuildingDoorAnimator startDoorAnimator = null, BuildingDoorAnimator targetDoorAnimator = null)
+        public bool BeginDoorToDoor(BuildingAnchor start, BuildingAnchor target, bool hideWhenArrived = true, BuildingDoorAnimator startDoorAnimator = null, BuildingDoorAnimator targetDoorAnimator = null, string attribution = null)
         {
             EnsureReferences();
             if (pathingManager == null)
@@ -382,7 +382,7 @@ namespace LandLedgers.Pathing
             if (grid == null) return false;
             GridCoord actualStart = grid.WorldToCoord(transform.position);
             if (!grid.IsInBounds(actualStart)
-                || !pathingManager.TryFindPath(actualStart, target.coord, out PathingResult result, this, $"{name} door-to-door"))
+                || !pathingManager.TryFindPath(actualStart, target.coord, out PathingResult result, this, $"{name} door-to-door", attribution: attribution))
             {
                 return false;
             }
@@ -480,14 +480,14 @@ namespace LandLedgers.Pathing
         }
 
         /// <summary>Routes an already visible actor between two navigable world cells.</summary>
-        public bool BeginGridRoute(GridCoord start, GridCoord target, bool hideWhenArrived = false)
+        public bool BeginGridRoute(GridCoord start, GridCoord target, bool hideWhenArrived = false, string attribution = null)
         {
             EnsureReferences();
             if (pathingManager == null || IsRouteActive || IsHidden) return false;
             TownGrid grid = pathingManager.Grid;
             GridCoord actualStart = grid != null ? grid.WorldToCoord(transform.position) : default;
             if (grid == null || !grid.IsInBounds(actualStart) || !actualStart.Equals(start)
-                || !pathingManager.TryFindPath(actualStart, target, out PathingResult result, this, $"{name} staging route"))
+                || !pathingManager.TryFindPath(actualStart, target, out PathingResult result, this, $"{name} staging route", attribution: attribution))
                 return false;
             var targetAnchor = new BuildingAnchor { type = AnchorType.FrontDoor, coord = target };
             StartRoute(result.Path, actualStart, targetAnchor, hideWhenArrived, null, null);
@@ -500,7 +500,7 @@ namespace LandLedgers.Pathing
         /// point that shares a coarse grid cell with its building.
         /// </summary>
         public bool BeginGridRouteWithFinalWaypoints(GridCoord start, GridCoord target,
-            IReadOnlyList<Vector3> finalWaypoints)
+            IReadOnlyList<Vector3> finalWaypoints, string attribution = null)
         {
             EnsureReferences();
             if (pathingManager == null || IsRouteActive || IsHidden || finalWaypoints == null
@@ -509,7 +509,7 @@ namespace LandLedgers.Pathing
             GridCoord actualStart = grid != null ? grid.WorldToCoord(transform.position) : default;
             if (grid == null || !grid.IsInBounds(actualStart) || !actualStart.Equals(start)
                 || !pathingManager.TryFindPath(actualStart, target, out PathingResult result,
-                    this, $"{name} doorway activity approach")) return false;
+                    this, $"{name} doorway activity approach", attribution: attribution)) return false;
 
             List<Vector3> route = new(result.Path.Count + finalWaypoints.Count);
             foreach (GridCoord coord in result.Path)
@@ -529,7 +529,7 @@ namespace LandLedgers.Pathing
         /// <summary>Routes to or from an authored building interior endpoint while preserving the building's doorway gate.</summary>
         public bool BeginBuildingRoute(GridCoord start, GridCoord target, int startInteriorBuildingId,
             int targetInteriorBuildingId, int floorIndex = 0, string functionalSpaceId = null,
-            bool hideWhenArrived = false)
+            bool hideWhenArrived = false, string attribution = null)
         {
             EnsureReferences();
             if (pathingManager == null || IsRouteActive || IsHidden) return false;
@@ -538,7 +538,7 @@ namespace LandLedgers.Pathing
             if (grid == null || !grid.IsInBounds(actualStart)
                 || !pathingManager.TryFindPath(actualStart, target, out PathingResult result, this,
                     $"{name} building activity route", PathingProfile.Pedestrian, floorIndex,
-                    functionalSpaceId, startInteriorBuildingId, targetInteriorBuildingId)) return false;
+                    functionalSpaceId, startInteriorBuildingId, targetInteriorBuildingId, attribution: attribution)) return false;
             var targetAnchor = new BuildingAnchor { type = AnchorType.FrontDoor, coord = target };
             StartRoute(result.Path, actualStart, targetAnchor, hideWhenArrived, null, null);
             return true;

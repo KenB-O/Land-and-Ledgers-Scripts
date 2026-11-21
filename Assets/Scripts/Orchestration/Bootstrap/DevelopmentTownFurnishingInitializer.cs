@@ -137,6 +137,14 @@ namespace LandLedgers.Orchestration
 
                 RebuildDerivedRegistries(household, systemsHub);
                 ValidateFunctionalActivityRoutes(home.runtimeFootprintAuthority, register, result.Diagnostics);
+                // Lane 9c (B-7): per-home startup access validation —
+                // stove, cleaning, firewood and dining chair, reachable
+                // from main-entrance where interior. Gaps are warnings,
+                // not diagnostics-list entries, so a home with no stove,
+                // no cleaning point, no firewood pile or no dining chair
+                // surfaces at startup (B-01..B-04) instead of as silent
+                // task failures.
+                ValidateHomeAccess(home.runtimeFootprintAuthority, home.id, household.id, definition.key);
             }
 
             return result;
@@ -215,6 +223,10 @@ namespace LandLedgers.Orchestration
                 }
                 RebuildDerivedRegistries(household, systemsHub);
                 ValidateFunctionalActivityRoutes(home.runtimeFootprintAuthority, register, result.Diagnostics);
+                // Lane 9c (B-7): same per-home access validation as the
+                // New Game seed, so a Continue re-surfaces a home whose
+                // access regressed (or was never authored).
+                ValidateHomeAccess(home.runtimeFootprintAuthority, home.id, household.id, $"household {household.id}");
             }
             return result;
         }
@@ -485,6 +497,35 @@ namespace LandLedgers.Orchestration
             systemsHub.SleepingPlaceRegistryFor(household.id).RebuildFromRegister();
             systemsHub.HouseholdStoveRegistryFor(household.id).RebuildFromRegister();
             systemsHub.DiningPlaceRegistryFor(household.id).HomeBuildingInstanceId = household.homeBuildingId;
+        }
+
+        /// <summary>
+        /// Lane 9c (B-7): per-home startup access validation. A home
+        /// needs a Stove, a Cleaning point, a Firewood point and at
+        /// least one Dining chair. Interior types must be reachable from
+        /// main-entrance via the type-based resolver; Firewood is an
+        /// exterior pile, so presence is the whole requirement. Gaps are
+        /// logged as warnings so they surface at startup (B-01..B-04)
+        /// instead of as silent task failures. The check computation is
+        /// shared with the business validation in
+        /// DevelopmentBusinessInteriorInitializer.
+        /// </summary>
+        private static void ValidateHomeAccess(
+            BuildingFootprintAuthority authority, int buildingId, int householdId, string householdLabel)
+        {
+            if (authority == null) return;
+            var checks = new List<StartupAccessValidator.ActivityAccessCheck>
+            {
+                DevelopmentBusinessInteriorInitializer.BuildAccessCheck(authority, buildingId, BuildingActivityLocationType.Stove, requiresInteriorRoute: true),
+                DevelopmentBusinessInteriorInitializer.BuildAccessCheck(authority, buildingId, BuildingActivityLocationType.Cleaning, requiresInteriorRoute: true),
+                DevelopmentBusinessInteriorInitializer.BuildAccessCheck(authority, buildingId, BuildingActivityLocationType.Firewood, requiresInteriorRoute: false),
+                DevelopmentBusinessInteriorInitializer.BuildAccessCheck(authority, buildingId, BuildingActivityLocationType.Dining, requiresInteriorRoute: true),
+            };
+            var gaps = new List<string>();
+            StartupAccessValidator.AppendAccessGaps(
+                $"Home '{householdLabel}' (household {householdId}, building {buildingId})", checks, gaps);
+            foreach (string gap in gaps)
+                Debug.LogWarning("[StartupAccess] " + gap);
         }
 
         private static void ValidateFunctionalActivityRoutes(

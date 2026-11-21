@@ -61,6 +61,19 @@ namespace LandLedgers.Population
             public bool ColdSeason;
             public bool HasAnimals;
             /// <summary>
+            /// Lane 9c (M-R4, Agent M §3.1/§7): whether the household home
+            /// currently has a usable animal-care destination. Null
+            /// preserves the field for legacy callers that do not supply
+            /// building-authority data; false is a known physical
+            /// blocker and true permits scheduling. Unlike the firewood
+            /// flag, null does NOT preserve legacy scheduling — the
+            /// legacy behaviour (schedule daily with no destination) is
+            /// the defect, so unknown fails closed. No pen/pasture
+            /// activity location type exists today, so production
+            /// supplies false until the owner authors a destination.
+            /// </summary>
+            public bool? AnimalCareDestinationAvailable;
+            /// <summary>
             /// B2 (Agent B, expanded campaign 2026-11-16): the household's
             /// stove registry, when the caller has one (Agent G wires it
             /// from the hub/state in production). Null means no stove
@@ -324,7 +337,21 @@ namespace LandLedgers.Population
 
             if (inputs.HasAnimals)
             {
-                wanted.Add((DomesticTaskCatalog.AnimalCareId, 480, "household animals need tending"));
+                // Lane 9c (M-R4): the resolver has no animal-care branch
+                // and no pen/pasture destination exists, so an unscheduled
+                // task could never arrive — start, fail arrival, interrupt,
+                // requeue, repeat. Gate scheduling on a destination
+                // existing; the need stays visible as a diagnostic, the
+                // same shape as the fuel-handling stove guard above.
+                if (DomesticAnimalCareGate.ShouldScheduleAnimalCare(inputs.AnimalCareDestinationAvailable, out string animalCareRefusal))
+                {
+                    wanted.Add((DomesticTaskCatalog.AnimalCareId, 480, "household animals need tending"));
+                }
+                else
+                {
+                    diag.Add("DomesticLaborDriver: household " + inputs.HouseholdId +
+                        " owns animals but " + animalCareRefusal);
+                }
             }
 
             if (inputs.CleaningNeeded)

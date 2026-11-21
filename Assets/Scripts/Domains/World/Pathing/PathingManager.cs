@@ -72,16 +72,17 @@ namespace LandLedgers.Pathing
             int floorIndex = 0,
             string functionalSpaceId = null,
             int startInteriorBuildingId = -1,
-            int targetInteriorBuildingId = -1)
+            int targetInteriorBuildingId = -1,
+            string attribution = null)
         {
             return TryFindPath(new PathingRequest(start, target, requester, label, profile, floorIndex: floorIndex,
                 functionalSpaceId: functionalSpaceId, startInteriorBuildingId: startInteriorBuildingId,
-                targetInteriorBuildingId: targetInteriorBuildingId), out result);
+                targetInteriorBuildingId: targetInteriorBuildingId, attribution: attribution), out result);
         }
 
-        public bool TryFindPath(BuildingAnchor start, BuildingAnchor target, out PathingResult result, UnityEngine.Object requester = null, string label = null, PathingProfile profile = PathingProfile.Pedestrian)
+        public bool TryFindPath(BuildingAnchor start, BuildingAnchor target, out PathingResult result, UnityEngine.Object requester = null, string label = null, PathingProfile profile = PathingProfile.Pedestrian, string attribution = null)
         {
-            return TryFindPath(start.coord, target.coord, out result, requester, label, profile);
+            return TryFindPath(start.coord, target.coord, out result, requester, label, profile, attribution: attribution);
         }
 
         public bool TryGetMovementCost(GridCoord coord, out int cost)
@@ -843,7 +844,12 @@ namespace LandLedgers.Pathing
             if (!result.Request.SuppressFailureLog && settings != null && settings.logFailedRequests)
             {
                 UnityEngine.Object context = result.Request.Requester != null ? result.Request.Requester : this;
-                Debug.LogWarning($"Pathing request failed ({result.FailureCategory}): {result.FailureReason}", context);
+                // Lane 9c (M-R9): the warning carries the request label
+                // (mover name + route kind), caller attribution (task
+                // family / destination where held) and the from/to cells,
+                // so a StartNotWalkable line is attributable without the
+                // checklist. The historical prefix is preserved verbatim.
+                Debug.LogWarning(PathingRequest.FormatFailureWarning(result.Request, result.FailureCategory, result.FailureReason), context);
             }
 
             return false;

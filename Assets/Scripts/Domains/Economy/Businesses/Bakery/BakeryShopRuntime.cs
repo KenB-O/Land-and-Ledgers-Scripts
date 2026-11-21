@@ -268,6 +268,15 @@ namespace LandLedgers.Economy.Businesses.Bakery
         /// <summary>D1D: wholesale supply agreements (Canon §7.3E).</summary>
         private readonly List<BakeryWholesaleAccount> wholesaleAccounts = new List<BakeryWholesaleAccount>();
 
+        /// <summary>
+        /// Lane 10a (H-3): the persisted sales-channel decision history —
+        /// every policy resolution/change and every account add/pause, with
+        /// who/what/when/why and the observed inputs at decision time.
+        /// The Incident Investigator and the Business Operations Monitor
+        /// read this list instead of a bare policy value.
+        /// </summary>
+        private readonly List<BakeryChannelDecision> channelDecisions = new List<BakeryChannelDecision>();
+
         /// <summary>D1D: fulfilled wholesale deliveries (the goods side of each account fill).</summary>
         private readonly List<BakeryWholesaleDeliveryRecord> wholesaleDeliveries = new List<BakeryWholesaleDeliveryRecord>();
 
@@ -321,11 +330,12 @@ namespace LandLedgers.Economy.Businesses.Bakery
         /// baker person-time booking. Resolved from the business owner, the
         /// same pattern as the freight owner resolution in SimulationDrivers
         /// (bakery.Owner.PersonId). -1 = unbound: no owner was bound, or the
-        /// bound owner has no person (e.g. the Player). Nothing reads this
-        /// yet: booking is NOT implemented until the hunger→capacity ruling
-        /// lands (Obj 45). The link is re-bound at bootstrap, not saved —
-        /// the save DTO does not carry it, so a restored runtime re-binds
-        /// from the live business owner.
+        /// bound owner has no person (e.g. the Player). Lane 10a (H-6):
+        /// the fail-closed worker gate DOES read this link and refuses the
+        /// bake when it is unbound — the old "Nothing reads this yet"
+        /// comment was false and is removed. The link is re-bound at
+        /// bootstrap, not saved — the save DTO does not carry it, so a
+        /// restored runtime re-binds from the live business owner.
         /// </summary>
         public int OwnerPersonId { get; private set; } = -1;
 
@@ -373,6 +383,13 @@ namespace LandLedgers.Economy.Businesses.Bakery
 
         /// <summary>D1D: wholesale supply agreements on the books.</summary>
         public IReadOnlyList<BakeryWholesaleAccount> WholesaleAccounts => wholesaleAccounts;
+
+        /// <summary>Lane 10a (H-3): the recorded sales-channel decision history (who/what/when/why).</summary>
+        public IReadOnlyList<BakeryChannelDecision> ChannelDecisions => channelDecisions;
+
+        /// <summary>Lane 10a (H-3): the latest recorded channel decision, or null when no decision is on record.</summary>
+        public BakeryChannelDecision LatestChannelDecision =>
+            channelDecisions.Count == 0 ? null : channelDecisions[channelDecisions.Count - 1];
 
         /// <summary>D1D: fulfilled wholesale deliveries.</summary>
         public IReadOnlyList<BakeryWholesaleDeliveryRecord> WholesaleDeliveries => wholesaleDeliveries;
@@ -1180,8 +1197,27 @@ namespace LandLedgers.Economy.Businesses.Bakery
         /// D1D: books a wholesale supply agreement with a repeat buyer
         /// (boarding house, hotel, restaurant, store, saloon, camp — Canon
         /// §7.3E). Returns a rejection string, or null on success.
+        /// Lane 10a (H-3/H-6): the booking is recorded as a channel
+        /// decision. Callers without a decision context (day/decider) get
+        /// the honest "unspecified" record — the day is -1 (not supplied),
+        /// never a fabricated day 0. The scenario path
+        /// (ScenarioOpeningWholesaleAccounts) and the morning
+        /// re-evaluation pass the real day and decider.
         /// </summary>
         public string AddWholesaleAccount(BakeryWholesaleAccount account, List<string> diag)
+        {
+            return AddWholesaleAccount(account, -1, BakeryChannelDecision.UnspecifiedDecider, diag);
+        }
+
+        /// <summary>
+        /// D1D: books a wholesale supply agreement with a repeat buyer,
+        /// recording the booking as a channel decision (H-3). An account
+        /// comes into existence only by an explicit config entry, a
+        /// voluntary recorded opt-in through this method, or a recorded
+        /// decision — never implicitly (H-6: wholesale is opt-in only).
+        /// Returns a rejection string, or null on success.
+        /// </summary>
+        public string AddWholesaleAccount(BakeryWholesaleAccount account, int dayIndex, string decider, List<string> diag)
         {
             diag = diag ?? diagnostics;
             if (account == null) return "BakeryShopRuntime: null wholesale account refused.";
@@ -1202,6 +1238,11 @@ namespace LandLedgers.Economy.Businesses.Bakery
             diag.Add($"BakeryShopRuntime: wholesale account {account.AccountId} — {account.UnitsPerDelivery}× {account.ProductId} " +
                 $"every {account.DeliveryCadenceDays} day(s) to {account.BuyerBusinessId} ({account.BuyerType}) " +
                 $"at {account.PricePerUnitCents}¢/unit, {account.Freshness}.");
+            RecordChannelDecision(dayIndex, decider, BakeryChannelDecision.AccountAddedKind,
+                "absent", account.AccountId,
+                $"wholesale account added: {account.UnitsPerDelivery}x {account.ProductId} every {account.DeliveryCadenceDays} day(s) to {account.BuyerBusinessId} at {account.PricePerUnitCents}c/unit"
+                + (dayIndex < 0 ? " (no decision context supplied by caller)" : string.Empty),
+                diag, wholesalePriceCentsPerUnit: account.PricePerUnitCents);
             return null;
         }
 
@@ -1840,6 +1881,320 @@ namespace LandLedgers.Economy.Businesses.Bakery
 
         #endregion
 
+        #region Lane 10a Sales-channel choice (Canon §7.3E/§7.5, H-2/H-3/H-5/H-6)
+
+        /// <summary>
+        /// Lane 10a (H-2): resolves Glenn's initial sales-channel policy
+        /// ONCE, from the scenario-authored config value, and records the
+        /// resolution as a decision. Authored value wins; absent
+        /// (Unspecified) means ProtectRetailCounter — the §19 retail-first
+        /// owner decision (Lane 9a), recorded as "scenario default,
+        /// retail-first per §19". Idempotent: a runtime that already holds
+        /// an initial-policy decision is not re-resolved. The code field
+        /// initializer and the save-DTO default remain only as
+        /// deserialization fallbacks for old saves, never as a decision.
+        /// Returns a rejection string, or null on success (resolution is
+        /// never refused — the worst case is the recorded default).
+        /// </summary>
+        public string ResolveInitialChannelPolicy(BakerySupplyProtectionPolicy authoredPolicy, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            foreach (BakeryChannelDecision existing in channelDecisions)
+            {
+                if (existing != null && string.Equals(existing.Kind, BakeryChannelDecision.InitialPolicyKind, StringComparison.Ordinal))
+                {
+                    diag.Add($"BakeryShopRuntime: initial channel policy already resolved on day {existing.DayIndex} ({existing.NewValue}); not re-resolved.");
+                    return null;
+                }
+            }
+
+            BakerySupplyProtectionPolicy previous = supplyProtection;
+            BakerySupplyProtectionPolicy resolved = authoredPolicy == BakerySupplyProtectionPolicy.Unspecified
+                ? BakerySupplyProtectionPolicy.ProtectRetailCounter
+                : authoredPolicy;
+            supplyProtection = resolved;
+            string reason = authoredPolicy == BakerySupplyProtectionPolicy.Unspecified
+                ? "scenario default, retail-first per §19 (Lane 9a owner decision; no initial policy authored in config)"
+                : "scenario-authored initial policy";
+            RecordChannelDecision(dayIndex, BakeryChannelDecision.ScenarioDecider,
+                BakeryChannelDecision.InitialPolicyKind, previous.ToString(), resolved.ToString(), reason, diag);
+            return null;
+        }
+
+        /// <summary>
+        /// Lane 10a (H-2/H-3): records the standing policy of a runtime
+        /// with no decision on record — a legacy save whose history predates
+        /// the decision record, or an opening that never resolved one. The
+        /// policy itself is UNCHANGED; only the fact that it stands, and
+        /// when it was first observed, is recorded. A runtime that already
+        /// holds any decision is left alone. Called by the morning
+        /// re-evaluation before it evaluates, so the history is never
+        /// silently empty.
+        /// </summary>
+        public string RecordStandingPolicyAsDecision(int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (channelDecisions.Count > 0)
+            {
+                diag.Add("BakeryShopRuntime: a channel decision is already on record; the standing policy needs no backstop entry.");
+                return null;
+            }
+
+            RecordChannelDecision(dayIndex, BakeryChannelDecision.ScenarioDecider,
+                BakeryChannelDecision.StandingPolicyKind, supplyProtection.ToString(), supplyProtection.ToString(),
+                "standing policy recorded on first observation — no prior decision on record (legacy save or unconfigured opening); the policy itself is unchanged",
+                diag);
+            return null;
+        }
+
+        /// <summary>
+        /// Lane 10a (H-3): sets the owner's scarcity policy and records the
+        /// change as a channel decision (who/what/when/why + observed
+        /// inputs). A set to the value already in force records nothing
+        /// and is not a decision. Unspecified is refused: it is not a
+        /// settable policy (the plain SupplyProtection property setter
+        /// still coerces it for deserialization/tests, without recording).
+        /// Returns a rejection string, or null on success.
+        /// </summary>
+        public string SetSupplyProtection(
+            BakerySupplyProtectionPolicy policy, int dayIndex, string decider, string reason, List<string> diag,
+            int recordedRetailAverageUnitsPerDay = -1, int openHouseholdBreadNeedUnits = -1,
+            int dueWholesaleUnits = -1, int retailPriceCentsPerUnit = -1, int wholesalePriceCentsPerUnit = -1)
+        {
+            diag = diag ?? diagnostics;
+            if (policy == BakerySupplyProtectionPolicy.Unspecified)
+                return "BakeryShopRuntime: Unspecified is not a settable channel policy — the current policy stands.";
+            BakerySupplyProtectionPolicy previous = supplyProtection;
+            if (previous == policy)
+            {
+                diag.Add($"BakeryShopRuntime: channel policy already {policy}; no decision recorded.");
+                return null;
+            }
+
+            supplyProtection = policy;
+            RecordChannelDecision(dayIndex, decider, BakeryChannelDecision.PolicyChangeKind,
+                previous.ToString(), policy.ToString(), reason, diag,
+                recordedRetailAverageUnitsPerDay, openHouseholdBreadNeedUnits, dueWholesaleUnits,
+                retailPriceCentsPerUnit, wholesalePriceCentsPerUnit);
+            return null;
+        }
+
+        /// <summary>
+        /// Lane 10a (H-3/H-5): pauses or resumes one wholesale account by
+        /// recorded decision (IsActive = false/true). Ending an account is
+        /// a lawful transition, never a silent wipe: booked accounts stay
+        /// booked in existing saves until a decision ends them, and the
+        /// entry names the decider, day and reason. A set to the value
+        /// already in force records nothing. Returns a rejection string,
+        /// or null on success.
+        /// </summary>
+        public string SetWholesaleAccountActive(string accountId, bool isActive, int dayIndex, string decider, string reason, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (string.IsNullOrWhiteSpace(accountId))
+                return "BakeryShopRuntime: a wholesale account id is required to change its active state.";
+            BakeryWholesaleAccount account = null;
+            foreach (BakeryWholesaleAccount candidate in wholesaleAccounts)
+            {
+                if (candidate != null && string.Equals(candidate.AccountId, accountId, StringComparison.Ordinal))
+                {
+                    account = candidate;
+                    break;
+                }
+            }
+            if (account == null)
+                return $"BakeryShopRuntime: no wholesale account '{accountId}' — nothing paused or resumed.";
+
+            if (account.IsActive == isActive)
+            {
+                diag.Add($"BakeryShopRuntime: wholesale account '{accountId}' is already {(isActive ? "active" : "paused")}; no decision recorded.");
+                return null;
+            }
+
+            bool previous = account.IsActive;
+            account.IsActive = isActive;
+            RecordChannelDecision(dayIndex, decider,
+                isActive ? BakeryChannelDecision.AccountResumedKind : BakeryChannelDecision.AccountPausedKind,
+                previous ? "active" : "paused", isActive ? "active" : "paused", reason, diag,
+                wholesalePriceCentsPerUnit: account.PricePerUnitCents);
+            return null;
+        }
+
+        /// <summary>
+        /// Lane 10a (H-5): the 3-day recorded counter-sale average for
+        /// bread loaves — the same window PlanRetailBatches plans from
+        /// (historyDays = 3, sales strictly before today, ceiling
+        /// average). Only observed sales create a demand signal.
+        /// </summary>
+        public int RecordedRetailAverageUnitsPerDay(int dayIndex)
+        {
+            const int historyDays = 3;
+            int firstDay = Math.Max(0, dayIndex - historyDays);
+            int elapsedDays = Math.Max(1, dayIndex - firstDay);
+            int observedUnits = 0;
+            foreach (BakerySaleRecord sale in sales)
+            {
+                if (sale == null || !string.Equals(sale.ProductId, BakeryBreadCatalog.BreadLoafId, StringComparison.Ordinal)) continue;
+                if (sale.DayIndex < firstDay || sale.DayIndex >= dayIndex) continue;
+                observedUnits += Math.Max(0, sale.Units);
+            }
+            return observedUnits <= 0 ? 0 : (observedUnits + elapsedDays - 1) / elapsedDays;
+        }
+
+        /// <summary>
+        /// Lane 10a (H-5): nameplate daily bread production capacity in
+        /// loaves — the smaller of the oven firing budget (installed ovens
+        /// × firings per oven per day) and the baker labour budget (baker
+        /// minutes per day ÷ hands-on minutes per batch), times the yield
+        /// per batch. Readiness (kit, oven components, fuel, flour) still
+        /// gates actual production — this is the planning ceiling the
+        /// channel rule compares demand against, not a promise that the
+        /// loaves bake. Zero when no oven is installed.
+        /// </summary>
+        public int DailyProductionCapacityUnits()
+        {
+            BakeryProductSpec spec = BakeryBreadCatalog.GetSpec(BakeryBreadCatalog.BreadLoafId);
+            int minutesPerBatch = Math.Max(1, spec.PrepMinutes + spec.BakeMinutes);
+            int labourBatches = BakerMinutesPerDay / minutesPerBatch;
+            int ovenBatches = Math.Max(0, ovens.Count) * BakeryBreadCatalog.FiringsPerOvenPerDay;
+            return Math.Max(0, Math.Min(labourBatches, ovenBatches)) * BakeryBreadCatalog.BreadYieldPerBatch;
+        }
+
+        /// <summary>
+        /// Lane 10a (H-5): Glenn's deterministic morning sales-channel
+        /// re-evaluation, run before planning each morning by
+        /// BakeryWholesaleDailyDriver.RunDay. The policy is re-evaluated
+        /// against the morning signals (3-day recorded counter sales, open
+        /// household need, retail-available shelf, due wholesale terms and
+        /// revenue, counter price, nameplate capacity); a change is a
+        /// recorded decision, never silent, and no change when the signals
+        /// are ambiguous. Delivery cost is caller-supplied (0 when no haul
+        /// terms are registered at planning time — the revenue comparison
+        /// then uses gross wholesale revenue). A bakery with no NPC owner
+        /// bound (player-owned bakery, D-04 owner decision) is SKIPPED,
+        /// not decided for: the standing policy is kept and the gap is
+        /// named in the diagnostic. Returns a rejection string, or null
+        /// (evaluation ran, applied, or was skipped with cause).
+        /// </summary>
+        public string ReevaluateChannelChoice(int dayIndex, int openHouseholdBreadNeedUnits, int deliveryCostCents, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (OwnerPersonId < 0)
+            {
+                diag.Add($"BakeryShopRuntime: morning channel re-evaluation skipped on day {dayIndex} — no NPC owner is bound (player-owned bakery, D-04 owner decision): the standing policy {supplyProtection} is kept and no decision is recorded.");
+                return null;
+            }
+
+            // Backstop (H-2/H-3): a bound runtime with no decision on
+            // record (legacy save, or an opening that never resolved one)
+            // records its standing policy first, unchanged.
+            if (channelDecisions.Count == 0)
+                RecordStandingPolicyAsDecision(dayIndex, diag);
+
+            int recordedAvg = RecordedRetailAverageUnitsPerDay(dayIndex);
+            int retailAvailable = RetailUnitsAvailableForSale(BakeryBreadCatalog.BreadLoafId, dayIndex, diag);
+            int dueUnits = WholesaleUnitsDueToday(BakeryBreadCatalog.BreadLoafId, dayIndex);
+            int dueRevenue = DueWholesaleRevenueCents(dayIndex);
+            int capacity = DailyProductionCapacityUnits();
+            int retailPrice = prices.BreadLoafFreshCents;
+            int wholesalePrice = dueUnits > 0 ? dueRevenue / dueUnits : -1;
+            string decider = "P" + OwnerPersonId;
+            var signals = new BakeryChannelSignals
+            {
+                DayIndex = dayIndex,
+                RecordedRetailAverageUnitsPerDay = recordedAvg,
+                OpenHouseholdBreadNeedUnits = Math.Max(0, openHouseholdBreadNeedUnits),
+                RetailUnitsAvailable = retailAvailable,
+                DueWholesaleUnits = dueUnits,
+                DueWholesaleRevenueCents = dueRevenue,
+                DeliveryCostCents = Math.Max(0, deliveryCostCents),
+                DailyProductionCapacityUnits = capacity,
+                RetailPriceCentsPerUnit = retailPrice,
+                CurrentPolicy = supplyProtection,
+            };
+
+            BakeryChannelProposal proposal = BakeryChannelChoiceEvaluator.Evaluate(signals);
+            if (proposal == null)
+            {
+                diag.Add($"BakeryShopRuntime: morning channel re-evaluation day {dayIndex}: no proposal — current policy {supplyProtection} stands.");
+                return null;
+            }
+
+            string reasons = JoinReasons(proposal.Reasons);
+            if (proposal.RecommendedPolicy != BakerySupplyProtectionPolicy.Unspecified
+                && proposal.RecommendedPolicy != supplyProtection)
+            {
+                SetSupplyProtection(proposal.RecommendedPolicy, dayIndex, decider, reasons, diag,
+                    recordedAvg, Math.Max(0, openHouseholdBreadNeedUnits), dueUnits, retailPrice, wholesalePrice);
+            }
+
+            if (proposal.PauseDueWholesaleAccounts)
+            {
+                var due = new List<BakeryWholesaleAccount>();
+                foreach (BakeryWholesaleAccount account in wholesaleAccounts)
+                {
+                    if (account == null || !account.IsActive) continue;
+                    if (!string.Equals(account.ProductId, BakeryBreadCatalog.BreadLoafId, StringComparison.Ordinal)) continue;
+                    if (account.NextDeliveryDayIndex > dayIndex) continue;
+                    due.Add(account);
+                }
+                foreach (BakeryWholesaleAccount account in due)
+                    SetWholesaleAccountActive(account.AccountId, false, dayIndex, decider, reasons, diag);
+            }
+
+            if (proposal.RecommendedPolicy == BakerySupplyProtectionPolicy.Unspecified
+                && !proposal.PauseDueWholesaleAccounts)
+            {
+                diag.Add($"BakeryShopRuntime: morning channel re-evaluation day {dayIndex}: no change — {reasons}; policy {supplyProtection} stands.");
+            }
+            return null;
+        }
+
+        private int DueWholesaleRevenueCents(int dayIndex)
+        {
+            int revenue = 0;
+            foreach (BakeryWholesaleAccount account in wholesaleAccounts)
+            {
+                if (account == null || !account.IsActive) continue;
+                if (!string.Equals(account.ProductId, BakeryBreadCatalog.BreadLoafId, StringComparison.Ordinal)) continue;
+                if (account.NextDeliveryDayIndex > dayIndex) continue;
+                revenue += Math.Max(0, account.UnitsPerDelivery) * Math.Max(0, account.PricePerUnitCents);
+            }
+            return revenue;
+        }
+
+        private static string JoinReasons(List<string> reasons)
+        {
+            if (reasons == null || reasons.Count == 0) return "no reason recorded";
+            return string.Join("; ", reasons);
+        }
+
+        private void RecordChannelDecision(
+            int dayIndex, string decider, string kind, string oldValue, string newValue, string reason, List<string> diag,
+            int recordedRetailAverageUnitsPerDay = -1, int openHouseholdBreadNeedUnits = -1,
+            int dueWholesaleUnits = -1, int retailPriceCentsPerUnit = -1, int wholesalePriceCentsPerUnit = -1)
+        {
+            diag = diag ?? diagnostics;
+            var decision = new BakeryChannelDecision
+            {
+                DayIndex = dayIndex,
+                Decider = string.IsNullOrWhiteSpace(decider) ? BakeryChannelDecision.UnspecifiedDecider : decider,
+                Kind = kind ?? string.Empty,
+                OldValue = oldValue ?? string.Empty,
+                NewValue = newValue ?? string.Empty,
+                Reason = reason ?? string.Empty,
+                RecordedRetailAverageUnitsPerDay = recordedRetailAverageUnitsPerDay,
+                OpenHouseholdBreadNeedUnits = openHouseholdBreadNeedUnits,
+                DueWholesaleUnits = dueWholesaleUnits,
+                RetailPriceCentsPerUnit = retailPriceCentsPerUnit,
+                WholesalePriceCentsPerUnit = wholesalePriceCentsPerUnit,
+            };
+            channelDecisions.Add(decision);
+            diag.Add($"BakeryShopRuntime: channel decision — {decision.Summary()}");
+        }
+
+        #endregion
+
         #region D1D Delivery runs (Canon §7.3E, Tech X §9.3)
 
         /// <summary>
@@ -2160,6 +2515,13 @@ namespace LandLedgers.Economy.Businesses.Bakery
             /// <summary>D1D: fulfilled wholesale deliveries.</summary>
             public List<BakeryWholesaleDeliveryRecord> WholesaleDeliveries = new List<BakeryWholesaleDeliveryRecord>();
 
+            /// <summary>
+            /// Lane 10a (H-3): the persisted sales-channel decision history
+            /// (additive; old saves load empty — see LoadFromSaveDto, same
+            /// pattern as TransferredStagedLotIds).
+            /// </summary>
+            public List<BakeryChannelDecision> ChannelDecisions = new List<BakeryChannelDecision>();
+
             /// <summary>D1D: delivery runs.</summary>
             public List<BakeryDeliveryRun> DeliveryRuns = new List<BakeryDeliveryRun>();
 
@@ -2219,6 +2581,7 @@ namespace LandLedgers.Economy.Businesses.Bakery
             dto.WasteNotedLotIds.AddRange(wasteNotedLotIds);
             dto.WholesaleAccounts.AddRange(wholesaleAccounts);
             dto.WholesaleDeliveries.AddRange(wholesaleDeliveries);
+            dto.ChannelDecisions.AddRange(channelDecisions);
             dto.DeliveryRuns.AddRange(deliveryRuns);
             return dto;
         }
@@ -2311,6 +2674,17 @@ namespace LandLedgers.Economy.Businesses.Bakery
                 foreach (var record in dto.WholesaleDeliveries)
                 {
                     if (record != null) wholesaleDeliveries.Add(record);
+                }
+            }
+
+            // Lane 10a (H-3): additive — old saves carry no decision
+            // history and load empty, exactly like TransferredStagedLotIds.
+            channelDecisions.Clear();
+            if (dto.ChannelDecisions != null)
+            {
+                foreach (var decision in dto.ChannelDecisions)
+                {
+                    if (decision != null) channelDecisions.Add(decision);
                 }
             }
 

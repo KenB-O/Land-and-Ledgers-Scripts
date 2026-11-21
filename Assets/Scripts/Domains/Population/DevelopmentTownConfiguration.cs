@@ -151,6 +151,9 @@ namespace LandLedgers.Population
             public string openingHorseId = string.Empty;
             public string openingWagonId = string.Empty;
             public BakeryWholesaleAccountDefinition[] wholesaleAgreements = Array.Empty<BakeryWholesaleAccountDefinition>();
+            [Header("Sales-channel choice (Lane 10a, H-2)")]
+            [Tooltip("Glenn's initial sales-channel policy, scenario-authored. Unspecified (the default) means no policy is authored: the bootstrapper resolves ProtectRetailCounter and records that resolution as a decision. Canon §7.3E gives no default; the retail-first resolution is the §19 owner decision (Lane 9a).")]
+            public BakerySupplyProtectionPolicy supplyProtection = BakerySupplyProtectionPolicy.Unspecified;
         }
 
         /// <summary>
@@ -431,6 +434,8 @@ namespace LandLedgers.Population
         public int OpeningBakeryFuelUnits => FindBusinessByOperation("bakery")?.opening?.bakeryFuelUnits ?? 0;
         public int OpeningBakeryFlourPounds => FindBusinessByOperation("bakery")?.opening?.bakeryFlourPounds ?? 0;
         public int OpeningBakeryNotionsUnits => FindBusinessByOperation("bakery")?.opening?.bakeryNotionsUnits ?? 0;
+        /// <summary>Lane 10a (H-2): Glenn's scenario-authored initial sales-channel policy; Unspecified when none is authored (the bootstrapper resolves ProtectRetailCounter and records it).</summary>
+        public BakerySupplyProtectionPolicy OpeningBakerySupplyProtection => FindBusinessByOperation("bakery")?.opening?.supplyProtection ?? BakerySupplyProtectionPolicy.Unspecified;
         public int OpeningCarpentryLumberUnits => FindBusinessByOperation("carpentry-workshop")?.opening?.carpentryLumberUnits ?? 0;
         public int FuelDealerIntakeUnitsPerBakeryUnit => FindBusinessByOperation("fuel-dealer")?.opening?.fuelDealerIntakeUnitsPerBakeryUnit ?? 0;
         public string OpeningHorseId => FindBusiness(FreightBusinessKey)?.opening?.openingHorseId ?? string.Empty;

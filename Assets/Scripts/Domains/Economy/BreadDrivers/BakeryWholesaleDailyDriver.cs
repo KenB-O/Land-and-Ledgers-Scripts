@@ -390,6 +390,19 @@ namespace LandLedgers.Economy.BreadDrivers
             BakeryShopRuntime bakery = inputs.Bakery;
             int dayIndex = inputs.DayIndex;
 
+            // Lane 10a (H-5): Glenn's deterministic morning re-evaluation —
+            // before planning, resolve the channel decision from the morning
+            // signals (3-day recorded counter sales, open household need,
+            // retail-available shelf, due wholesale terms, prices, capacity).
+            // A change is a recorded decision, never silent; no change when
+            // the signals are ambiguous. Delivery cost is 0 here: no haul
+            // terms are registered at planning time (StageDeliveryRun terms
+            // are per-run), so the revenue comparison uses gross wholesale
+            // revenue. A player-owned bakery (no NPC owner bound, D-04) is
+            // skipped, not decided for — see
+            // BakeryShopRuntime.ReevaluateChannelChoice.
+            bakery.ReevaluateChannelChoice(dayIndex, inputs.OpenHouseholdBreadNeedUnits, deliveryCostCents: 0, diag);
+
             int activeAccounts = 0;
             foreach (var account in bakery.WholesaleAccounts)
                 if (account != null && account.IsActive) activeAccounts++;

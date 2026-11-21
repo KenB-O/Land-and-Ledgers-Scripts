@@ -1953,6 +1953,14 @@ namespace LandLedgers.Orchestration.Systems
             TimberHarvest.RegisterTaskDefinitions(tasks);
             Sawmill.RegisterTaskDefinitions(tasks);
 
+            // Lane 10c (J-S1): register the 9-skill starter set in production.
+            // Before this, RegisterStarterSet had test-only callers, so the
+            // general skills had no definitions in a live game and aptitude
+            // resolution fell back to CapabilityFamily.Unknown (learning rate
+            // 1.0) for every general skill. Idempotent: duplicates rejected,
+            // so re-registration (e.g. after a load) is a no-op.
+            skills?.RegisterStarterSet();
+
             // Blacksmith skill definitions must exist in the live skill
             // authority so completed work can build real smithing/farrier
             // capability. GetCapability's novice fallback keeps unknown ids
@@ -2121,6 +2129,12 @@ namespace LandLedgers.Orchestration.Systems
             // records flagged RebuiltAfterLoad.
             taskDurationDiagnostics?.RebuildFromAuthority(Tasks);
             Skills.LoadFromSaveDto(dto.skills);
+            // Lane 10c (J-S1): LoadFromSaveDto is clear-then-load, so a save
+            // written before the starter set was registered in production
+            // carries no general-skill definitions. Re-register here so a
+            // Continue does not silently lose them; on new saves this is a
+            // no-op (duplicates rejected).
+            Skills.RegisterStarterSet();
             WorkTimeBudgets.LoadFromSaveDto(dto.workTimeBudgets, absoluteDayIndex);
             Valuation.LoadFromSaveDto(dto.valuation);
             // Pass IV Worker 2: restore the reservation authority BEFORE the

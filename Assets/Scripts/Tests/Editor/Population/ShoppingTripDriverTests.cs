@@ -1958,11 +1958,22 @@ namespace LandLedgers.Editor.Population
             HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
             int cashBefore = f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents();
             PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            int failureEvents = 0;
+            f.Driver.CounterWaitFailureObserver = (failedTrip, day, seconds, reason) =>
+            {
+                failureEvents++;
+                Assert.AreSame(trip, failedTrip);
+                Assert.AreEqual(Fixture.Day, day);
+                Assert.Greater(seconds, failedTrip.ServiceWaitDeadlineGameSeconds);
+                StringAssert.Contains("finite waiting window", reason);
+                StringAssert.Contains("no physically present service clerk is available", failedTrip.LastServiceRefusal);
+            };
 
             f.Driver.AdvanceTick(arrival + CustomerQueue.DefaultPatienceMinutes * 60f + 1f,
                 Fixture.Day, f.DueEvents, f.Diag);
 
             Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State);
+            Assert.AreEqual(1, failureEvents);
             Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
             Assert.AreEqual(0, f.Store.CashReceived);
             Assert.AreEqual(cashBefore, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());

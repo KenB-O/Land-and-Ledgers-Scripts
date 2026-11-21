@@ -299,6 +299,7 @@ namespace LandLedgers.Population
         /// </summary>
         public bool NeedsRehydrateAfterLoad { get; private set; }
         public HouseholdShoppingLoop Loop => loop;
+        internal Action<PlannedShoppingTrip, int, float, string> CounterWaitFailureObserver { get; set; }
         public bool HasActiveTripForNeed(int needSequence) => HasActiveTripFor(needSequence);
         public bool HasDepartedTripForPerson(int personId)
         {
@@ -1160,10 +1161,12 @@ namespace LandLedgers.Population
                 if (trip.ServiceWaitDeadlineGameSeconds >= 0f
                     && nowGameSeconds >= trip.ServiceWaitDeadlineGameSeconds)
                 {
-                    string timeoutReason = "No physically present clerk completed service within the customer's finite waiting window.";
-                    if (!string.IsNullOrWhiteSpace(trip.LastServiceRefusal))
-                        timeoutReason += " Last availability check: " + trip.LastServiceRefusal;
-                    ReturnEmpty(trip, timeoutReason,
+                    const string timeoutReason = "No physically present clerk completed service within the customer's finite waiting window.";
+                    CounterWaitFailureObserver?.Invoke(trip, dayIndex, nowGameSeconds, timeoutReason);
+                    string resultReason = string.IsNullOrWhiteSpace(trip.LastServiceRefusal)
+                        ? timeoutReason
+                        : timeoutReason + " Last availability check: " + trip.LastServiceRefusal;
+                    ReturnEmpty(trip, resultReason,
                         "counter service expired", dayIndex, nowGameSeconds, dueEvents, diag);
                     continue;
                 }
@@ -1677,7 +1680,9 @@ namespace LandLedgers.Population
             // CancelTask due-scheduler seam is not installed in production,
             // so this deregistration is load-bearing, not belt-and-braces).
             serviceTaskIdStringToTripId.Remove(trip.ServiceTaskId.ToString());
-            ReturnEmpty(trip, $"Balked: patience exhausted after waiting {waited} min.", "balked", dayIndex, currentGameSeconds, dueEvents, diag);
+            string reason = $"Balked: patience exhausted after waiting {waited} min.";
+            CounterWaitFailureObserver?.Invoke(trip, dayIndex, currentGameSeconds, reason);
+            ReturnEmpty(trip, reason, "balked", dayIndex, currentGameSeconds, dueEvents, diag);
         }
 
         private static bool IsConcurrentTaskStartRefusal(string error) =>

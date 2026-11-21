@@ -4485,6 +4485,7 @@ namespace LandLedgers.Orchestration.Systems
                     timeManager != null && timeManager.Settings != null
                         ? timeManager.Settings.ShortTickIntervalGameSeconds : 900f,
                     () => lastPhysicalShoppingRouteRefusal);
+                shoppingTripDriver.CounterWaitFailureObserver = ReportShoppingCounterWaitFailure;
             }
 
             // Slice 25: attach the driver beside the loop, same shape —
@@ -4517,6 +4518,21 @@ namespace LandLedgers.Orchestration.Systems
             if (storeManager != null)
                 storeManager.PhysicalHouseholdFoodAuthorityEnabled = householdShoppingLoop != null;
 
+        }
+
+        private static void ReportShoppingCounterWaitFailure(PlannedShoppingTrip trip, int dayIndex, float gameSeconds, string reason)
+        {
+            string lastCheck = string.IsNullOrWhiteSpace(trip.LastServiceRefusal)
+                ? "Unknown"
+                : trip.LastServiceRefusal;
+            string message = FormattableString.Invariant(
+                $"Trip {trip.TripId}, need {trip.Need?.NeedSequence}, deadline {trip.ServiceWaitDeadlineGameSeconds}s. {reason} Last availability check: {lastCheck}.");
+            IncidentDiagnostics.EmitRefusal("ShoppingTripDriver:counter-wait-ended", dayIndex, message,
+                simSeconds: gameSeconds, taskId: trip.ServiceTaskId.IsValid ? trip.ServiceTaskId.ToString() : null,
+                personId: FormattableString.Invariant($"person:{trip.ShopperPersonId}"),
+                householdId: FormattableString.Invariant($"household:{trip.HouseholdId}"),
+                businessId: trip.Candidate?.Supplier?.SupplierBusinessId,
+                buildingId: trip.SellerLocationIdForDiagnostics);
         }
 
         /// <summary>

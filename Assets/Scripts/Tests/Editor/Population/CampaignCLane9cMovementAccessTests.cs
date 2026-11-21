@@ -75,6 +75,38 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual("stove", DomesticActivityLocationResolver.ResolveStoveLocationId("   "));
         }
 
+        // ---------- Fix #1 (A4): fuel-handling leg 0 Firewood fallback ----------
+
+        [Test]
+        public void FuelLeg0_PrefersAuthoredFirewoodPoint()
+        {
+            string resolved = DomesticActivityLocationResolver.ResolveFuelLeg0LocationId(
+                () => "firewood-h1-a", "stove-h1-a-stove", out string fallbackReason);
+            Assert.AreEqual("firewood-h1-a", resolved);
+            Assert.IsNull(fallbackReason, "no fallback when the authored point exists");
+        }
+
+        [Test]
+        public void FuelLeg0_FallsBackToStoveWithReasonWhenNoFirewoodPoint()
+        {
+            string resolved = DomesticActivityLocationResolver.ResolveFuelLeg0LocationId(
+                () => null, "stove-h1-a-stove", out string fallbackReason);
+            Assert.AreEqual("stove-h1-a-stove", resolved);
+            Assert.IsNotNull(fallbackReason);
+            Assert.IsTrue(fallbackReason.Contains("no Firewood activity location is authored"),
+                "the reason must name the missing authoring: " + fallbackReason);
+            Assert.IsFalse(resolved.Contains("porch"), "the fallback never aliases the porch point");
+        }
+
+        [Test]
+        public void FuelLeg0_FallsBackToLiteralStoveWhenRegistryHasNoStove()
+        {
+            string resolved = DomesticActivityLocationResolver.ResolveFuelLeg0LocationId(
+                () => null, null, out string fallbackReason);
+            Assert.AreEqual("stove", resolved, "a stove-less household keeps the legacy literal");
+            Assert.IsNotNull(fallbackReason);
+        }
+
         [Test]
         public void Chores_PrefersReachableCleaningPoint()
         {
@@ -302,6 +334,8 @@ namespace LandLedgers.Editor.Population
                 "SimulationDrivers must call the type-based resolver (M-R1): it had zero production callers.");
             Assert.IsTrue(drivers.Contains("DomesticActivityLocationResolver.ResolveStoveLocationId"),
                 "Meal prep / fuel leg 1 must resolve the stove id through the helper (M-R1).");
+            Assert.IsTrue(drivers.Contains("DomesticActivityLocationResolver.ResolveFuelLeg0LocationId"),
+                "Fuel-handling leg 0 must resolve through the helper (fix #1, A4 fallback).");
             Assert.IsTrue(drivers.Contains("DomesticActivityLocationResolver.ResolveChoreLocationId"),
                 "Chores must resolve by activity type through the helper (M-R1).");
         }

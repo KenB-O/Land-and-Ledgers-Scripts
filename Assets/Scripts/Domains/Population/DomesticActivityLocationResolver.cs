@@ -12,6 +12,11 @@
 // whose registry has no stove, so the Main Scene keeps its current
 // behaviour there instead of failing in a new way.
 //
+// Fuel-handling leg 0 routes to the authored Firewood point when one
+// exists (fix #1, A4); with none authored anywhere today it falls back
+// to the stove as a single leg with a logged reason, so the task can
+// proceed instead of parking on capability-wait forever.
+//
 // Chores resolve by activity type through the existing type-based
 // resolver TryFindReachableActivityLocation (B-02/B-04/M-02), Cleaning
 // first, then Porch. The legacy literal ids ("cleaning" /
@@ -41,6 +46,36 @@ namespace LandLedgers.Population
             return string.IsNullOrWhiteSpace(stoveActivityLocationId)
                 ? LegacyStoveLocationId
                 : stoveActivityLocationId;
+        }
+
+        /// <summary>
+        /// Fuel-handling leg 0 destination (fix #1, A4 fallback): the
+        /// authored Firewood activity location id when one exists, else the
+        /// stove id as a single-leg fallback with a reason. No Firewood
+        /// point is authored anywhere today, so without the fallback every
+        /// home's domestic.fuel-handling task parks forever on a
+        /// capability-wait refusal. The fallback routes the actor straight
+        /// to the stove (leg 1 resolves to the same id and the director
+        /// reports Arrived immediately when already there), so fuel work
+        /// can proceed without inventing coordinates and without aliasing
+        /// the porch point. Authoring real Firewood points in the
+        /// owner-local prefabs remains the Codex morning item; until then
+        /// the caller logs the fallback reason day-keyed.
+        /// Returns the location id to route to; fallbackReason is null
+        /// when the authored Firewood id was used.
+        /// </summary>
+        public static string ResolveFuelLeg0LocationId(Func<string> tryResolveFirewoodLocationId, string stoveLocationId, out string fallbackReason)
+        {
+            fallbackReason = null;
+            if (tryResolveFirewoodLocationId != null)
+            {
+                string firewood = tryResolveFirewoodLocationId();
+                if (!string.IsNullOrWhiteSpace(firewood)) return firewood;
+            }
+            fallbackReason = "no Firewood activity location is authored for this household; "
+                + "fuel-handling leg 0 falls back to the stove as a single leg (A4). "
+                + "Author Firewood points in the owner-local prefabs to restore the two-leg route.";
+            return ResolveStoveLocationId(stoveLocationId);
         }
 
         /// <summary>

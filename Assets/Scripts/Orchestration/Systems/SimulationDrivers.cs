@@ -6539,6 +6539,12 @@ namespace LandLedgers.Orchestration.Systems
                     Stoves = ResolveHouseholdStoves(household),
                     FuelWoodReserveUnits = household.GetReserve(HouseholdReserveCatalog.FuelWoodCategoryId)?.currentUnits ?? 0,
                 };
+                // Fix #1 (A4 fallback): the driver parks a fuel task in
+                // capability-wait only when the home has neither a Firewood
+                // point nor a stove to fall back to. The stove list is the
+                // same derived registry the minting gate reads.
+                inputs.FuelHandlingStoveFallbackAvailable =
+                    inputs.Stoves != null && inputs.Stoves.Stoves.Count > 0;
                 hub.DomesticLaborDriver.DriveDay(inputs, absoluteDayIndex, hub.Tasks,
                     hub.WorkTimeBudgets, hub.PersonSchedules, hub.DomesticLabor,
                     hub.DueEvents, diag);
@@ -6650,12 +6656,13 @@ namespace LandLedgers.Orchestration.Systems
                 // authored on the home (the exterior pile, not a built
                 // interior route, so TryFindReachableActivityLocation
                 // does not apply). Leg 1 is the stove, the same
-                // location meal-prep uses. No firewood location authored
-                // on the home refuses loudly (Codex scene authoring),
-                // and the driver defers the trip without completion or
-                // labour credit. Animal-care stays Unsupported (the
-                // animal location is a pen/pasture question, out of B
-                // scope per the plan).
+                // location meal-prep uses. With no Firewood location
+                // authored on the home, leg 0 falls back to the stove
+                // as a single leg (fix #1, A4) with a day-keyed logged
+                // reason; authoring Firewood points in the owner-local
+                // prefabs remains the Codex morning item. Animal-care
+                // stays Unsupported (the animal location is a pen/pasture
+                // question, out of B scope per the plan).
                 if (flight.FuelHandlingLeg > 0)
                 {
                     // Lane 9c (M-R1): leg 1 is the stove, the same
@@ -6665,24 +6672,32 @@ namespace LandLedgers.Orchestration.Systems
                 }
                 else
                 {
-                    string firewoodLocationId = null;
-                    if (home.runtimeFootprintAuthority.ActivityLocations != null)
-                    {
-                        foreach (BuildingActivityLocationAuthoring location in home.runtimeFootprintAuthority.ActivityLocations)
+                    // Fix #1 (A4 fallback): the authored Firewood point
+                    // when one exists, else the stove as a single leg
+                    // with a day-keyed logged reason. No Firewood point
+                    // is authored anywhere today; the old code refused
+                    // here with capability-wait, so every home's
+                    // domestic.fuel-handling task parked forever.
+                    activityLocationId = DomesticActivityLocationResolver.ResolveFuelLeg0LocationId(
+                        () =>
                         {
-                            if (location != null && location.type == BuildingActivityLocationType.Firewood)
+                            if (home.runtimeFootprintAuthority.ActivityLocations == null)
+                                return null;
+                            foreach (BuildingActivityLocationAuthoring location in home.runtimeFootprintAuthority.ActivityLocations)
                             {
-                                firewoodLocationId = location.id;
-                                break;
+                                if (location != null && location.type == BuildingActivityLocationType.Firewood)
+                                    return location.id;
                             }
-                        }
-                    }
-                    if (string.IsNullOrWhiteSpace(firewoodLocationId))
+                            return null;
+                        },
+                        FirstStoveActivityLocationId(flight.PersonId),
+                        out string fallbackReason);
+                    if (!string.IsNullOrWhiteSpace(fallbackReason))
                     {
-                        flight.ActivityLocationId = DomesticLaborDriver.MissingFirewoodStorageLocationId;
-                        return DomesticActivityMovementResult.Unsupported;
+                        int dayIndex = (int)Math.Floor(currentGameSeconds / 86400f);
+                        LogRefusalDayKeyed("domestic:fuel-handling:no-firewood-point", dayIndex,
+                            $"[FuelHandling] Household {flight.HouseholdId} person {flight.PersonId}: {fallbackReason}");
                     }
-                    activityLocationId = firewoodLocationId;
                 }
             }
             else

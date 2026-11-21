@@ -56,6 +56,19 @@ namespace LandLedgers.Population
             /// blocker and true permits a previously deferred trip to resume.
             /// </summary>
             public bool? FirewoodActivityLocationAvailable;
+            /// <summary>
+            /// Fix #1 (A4 fallback): whether the household home currently
+            /// has a stove the fuel-handling leg can fall back to when no
+            /// Firewood point is authored. True means a missing Firewood
+            /// point is not a capability block: the trip runs as a single
+            /// leg to the stove (resolved by
+            /// DomesticActivityLocationResolver.ResolveFuelLeg0LocationId).
+            /// Null preserves legacy callers that do not supply the flag
+            /// (no fallback known, old park behaviour). Stove-less
+            /// households never reach this gate: minting already refuses
+            /// a fuel-handling task with no stove at all.
+            /// </summary>
+            public bool? FuelHandlingStoveFallbackAvailable;
             /// <summary>True only when a supported household cleanliness need exists.</summary>
             public bool CleaningNeeded;
             public bool ColdSeason;
@@ -1214,8 +1227,14 @@ namespace LandLedgers.Population
                 }
 
                 DomesticRouteRecoveryRecord routeRecovery = FindRouteRecovery(task.TaskId);
+                // Fix #1 (A4 fallback): a missing Firewood point parks the
+                // task only when there is no stove to fall back to. With a
+                // stove the trip runs as a single leg, so the task is
+                // adopted like any other and the resolver supplies the
+                // stove id.
                 if (string.Equals(task.DefinitionId, DomesticTaskCatalog.FuelHandlingId, StringComparison.Ordinal)
-                    && inputs.FirewoodActivityLocationAvailable == false)
+                    && inputs.FirewoodActivityLocationAvailable == false
+                    && inputs.FuelHandlingStoveFallbackAvailable != true)
                 {
                     if (routeRecovery == null)
                     {
@@ -1241,13 +1260,22 @@ namespace LandLedgers.Population
 
                 if (routeRecovery != null && routeRecovery.WaitForCapabilityChange)
                 {
-                    if (inputs.FirewoodActivityLocationAvailable != true)
+                    // Fix #1 (A4 fallback): a retained fuel task resumes
+                    // when Firewood is authored OR when the stove fallback
+                    // becomes available; only a home with neither stays
+                    // capability-waited.
+                    bool firewoodNow = inputs.FirewoodActivityLocationAvailable == true;
+                    bool fallbackNow = inputs.FuelHandlingStoveFallbackAvailable == true;
+                    if (!firewoodNow && !fallbackNow)
                         continue;
 
                     routeRecovery.WaitForCapabilityChange = false;
                     routeRecovery.RetryAfterDay = dayIndex;
-                    diag.Add("DomesticLaborDriver: authored Firewood capability is now available; resuming retained fuel-handling task "
-                        + task.TaskId + " without creating a duplicate household need.");
+                    diag.Add(firewoodNow
+                        ? "DomesticLaborDriver: authored Firewood capability is now available; resuming retained fuel-handling task "
+                            + task.TaskId + " without creating a duplicate household need."
+                        : "DomesticLaborDriver: fuel-handling stove fallback is available; resuming retained fuel-handling task "
+                            + task.TaskId + " as a single-leg stove trip (fix #1, A4) without creating a duplicate household need.");
                 }
 
                 if (routeRecovery != null && dayIndex < routeRecovery.RetryAfterDay)

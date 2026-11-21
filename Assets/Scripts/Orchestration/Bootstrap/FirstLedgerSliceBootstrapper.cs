@@ -846,7 +846,6 @@ namespace LandLedgers.FirstLedger
             // target moved.
             if (resolveOpeningDaySales)
             {
-                SimulationDrivers simulationDrivers = FindAnyObjectByType<SimulationDrivers>();
                 int openingDayIndex = timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0;
                 simulationDrivers?.DriveHouseholdReserveDay(openingDayIndex);
             }

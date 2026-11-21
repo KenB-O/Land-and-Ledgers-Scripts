@@ -1382,7 +1382,7 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(0, fallbackSold, "the fallback must refuse a category-to-bread substitution");
             Assert.AreEqual(0, fallbackAdapter.Sell("staple_food", 6, 0, diag),
                 "an ambiguous staple category cannot be sold as an unidentified food transaction");
-            Assert.AreEqual(18, fallbackAdapter.Stock["staple_food"], "refusal leaves unidentified category stock untouched");
+            Assert.AreEqual(18, fallback.Stock["staple_food"], "refusal leaves unidentified category stock untouched");
             Assert.AreEqual(50000, fallback.CashBalance, "a refused identity must not settle cash");
             Assert.IsTrue(string.IsNullOrWhiteSpace(fallbackAdapter.LastReceiptId), "a refused sale has no receipt");
             Assert.AreEqual(0, fallback.CreditSettlements, "a cash sale must record no receivable");

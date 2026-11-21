@@ -325,7 +325,8 @@ namespace LandLedgers.Editor.Diagnostics
             {
                 if (path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && item.AuthoritySourceLine > 0)
                 {
-                    UnityEditor.CodeEditor.CodeEditor.CurrentEditor.OpenProject(path, item.AuthoritySourceLine, 1);
+                    UnityEngine.Object script = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
+                    if (script != null) AssetDatabase.OpenAsset(script, item.AuthoritySourceLine);
                     return;
                 }
                 UnityEngine.Object asset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path);
@@ -479,7 +480,7 @@ namespace LandLedgers.Editor.Diagnostics
                 RelatedAgreementId = agreement != null ? agreement.AgreementId : (request.AgreementId ?? string.Empty),
                 RelatedLotId = request.CargoLotId ?? string.Empty,
                 RelatedShipmentId = shipment != null ? shipment.shipmentId : (request.ShipmentId ?? string.Empty),
-                AgreementCancelled = agreement != null && agreement.Status == FreightAgreementStatus.Cancelled,
+                AgreementCancelled = agreement != null && agreement.Status == FreightServiceAgreementStatus.Cancelled,
                 LotCommitted = shipment != null && (shipment.sourceCommittedAtSchedule || shipment.loadApplied),
                 HasReopenPath = request.Status != FreightServiceRequestStatus.Accepted,
                 RecoveryAttempts = agreement != null ? agreement.DispatchTaskRecoveryAttempts : 0,
@@ -518,7 +519,7 @@ namespace LandLedgers.Editor.Diagnostics
                 HasLivenessBound = false,
                 RelatedAgreementId = shipment.freightServiceAgreementId ?? string.Empty,
                 RelatedLotId = shipment.cargoLotId ?? string.Empty,
-                AgreementCancelled = agreement != null && agreement.Status == FreightAgreementStatus.Cancelled,
+                AgreementCancelled = agreement != null && agreement.Status == FreightServiceAgreementStatus.Cancelled,
                 LotCommitted = shipment.sourceCommittedAtSchedule || shipment.loadApplied,
                 RecoveryAttempts = agreement != null ? agreement.DispatchTaskRecoveryAttempts : 0,
                 RecoveryAttemptLimit = FreightServiceAgreement.MaximumDispatchTaskRecoveryAttempts,

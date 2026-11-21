@@ -9033,7 +9033,7 @@ namespace LandLedgers.Orchestration.Systems
                     LogRefusalDayKeyed("stale-queued:" + task.TaskId, dayIndex,
                         "[StaleQueued] Task '" + task.TaskId + "' (" + task.DefinitionId + ", owner " + task.OwnerId
                         + ") is stuck Queued — " + verdict.Reason,
-                        taskId: task.TaskId);
+                        taskId: task.TaskId.ToString());
                 }
             }
         }

@@ -143,9 +143,9 @@ namespace LandLedgers.Editor.Diagnostics
 
         private void EvaluateRun()
         {
-            string repoRoot = Directory.GetParent(Application.dataPath).FullName;
+            string repoRoot = System.IO.Directory.GetParent(Application.dataPath).FullName;
             string runDir = Path.Combine(repoRoot, runDirectory);
-            if (!Directory.Exists(runDir))
+            if (!System.IO.Directory.Exists(runDir))
             {
                 status = "Run directory not found: " + runDir;
                 return;
@@ -213,7 +213,7 @@ namespace LandLedgers.Editor.Diagnostics
                 return;
             }
 
-            string repoRoot = Directory.GetParent(Application.dataPath).FullName;
+            string repoRoot = System.IO.Directory.GetParent(Application.dataPath).FullName;
             string runDir = Path.Combine(repoRoot, runDirectory);
             File.WriteAllText(Path.Combine(runDir, "run-acceptance-report.md"), acceptanceReport.ToMarkdown());
             File.WriteAllText(Path.Combine(runDir, "run-acceptance.json"), acceptanceReport.ToJson());

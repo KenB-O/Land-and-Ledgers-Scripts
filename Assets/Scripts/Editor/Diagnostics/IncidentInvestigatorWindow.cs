@@ -274,7 +274,8 @@ namespace LandLedgers.Editor.Diagnostics
             {
                 if (path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && item.AuthoritySourceLine > 0)
                 {
-                    UnityEditor.CodeEditor.CodeEditor.CurrentEditor.OpenProject(path, item.AuthoritySourceLine, 1);
+                    UnityEngine.Object script = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
+                    if (script != null) AssetDatabase.OpenAsset(script, item.AuthoritySourceLine);
                     return;
                 }
                 UnityEngine.Object asset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path);

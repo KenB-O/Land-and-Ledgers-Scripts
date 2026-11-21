@@ -136,7 +136,7 @@ namespace LandLedgers.Editor.Diagnostics
 
         private static string RepoRoot()
         {
-            return Directory.GetParent(Application.dataPath).FullName;
+            return System.IO.Directory.GetParent(Application.dataPath).FullName;
         }
 
         private static string ReadFile(string repoRoot, string relativePath)

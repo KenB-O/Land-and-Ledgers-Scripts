@@ -614,7 +614,7 @@ namespace LandLedgers.Editor.Diagnostics
                 foreach (CategoryStockState stock in runtime.CategoryStock)
                 {
                     if (stock == null) continue;
-                    missing += stock.MissingTargetUnits;
+                    missing += Math.Max(0, stock.TargetStockUnits - stock.CurrentStockUnits);
                 }
             }
             detail.RestockMissingUnits = missing;
@@ -661,9 +661,9 @@ namespace LandLedgers.Editor.Diagnostics
             int expectedIncoming = 0;
             if (dealer.Orders != null)
             {
-                foreach (FuelDealerOrder order in dealer.Orders)
+                foreach (FuelDealerRuntime.FuelDealerOrder order in dealer.Orders)
                 {
-                    if (order == null || order.Status != FuelDealerOrderStatus.Placed) continue;
+                    if (order == null || order.Status != FuelDealerRuntime.FuelDealerOrderStatus.Placed) continue;
                     outstanding++;
                     expectedIncoming += (int)Math.Floor(Math.Max(0, order.InputUnits) * order.ConversionRateFuelPerInputUnit);
                 }
@@ -674,9 +674,9 @@ namespace LandLedgers.Editor.Diagnostics
             int retailSales = 0;
             if (dealer.CashBook != null)
             {
-                foreach (FuelDealerCashBookEntry entry in dealer.CashBook)
+                foreach (FuelDealerRuntime.FuelDealerCashBookEntry entry in dealer.CashBook)
                 {
-                    if (entry != null && entry.Kind == FuelDealerCashBookKind.RetailSale)
+                    if (entry != null && entry.Kind == FuelDealerRuntime.FuelDealerCashBookKind.RetailSale)
                         retailSales++;
                 }
             }

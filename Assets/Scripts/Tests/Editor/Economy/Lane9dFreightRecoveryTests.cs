@@ -21,6 +21,7 @@ using LandLedgers.Tasks;
 using LandLedgers.Time;
 using NUnit.Framework;
 using UnityEngine;
+using EntityId = LandLedgers.Primitives.EntityId;
 using LogisticsShipmentState = global::LandLedgers.Economy.LogisticsShipmentState;
 using LogisticsShipmentStatus = global::LandLedgers.Economy.LogisticsShipmentStatus;
 

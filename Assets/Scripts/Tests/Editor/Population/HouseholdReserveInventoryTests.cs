@@ -190,9 +190,9 @@ namespace LandLedgers.EditorTests.Population
             // -10.7 C) strains hardest, a shoulder mean (-1.1 C) less, and
             // a warm July mean (21.8 C, above the 15 C heating base) not
             // at all.
-            HouseholdReserveEvaluator.ResolveDailyUse(winter, 0, exteriorMeanCelsius: -10.7f);
-            HouseholdReserveEvaluator.ResolveDailyUse(shoulder, 0, exteriorMeanCelsius: -1.1f);
-            HouseholdReserveEvaluator.ResolveDailyUse(warm, 0, exteriorMeanCelsius: 21.8f);
+            HouseholdReserveEvaluator.ResolveDailyUse(winter, 0, CalendarAnchor.Default, exteriorMeanCelsius: -10.7f);
+            HouseholdReserveEvaluator.ResolveDailyUse(shoulder, 0, CalendarAnchor.Default, exteriorMeanCelsius: -1.1f);
+            HouseholdReserveEvaluator.ResolveDailyUse(warm, 0, CalendarAnchor.Default, exteriorMeanCelsius: 21.8f);
 
             Assert.Greater(winter.lastWinterStrain01, shoulder.lastWinterStrain01);
             Assert.Greater(shoulder.lastWinterStrain01, 0f);
@@ -217,8 +217,8 @@ namespace LandLedgers.EditorTests.Population
             // one seeded day's draw.
             int draftyUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(drafty, -10.7f);
             int efficientUse = HouseholdHeatingEvaluator.CalculateDailyFuelUseUnits(efficient, -10.7f);
-            HouseholdReserveEvaluator.ResolveDailyUse(drafty, 0, exteriorMeanCelsius: -10.7f);
-            HouseholdReserveEvaluator.ResolveDailyUse(efficient, 0, exteriorMeanCelsius: -10.7f);
+            HouseholdReserveEvaluator.ResolveDailyUse(drafty, 0, CalendarAnchor.Default, exteriorMeanCelsius: -10.7f);
+            HouseholdReserveEvaluator.ResolveDailyUse(efficient, 0, CalendarAnchor.Default, exteriorMeanCelsius: -10.7f);
 
             Assert.Greater(draftyUse, efficientUse);
             Assert.Greater(drafty.lastWinterStrain01, efficient.lastWinterStrain01);

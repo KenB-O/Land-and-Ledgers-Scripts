@@ -285,6 +285,9 @@ namespace LandLedgers.Diagnostics
             }
         }
 
+        void ITaskTimingObserver.RecordRefusal(string taskId, string method, string reason, int day)
+            => RecordRefusal(taskId, method, reason, day);
+
         /// <summary>
         /// Records an assign/start refusal for a task. The optional
         /// <paramref name="causeClass"/> tags the refusal with its causal

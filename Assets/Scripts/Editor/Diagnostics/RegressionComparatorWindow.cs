@@ -119,15 +119,15 @@ namespace LandLedgers.Editor.Diagnostics
 
         private void CompareRuns()
         {
-            string repoRoot = Directory.GetParent(Application.dataPath).FullName;
+            string repoRoot = System.IO.Directory.GetParent(Application.dataPath).FullName;
             string baselineDir = Path.Combine(repoRoot, baselineDirectory);
             string candidateDir = Path.Combine(repoRoot, candidateDirectory);
-            if (!Directory.Exists(baselineDir))
+            if (!System.IO.Directory.Exists(baselineDir))
             {
                 status = "Baseline run directory not found: " + baselineDir;
                 return;
             }
-            if (!Directory.Exists(candidateDir))
+            if (!System.IO.Directory.Exists(candidateDir))
             {
                 status = "Candidate run directory not found: " + candidateDir;
                 return;

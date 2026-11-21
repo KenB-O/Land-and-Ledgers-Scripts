@@ -32,7 +32,7 @@ namespace LandLedgers.EditorTests.Diagnostics
                 return fromEnv;
             }
 
-            string dir = Directory.GetCurrentDirectory();
+            string dir = System.IO.Directory.GetCurrentDirectory();
             while (!string.IsNullOrEmpty(dir))
             {
                 if (File.Exists(Path.Combine(dir, "Assets/Core/Population/DevelopmentTownConfiguration.asset")))
@@ -101,7 +101,7 @@ namespace LandLedgers.EditorTests.Diagnostics
         private static RunSummary ReadRetained60DayRun(string repoRoot, out SurvivalRunEvidence survivalEvidence)
         {
             string runDir = Path.Combine(repoRoot, "Reports/Playtests/Runs/20261120T192311Z-343a8cd2");
-            Assert.IsTrue(Directory.Exists(runDir), "Retained 60-day run directory missing: " + runDir);
+            Assert.IsTrue(System.IO.Directory.Exists(runDir), "Retained 60-day run directory missing: " + runDir);
             string metadataText = Read(repoRoot, "Reports/Playtests/Runs/20261120T192311Z-343a8cd2/metadata.json");
             string csvText = Read(repoRoot, "Reports/Playtests/Runs/20261120T192311Z-343a8cd2/daily-summary.csv");
             string jsonlText = Read(repoRoot, "Reports/Playtests/Runs/20261120T192311Z-343a8cd2/console-events.jsonl");

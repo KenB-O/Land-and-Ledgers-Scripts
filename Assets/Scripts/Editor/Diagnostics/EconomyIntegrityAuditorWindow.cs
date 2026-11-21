@@ -189,8 +189,8 @@ namespace LandLedgers.Editor.Diagnostics
             string assets = Application.dataPath;
             if (string.IsNullOrEmpty(assets))
                 return null;
-            string root = Directory.GetParent(assets)?.FullName;
-            if (root == null || !Directory.Exists(Path.Combine(root, "Assets", "Scripts")))
+            string root = System.IO.Directory.GetParent(assets)?.FullName;
+            if (root == null || !System.IO.Directory.Exists(Path.Combine(root, "Assets", "Scripts")))
                 return null;
             return root;
         }
@@ -198,9 +198,9 @@ namespace LandLedgers.Editor.Diagnostics
         private static List<EconomySourceTextFile> ReadProductionFiles(string scriptsRoot, string repoRoot)
         {
             var files = new List<EconomySourceTextFile>();
-            if (!Directory.Exists(scriptsRoot))
+            if (!System.IO.Directory.Exists(scriptsRoot))
                 return files;
-            foreach (string path in Directory.GetFiles(scriptsRoot, "*.cs", SearchOption.AllDirectories))
+            foreach (string path in System.IO.Directory.GetFiles(scriptsRoot, "*.cs", SearchOption.AllDirectories))
             {
                 string relative = path.Substring(repoRoot.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 if (relative.Contains("/Tests/") || relative.Contains("\\Tests\\"))

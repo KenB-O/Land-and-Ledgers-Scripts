@@ -99,6 +99,28 @@ namespace LandLedgers.Population
         /// </summary>
         public Func<string, IReadOnlyList<int>> ResolveServiceClerkCandidates { get; set; }
         /// <summary>
+        /// Lane 10b (I-R5): the clerk-arrival gate for counter service.
+        /// Optional: clerk person id + supplier business id → true when
+        /// that clerk has arrived at the business's counter activity
+        /// location (FurniturePlacementScoring.TryRetailCounterActivityId:
+        /// general-store-counter, bakery-retail-counter,
+        /// fuel-dealer-counter). When set, a clerk candidate who has
+        /// not arrived is skipped with a named refusal and the customer
+        /// stays queued — the sweep retries (ShoppingTripDriver.
+        /// SweepAwaitingCustomerService) until the finite service-wait
+        /// deadline, so a late clerk delays service but never strands
+        /// the customer past the deadline. Null means the gate is
+        /// unwired and today's behaviour holds (the candidate list
+        /// alone decides) — the production wiring is NOT attached in
+        /// this lane on purpose: no existing caller routes a clerk to
+        /// a business interior point, so a position check without the
+        /// route request would refuse every service until the deadline
+        /// and leave every customer unserved; the wiring needs the
+        /// clerk-to-counter interior route first (see the driver
+        /// wiring note in SimulationDrivers.BuildHouseholdShoppingLoop).
+        /// </summary>
+        public Func<int, string, bool> HasArrivedAtCounter { get; set; }
+        /// <summary>
         /// Identifies the configured counter clerk for a supplier without
         /// requiring the person to be physically present yet. A household
         /// cannot schedule that same sole clerk as the customer for the
@@ -3001,6 +3023,9 @@ namespace LandLedgers.Population
         /// Start counter work for the FIFO customer only when a production
         /// binding resolves a physically present clerk. If the clerk is away
         /// or occupied, the customer remains queued and no sale is settled.
+        /// Lane 10b (I-R5): when HasArrivedAtCounter is bound, a clerk
+        /// candidate is also skipped until that clerk has arrived at the
+        /// business's counter activity location.
         /// </summary>
         internal bool TryStartCustomerService(PlannedShoppingTrip trip, int dayIndex,
             List<string> diag, out string refusal)
@@ -3047,6 +3072,17 @@ namespace LandLedgers.Population
             foreach (int clerkPersonId in clerkCandidates)
             {
                 if (clerkPersonId < 0 || !attemptedPeople.Add(clerkPersonId)) continue;
+                // Lane 10b (I-R5): the clerk must have arrived at the
+                // counter before TendCustomer starts — the customer side
+                // is already physical (the shopper routes to the store),
+                // and the seller side closes here. A clerk who has not
+                // arrived is skipped, never started from nowhere; the
+                // customer stays queued and the sweep retries.
+                if (HasArrivedAtCounter != null && !HasArrivedAtCounter(clerkPersonId, businessId))
+                {
+                    lastRefusal = "clerk P" + clerkPersonId + " has not arrived at the counter for '" + businessId + "' — the customer stays queued.";
+                    continue;
+                }
                 WorkTask task = GeneralStoreTaskCatalog.EnqueueTendCustomer(tasks, storeEntity, dayIndex, customerRef);
                 EntityId clerk = EntityId.For(EntityKind.Person, clerkPersonId);
                 if (!tasks.AssignTask(task.TaskId, clerk, budgets, out string assignReason))

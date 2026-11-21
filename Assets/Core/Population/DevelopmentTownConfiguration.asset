@@ -1780,6 +1780,23 @@ MonoBehaviour:
         activityForwardLocal: {x: 0, y: 0, z: 1}
         activityType: 8
         functionalSpaceId: 
+      - assetId: bakery-retail-counter-01
+        kind: fixture-counter
+        displayName: Bakery Retail Counter
+        prefab: {fileID: 2986641611251337318, guid: 747b02fd9cc266e41ad64514eac0d162, type: 3}
+        localPosition: {x: -0.75, y: 0.8, z: -4.9}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: bakery-retail-counter
+        activityPositionLocal: {x: -0.75, y: 0.8, z: -3.7}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 3
+        functionalSpaceId: 
       - assetId: bakery-empty-crate-01
         kind: fixture-handling-crate
         displayName: Empty Bakery Handling Crate
@@ -1827,6 +1844,23 @@ MonoBehaviour:
         kitIds: []
         assetEntries: []
       interiorFixtures:
+      - assetId: fuel-dealer-counter-01
+        kind: fixture-counter
+        displayName: Fuel Dealer Counter
+        prefab: {fileID: 2986641611251337318, guid: 747b02fd9cc266e41ad64514eac0d162, type: 3}
+        localPosition: {x: -2.8, y: 0.8, z: -4.9}
+        localEulerAngles: {x: 0, y: 0, z: 0}
+        visualScaleMultiplier: {x: 1, y: 1, z: 1}
+        pivotOffsetLocal: {x: 0, y: 0, z: 0}
+        floorIndex: 0
+        useCollisionFootprintOverride: 0
+        collisionFootprintCenterLocal: {x: 0, y: 0}
+        collisionFootprintSizeMeters: {x: 0, y: 0}
+        activityLocationId: fuel-dealer-counter
+        activityPositionLocal: {x: -2.8, y: 0.8, z: -3.7}
+        activityForwardLocal: {x: 0, y: 0, z: 1}
+        activityType: 3
+        functionalSpaceId: 
       - assetId: fuel-dealer-barrel-01
         kind: fixture-fuel-vessel
         displayName: Empty Fuel Dealer Barrel

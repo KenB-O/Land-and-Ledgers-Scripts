@@ -694,6 +694,8 @@ namespace LandLedgers.FirstLedger
                     SeedDevelopmentBusinessOpeningEquipment();
                 if (startupIntent == WorldStartupIntent.NewGame)
                     SeedBakeryWholesaleAccounts();
+                if (startupIntent == WorldStartupIntent.NewGame)
+                    ResolveBakeryInitialChannelPolicy();
                 if (startupIntent == WorldStartupIntent.NewGame && simulationDrivers != null && developmentNpcStore?.RuntimeState != null)
                     ConfigurePlaytestHorseFeed(developmentNpcStore, simulationDrivers);
             }
@@ -2080,6 +2082,38 @@ namespace LandLedgers.FirstLedger
                 return;
             }
             Debug.Log($"[WorldStartup] {wholesaleReport}", this);
+            foreach (string line in diag) Debug.Log($"[WorldStartup] {line}", this);
+        }
+
+        /// <summary>
+        /// Lane 10a (H-2): resolves Glenn's initial sales-channel policy
+        /// once, from the scenario-authored config value, and records the
+        /// resolution as a decision on the live bakery runtime. Authored
+        /// value wins; absent (Unspecified) means ProtectRetailCounter
+        /// (retail-first per §19, Lane 9a owner decision). Idempotent: a
+        /// runtime that already holds an initial-policy decision is not
+        /// re-resolved. New Game only — a Continued save keeps its
+        /// persisted policy and decision history; a legacy save with no
+        /// decision on record gets its standing policy recorded on the
+        /// first morning re-evaluation instead (see
+        /// BakeryShopRuntime.ReevaluateChannelChoice), after the Pass XL
+        /// restore has run.
+        /// </summary>
+        private void ResolveBakeryInitialChannelPolicy()
+        {
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (!enableDevelopmentTownConfiguration || configuration == null) return;
+            Series2Pass9SaveState pass9 = saveLoadManager?.Series2Pass9State;
+            if (pass9?.BakeryRuntime == null)
+            {
+                Debug.LogError("[WorldStartup] Initial bakery channel policy refused: no live bakery runtime is registered on the Pass 9 state.", this);
+                return;
+            }
+            var diag = new List<string>();
+            pass9.BakeryRuntime.ResolveInitialChannelPolicy(
+                configuration.OpeningBakerySupplyProtection,
+                timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                diag);
             foreach (string line in diag) Debug.Log($"[WorldStartup] {line}", this);
         }
 

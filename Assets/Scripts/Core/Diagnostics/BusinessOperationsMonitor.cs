@@ -116,6 +116,8 @@ namespace LandLedgers.Diagnostics
         /// <summary>Owner person id, or -1 when no owner/worker is bound (D-04).</summary>
         public int OwnerPersonId = -1;
         public string SupplyProtectionPolicy = string.Empty;
+        /// <summary>Lane 10a (H-3): one-line summary of the latest recorded sales-channel decision, or "none on record".</summary>
+        public string LatestChannelDecision = string.Empty;
         public int WholesaleAccountCount;
         public int WholesaleUnitsDueToday;
         public int RetailUnitsAvailableForSale;

@@ -134,7 +134,7 @@ namespace LandLedgers.Economy.Equipment
                     Freshness = entry.freshness,
                     NextDeliveryDayIndex = entry.firstDeliveryDayIndex,
                 };
-                if (!BookIfNew(sellerRuntime, account, diag, booked, out error)) return false;
+                if (!BookIfNew(sellerRuntime, account, dayIndex, diag, booked, out error)) return false;
             }
 
             if (!sellerBusinessRuntimeState.RecordAppliedScenarioEndowment(endowmentId))
@@ -152,6 +152,7 @@ namespace LandLedgers.Economy.Equipment
         private static bool BookIfNew(
             BakeryShopRuntime sellerRuntime,
             BakeryWholesaleAccount account,
+            int dayIndex,
             List<string> diag,
             List<string> booked,
             out string error)
@@ -173,7 +174,10 @@ namespace LandLedgers.Economy.Equipment
                 }
             }
 
-            string refusal = sellerRuntime.AddWholesaleAccount(account, diag);
+            // Lane 10a (H-3/H-6): an explicit config entry is the opt-in —
+            // the booking is recorded with its day and the "scenario"
+            // decider, so the account's provenance is on the record.
+            string refusal = sellerRuntime.AddWholesaleAccount(account, dayIndex, BakeryChannelDecision.ScenarioDecider, diag);
             if (!string.IsNullOrWhiteSpace(refusal))
             {
                 error = $"Wholesale account for '{account.BuyerBusinessId}' refused: {refusal}";

@@ -44,6 +44,65 @@ namespace LandLedgers.Economy.Businesses.Bakery
     }
 
     /// <summary>
+    /// Lane 10a (H-3): one recorded sales-channel decision (Canon §7.3E/§7.5).
+    /// The choice machinery (policy + account set) already persisted; the
+    /// decision record is what was missing — who chose, on what day, from
+    /// what to what, why, and on which observed inputs. Every policy change
+    /// and every account add/pause writes one entry; the history round-trips
+    /// with the runtime save DTO (additive; old saves load empty). The
+    /// Incident Investigator and the Business Operations Monitor read this
+    /// list instead of a bare policy value. Input fields are -1 when the
+    /// decision was taken without that input measured.
+    /// </summary>
+    [Serializable]
+    public sealed class BakeryChannelDecision
+    {
+        /// <summary>Decider for a scenario-authored decision (config or opening).</summary>
+        public const string ScenarioDecider = "scenario";
+
+        /// <summary>Decider when no owner person is bound and no scenario context was supplied.</summary>
+        public const string UnspecifiedDecider = "unspecified";
+
+        /// <summary>Kind: the initial policy resolved once at opening.</summary>
+        public const string InitialPolicyKind = "InitialPolicy";
+
+        /// <summary>Kind: the standing policy recorded on first observation when no prior decision is on record (legacy save or unconfigured opening); the policy itself is unchanged.</summary>
+        public const string StandingPolicyKind = "StandingPolicy";
+
+        /// <summary>Kind: a policy change (morning re-evaluation or an explicit set).</summary>
+        public const string PolicyChangeKind = "PolicyChange";
+
+        /// <summary>Kind: a wholesale account added (explicit config entry or a recorded opt-in).</summary>
+        public const string AccountAddedKind = "AccountAdded";
+
+        /// <summary>Kind: a wholesale account paused (IsActive = false) by a recorded decision — a lawful transition, never a silent wipe.</summary>
+        public const string AccountPausedKind = "AccountPaused";
+
+        /// <summary>Kind: a paused wholesale account resumed.</summary>
+        public const string AccountResumedKind = "AccountResumed";
+
+        public int DayIndex = -1;
+        public string Decider = string.Empty;
+        public string Kind = string.Empty;
+        public string OldValue = string.Empty;
+        public string NewValue = string.Empty;
+        public string Reason = string.Empty;
+        public int RecordedRetailAverageUnitsPerDay = -1;
+        public int OpenHouseholdBreadNeedUnits = -1;
+        public int DueWholesaleUnits = -1;
+        public int RetailPriceCentsPerUnit = -1;
+        public int WholesalePriceCentsPerUnit = -1;
+
+        public BakeryChannelDecision() { }
+
+        /// <summary>One inspectable line for the Business Operations Monitor / Incident Investigator.</summary>
+        public string Summary()
+        {
+            return $"day {DayIndex}: {Kind} ({Decider}): {OldValue} -> {NewValue} — {Reason}";
+        }
+    }
+
+    /// <summary>
     /// D1D: one wholesale supply agreement — a standing account with a repeat
     /// buyer (boarding house, hotel, restaurant, general store, saloon, mine
     /// or logging camp — Canon §7.3E). The account names the buyer business,

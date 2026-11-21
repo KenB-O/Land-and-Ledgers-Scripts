@@ -228,6 +228,8 @@ namespace LandLedgers.Editor.Diagnostics
                     + bakery.RetailUnitsAvailableForSale + "u (net of due wholesale "
                     + bakery.RetailUnitsNetOfDueWholesale + "u), policy " + bakery.SupplyProtectionPolicy,
                     EditorStyles.wordWrappedLabel);
+                EditorGUILayout.LabelField("Bakery: latest channel decision — " + bakery.LatestChannelDecision,
+                    EditorStyles.wordWrappedLabel);
             }
             if (snapshot.FuelDealer != null)
             {
@@ -504,6 +506,13 @@ namespace LandLedgers.Editor.Diagnostics
             {
                 OwnerPersonId = bakery.OwnerPersonId,
                 SupplyProtectionPolicy = bakery.SupplyProtection.ToString(),
+                // Lane 10a (H-3): the channel history is inspectable from
+                // the monitor — the latest recorded decision, not a bare
+                // policy value. "none on record" is honest for a legacy
+                // save whose history predates the decision record.
+                LatestChannelDecision = bakery.LatestChannelDecision != null
+                    ? bakery.LatestChannelDecision.Summary()
+                    : "none on record",
                 WholesaleAccountCount = bakery.WholesaleAccounts != null ? bakery.WholesaleAccounts.Count : 0,
                 FuelDealerIntakeUnitsPerBakeryUnit = fuelIntakeUnitsPerBakeryUnit,
             };

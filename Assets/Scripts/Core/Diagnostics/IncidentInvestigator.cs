@@ -28,14 +28,10 @@ using System.Collections.Generic;
 
 namespace LandLedgers.Diagnostics
 {
-    /// <summary>Severity of a classified incident. Circumstance-derived, never elapsed-time-derived.</summary>
-    public enum IncidentSeverity
-    {
-        Information = 0,
-        Warning = 1,
-        Critical = 2,
-        Unknown = 3,
-    }
+    // Severity is the single canonical scale in IncidentSeverity.cs
+    // (Lane 1): Unknown = 0, Information = 1, Warning = 2, Critical = 3.
+    // Lane 2's local copy was removed at the Lane 1 merge — one scale,
+    // no emitter invents its own.
 
     /// <summary>
     /// Causal class of a physical-task refusal / interrupt (M-R14).

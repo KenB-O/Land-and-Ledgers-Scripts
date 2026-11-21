@@ -81,11 +81,13 @@ namespace LandLedgers.Editor.Diagnostics
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Proving case 1: fuel-handling stall"))
             {
+                IncidentDiagnostics.WireInvestigator();
                 finding = IncidentInvestigator.InvestigateKnownFuelHandlingStall();
                 status = "Proving case 1: interrupted domestic.fuel-handling tasks T9/T10/T170 (60-day) and T8/T9/T11 (5-day), retained-run record.";
             }
             if (GUILayout.Button("Proving case 2: 24-loaf wholesale"))
             {
+                IncidentDiagnostics.WireInvestigator();
                 finding = IncidentInvestigator.InvestigateWholesaleObligation(IncidentInvestigator.KnownWholesaleObligationEvidence());
                 status = "Proving case 2: 24-loaf/day @ 4c wholesale obligation (E-06 SOLVED), config + bootstrap source at this HEAD.";
             }
@@ -99,6 +101,7 @@ namespace LandLedgers.Editor.Diagnostics
 
         private void InvestigateLive()
         {
+            IncidentDiagnostics.WireInvestigator();
             SimulationSystemsHub hub = UnityEngine.Object.FindFirstObjectByType<SimulationSystemsHub>();
             TimeManager time = UnityEngine.Object.FindFirstObjectByType<TimeManager>();
             NpcActivityTraceRecorder trace = hub != null ? hub.ActivityTrace : null;

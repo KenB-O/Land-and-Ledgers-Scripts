@@ -2,7 +2,7 @@
 
 ## Verification boundary
 
-Current integration worktree: `codex/muse-unity-integration-2026-11-21`, HEAD `e21064613760a081ad30d4d95b2ccac025687046` (Muse source ancestor `0fc97de07465df7364316b4f318c6f172ef6a5ef`). Project version is Unity `6000.4.2f1`.
+Integration source checkpoint assessed: `codex/muse-unity-integration-2026-11-21` at `878ed06e18247c92c5a00cf5abd041e47187ed5b` (Muse source ancestor `0fc97de07465df7364316b4f318c6f172ef6a5ef`). This record itself may be committed after that source checkpoint. Project version is Unity `6000.4.2f1`.
 
 **Unity compile and tests are NOT RUN on the Muse integration source.** The only connected Editor is open on the owner's separate `F:\Land & Ledgers` checkout, branch `codex/player-economic-participation-2026-11-18`, HEAD `8537f52fb7dea263fa3ba62da6cbd4d6b5aefbf8`. It reports stopped/not-compiling and a clean active Main Scene, but loaded owner assets are marked dirty in memory. The integration worktree has no `Library` cache and would cold-import. Available physical memory at the last check was about 3.6 GB. The owner checkout has 2,667 status entries and 4 unpublished commits; it remains untouched. Do not open the integration project or close the owner Editor until a safe memory/asset checkpoint is confirmed.
 
@@ -33,7 +33,7 @@ Do not execute or reinterpret these two known pre-existing spillover failures un
 - `CrossSystemInterplayRuntimeTests.TownPulseUnmetHardwareDemandSpillsIntoBlacksmith` expects 3 units sold/transferred; current no-buyer rule produces 0.
 - `CrossSystemInterplayRuntimeTests.TownPulseMeatDemandCanSpillIntoButcher` expects 2 units; current no-buyer rule produces 0.
 
-Preserve Muse's historical Roslyn failure unchanged: `DEF-046 DoubleTimeline_ExistsButHasTwoProductionConsumers`, expected 3, observed 7. It predates Muse, is not a Unity result, and its assertion must not be weakened.
+Preserve Muse's historical Roslyn failure unchanged: `DEF-046 DoubleTimeline_ExistsButHasTwoProductionConsumers`, expected 3, observed 7. It predates Muse, is not a Unity result, and its assertion must not be weakened. A fresh source-only count in this integration checkout currently finds six production `.cs` files referencing `PreciseAbsoluteGameSeconds`: `TimeManager`, `AgentMover`, `WorldInteractionController`, `PopulationPathingDirector`, `SimulationDrivers`, and the Editor `NpcActivityMonitorWindow`. This differs from the archived Roslyn result of seven and is not a test execution. The test still asserts three; investigate the intended consumer contract in a current Unity run without weakening the historical assertion.
 
 ## Editor diagnostics — source inventory only
 

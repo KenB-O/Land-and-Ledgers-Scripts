@@ -176,7 +176,12 @@ namespace LandLedgers.Diagnostics
             }
 
             // Destination missing (class 1): no authored point at all.
+            // The retained 60-day run's wording ("no firewood storage is
+            // authored on the home.") carries neither "no authored" nor the
+            // MissingFirewoodStorageLocationId id, so it is matched
+            // explicitly (Lane 4 follow-up).
             if (reason.IndexOf("no authored", StringComparison.Ordinal) >= 0
+                || reason.IndexOf("no firewood storage is authored", StringComparison.Ordinal) >= 0
                 || reason.IndexOf("MissingFirewoodStorageLocationId", StringComparison.Ordinal) >= 0)
             {
                 return RefusalCauseClass.DestinationMissing;

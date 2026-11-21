@@ -228,6 +228,8 @@ namespace LandLedgers.EditorTests.Diagnostics
                 RefusalCauseClassifier.Classify("Refused: P7 Sleep [1320-1440] runs past midnight — split across days instead."));
             Assert.AreEqual(RefusalCauseClass.DestinationMissing,
                 RefusalCauseClassifier.Classify("DomesticLaborDriver: home has no authored Firewood location."));
+            Assert.AreEqual(RefusalCauseClass.DestinationMissing,
+                RefusalCauseClassifier.Classify("firewood: no firewood storage is authored on the home."));
             Assert.AreEqual(RefusalCauseClass.WorkerCannotPerform,
                 RefusalCauseClassifier.Classify("No visible on-map presentation"));
             Assert.AreEqual(RefusalCauseClass.Unclassified,

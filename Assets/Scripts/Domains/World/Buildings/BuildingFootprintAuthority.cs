@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using LandLedgers.Economy.GenericBusiness;
 using UnityEngine;
 
 #if UNITY_EDITOR
@@ -830,6 +831,102 @@ namespace LandLedgers.World
                 pair = null;
                 return false;
             }
+            return true;
+        }
+
+        /// <summary>
+        /// Lane 10b (I-R1/I-R3): the activity locations the placement
+        /// rules need — authored locations plus runtime-registered ones
+        /// (the public ActivityLocations property exposes only the
+        /// authored list). A location with a blank id or a non-finite
+        /// position is skipped, never invented.
+        /// </summary>
+        public bool TryListActivityLocations(out IReadOnlyList<BuildingActivityLocationAuthoring> locations, out string refusal)
+        {
+            var found = new List<BuildingActivityLocationAuthoring>();
+            foreach (BuildingActivityLocationAuthoring location in AllActivityLocations())
+            {
+                if (location == null || string.IsNullOrWhiteSpace(location.id) || !IsFinite(location.positionLocal)) continue;
+                found.Add(location);
+            }
+            locations = found;
+            refusal = string.Empty;
+            return true;
+        }
+
+        /// <summary>
+        /// Lane 10b (I-R1): extracts this building's authored geometry
+        /// into the pure placement context the install path scores
+        /// (FurniturePlacementScoring): the wall polygon is the first
+        /// floor's first walkable polygon with at least 3 vertices; the
+        /// door is the main-entrance indoor point, falling back to the
+        /// front-door local point; approach points are the resolved
+        /// activity locations; poses come from the placements' own
+        /// building-local transforms. A missing wall polygon degrades
+        /// explicitly — the context reports HasWallPolygon false and the
+        /// scorer skips the wall rules — rather than inventing a wall.
+        /// Returns false only when the authority carries no usable
+        /// interior geometry at all (no floors and no finite door
+        /// point); the caller then keeps first-match behaviour.
+        /// </summary>
+        public bool TryBuildFurniturePlacementContext(
+            IReadOnlyList<BuildingEquipmentPlacement> placements,
+            out FurniturePlacementContext context, out string refusal)
+        {
+            context = null;
+            refusal = string.Empty;
+            var wallPolygon = new List<FurnitureFloorPoint>();
+            InteriorFloorAuthoring floor = InteriorFloors?.FirstOrDefault(f => f != null);
+            InteriorPolygonAuthoring area = floor?.walkableAreas?
+                .FirstOrDefault(p => p != null && p.vertices != null && p.vertices.Count >= 3);
+            if (area != null)
+            {
+                foreach (Vector3 vertex in area.vertices)
+                    wallPolygon.Add(new FurnitureFloorPoint(vertex.x, vertex.z));
+            }
+
+            bool hasDoor = false;
+            float doorX = 0f, doorZ = 0f;
+            if (TryGetEntrancePair("main-entrance", out BuildingEntrancePairAuthoring entrance, out _)
+                && IsFinite(entrance.indoorPositionLocal))
+            {
+                hasDoor = true;
+                doorX = entrance.indoorPositionLocal.x;
+                doorZ = entrance.indoorPositionLocal.z;
+            }
+            else if (IsFinite(FrontDoorLocalPoint))
+            {
+                hasDoor = true;
+                doorX = FrontDoorLocalPoint.x;
+                doorZ = FrontDoorLocalPoint.z;
+            }
+
+            if (wallPolygon.Count < 3 && !hasDoor)
+            {
+                refusal = $"Building '{name}' carries no walkable wall polygon and no finite door point, so no placement context can be built.";
+                return false;
+            }
+
+            var approachPoints = new List<FurnitureApproachPoint>();
+            if (TryListActivityLocations(out IReadOnlyList<BuildingActivityLocationAuthoring> locations, out _))
+            {
+                foreach (BuildingActivityLocationAuthoring location in locations)
+                    approachPoints.Add(new FurnitureApproachPoint(location.id, location.positionLocal.x, location.positionLocal.z));
+            }
+
+            var poses = new Dictionary<string, FurniturePlacementPose>();
+            if (placements != null)
+            {
+                foreach (BuildingEquipmentPlacement placement in placements)
+                {
+                    if (placement == null || string.IsNullOrWhiteSpace(placement.PlacementId)) continue;
+                    if (!placement.TryGetBuildingLocalPlacement(out Vector3 localPosition, out Quaternion localRotation, out _)) continue;
+                    poses[placement.PlacementId] = new FurniturePlacementPose(
+                        localPosition.x, localPosition.z, localRotation.eulerAngles.y);
+                }
+            }
+
+            context = FurniturePlacementContext.Build(wallPolygon, hasDoor, doorX, doorZ, approachPoints, poses);
             return true;
         }
 
@@ -2743,53 +2840,29 @@ namespace LandLedgers.World
             if (authority == null || area == null || prefab == null
                 || !BuildingFootprintAuthority.TryValidateInteriorPolygon(area.vertices, out error)) return false;
 
-            Vector2[] outline = area.vertices.Select(v => new Vector2(v.x, v.z)).ToArray();
-            Vector2 query = new(nearLocal.x, nearLocal.z);
-            float nearestDistance = float.PositiveInfinity;
-            Vector2 bestStart = default, bestEnd = default;
-            for (int i = 0; i < outline.Length; i++)
-            {
-                Vector2 a = outline[i], b = outline[(i + 1) % outline.Length];
-                Vector2 edge = b - a;
-                if (edge.sqrMagnitude < 0.01f) continue;
-                float t = Mathf.Clamp01(Vector2.Dot(query - a, edge) / edge.sqrMagnitude);
-                float distance = (query - (a + edge * t)).sqrMagnitude;
-                if (distance >= nearestDistance) continue;
-                nearestDistance = distance;
-                bestStart = a;
-                bestEnd = b;
-            }
+            List<FurnitureFloorPoint> polygon = area.vertices
+                .Select(v => new FurnitureFloorPoint(v.x, v.z)).ToList();
 
-            Vector2 tangent = (bestEnd - bestStart).normalized;
-            if (tangent.sqrMagnitude < 0.5f)
-            {
-                error = "The walkable floor polygon has no usable wall edge.";
-                return false;
-            }
-
-            float signedArea = 0f;
-            for (int i = 0; i < outline.Length; i++)
-                signedArea += outline[i].x * outline[(i + 1) % outline.Length].y - outline[(i + 1) % outline.Length].x * outline[i].y;
-            Vector2 inward = signedArea >= 0f ? new Vector2(-tangent.y, tangent.x) : new Vector2(tangent.y, -tangent.x);
-
-            yawDegrees = Mathf.Atan2(-tangent.y, tangent.x) * Mathf.Rad2Deg;
+            // Lane 10b (I-R2): the wall-edge geometry lives in the pure
+            // FurniturePlacementScoring port, so the editor button and
+            // the install path align by the same rule. The wall yaw
+            // comes from the nearest edge alone, so align once with a
+            // minimal footprint to learn it — the footprint's real size
+            // depends on that yaw (renderer bounds rotate with it) —
+            // then align again with the real footprint. The prefab
+            // footprint and floor-height handling stay in this wrapper.
+            if (!FurniturePlacementScoring.TryAlignToNearestWall(polygon, nearLocal.x, nearLocal.z,
+                    0.05f, 0.05f, out _, out _, out yawDegrees, out error)) return false;
             if (!TryGetPrefabFootprint(prefab, yawDegrees, out Vector3 footprintSize, out float minimumY))
             {
                 error = $"Prefab '{prefab.name}' has no enabled renderer from which to derive a physical footprint.";
                 return false;
             }
 
-            float edgeLength = Vector2.Distance(bestStart, bestEnd);
-            float halfWidth = footprintSize.x * 0.5f;
-            if (edgeLength < footprintSize.x + 0.1f)
-            {
-                error = $"The nearest floor edge is {edgeLength:F2} m long, shorter than the equipment's {footprintSize.x:F2} m wall-facing width.";
-                return false;
-            }
-
-            Vector2 projected = bestStart + tangent * Mathf.Clamp(Vector2.Dot(query - bestStart, tangent), halfWidth + 0.05f, edgeLength - halfWidth - 0.05f);
-            Vector2 center = projected + inward * (footprintSize.z * 0.5f + 0.05f);
-            position = new Vector3(center.x, floor.floorHeightLocal - minimumY, center.y);
+            if (!FurniturePlacementScoring.TryAlignToNearestWall(polygon, nearLocal.x, nearLocal.z,
+                    footprintSize.x, footprintSize.z,
+                    out float alignedX, out float alignedZ, out yawDegrees, out error)) return false;
+            position = new Vector3(alignedX, floor.floorHeightLocal - minimumY, alignedZ);
             error = string.Empty;
             return true;
         }

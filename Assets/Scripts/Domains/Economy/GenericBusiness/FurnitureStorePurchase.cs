@@ -451,7 +451,8 @@ namespace LandLedgers.Economy.GenericBusiness
                 }
             }
             var handler = new FurniturePurchaseInstallHandler(register, building, buildingInstanceId,
-                placements, placementIsBound, FurnishingAcquisitionSource.Purchase, null, diag);
+                placements, placementIsBound, FurnishingAcquisitionSource.Purchase, null, diag,
+                PlacementContextFor(building, placements));
             int totalUnits = 0;
             foreach (FurniturePurchaseLine line in order.Lines)
             {
@@ -515,7 +516,8 @@ namespace LandLedgers.Economy.GenericBusiness
             if (scenePlacements != null)
                 foreach (BuildingEquipmentPlacement placement in scenePlacements()) if (placement != null) placements.Add(placement);
             var handler = new FurniturePurchaseInstallHandler(register, building, buildingInstanceId,
-                placements, placementIsBound, FurnishingAcquisitionSource.Purchase, null, diag);
+                placements, placementIsBound, FurnishingAcquisitionSource.Purchase, null, diag,
+                PlacementContextFor(building, placements));
             CreditPurchaseProceedsHandler creditProceeds = (int goodsCents, int fareCents, string id) =>
             {
                 // Resume never calls TryPay. This delegate exists only to construct
@@ -591,15 +593,33 @@ namespace LandLedgers.Economy.GenericBusiness
         private string FindInstallationReadinessReason(FurniturePurchaseOrder order,
             BuildingFootprintAuthority building, List<BuildingEquipmentPlacement> placements, int buildingInstanceId)
         {
+            // Lane 10b (I-R1): the blocker names the placement-table
+            // refusal (wall/door/approach) when the scored path finds
+            // no valid slot — not just "no free placement".
+            FurniturePlacementContext placementContext = PlacementContextFor(building, placements);
             foreach (EquipmentAsset asset in order.ReceivedAssets)
             {
                 if (asset == null) continue;
                 if (asset.LocationId == HouseholdFurnishingRegister.BuildingLocationId(buildingInstanceId)
                     && asset.OwnerId == FurniturePurchaseService.HouseholdOwnerId(order.HouseholdId)) continue;
                 if (!FurnitureInstallBinding.TryFindFreePlacement(asset.Kind, building, placements,
-                        placementIsBound, out BuildingEquipmentPlacement _, out string reason))
+                        placementIsBound, placementContext, out BuildingEquipmentPlacement _, out string reason))
                     return reason;
             }
+            return null;
+        }
+
+        /// <summary>
+        /// Lane 10b (I-R1): the placement context for the install path,
+        /// or null when it cannot be built — the install path then keeps
+        /// today's first-match behaviour.
+        /// </summary>
+        private static FurniturePlacementContext PlacementContextFor(
+            BuildingFootprintAuthority building, List<BuildingEquipmentPlacement> placements)
+        {
+            if (building != null && building.TryBuildFurniturePlacementContext(placements,
+                    out FurniturePlacementContext context, out _))
+                return context;
             return null;
         }
 

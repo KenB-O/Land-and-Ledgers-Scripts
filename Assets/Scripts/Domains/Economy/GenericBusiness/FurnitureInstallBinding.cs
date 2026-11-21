@@ -33,6 +33,20 @@
 // scene here): the Unity checklist (plan §9.8) asks Codex to verify homes
 // contain unbound placements whose definitions match the first-wave kinds
 // or are unspecified.
+//
+// Lane 10b (I-R1): when the caller supplies a FurniturePlacementContext
+// (wall polygon, doorway, approach points, per-placement poses), the
+// free placements are SCORED by the §4.1 placement table
+// (FurniturePlacementScoring) and the best wins — a shelf takes a
+// wall-adjacent slot over a mid-room one, a crate takes a near-door
+// slot, a generic slot is spent only when no kind-matched slot
+// qualifies, and a placement whose footprint would block an activity
+// approach or the doorway is refused. Ties break by scene order,
+// preserving today's determinism. Without a context the selection is
+// first-match, exactly as before — the context is supplied by the
+// live driver (SimulationDrivers builds it from the building
+// authority); callers without geometry keep the old behaviour rather
+// than scoring against invented positions.
 
 using System;
 using System.Collections.Generic;
@@ -121,6 +135,34 @@ namespace LandLedgers.Economy.GenericBusiness
             out BuildingEquipmentPlacement placement,
             out string refusal)
         {
+            return TryFindFreePlacement(assetKind, building, scenePlacements, placementIsBound,
+                null, out placement, out refusal);
+        }
+
+        /// <summary>
+        /// Lane 10b (I-R1): the scored selection. With a placement
+        /// context, every qualifying candidate is scored by the §4.1
+        /// placement table (FurniturePlacementScoring) and the best
+        /// wins; ties break by scene order. A candidate refused by
+        /// the scoring (a Fixture kind away from a wall, a footprint
+        /// covering an activity approach or the doorway) never wins,
+        /// and when every qualifying candidate is refused the refusal
+        /// names the first scoring refusal in scene order — the piece
+        /// stays in custody with a reason, never installed badly.
+        /// A candidate whose pose the context does not carry scores
+        /// neutral on wall/door (kind match only): the scene did not
+        /// report a position, so none is invented for it. A null
+        /// context is first-match, exactly the uncontexted overload.
+        /// </summary>
+        public static bool TryFindFreePlacement(
+            string assetKind,
+            BuildingFootprintAuthority building,
+            IEnumerable<BuildingEquipmentPlacement> scenePlacements,
+            Func<string, bool> placementIsBound,
+            FurniturePlacementContext placementContext,
+            out BuildingEquipmentPlacement placement,
+            out string refusal)
+        {
             placement = null;
             refusal = string.Empty;
             if (string.IsNullOrWhiteSpace(assetKind))
@@ -144,6 +186,35 @@ namespace LandLedgers.Economy.GenericBusiness
                 return false;
             }
             string wanted = assetKind.Trim();
+            if (placementContext == null)
+            {
+                foreach (BuildingEquipmentPlacement candidate in scenePlacements)
+                {
+                    if (candidate == null) continue;
+                    if (!ReferenceEquals(candidate.BuildingAuthority, building)) continue;
+                    string definition = candidate.DefinitionId;
+                    bool unspecified = string.IsNullOrWhiteSpace(definition)
+                        || string.Equals(definition.Trim(), UnspecifiedDefinitionId, StringComparison.Ordinal);
+                    if (!unspecified && !string.Equals(definition.Trim(), wanted, StringComparison.Ordinal)) continue;
+                    if (placementIsBound(candidate.PlacementId ?? string.Empty)) continue;
+                    placement = candidate;
+                    return true;
+                }
+                refusal = $"FurnitureInstallBinding: no free placement for '{wanted}' in this building — every matching spot is bound, belongs to another building, or names a different kind.";
+                return false;
+            }
+
+            float lengthM = FurniturePlacementScoring.DefaultDimensionMeters;
+            float widthM = FurniturePlacementScoring.DefaultDimensionMeters;
+            if (FurnitureItemSpecs.TryGetRow(wanted, out FurnitureItemSpecs.Row row) && row != null)
+            {
+                lengthM = row.LengthM;
+                widthM = row.WidthM;
+            }
+
+            bool anyQualifying = false;
+            string firstScoringRefusal = null;
+            float bestScore = float.NegativeInfinity;
             foreach (BuildingEquipmentPlacement candidate in scenePlacements)
             {
                 if (candidate == null) continue;
@@ -151,12 +222,43 @@ namespace LandLedgers.Economy.GenericBusiness
                 string definition = candidate.DefinitionId;
                 bool unspecified = string.IsNullOrWhiteSpace(definition)
                     || string.Equals(definition.Trim(), UnspecifiedDefinitionId, StringComparison.Ordinal);
+                bool kindMatched = !unspecified;
                 if (!unspecified && !string.Equals(definition.Trim(), wanted, StringComparison.Ordinal)) continue;
                 if (placementIsBound(candidate.PlacementId ?? string.Empty)) continue;
-                placement = candidate;
-                return true;
+                anyQualifying = true;
+
+                float score;
+                if (placementContext.TryGetPose(candidate.PlacementId ?? string.Empty, out FurniturePlacementPose pose))
+                {
+                    if (!FurniturePlacementScoring.TryScoreCandidate(wanted, pose, lengthM, widthM,
+                            kindMatched, placementContext, out score, out string scoringRefusal))
+                    {
+                        firstScoringRefusal = firstScoringRefusal ?? scoringRefusal;
+                        continue;
+                    }
+                }
+                else
+                {
+                    // No pose reported for this placement: score neutral
+                    // on wall/door (kind match only) rather than
+                    // inventing a position for it.
+                    score = FurniturePlacementScoring.NeutralDoorScore
+                        + (kindMatched ? FurniturePlacementScoring.KindMatchBonus : 0f);
+                }
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    placement = candidate;
+                }
             }
-            refusal = $"FurnitureInstallBinding: no free placement for '{wanted}' in this building — every matching spot is bound, belongs to another building, or names a different kind.";
+            if (placement != null) return true;
+            if (!anyQualifying)
+            {
+                refusal = $"FurnitureInstallBinding: no free placement for '{wanted}' in this building — every matching spot is bound, belongs to another building, or names a different kind.";
+                return false;
+            }
+            refusal = $"FurnitureInstallBinding: no scored placement for '{wanted}' in this building — {firstScoringRefusal ?? "every qualifying placement was refused by the placement rules."}";
             return false;
         }
 
@@ -169,6 +271,8 @@ namespace LandLedgers.Economy.GenericBusiness
         /// for a store buy, Secondhand for a household sale, Manufacture
         /// for a workshop piece. Returns null on success, the refusal
         /// otherwise — nothing is ever marked installed that was not.
+        /// A null placement context is first-match selection; a context
+        /// scores the placement (Lane 10b, I-R1).
         /// </summary>
         public static string TryInstallHouseholdAsset(
             HouseholdFurnishingRegister register,
@@ -179,6 +283,23 @@ namespace LandLedgers.Economy.GenericBusiness
             Func<string, bool> placementIsBound,
             FurnishingAcquisitionSource source,
             string sourceId,
+            out FurnishingPlacementBinding binding)
+        {
+            return TryInstallHouseholdAsset(register, asset, building, buildingInstanceId,
+                scenePlacements, placementIsBound, source, sourceId, null, out binding);
+        }
+
+        /// <summary>Lane 10b (I-R1): the install core with placement scoring — the placement is chosen by the §4.1 table when a context is supplied.</summary>
+        public static string TryInstallHouseholdAsset(
+            HouseholdFurnishingRegister register,
+            EquipmentAsset asset,
+            BuildingFootprintAuthority building,
+            int buildingInstanceId,
+            IEnumerable<BuildingEquipmentPlacement> scenePlacements,
+            Func<string, bool> placementIsBound,
+            FurnishingAcquisitionSource source,
+            string sourceId,
+            FurniturePlacementContext placementContext,
             out FurnishingPlacementBinding binding)
         {
             binding = null;
@@ -193,7 +314,7 @@ namespace LandLedgers.Economy.GenericBusiness
                 return $"FurnitureInstallBinding: asset {asset.AssetId} could not be registered — {registerRefusal}";
             if (!TryCapabilityForKind(asset.Kind, out FurnishingCapabilityKind capability))
                 return $"FurnitureInstallBinding: asset {asset.AssetId} is kind '{asset.Kind}', which has no install capability mapped — unknown or out-of-wave kinds are never installed on a guessed capability.";
-            if (!TryFindFreePlacement(asset.Kind, building, scenePlacements, placementIsBound,
+            if (!TryFindFreePlacement(asset.Kind, building, scenePlacements, placementIsBound, placementContext,
                     out BuildingEquipmentPlacement placement, out string placementRefusal))
                 return placementRefusal;
             string installRefusal = register.TryInstall(asset.AssetId, placement, building, buildingInstanceId,
@@ -212,7 +333,8 @@ namespace LandLedgers.Economy.GenericBusiness
         /// unusable, or reserved is skipped, never forced. One refusal
         /// never stops the remaining pieces: each refusal is recorded
         /// loudly in the diagnostics and the leg continues. Returns the
-        /// installed count.
+        /// installed count. Lane 10b (I-R1): an optional placement
+        /// context scores the placement; null is first-match.
         /// </summary>
         public static int TryInstallCustodyPieces(
             HouseholdFurnishingRegister register,
@@ -220,7 +342,8 @@ namespace LandLedgers.Economy.GenericBusiness
             int buildingInstanceId,
             IEnumerable<BuildingEquipmentPlacement> scenePlacements,
             Func<string, bool> placementIsBound,
-            List<string> diag)
+            List<string> diag,
+            FurniturePlacementContext placementContext = null)
         {
             diag = diag ?? new List<string>();
             if (register == null || register.Assets == null) return 0;
@@ -243,7 +366,7 @@ namespace LandLedgers.Economy.GenericBusiness
                 }
                 string refusal = TryInstallHouseholdAsset(register, asset, building, buildingInstanceId,
                     scenePlacements, placementIsBound, FurnishingAcquisitionSource.Manufacture,
-                    asset.MadeByBusinessId, out FurnishingPlacementBinding binding);
+                    asset.MadeByBusinessId, placementContext, out FurnishingPlacementBinding binding);
                 if (refusal != null)
                 {
                     diag.Add($"FurnitureInstallBinding: custody piece '{asset.AssetId}' ({asset.Kind}) install refused — {refusal}; it stays in household custody.");
@@ -288,6 +411,7 @@ namespace LandLedgers.Economy.GenericBusiness
         private readonly FurnishingAcquisitionSource source;
         private readonly HouseholdFurnishingRegister sellerRegister;
         private readonly List<string> diagnostics;
+        private readonly FurniturePlacementContext placementContext;
 
         public FurniturePurchaseInstallHandler(
             HouseholdFurnishingRegister buyerRegister,
@@ -297,7 +421,8 @@ namespace LandLedgers.Economy.GenericBusiness
             Func<string, bool> placementIsBound,
             FurnishingAcquisitionSource source,
             HouseholdFurnishingRegister sellerRegister,
-            List<string> diagnostics)
+            List<string> diagnostics,
+            FurniturePlacementContext placementContext = null)
         {
             this.buyerRegister = buyerRegister;
             this.building = building;
@@ -307,6 +432,7 @@ namespace LandLedgers.Economy.GenericBusiness
             this.source = source;
             this.sellerRegister = sellerRegister;
             this.diagnostics = diagnostics;
+            this.placementContext = placementContext;
         }
 
         /// <summary>
@@ -338,7 +464,7 @@ namespace LandLedgers.Economy.GenericBusiness
             }
             string refusal = FurnitureInstallBinding.TryInstallHouseholdAsset(buyerRegister, asset, building,
                 buildingInstanceId, scenePlacements, placementIsBound, source, purchaseId ?? string.Empty,
-                out FurnishingPlacementBinding binding);
+                placementContext, out FurnishingPlacementBinding binding);
             if (refusal != null)
                 return refusal;
             diagnostics?.Add($"FurniturePurchaseInstallHandler: purchase '{purchaseId}' installed '{asset.AssetId}' ({asset.Kind}) in building {buildingInstanceId} (placement {binding?.PlacementId}, capability {binding?.CapabilityKind}, source {source}).");

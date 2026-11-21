@@ -4,6 +4,7 @@ using System.Linq;
 using LandLedgers.Economy;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.Equipment;
+using LandLedgers.Economy.GenericBusiness;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Population;
 using LandLedgers.World;
@@ -219,11 +220,13 @@ namespace LandLedgers.Orchestration
         /// A business needs a Counter (service point) and a Receiving
         /// point, each authored and reachable from main-entrance via the
         /// type-based resolver. Gaps are logged as warnings here so they
-        /// surface at startup (M-07/M-08/M-15: the bakery and fuel
-        /// dealer have no counter point, and no business but the lumber
-        /// yard has a receiving point). The gap text itself is decided
-        /// by StartupAccessValidator (harness-pinned); this method only
-        /// computes each check from the live authority.
+        /// surface at startup (M-15: no business but the lumber yard has
+        /// a receiving point; the bakery and fuel dealer counter gaps,
+        /// M-07/I-R6 and M-08, were closed by Lane 10b's authored
+        /// bakery-retail-counter-01 and fuel-dealer-counter-01 fixtures).
+        /// The gap text itself is decided by StartupAccessValidator
+        /// (harness-pinned); this method only computes each check from
+        /// the live authority.
         /// </summary>
         private static void ValidateBusinessAccess(
             BuildingFootprintAuthority authority, int buildingId, string displayName, string instanceId)
@@ -327,6 +330,74 @@ namespace LandLedgers.Orchestration
             return false;
         }
 
+        /// <summary>
+        /// Lane 10b (I-R3/I-R7): placement-table validation for one
+        /// fixture at its true placed pose (including the pivot offset).
+        /// Warning only — the authored layout stands. A fixture whose
+        /// prefab has no measurable rendered footprint, or a building
+        /// whose placement context cannot be built, is skipped, never
+        /// guessed.
+        /// </summary>
+        private static void ValidatePlacedFixturePlacement(
+            BuildingFootprintAuthority authority,
+            DevelopmentTownConfiguration.BusinessInteriorFixture fixture,
+            Vector3 placedLocalPosition, Quaternion placedLocalRotation)
+        {
+            if (authority == null || fixture?.prefab == null) return;
+            if (!TryGetFixtureFootprint(fixture.prefab, placedLocalRotation.eulerAngles.y, out float lengthM, out float widthM)) return;
+            if (!authority.TryBuildFurniturePlacementContext(null, out FurniturePlacementContext placementContext, out _)) return;
+            var pose = new FurniturePlacementPose(
+                placedLocalPosition.x, placedLocalPosition.z, placedLocalRotation.eulerAngles.y);
+            string diagnostic = FurniturePlacementScoring.ValidateBusinessFixturePlacement(
+                fixture.kind, pose, lengthM, widthM, placementContext);
+            if (!string.IsNullOrWhiteSpace(diagnostic))
+                Debug.LogWarning($"[Lane10b] Business fixture '{fixture.assetId}' ({fixture.kind}): {diagnostic}");
+        }
+
+        /// <summary>
+        /// Lane 10b: the prefab's rendered footprint in building-local
+        /// metres at the fixture's authored yaw, mirroring
+        /// BuildingFootprintAuthority.TryGetPrefabFootprint's
+        /// localBounds math (renderer corners into prefab-local space,
+        /// prefab scale, yaw rotation). Returns false when the prefab
+        /// has no rendered geometry to measure.
+        /// </summary>
+        private static bool TryGetFixtureFootprint(GameObject prefab, float yawDegrees, out float lengthM, out float widthM)
+        {
+            lengthM = 0f;
+            widthM = 0f;
+            if (prefab == null) return false;
+            Vector3 min = new(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+            Vector3 max = new(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+            bool found = false;
+            Quaternion yaw = Quaternion.Euler(0f, yawDegrees, 0f);
+            foreach (Renderer renderer in prefab.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer == null) continue;
+                Bounds bounds = renderer.localBounds;
+                for (int x = 0; x <= 1; x++)
+                    for (int y = 0; y <= 1; y++)
+                        for (int z = 0; z <= 1; z++)
+                        {
+                            Vector3 corner = new(x == 0 ? bounds.min.x : bounds.max.x,
+                                y == 0 ? bounds.min.y : bounds.max.y,
+                                z == 0 ? bounds.min.z : bounds.max.z);
+                            Vector3 sourceLocal = prefab.transform.InverseTransformPoint(renderer.transform.TransformPoint(corner));
+                            Vector3 scaled = Vector3.Scale(sourceLocal, prefab.transform.localScale);
+                            Vector3 rotated = yaw * scaled;
+                            min = Vector3.Min(min, rotated);
+                            max = Vector3.Max(max, rotated);
+                            found = true;
+                        }
+            }
+            if (!found) return false;
+            Vector3 size = max - min;
+            if (size.x <= 0.05f || size.z <= 0.05f) return false;
+            lengthM = size.x;
+            widthM = size.z;
+            return true;
+        }
+
         private static string CreatePresentation(
             BuildingFootprintAuthority authority,
             int buildingInstanceId,
@@ -356,6 +427,14 @@ namespace LandLedgers.Orchestration
                 fixture.collisionFootprintCenterLocal, fixture.collisionFootprintSizeMeters);
             placement.AssociateWithBuilding(authority);
             placement.SetEconomicRecord(asset.OwnerId, $"scenario-opening:{fixture.assetId}");
+
+            // Lane 10b (I-R3/I-R7): placement-table validation for the
+            // fixture just placed, at its true placed pose — a warning,
+            // never a refusal: the authored layout stands, and the
+            // diagnostic names the rule it breaks so the owner can
+            // correct the config.
+            ValidatePlacedFixturePlacement(authority, fixture,
+                instance.transform.localPosition, instance.transform.localRotation);
 
             var marker = instance.GetComponent<BusinessInteriorFixturePresentation>();
             if (marker == null) marker = instance.AddComponent<BusinessInteriorFixturePresentation>();

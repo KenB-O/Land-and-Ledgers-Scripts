@@ -39,8 +39,13 @@
 //   neither, never silently lost.
 //
 // Placement appropriateness (walls, counter ends, door proximity) is
-// Lane 10b's work, not this lane's: this driver uses authored placements
-// as they exist, through FurnitureInstallBinding.TryFindFreePlacement.
+// Lane 10b's work: the driver takes an optional
+// FurniturePlacementContext (built by SimulationDrivers from the home
+// building authority) and passes it through to
+// FurnitureInstallBinding, so the install resolves at the scored
+// placement. Null context is first-match, exactly the Lane 9f
+// behaviour — the context is supplied by the live driver, never
+// invented here.
 // Unity-free (plain state only), so it is harness-compiled and
 // harness-tested; the daily driver (SimulationDrivers) binds the scene
 // seams (placements, bound check, arrival fact) and the household roster.
@@ -169,7 +174,10 @@ namespace LandLedgers.Economy.GenericBusiness
         /// whose worker has not arrived waits Queued — no minutes accrue
         /// from nowhere, and no budget is booked for an absent worker.
         /// Returns the day's counts; every refusal and install is also
-        /// appended to diag.
+        /// appended to diag. Lane 10b (I-R1): an optional placement
+        /// context scores the placement the install resolves to (and
+        /// the mint-time free-placement check); null is first-match,
+        /// exactly today's behaviour.
         /// </summary>
         public static DriveDayResult DriveDay(
             TaskAuthority tasks,
@@ -185,7 +193,8 @@ namespace LandLedgers.Economy.GenericBusiness
             IReadOnlyList<FurniturePurchaseOrder> orders,
             Func<int, int, bool> hasArrivedAtHome,
             int dayIndex,
-            List<string> diag)
+            List<string> diag,
+            FurniturePlacementContext placementContext = null)
         {
             diag = diag ?? new List<string>();
             var result = new DriveDayResult();
@@ -245,7 +254,7 @@ namespace LandLedgers.Economy.GenericBusiness
                 EquipmentAsset asset = candidate.Asset;
                 if (FindLiveInstallTask(tasks, householdOwner, asset.AssetId) != null) continue;
                 if (!FurnitureInstallBinding.TryFindFreePlacement(asset.Kind, building, scenePlacements,
-                        placementIsBound, out _, out string placementRefusal))
+                        placementIsBound, placementContext, out _, out string placementRefusal))
                 {
                     result.BlockedAssets++;
                     if (candidate.Order != null)
@@ -292,7 +301,7 @@ namespace LandLedgers.Economy.GenericBusiness
                 if (register.LiveBindingFor(assetId) != null)
                 {
                     string alreadyRefusal = ResolveCompletedInstallTask(task, order, register, building,
-                        buildingInstanceId, scenePlacements, placementIsBound, diag);
+                        buildingInstanceId, scenePlacements, placementIsBound, diag, placementContext);
                     if (alreadyRefusal == null)
                     {
                         tasks.CompleteTask(task.TaskId, TaskOutcome.Success, dayIndex, budgets);
@@ -328,7 +337,7 @@ namespace LandLedgers.Economy.GenericBusiness
                 if (task.Status != TaskStatus.Complete) continue;
                 result.CompletedTasks++;
                 string resolveRefusal = ResolveCompletedInstallTask(task, order, register, building,
-                    buildingInstanceId, scenePlacements, placementIsBound, diag);
+                    buildingInstanceId, scenePlacements, placementIsBound, diag, placementContext);
                 if (resolveRefusal == null) result.InstalledAssets++;
                 else result.BlockedAssets++;
             }
@@ -343,6 +352,8 @@ namespace LandLedgers.Economy.GenericBusiness
         /// already installed — the order is advanced either way), the
         /// refusal otherwise. Never installs synchronously outside a
         /// completed task, never marks an order installed that was not.
+        /// Lane 10b (I-R1): an optional placement context scores the
+        /// placement; null is first-match.
         /// </summary>
         public static string ResolveCompletedInstallTask(
             WorkTask task,
@@ -352,7 +363,8 @@ namespace LandLedgers.Economy.GenericBusiness
             int buildingInstanceId,
             IEnumerable<BuildingEquipmentPlacement> scenePlacements,
             Func<string, bool> placementIsBound,
-            List<string> diag)
+            List<string> diag,
+            FurniturePlacementContext placementContext = null)
         {
             diag = diag ?? new List<string>();
             if (task == null || register == null || building == null)
@@ -392,7 +404,7 @@ namespace LandLedgers.Economy.GenericBusiness
             }
             string refusal = FurnitureInstallBinding.TryInstallHouseholdAsset(register, asset, building,
                 buildingInstanceId, scenePlacements, placementIsBound, source, sourceId,
-                out FurnishingPlacementBinding binding);
+                placementContext, out FurnishingPlacementBinding binding);
             if (refusal != null)
             {
                 if (order != null) order.InstallationBlockedReason = refusal;
@@ -403,7 +415,7 @@ namespace LandLedgers.Economy.GenericBusiness
             {
                 AdvanceOrderLineForAsset(order, assetId, register);
                 if (order.IsOperational) order.InstallationBlockedReason = string.Empty;
-                else RefreshInstallationBlocker(order, register, building, scenePlacements, placementIsBound);
+                else RefreshInstallationBlocker(order, register, building, scenePlacements, placementIsBound, placementContext);
             }
             diag.Add($"FurnishingInstallTaskDriver: asset '{assetId}' ({asset.Kind}) installed in building {buildingInstanceId} " +
                 $"(placement {binding?.PlacementId}, capability {binding?.CapabilityKind}, source {source})" +
@@ -460,7 +472,8 @@ namespace LandLedgers.Economy.GenericBusiness
             HouseholdFurnishingRegister register,
             BuildingFootprintAuthority building,
             IEnumerable<BuildingEquipmentPlacement> scenePlacements,
-            Func<string, bool> placementIsBound)
+            Func<string, bool> placementIsBound,
+            FurniturePlacementContext placementContext = null)
         {
             if (order == null || register == null || building == null) return;
             order.InstallationBlockedReason = string.Empty;
@@ -474,7 +487,7 @@ namespace LandLedgers.Economy.GenericBusiness
                     EquipmentAsset asset = register.FindAsset(assetId);
                     if (asset == null || register.LiveBindingFor(assetId) != null) continue;
                     if (!FurnitureInstallBinding.TryFindFreePlacement(asset.Kind, building, scenePlacements,
-                            placementIsBound, out _, out string refusal))
+                            placementIsBound, placementContext, out _, out string refusal))
                     {
                         order.InstallationBlockedReason = refusal;
                         return;

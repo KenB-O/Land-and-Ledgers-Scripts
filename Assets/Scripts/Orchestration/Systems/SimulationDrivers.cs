@@ -4190,6 +4190,20 @@ namespace LandLedgers.Orchestration.Systems
             householdShoppingLoop.DevelopmentTraceObserver = shoppingEvent => hub.ActivityTrace?.RecordShoppingEvent(shoppingEvent);
 #endif
 
+            // Lane 10b (I-R5): HouseholdShoppingLoop.HasArrivedAtCounter
+            // is deliberately NOT bound here. The gate refuses service
+            // until a clerk has arrived at the retail counter, and no
+            // caller today routes a clerk to a business interior point —
+            // a position check without the route request would refuse
+            // every service until the deadline and leave every customer
+            // unserved. It is also unconfirmed whether the store clerk
+            // (Kennedy, owner) is at the store building during shopping
+            // hours. Bind it only together with the clerk-to-counter
+            // routing, and only once the clerk's in-hours location is
+            // known; until then the queue/clerk wiring below is the
+            // service gate. The gate itself is harness-tested
+            // (Lane10bFurniturePlacementTests, ClerkArrivalGate_*).
+
             // Physical retail service uses a distinct FIFO queue per merchant.
             // The General Store queue remains owned by its runtime manager;
             // the authored bakery queue is owned here and persisted through
@@ -7992,6 +8006,23 @@ namespace LandLedgers.Orchestration.Systems
                     }
                 }
             }
+            // Lane 10b (I-R8): prefer the highest carpentry capability
+            // among the owner-first candidate order; the stable sort
+            // keeps owner-first as the tiebreak, and a novice is still
+            // picked when nobody better is available — no hard gates
+            // (Canon XXXI §3.3). TryBeginDemandedFurniture takes the
+            // first available worker from the list, so ordering the list
+            // is the selection; availability is still decided inside
+            // production. The ranking is the selection reason, logged
+            // with the daily carpentry drive.
+            if (hub?.Skills != null && workers.Count > 1)
+            {
+                workers = workers
+                    .OrderByDescending(worker => hub.Skills.GetCapability(worker, FurniturePlacementScoring.CarpentrySkillId))
+                    .ToList();
+                Debug.Log($"[SimulationDrivers] carpentry day {absoluteDayIndex}: workers ordered by carpentry capability: " +
+                    string.Join(", ", workers.Select(worker => $"P{worker.Id} ({hub.Skills.GetCapability(worker, FurniturePlacementScoring.CarpentrySkillId).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)})")), this);
+            }
             List<CarpentryFurnitureSaleCandidate> furnitureCandidates = BuildFurnitureSaleCandidates(absoluteDayIndex);
             if (workshop.GenericConfiguration.ActiveProcesses.All(process => process == null || process.Completed))
             {
@@ -8366,6 +8397,14 @@ namespace LandLedgers.Orchestration.Systems
                         if (memberId >= 0) installMembers.Add(EntityId.For(EntityKind.Person, memberId));
                     }
                 }
+                // Lane 10b (I-R1): score install placements by the
+                // placement table (wall/door/approach rules) instead of
+                // first-match. A context that cannot be built stays null
+                // and the install path keeps today's first-match behaviour.
+                FurniturePlacementContext placementContext = null;
+                if (building.TryBuildFurniturePlacementContext(scenePlacements,
+                        out FurniturePlacementContext builtContext, out _))
+                    placementContext = builtContext;
                 FurnishingInstallTaskDriver.DriveDayResult installResult = FurnishingInstallTaskDriver.DriveDay(
                     hub.Tasks, hub.WorkTimeBudgets,
                     EntityId.For(EntityKind.Household, candidate.HouseholdId),
@@ -8373,7 +8412,7 @@ namespace LandLedgers.Orchestration.Systems
                     candidate.Furnishings, building, scenePlacements, placementIsBound,
                     GetFurniturePurchaseOrders(),
                     (personId, buildingId) => IsPersonVisuallyAtBuilding(personId, buildingId),
-                    absoluteDayIndex, diag);
+                    absoluteDayIndex, diag, placementContext);
                 if (installResult.InstalledAssets > 0)
                 {
                     Debug.Log($"[SimulationDrivers] furniture purchase day {absoluteDayIndex}: household {candidate.HouseholdId} installed {installResult.InstalledAssets} custody piece(s) through furnishing.install tasks in building {candidate.HomeBuildingId}.", this);
@@ -9023,8 +9062,16 @@ namespace LandLedgers.Orchestration.Systems
                         if (candidate?.Bindings != null && candidate.Bindings.Exists(item => item != null && item.BindingId == placementId)) return true;
                     return false;
                 };
+                // Lane 10b (I-R1): score the install placement by the
+                // placement table (wall/door/approach rules) instead of
+                // first-match. A context that cannot be built stays null
+                // and the handler keeps today's first-match behaviour.
+                FurniturePlacementContext installContext = null;
+                if (building != null && building.TryBuildFurniturePlacementContext(placements,
+                        out FurniturePlacementContext builtContext, out _))
+                    installContext = builtContext;
                 var handler = new FurniturePurchaseInstallHandler(register, building, order.BuildingInstanceId,
-                    placements, bound, FurnishingAcquisitionSource.Purchase, null, null);
+                    placements, bound, FurnishingAcquisitionSource.Purchase, null, null, installContext);
                 var service = new FurniturePurchaseService(ledger,
                     new StoreFurnitureVendorStock(store.RuntimeState, null),
                     (int goods, int fare, string id) => "Paid furniture orders cannot be charged again.",
@@ -14874,9 +14921,9 @@ namespace LandLedgers.Orchestration.Systems
             if (bakery == null) return;
             StagedBakeryChainDriver driver = StagedBakeryDriverFor(bakery);
             if (driver == null) return;
-            EntityId bakerId = ResolveStagedBakeryBaker(bakery);
-            ApplyRestoredStagedBakeryChain(state, driver, dayIndex, bakerId);
             var diag = new List<string>();
+            EntityId bakerId = ResolveStagedBakeryBaker(bakery, diag);
+            ApplyRestoredStagedBakeryChain(state, driver, dayIndex, bakerId);
             int openBreadNeedUnits = CountOpenHouseholdBreadNeedUnits(hub?.PurchasingNeeds);
             // Lane 9a (H-4): the gate compares open need against retail
             // stock net of due-today wholesale units (see
@@ -14980,28 +15027,32 @@ namespace LandLedgers.Orchestration.Systems
             if (bakery == null) return;
             StagedBakeryChainDriver driver = StagedBakeryDriverFor(bakery);
             if (driver == null) return;
-            EntityId bakerId = ResolveStagedBakeryBaker(bakery);
+            var diag = new List<string>();
+            EntityId bakerId = ResolveStagedBakeryBaker(bakery, diag);
             // Apply the restored DTO before the no-op check: a pending
             // restore is what makes this drive non-empty.
             ApplyRestoredStagedBakeryChain(state, driver, dayIndex, bakerId);
             if (!driver.HasActiveBatch && driver.Chain.BreadShelf.Count == 0) return;
-            var diag = new List<string>();
             driver.DriveTick(dayIndex, wholeMinutes, bakerId, diag);
             if (diag.Count > 0)
                 Debug.Log("[BakeryProduction] Day " + dayIndex + ": " + string.Join(" | ", diag), this);
         }
 
         /// <summary>
-        /// The baker is the first available person from the
+        /// The baker is the highest-capability eligible person from the
         /// DriveGenericProduction worker pool for the bakery business
         /// instance: its Owner first, then the active employees from the
-        /// business RuntimeState EmploymentRegistry. No second-baker
-        /// fallback, no multi-baker arbitration, no employment creation.
-        /// A founder-operator owner is a legitimate baker; no wage, no
-        /// payroll entry is created here.
+        /// business RuntimeState EmploymentRegistry (Lane 10b I-R8:
+        /// owner-first remains the tiebreak, and a novice is still
+        /// picked when nobody better is available — no hard gates,
+        /// Canon XXXI §3.3). No second-baker fallback, no multi-baker
+        /// arbitration, no employment creation. A founder-operator owner
+        /// is a legitimate baker; no wage, no payroll entry is created
+        /// here.
         /// </summary>
         private EntityId ResolveStagedBakeryBaker(
-            LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime bakery)
+            LandLedgers.Economy.Businesses.Bakery.BakeryShopRuntime bakery,
+            List<string> diagnostics = null)
         {
             if (bakery == null || sharedBusinessRuntime == null) return EntityId.Invalid;
             BusinessInstanceState business = null;
@@ -15034,7 +15085,26 @@ namespace LandLedgers.Orchestration.Systems
                 }
             }
 
-            int selectedPersonId = FirstEligibleStagedBakeryWorkerId(candidates, IsEligibleStagedBakeryWorker);
+            // Lane 10b (I-R8): prefer the highest baking capability;
+            // the owner-first candidate order stays the tiebreak, and a
+            // novice is still picked when nobody better is available —
+            // no hard gates (Canon XXXI §3.3). When no capability store
+            // is present the candidates tie at zero and owner-first wins,
+            // exactly FirstEligibleStagedBakeryWorkerId's behaviour.
+            int selectedPersonId = FurniturePlacementScoring.SelectPreferredCandidate(
+                candidates, IsEligibleStagedBakeryWorker,
+                personId => hub?.Skills == null
+                    ? 0.0
+                    : hub.Skills.GetCapability(EntityId.For(EntityKind.Person, personId),
+                        FurniturePlacementScoring.BakingSkillId));
+            if (selectedPersonId >= 0 && diagnostics != null)
+            {
+                double capability = hub?.Skills == null
+                    ? 0.0
+                    : hub.Skills.GetCapability(EntityId.For(EntityKind.Person, selectedPersonId),
+                        FurniturePlacementScoring.BakingSkillId);
+                diagnostics.Add($"staged baker P{selectedPersonId} selected by highest baking capability ({capability.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)}); owner-first breaks ties, no hard gates.");
+            }
             return selectedPersonId >= 0
                 ? EntityId.For(EntityKind.Person, selectedPersonId)
                 : EntityId.Invalid;

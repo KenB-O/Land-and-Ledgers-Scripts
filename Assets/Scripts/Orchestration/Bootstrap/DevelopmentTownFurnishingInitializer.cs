@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using LandLedgers.Economy.Blacksmith;
+using LandLedgers.Economy.GenericBusiness;
+using LandLedgers.Economy.Storage;
 using LandLedgers.Orchestration.Systems;
 using LandLedgers.Population;
 using LandLedgers.World;
@@ -550,12 +552,36 @@ namespace LandLedgers.Orchestration
             List<string> diagnostics)
         {
             if (authority == null || register?.Bindings == null) return;
+            // Lane 10b (I-R3): the placement-table check runs for every
+            // installed binding, not only the activity kinds below — a
+            // shelf installed mid-room is a placement failure even though
+            // no activity route references it. The context is built
+            // without scene placements (ValidateInstalledPlacement scores
+            // the binding's own pose); when it cannot be built the check
+            // is skipped, never guessed. A kind with no spec row has no
+            // shipped-form footprint to score, so it is skipped too.
+            FurniturePlacementContext placementContext = null;
+            if (authority.TryBuildFurniturePlacementContext(null, out FurniturePlacementContext builtContext, out _))
+                placementContext = builtContext;
             foreach (FurnishingPlacementBinding binding in register.Bindings)
             {
-                if (binding == null || binding.BuildingInstanceId < 0
-                    || (binding.CapabilityKind != FurnishingCapabilityKind.SleepingPlace
-                        && binding.CapabilityKind != FurnishingCapabilityKind.StoveWorkstation
-                        && binding.CapabilityKind != FurnishingCapabilityKind.DiningSeat)) continue;
+                if (binding == null || binding.BuildingInstanceId < 0) continue;
+                if (placementContext != null)
+                {
+                    EquipmentAsset asset = register.FindAsset(binding.AssetId);
+                    if (asset != null && FurnitureItemSpecs.TryGetRow(asset.Kind, out FurnitureItemSpecs.Row row) && row != null)
+                    {
+                        var pose = new FurniturePlacementPose(
+                            binding.LocalPosition.x, binding.LocalPosition.z, binding.LocalRotation.eulerAngles.y);
+                        string placementDiagnostic = FurniturePlacementScoring.ValidateInstalledPlacement(
+                            asset.Kind, pose, row.LengthM, row.WidthM, placementContext);
+                        if (!string.IsNullOrWhiteSpace(placementDiagnostic))
+                            diagnostics.Add($"Installed asset {binding.AssetId} ({asset.Kind}): {placementDiagnostic}");
+                    }
+                }
+                if (binding.CapabilityKind != FurnishingCapabilityKind.SleepingPlace
+                    && binding.CapabilityKind != FurnishingCapabilityKind.StoveWorkstation
+                    && binding.CapabilityKind != FurnishingCapabilityKind.DiningSeat) continue;
                 if (!authority.TryGetActivityLocation(binding.CapabilityReferenceId, binding.BuildingInstanceId,
                         out _, out string reason))
                 {

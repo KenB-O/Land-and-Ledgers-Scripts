@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Economy.Logistics;
 using LandLedgers.Primitives;
@@ -89,6 +90,13 @@ namespace LandLedgers.Population
         internal EntityId InStoreTaskId;
         internal EntityId ReturnTaskId;
 
+        /// <summary>Stable leg identity exposed for read-only playtest evidence.</summary>
+        public string OutboundTaskIdForDiagnostics => OutboundTaskId.IsValid
+            ? OutboundTaskId.ToString() : string.Empty;
+
+        /// <summary>Resolved seller location exposed for read-only playtest evidence.</summary>
+        public string SellerLocationIdForDiagnostics => Candidate?.Supplier?.LocationId ?? string.Empty;
+
         /// <summary>Plan 16: the TendCustomer task serving this trip's
         /// shopper, and its skill-scaled planned minutes (the due time is
         /// scheduled from this, never from the 4-minute base). Slice 19
@@ -173,6 +181,8 @@ namespace LandLedgers.Population
         public string CarrierBusinessInstanceId = string.Empty;
         // Custody batch scalars (null BatchId = no settlement yet).
         public string BatchId = string.Empty;
+        public int BatchNeedSequence;
+        public bool BatchHasNeedIdentity;
         public string BatchItemId = string.Empty;
         public int BatchUnits;
         public int BatchUnitPriceCents;
@@ -304,6 +314,103 @@ namespace LandLedgers.Population
                     && trip.State != PlannedShoppingTrip.TripState.RecoveryPlanned)
                     return trip.TripId ?? string.Empty;
             return string.Empty;
+        }
+
+        /// <summary>
+        /// Household-unit acquisitions already committed to one exact open
+        /// purchasing need. Paid batches in person or freight custody count
+        /// by their persisted need identity; unsettled stock counts only when
+        /// this trip still owns a live retail hold at the forecast instant.
+        /// </summary>
+        public int CommittedAcquisitionUnitsForNeed(
+            int householdId, int needSequence, string itemId, float atGameSeconds)
+        {
+            if (householdId < 0 || needSequence < 0 || string.IsNullOrWhiteSpace(itemId)) return 0;
+            int total = 0;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            AddCommittedAcquisitions(activeTrips, householdId, needSequence, itemId, atGameSeconds, seen, ref total);
+            AddCommittedAcquisitions(returnRecoveries, householdId, needSequence, itemId, atGameSeconds, seen, ref total);
+            return total;
+        }
+
+        /// <summary>
+        /// Cash already selected for unsettled, held shopping trips is not
+        /// available for a second forecast purchase. Credit purchases do not
+        /// consume household cash and are excluded.
+        /// </summary>
+        public int CommittedCashCentsForHousehold(int householdId, float atGameSeconds)
+        {
+            if (householdId < 0) return 0;
+            int total = 0;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (PlannedShoppingTrip trip in activeTrips)
+            {
+                if (trip == null || !trip.IsActive || trip.HouseholdId != householdId
+                    || trip.Batch != null || trip.Need == null
+                    || trip.Need.Status != PurchasingNeedStatus.Open
+                    || string.IsNullOrEmpty(trip.StockReservationId) || trip.Candidate == null
+                    || trip.Candidate.SettlementMode != ShoppingSettlementMode.CashFromLedger
+                    || !seen.Add(trip.TripId ?? string.Empty))
+                {
+                    continue;
+                }
+
+                int heldUnits = RetailStockReservation.ReservedUnitsForOwner(
+                    loop.ReservationAuthority,
+                    trip.Candidate.Supplier?.SupplierBusinessId ?? string.Empty,
+                    trip.Need.ItemId,
+                    trip.TripId,
+                    atGameSeconds);
+                if (heldUnits > 0)
+                    total = (int)Math.Min(int.MaxValue, (long)total + Math.Max(0, trip.Candidate.TotalCostCents));
+            }
+
+            return total;
+        }
+
+        private void AddCommittedAcquisitions(
+            IList<PlannedShoppingTrip> trips, int householdId, int needSequence, string itemId,
+            float atGameSeconds, HashSet<string> seen, ref int total)
+        {
+            if (trips == null) return;
+            foreach (PlannedShoppingTrip trip in trips)
+            {
+                HouseholdPurchasingNeed need = trip?.Need;
+                if (trip == null || need == null || trip.HouseholdId != householdId
+                    || need.HouseholdId != householdId || need.NeedSequence != needSequence
+                    || need.Status != PurchasingNeedStatus.Open
+                    || !string.Equals(need.ItemId, itemId, StringComparison.Ordinal)
+                    || !seen.Add(trip.TripId ?? string.Empty))
+                {
+                    continue;
+                }
+
+                CarriedGoodsBatch batch = trip.Batch;
+                if (batch != null)
+                {
+                    if (!batch.HasNeedIdentity || batch.HouseholdId != householdId
+                        || batch.NeedSequence != needSequence
+                        || !string.Equals(batch.ItemId, itemId, StringComparison.Ordinal)
+                        || (batch.Custody != GoodsCustodyState.InHand
+                            && batch.Custody != GoodsCustodyState.ArrangedDelivery))
+                    {
+                        continue;
+                    }
+
+                    long householdUnits = (long)Math.Max(0, batch.Units)
+                        * Math.Max(1, batch.HouseholdUnitsPerStoreUnit);
+                    total = (int)Math.Min(int.MaxValue, (long)total + householdUnits);
+                    continue;
+                }
+
+                if (string.IsNullOrEmpty(trip.StockReservationId) || trip.Candidate?.Supplier == null) continue;
+                int heldStoreUnits = RetailStockReservation.ReservedUnitsForOwner(
+                    loop.ReservationAuthority, trip.Candidate.Supplier.SupplierBusinessId,
+                    itemId, trip.TripId, atGameSeconds);
+                long heldHouseholdUnits = (long)heldStoreUnits
+                    * Math.Max(1, trip.Candidate.HouseholdUnitsPerStoreUnit);
+                total = (int)Math.Min(int.MaxValue, (long)total + heldHouseholdUnits);
+            }
         }
 
         public ShoppingTripDriver(HouseholdShoppingLoop loop,
@@ -614,10 +721,10 @@ namespace LandLedgers.Population
                 InFlightLeg tracking = EnsureRouteWatch(trip, kind, leg, nowGameSeconds);
                 ObserveRouteProgress(trip, tracking, destination, nowGameSeconds);
 
-                // Arrival confirmation is optional diagnostic evidence; it is
-                // not the liveness authority. If the callback was not rebound
-                // after load, the persisted deadline must still release the
-                // task instead of allowing an Outbound trip to live forever.
+                // Arrival confirmation is required gameplay evidence. A
+                // missing callback after load is not proof of arrival; the
+                // persisted deadline/no-progress watchdog remains responsible
+                // for eventually releasing the trip and its reservations.
                 bool physicallyArrived = hasPhysicallyArrived != null
                     && hasPhysicallyArrived(trip.ShopperPersonId, destination);
                 if (leg == null)
@@ -1009,6 +1116,17 @@ namespace LandLedgers.Population
                     if (serviceTask != null && serviceTask.Status == TaskStatus.Complete)
                     {
                         serviceTaskIdStringToTripId.Remove(trip.ServiceTaskId.ToString());
+                        string storeLocation = trip.Candidate?.Supplier?.LocationId ?? string.Empty;
+                        if (hasPhysicallyArrived == null
+                            || !hasPhysicallyArrived(trip.ShopperPersonId, storeLocation))
+                        {
+                            ReturnEmpty(trip,
+                                "Physical presence at the seller could not be confirmed while recovering completed counter service.",
+                                "customer absent during completed-service recovery", dayIndex,
+                                nowGameSeconds, dueEvents, diag);
+                            continue;
+                        }
+
                         CustomerQueue completedQueue = loop.ResolveCustomerQueue?.Invoke(
                             trip.Candidate?.Supplier?.SupplierBusinessId ?? string.Empty);
                         string servedRef = completedQueue?.ServeNext();
@@ -1144,6 +1262,16 @@ namespace LandLedgers.Population
                 WorkTask serviceTask = loop.FindServiceTask(serviceTrip.ServiceTaskId);
                 CustomerQueue serviceQueue = loop.ResolveCustomerQueue?.Invoke(serviceTrip.Candidate?.Supplier?.SupplierBusinessId ?? string.Empty);
                 string expectedCustomerRef = $"shop:{serviceTrip.HouseholdId}:{serviceTrip.Need?.NeedSequence ?? -1}";
+                string storeLocation = serviceTrip.Candidate?.Supplier?.LocationId ?? string.Empty;
+                if (hasPhysicallyArrived == null
+                    || !hasPhysicallyArrived(serviceTrip.ShopperPersonId, storeLocation))
+                {
+                    loop.CancelServiceTask(serviceTask, dayIndex, diag);
+                    ReturnEmpty(serviceTrip,
+                        "Physical presence at the seller could not be confirmed when counter service completed.",
+                        "customer absent at service completion", dayIndex, currentGameSeconds, dueEvents, diag);
+                    return;
+                }
                 if (serviceQueue == null || serviceQueue.Waiting.Count == 0
                     || !string.Equals(serviceQueue.Waiting[0].CustomerRef, expectedCustomerRef, StringComparison.Ordinal))
                 {
@@ -1202,9 +1330,17 @@ namespace LandLedgers.Population
             string expectedLocation = leg.Kind == LegKind.Outbound
                 ? trip.Candidate?.Supplier?.LocationId
                 : leg.Kind == LegKind.Return ? trip.HomeLocationId : null;
+            if ((leg.Kind == LegKind.Outbound || leg.Kind == LegKind.Return)
+                && string.IsNullOrWhiteSpace(expectedLocation))
+            {
+                RecoverStalledRoute(trip, leg.Kind, expectedLocation,
+                    $"physical {leg.Kind} journey has no resolved destination",
+                    dayIndex, dueEvents, diag);
+                return;
+            }
             if (!string.IsNullOrWhiteSpace(expectedLocation)
-                && hasPhysicallyArrived != null
-                && !hasPhysicallyArrived(trip.ShopperPersonId, expectedLocation))
+                && (hasPhysicallyArrived == null
+                    || !hasPhysicallyArrived(trip.ShopperPersonId, expectedLocation)))
             {
                 ScheduleArrivalRetry(trip, leg.Kind, dayIndex, currentGameSeconds, dueEvents, diag);
                 return;
@@ -1299,8 +1435,8 @@ namespace LandLedgers.Population
             IDueEventScheduler dueEvents, List<string> diag)
         {
             string storeLocation = trip.Candidate?.Supplier?.LocationId ?? string.Empty;
-            if (hasPhysicallyArrived != null
-                && !hasPhysicallyArrived(trip.ShopperPersonId, storeLocation))
+            if (hasPhysicallyArrived == null
+                || !hasPhysicallyArrived(trip.ShopperPersonId, storeLocation))
             {
                 ScheduleArrivalRetry(trip, LegKind.Outbound, dayIndex, currentGameSeconds, dueEvents, diag);
                 return;
@@ -1940,33 +2076,55 @@ namespace LandLedgers.Population
         /// loop custody DTO and the driver DTO loads last, the trip ends
         /// up pointing at the loop-owned instance.
         /// </summary>
-        private void AttachTripBatchToLoop(PlannedShoppingTrip trip)
+        private bool AttachTripBatchToLoop(PlannedShoppingTrip trip, List<string> diag = null)
         {
-            if (trip == null || trip.Batch == null || loop == null) return;
-            CarriedGoodsBatch owned = loop.AttachRestoredBatch(trip.Batch);
+            if (trip == null || trip.Batch == null || loop == null) return true;
+            // Legacy trip DTOs did not persist the need identity on their
+            // custody batch. Bind only from this trip's own matching saved
+            // need; never infer it from a later same-SKU household need.
+            if (!trip.Batch.HasNeedIdentity && trip.Need != null
+                && trip.Need.HouseholdId == trip.HouseholdId
+                && trip.Batch.HouseholdId == trip.HouseholdId
+                && string.Equals(trip.Batch.ItemId, trip.Need.ItemId, StringComparison.Ordinal))
+            {
+                trip.Batch.NeedSequence = trip.Need.NeedSequence;
+                trip.Batch.HasNeedIdentity = true;
+            }
+            if (trip.Need != null && trip.Batch.HasNeedIdentity
+                && (trip.Batch.HouseholdId != trip.Need.HouseholdId
+                    || trip.Batch.NeedSequence != trip.Need.NeedSequence
+                    || !string.Equals(trip.Batch.ItemId, trip.Need.ItemId, StringComparison.Ordinal)))
+            {
+                diag?.Add($"ShoppingTripDriver: trip {trip.TripId} batch {trip.Batch.BatchId} identity does not match need {trip.Need.NeedSequence}; custody attachment refused.");
+                return false;
+            }
+            CarriedGoodsBatch owned = loop.AttachRestoredBatch(trip.Batch, diag);
             if (owned != null)
             {
                 trip.Batch = owned;
+                return true;
             }
+            return false;
         }
 
         /// <summary>
-        /// QA-19: re-points a restored trip's need at the registry-owned
-        /// instance for the same (HouseholdId, NeedSequence), via the loop.
-        /// Called on load and again on rehydrate: whichever of the needs
-        /// registry and the driver DTO loads last, the trip ends up pointing
-        /// at the registry instance. Idempotent: a second call returns the
-        /// same instance. Returns true when the trip was re-pointed.
-        /// A miss on load is silent (the registry may not be restored yet —
-        /// the fixture order loads the driver first); a miss on rehydrate
-        /// is diagnosed by the caller (see RehydrateAfterLoad).
+        /// QA-19: binds the restored trip to the registry-owned need by stable
+        /// identity, via the loop. Called on load and again on rehydrate:
+        /// whichever DTO loads last, the trip ends up pointing at the final
+        /// registry instance. A missing row may be restored from the trip's
+        /// persisted obligation; malformed/conflicting identities fail.
         /// </summary>
         private bool AttachTripNeedToRegistry(PlannedShoppingTrip trip)
         {
-            if (trip == null || trip.Need == null || loop == null) return false;
+            if (trip == null || trip.Need == null || loop == null
+                || trip.HouseholdId != trip.Need.HouseholdId) return false;
             HouseholdPurchasingNeed owned = loop.AttachRestoredNeed(trip.Need);
             if (owned != null)
             {
+                // A restored active trip represents an unsettled obligation.
+                // Reattaching a fulfilled/cancelled registry row must not
+                // revive stale travel or allow another counter settlement.
+                if (owned.Status != PurchasingNeedStatus.Open) return false;
                 trip.Need = owned;
                 return true;
             }
@@ -2007,7 +2165,14 @@ namespace LandLedgers.Population
                 // trip points at. Attaching is idempotent, and a trip that
                 // turns out dead below still keeps its batch in loop
                 // custody (preserved, depositable via ReceiveCarriedBatch).
-                AttachTripBatchToLoop(trip);
+                if (!AttachTripBatchToLoop(trip, diag))
+                {
+                    diag.Add($"ShoppingTripDriver: trip {trip.TripId} custody conflicts with the loop-owned batch; trip aborted and existing paid cargo remains authoritative.");
+                    trip.Candidate = RebuildCandidate(trip.CandidateDto, supplierByBusinessId);
+                    trip.Batch = null;
+                    dead.Add(trip);
+                    continue;
+                }
                 // QA-20 (Plan 17): raise the loop's trip-id sequence past this
                 // restored trip's id, so a later plan cannot re-issue it. Never
                 // backward; a null loop is safe (loop is readonly and set in the
@@ -2023,13 +2188,19 @@ namespace LandLedgers.Population
 
                 // QA-19: re-point the restored trip's need at the registry
                 // instance — the registry may have loaded after this driver,
-                // replacing the instance this trip points at. Attaching is
-                // idempotent. A miss is diagnosed loudly but the trip is not
-                // aborted: it can still complete, and the receipt will
-                // decrement the DTO copy instead of the registry need.
+                // replacing the instance this trip points at. The registry
+                // can restore a missing persisted row by stable identity. A
+                // remaining miss means the saved identity conflicts or is
+                // invalid: do not let the trip mutate a detached DTO copy.
                 if (!AttachTripNeedToRegistry(trip))
                 {
-                    diag.Add($"ShoppingTripDriver: trip {trip.TripId} household {trip.HouseholdId} need {trip.Need?.NeedSequence} has no registry instance — the receipt will decrement the DTO copy, not the registry need.");
+                    diag.Add($"ShoppingTripDriver: trip {trip.TripId} household {trip.HouseholdId} need {trip.Need?.NeedSequence} could not attach to its authoritative need — aborted; paid cargo remains under custody recovery.");
+                    // AbortTrip uses the supplier's queue to remove a saved
+                    // counter entry. Resolve it before adding to the dead set
+                    // so recovery also releases that physical service claim.
+                    trip.Candidate = RebuildCandidate(trip.CandidateDto, supplierByBusinessId);
+                    dead.Add(trip);
+                    continue;
                 }
 
                 // Campaign C (DEF-022): the candidate re-resolves before the
@@ -2193,14 +2364,21 @@ namespace LandLedgers.Population
             foreach (PlannedShoppingTrip trip in returnRecoveries)
             {
                 if (trip == null) continue;
-                AttachTripBatchToLoop(trip);
+                if (!AttachTripBatchToLoop(trip, diag))
+                {
+                    diag.Add($"ShoppingTripDriver: recovery trip {trip.TripId} custody conflicts with the loop-owned batch; recovery removed and existing cargo remains authoritative.");
+                    deadRecoveries.Add(trip);
+                    continue;
+                }
                 if (loop != null)
                 {
                     loop.SeedTripSequenceFromTripId(trip.TripId);
                 }
                 if (!AttachTripNeedToRegistry(trip))
                 {
-                    diag.Add($"ShoppingTripDriver: recovery trip {trip.TripId} household {trip.HouseholdId} need {trip.Need?.NeedSequence} has no registry instance — the receipt will decrement the DTO copy, not the registry need.");
+                    diag.Add($"ShoppingTripDriver: recovery trip {trip.TripId} household {trip.HouseholdId} need {trip.Need?.NeedSequence} could not attach to its authoritative need — recovery removed; paid cargo remains in custody.");
+                    deadRecoveries.Add(trip);
+                    continue;
                 }
                 trip.Candidate = RebuildCandidate(trip.CandidateDto, supplierByBusinessId);
                 if (trip.Candidate == null)
@@ -2302,6 +2480,8 @@ namespace LandLedgers.Population
             if (trip.Batch != null)
             {
                 dto.BatchId = trip.Batch.BatchId ?? string.Empty;
+                dto.BatchNeedSequence = trip.Batch.NeedSequence;
+                dto.BatchHasNeedIdentity = trip.Batch.HasNeedIdentity;
                 dto.BatchItemId = trip.Batch.ItemId ?? string.Empty;
                 dto.BatchUnits = trip.Batch.Units;
                 dto.BatchUnitPriceCents = trip.Batch.UnitPriceCents;
@@ -2365,6 +2545,8 @@ namespace LandLedgers.Population
                 {
                     BatchId = dto.BatchId,
                     HouseholdId = dto.HouseholdId,
+                    NeedSequence = dto.BatchNeedSequence,
+                    HasNeedIdentity = dto.BatchHasNeedIdentity,
                     HolderPersonId = dto.ShopperPersonId,
                     ItemId = dto.BatchItemId,
                     Units = dto.BatchUnits,

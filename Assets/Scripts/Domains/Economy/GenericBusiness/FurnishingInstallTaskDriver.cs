@@ -15,19 +15,18 @@
 // - Mint: one furnishing.install task per custody asset (a received
 //   store-purchase asset, or a workshop-made custody piece), minted only
 //   when a free authored placement exists at mint time. The task's
-//   CustomerRef carries the order + asset identity
-//   ("furnishing-install:<purchaseId>:<assetId>"; empty purchase id for
-//   workshop custody pieces), so the linkage survives Save/Continue
-//   through the persisted TaskAuthority state — the order, its stage,
-//   the custody asset and the blocker already persist through the Pass 9
-//   furniture-order register. No live task is ever minted twice for one
-//   asset.
-// - Work: the task accrues its 30 minutes only when an available
-//   household member has physically arrived at the home building (the
-//   caller supplies the arrival fact; a null arrival predicate means the
-//   task waits, never works from nowhere). Assignment, start and work
-//   happen through the shared TaskAuthority, so budgets, interruption
-//   and the lifecycle rules all apply.
+//   CustomerRef carries the order, asset, and selected authored-placement identity.
+//   ("furnishing-install:<purchaseId>:<assetId>" remains readable for old
+//   saves; new refs append the placement identity), so the order, asset,
+//   and slot linkage survive TaskAuthority Save/Continue. A legacy task
+//   without a recorded slot conservatively holds new slot claims until it
+//   terminates. No live task is ever minted twice for one asset.
+// - Work: when the live caller supplies a placement-route resolver, an
+//   available household member must physically arrive at the reserved
+//   furniture approach before the task accrues 30 minutes. Assignment,
+//   start and work happen through the shared TaskAuthority, so budgets,
+//   interruption and lifecycle rules all apply. Legacy callers retain the
+//   conservative home-arrival gate until they adopt the placement route.
 // - Resolve: when the task completes, the resolver installs the asset
 //   through FurnitureInstallBinding at the scored placement (I-R1's
 //   placement scoring decides WHERE; this decides THAT it happens), and
@@ -69,6 +68,13 @@ namespace LandLedgers.Economy.GenericBusiness
     /// </summary>
     public static class FurnishingInstallTaskDriver
     {
+        /// <summary>Routes an assigned worker to the physical installation approach for the task's reserved placement.</summary>
+        public delegate DomesticActivityMovementResult InstallationRouteResolver(
+            int personId, int buildingId, WorkTask task, out string reason);
+
+        /// <summary>Releases temporary routing data after an install task becomes terminal.</summary>
+        public delegate void InstallationRouteRelease(WorkTask task);
+
         /// <summary>The CustomerRef prefix for install tasks. The ref carries the order + asset identity.</summary>
         public const string InstallTaskRefPrefix = "furnishing-install:";
 
@@ -82,23 +88,39 @@ namespace LandLedgers.Economy.GenericBusiness
         }
 
         /// <summary>Builds the CustomerRef for one asset's install task. Empty purchase id = a workshop custody piece with no order.</summary>
-        public static string BuildInstallTaskRef(string purchaseId, string assetId)
+        public static string BuildInstallTaskRef(string purchaseId, string assetId, string placementId = null)
         {
-            return InstallTaskRefPrefix + (purchaseId ?? string.Empty) + ":" + (assetId ?? string.Empty);
+            string reference = InstallTaskRefPrefix + (purchaseId ?? string.Empty) + ":" + (assetId ?? string.Empty);
+            return string.IsNullOrWhiteSpace(placementId) ? reference : reference + ":placement=" + placementId.Trim();
         }
 
         /// <summary>Parses an install-task CustomerRef back into its purchase id (possibly empty) and asset id.</summary>
         public static bool TryParseInstallTaskRef(string customerRef, out string purchaseId, out string assetId)
         {
+            return TryParseInstallTaskRef(customerRef, out purchaseId, out assetId, out _);
+        }
+
+        /// <summary>Parses the optional durable authored-placement reservation from a task ref.</summary>
+        public static bool TryParseInstallTaskRef(string customerRef, out string purchaseId, out string assetId, out string placementId)
+        {
             purchaseId = string.Empty;
             assetId = string.Empty;
+            placementId = string.Empty;
             if (string.IsNullOrWhiteSpace(customerRef)
                 || !customerRef.StartsWith(InstallTaskRefPrefix, StringComparison.Ordinal)) return false;
             string rest = customerRef.Substring(InstallTaskRefPrefix.Length);
+            int placementMarker = rest.LastIndexOf(":placement=", StringComparison.Ordinal);
+            if (placementMarker >= 0)
+            {
+                placementId = rest.Substring(placementMarker + ":placement=".Length);
+                rest = rest.Substring(0, placementMarker);
+                if (string.IsNullOrWhiteSpace(placementId)) return false;
+            }
             int split = rest.LastIndexOf(':');
             if (split < 0) return false;
             purchaseId = rest.Substring(0, split);
             assetId = rest.Substring(split + 1);
+            if (string.IsNullOrWhiteSpace(assetId)) return false;
             return !string.IsNullOrWhiteSpace(assetId);
         }
 
@@ -127,6 +149,38 @@ namespace LandLedgers.Economy.GenericBusiness
             return null;
         }
 
+        private static bool TryFindUnreservedPlacement(
+            TaskAuthority tasks, EntityId householdOwner, string kind,
+            BuildingFootprintAuthority building, IEnumerable<BuildingEquipmentPlacement> placements,
+            Func<string, bool> placementIsBound, FurniturePlacementContext context,
+            out BuildingEquipmentPlacement selected, out string refusal)
+        {
+            var reserved = new HashSet<string>(StringComparer.Ordinal);
+            bool hasPreReservationTask = false;
+            if (tasks != null)
+            {
+                foreach (WorkTask open in tasks.GetOpenTasks(householdOwner))
+                {
+                    if (!IsInstallTask(open)) continue;
+                    if (!TryParseInstallTaskRef(open.CustomerRef, out _, out _, out string placementId)) continue;
+                    if (string.IsNullOrWhiteSpace(placementId)) hasPreReservationTask = true;
+                    else reserved.Add(placementId);
+                }
+            }
+
+            bool IsUnavailable(string id) => hasPreReservationTask || reserved.Contains(id ?? string.Empty)
+                || placementIsBound != null && placementIsBound(id ?? string.Empty);
+            if (FurnitureInstallBinding.TryFindFreePlacement(kind, building, placements,
+                    IsUnavailable, context, out selected, out refusal)) return true;
+            if (hasPreReservationTask)
+                refusal = "FurnishingInstallTaskDriver: a saved pre-reservation installation task still owns placement choice; new installation tasks wait until it reaches a terminal state.";
+            if (reserved.Count > 0 && string.IsNullOrWhiteSpace(refusal))
+                refusal = "FurnishingInstallTaskDriver: every matching authored placement is already bound to an open installation task.";
+            else if (reserved.Count > 0 && refusal.IndexOf("no free placement", StringComparison.OrdinalIgnoreCase) >= 0)
+                refusal = refusal + " Open installation tasks retain their selected placements until completion or terminal failure.";
+            return false;
+        }
+
         /// <summary>
         /// Mints one Queued furnishing.install task for one custody asset.
         /// Refuses (never throws, never mints twice) when the definition
@@ -147,7 +201,8 @@ namespace LandLedgers.Economy.GenericBusiness
             string purchaseId,
             EquipmentAsset asset,
             int dayIndex,
-            out WorkTask task)
+            out WorkTask task,
+            string placementId = null)
         {
             task = null;
             if (tasks == null)
@@ -159,7 +214,7 @@ namespace LandLedgers.Economy.GenericBusiness
             if (FindLiveInstallTask(tasks, householdOwner, asset.AssetId) != null)
                 return $"FurnishingInstallTaskDriver: asset '{asset.AssetId}' already has a live install task — refusing a duplicate.";
             task = tasks.CreateTask(FurnishingTaskDefinitions.InstallId, householdOwner, dayIndex,
-                BuildInstallTaskRef(purchaseId, asset.AssetId));
+                BuildInstallTaskRef(purchaseId, asset.AssetId, placementId));
             return null;
         }
 
@@ -194,7 +249,9 @@ namespace LandLedgers.Economy.GenericBusiness
             Func<int, int, bool> hasArrivedAtHome,
             int dayIndex,
             List<string> diag,
-            FurniturePlacementContext placementContext = null)
+            FurniturePlacementContext placementContext = null,
+            InstallationRouteResolver routeToInstallationTarget = null,
+            InstallationRouteRelease releaseInstallationRoute = null)
         {
             diag = diag ?? new List<string>();
             var result = new DriveDayResult();
@@ -253,18 +310,27 @@ namespace LandLedgers.Economy.GenericBusiness
             {
                 EquipmentAsset asset = candidate.Asset;
                 if (FindLiveInstallTask(tasks, householdOwner, asset.AssetId) != null) continue;
-                if (!FurnitureInstallBinding.TryFindFreePlacement(asset.Kind, building, scenePlacements,
-                        placementIsBound, placementContext, out _, out string placementRefusal))
+                if (!TryFindUnreservedPlacement(tasks, householdOwner, asset.Kind, building,
+                        scenePlacements, placementIsBound, placementContext,
+                        out BuildingEquipmentPlacement selectedPlacement, out string placementRefusal))
                 {
                     result.BlockedAssets++;
-                    if (candidate.Order != null)
-                        candidate.Order.InstallationBlockedReason = placementRefusal;
-                    diag.Add($"FurnishingInstallTaskDriver: household {householdId} asset '{asset.AssetId}' ({asset.Kind}) has no free authored placement — it stays in custody: {placementRefusal}");
+                    bool newOrderBlocker = candidate.Order != null
+                        && !string.Equals(candidate.Order.InstallationBlockedReason, placementRefusal, StringComparison.Ordinal);
+                    if (candidate.Order != null) candidate.Order.InstallationBlockedReason = placementRefusal;
+                    // Keep checking for a changed authored layout so the
+                    // order can recover, but emit one actionable incident
+                    // for an unchanged blocker instead of repeating it each
+                    // day while the paid item remains safely in custody.
+                    if (candidate.Order == null || newOrderBlocker)
+                        diag.Add($"FurnishingInstallTaskDriver: household {householdId} asset '{asset.AssetId}' ({asset.Kind}) has no free authored placement — it stays in custody: {placementRefusal}");
                     continue;
                 }
+                if (candidate.Order != null)
+                    candidate.Order.InstallationBlockedReason = string.Empty;
                 string mintRefusal = TryMintInstallTask(tasks, householdOwner,
                     candidate.Order != null ? candidate.Order.PurchaseId : string.Empty,
-                    asset, dayIndex, out WorkTask minted);
+                    asset, dayIndex, out WorkTask minted, selectedPlacement.PlacementId);
                 if (mintRefusal != null)
                 {
                     result.BlockedAssets++;
@@ -286,13 +352,14 @@ namespace LandLedgers.Economy.GenericBusiness
             foreach (WorkTask task in new List<WorkTask>(tasks.GetOpenTasks(householdOwner)))
             {
                 if (!IsInstallTask(task)) continue;
-                if (!TryParseInstallTaskRef(task.CustomerRef, out string purchaseId, out string assetId)) continue;
+                if (!TryParseInstallTaskRef(task.CustomerRef, out string purchaseId, out string assetId, out string reservedPlacementId)) continue;
                 FurniturePurchaseOrder order = FindOrder(orders, householdId, purchaseId);
                 EquipmentAsset asset = register.FindAsset(assetId);
                 if (asset == null)
                 {
                     tasks.CompleteTask(task.TaskId, TaskOutcome.RecoverableFailure, dayIndex, budgets);
                     result.CompletedTasks++;
+                    releaseInstallationRoute?.Invoke(task);
                     if (order != null)
                         order.InstallationBlockedReason = $"FurnishingInstallTaskDriver: asset '{assetId}' left the household register before its install task completed — the install cannot proceed.";
                     diag.Add($"FurnishingInstallTaskDriver: household {householdId} install task '{task.TaskId}' failed — asset '{assetId}' is no longer in the household register.");
@@ -301,16 +368,41 @@ namespace LandLedgers.Economy.GenericBusiness
                 if (register.LiveBindingFor(assetId) != null)
                 {
                     string alreadyRefusal = ResolveCompletedInstallTask(task, order, register, building,
-                        buildingInstanceId, scenePlacements, placementIsBound, diag, placementContext);
+                        buildingInstanceId, scenePlacements, placementIsBound, diag, placementContext, reservedPlacementId);
                     if (alreadyRefusal == null)
                     {
                         tasks.CompleteTask(task.TaskId, TaskOutcome.Success, dayIndex, budgets);
                         result.CompletedTasks++;
+                        releaseInstallationRoute?.Invoke(task);
                     }
                     continue;
                 }
-                if (!TryPickArrivedWorker(tasks, householdMembers, hasArrivedAtHome, buildingInstanceId,
-                        task, out EntityId worker, out string workerRefusal))
+                if (string.IsNullOrWhiteSpace(reservedPlacementId))
+                {
+                    // A pre-change task has no durable placement reservation.
+                    // End it without work so the next daily pass can mint a
+                    // replacement that carries the selected slot through save.
+                    if (tasks.CompleteTask(task.TaskId, TaskOutcome.RecoverableFailure, dayIndex, budgets))
+                    {
+                        result.CompletedTasks++;
+                        releaseInstallationRoute?.Invoke(task);
+                        diag.Add($"FurnishingInstallTaskDriver: legacy install task '{task.TaskId}' for asset '{assetId}' ended without labor because it has no saved placement identity; custody is preserved and a placement-bound task may be minted next day.");
+                    }
+                    continue;
+                }
+                EntityId worker;
+                string workerRefusal;
+                if (routeToInstallationTarget == null)
+                {
+                    if (!TryPickArrivedWorker(tasks, householdMembers, hasArrivedAtHome, buildingInstanceId,
+                            task, out worker, out workerRefusal))
+                    {
+                        if (!string.IsNullOrWhiteSpace(workerRefusal))
+                            diag.Add($"FurnishingInstallTaskDriver: household {householdId} install task '{task.TaskId}' waits — {workerRefusal}");
+                        continue;
+                    }
+                }
+                else if (!TryPickAvailableWorker(tasks, householdMembers, task, out worker, out workerRefusal))
                 {
                     if (!string.IsNullOrWhiteSpace(workerRefusal))
                         diag.Add($"FurnishingInstallTaskDriver: household {householdId} install task '{task.TaskId}' waits — {workerRefusal}");
@@ -321,6 +413,31 @@ namespace LandLedgers.Economy.GenericBusiness
                 {
                     diag.Add($"FurnishingInstallTaskDriver: household {householdId} install task '{task.TaskId}' could not be assigned to P{worker.Id} — {assignRefusal}");
                     continue;
+                }
+                if (routeToInstallationTarget != null)
+                {
+                    DomesticActivityMovementResult movement = routeToInstallationTarget(
+                        worker.Id, buildingInstanceId, task, out string movementReason);
+                    if (movement != DomesticActivityMovementResult.Arrived)
+                    {
+                        if (movement == DomesticActivityMovementResult.Unsupported)
+                        {
+                            string priorBlocker = order != null ? order.InstallationBlockedReason : string.Empty;
+                            string interruptReason = string.Empty;
+                            bool releasedWorker = task.Status != TaskStatus.Queued
+                                && tasks.InterruptTask(task.TaskId, budgets, out interruptReason);
+                            if (order != null && !string.IsNullOrWhiteSpace(movementReason))
+                                order.InstallationBlockedReason = movementReason;
+                            bool changedBlocker = !string.Equals(priorBlocker, movementReason, StringComparison.Ordinal);
+                            if (changedBlocker)
+                                diag.Add($"FurnishingInstallTaskDriver: household {householdId} install task '{task.TaskId}' route refused" +
+                                    (releasedWorker ? "; worker reservation released" : string.Empty) +
+                                    $"; the item and placement obligation remain open: {movementReason}" +
+                                    (string.IsNullOrWhiteSpace(interruptReason) ? string.Empty : $" ({interruptReason})"));
+                        }
+                        continue;
+                    }
+                    if (order != null) order.InstallationBlockedReason = string.Empty;
                 }
                 if (task.Status == TaskStatus.Assigned
                     && !tasks.StartTask(task.TaskId, dayIndex, out string startRefusal))
@@ -337,7 +454,8 @@ namespace LandLedgers.Economy.GenericBusiness
                 if (task.Status != TaskStatus.Complete) continue;
                 result.CompletedTasks++;
                 string resolveRefusal = ResolveCompletedInstallTask(task, order, register, building,
-                    buildingInstanceId, scenePlacements, placementIsBound, diag, placementContext);
+                    buildingInstanceId, scenePlacements, placementIsBound, diag, placementContext, reservedPlacementId);
+                releaseInstallationRoute?.Invoke(task);
                 if (resolveRefusal == null) result.InstalledAssets++;
                 else result.BlockedAssets++;
             }
@@ -364,13 +482,15 @@ namespace LandLedgers.Economy.GenericBusiness
             IEnumerable<BuildingEquipmentPlacement> scenePlacements,
             Func<string, bool> placementIsBound,
             List<string> diag,
-            FurniturePlacementContext placementContext = null)
+            FurniturePlacementContext placementContext = null,
+            string reservedPlacementId = null)
         {
             diag = diag ?? new List<string>();
             if (task == null || register == null || building == null)
                 return "FurnishingInstallTaskDriver: resolving an install needs the completed task, the household register, and the home building.";
-            if (!TryParseInstallTaskRef(task.CustomerRef, out string purchaseId, out string assetId))
+            if (!TryParseInstallTaskRef(task.CustomerRef, out string purchaseId, out string assetId, out string taskPlacementId))
                 return $"FurnishingInstallTaskDriver: task '{task.TaskId}' carries no install ref — it is not an install outcome.";
+            if (!string.IsNullOrWhiteSpace(taskPlacementId)) reservedPlacementId = taskPlacementId;
             EquipmentAsset asset = register.FindAsset(assetId);
             if (asset == null)
             {
@@ -402,8 +522,23 @@ namespace LandLedgers.Economy.GenericBusiness
                 source = FurnishingAcquisitionSource.Purchase;
                 sourceId = purchaseId;
             }
+            IEnumerable<BuildingEquipmentPlacement> eligiblePlacements = scenePlacements;
+            if (!string.IsNullOrWhiteSpace(reservedPlacementId))
+            {
+                BuildingEquipmentPlacement reservedPlacement = null;
+                foreach (BuildingEquipmentPlacement candidate in scenePlacements ?? Array.Empty<BuildingEquipmentPlacement>())
+                    if (candidate != null && string.Equals(candidate.PlacementId, reservedPlacementId, StringComparison.Ordinal))
+                    { reservedPlacement = candidate; break; }
+                if (reservedPlacement == null)
+                {
+                    string missing = $"FurnishingInstallTaskDriver: task '{task.TaskId}' reserved authored placement '{reservedPlacementId}', which is no longer present; the item stays in custody.";
+                    if (order != null) order.InstallationBlockedReason = missing;
+                    return missing;
+                }
+                eligiblePlacements = new[] { reservedPlacement };
+            }
             string refusal = FurnitureInstallBinding.TryInstallHouseholdAsset(register, asset, building,
-                buildingInstanceId, scenePlacements, placementIsBound, source, sourceId,
+                buildingInstanceId, eligiblePlacements, placementIsBound, source, sourceId,
                 placementContext, out FurnishingPlacementBinding binding);
             if (refusal != null)
             {
@@ -509,11 +644,10 @@ namespace LandLedgers.Economy.GenericBusiness
         }
 
         /// <summary>
-        /// Picks the worker for an install task: the assignee when one is
-        /// already assigned, otherwise the first household member with no
-        /// blocking task who has arrived at the home building. A null
-        /// arrival predicate means arrival cannot be proven — the task
-        /// waits, never works from nowhere.
+        /// Picks the worker for an install task: the existing assignee, or
+        /// the first free household member. The live placement-route
+        /// resolver proves physical arrival before work; legacy callers use
+        /// the separate home-arrival check.
         /// </summary>
         private static bool TryPickArrivedWorker(
             TaskAuthority tasks,
@@ -555,6 +689,32 @@ namespace LandLedgers.Economy.GenericBusiness
                 return true;
             }
             refusal = "no available household member has arrived at the home building — the install waits.";
+            return false;
+        }
+
+        private static bool TryPickAvailableWorker(
+            TaskAuthority tasks, IReadOnlyList<EntityId> householdMembers, WorkTask task,
+            out EntityId worker, out string refusal)
+        {
+            worker = EntityId.Invalid;
+            refusal = string.Empty;
+            if (task.HasAssignee)
+            {
+                worker = task.AssigneeId;
+                return true;
+            }
+            if (householdMembers == null)
+            {
+                refusal = "no household members are available to install.";
+                return false;
+            }
+            foreach (EntityId member in householdMembers)
+            {
+                if (!member.IsValid || tasks.FindBlockingTaskForAssignee(member) != null) continue;
+                worker = member;
+                return true;
+            }
+            refusal = "no household member is free to take the installation task.";
             return false;
         }
 

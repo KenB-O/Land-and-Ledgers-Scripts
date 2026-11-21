@@ -605,6 +605,8 @@ namespace LandLedgers.Editor.Economy
             need.UnitsNeeded = 14;
             need.Urgency01 = 0.9f;
             need.ReasonSummary = "test need: bread for meals";
+            batch.NeedSequence = need.NeedSequence;
+            batch.HasNeedIdentity = true;
             string problem = loop.ReceiveCarriedBatch(batch.BatchId, Day, s.Diag);
             Assert.IsNull(problem, "Continue must deposit the stranded batch: " + problem);
             Assert.AreEqual(0, loop.ActiveCustodyBatches.Count, "the batch leaves custody on deposit");

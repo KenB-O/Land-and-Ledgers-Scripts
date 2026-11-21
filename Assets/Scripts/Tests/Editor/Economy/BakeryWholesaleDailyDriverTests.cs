@@ -448,6 +448,29 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void RunDay_LiveTaskBackedMode_LeavesRetailDemandForStagedTaskAuthority()
+        {
+            Slice s = NewSlice();
+            InstallOven(s);
+            SeedInputs(s, flourLb: 24, notions: 2, fuel: 2);
+            BakeryWholesaleDailyInputs inputs = InputsFor(s, 2);
+            inputs.OpenHouseholdBreadNeedUnits = 24;
+            inputs.AllowConventionalRetailProduction = false;
+
+            BakeryWholesaleDailyResult result = BakeryWholesaleDailyDriver.RunDay(inputs, s.Diag);
+
+            Assert.AreEqual(0, result.AccountsOnBooks);
+            Assert.AreEqual(0, result.BatchesPlanned,
+                "the conventional daily driver must not create a second retail production authority");
+            Assert.AreEqual(0, result.BatchesBaked,
+                "the persistent staged TaskAuthority pipeline owns live household retail production");
+            Assert.AreEqual(24, s.Bakery.FlourStock.UnitsOnHand(BakeryBreadCatalog.FlourItemId),
+                "leaving demand for the staged driver does not consume bakery inputs");
+            Assert.AreEqual(0, s.Bakery.BreadShelf.Sum(lot => lot != null ? lot.UnitCount : 0),
+                "the conventional path does not manufacture a substitute output");
+        }
+
+        [Test]
         public void RunDay_ReportsRecordedRetailRevenueWasteAndCashWithoutInventingSales()
         {
             Slice s = NewSlice();

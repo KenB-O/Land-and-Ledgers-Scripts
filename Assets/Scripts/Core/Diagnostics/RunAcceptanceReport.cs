@@ -37,6 +37,9 @@ namespace LandLedgers.Diagnostics
 
         /// <summary>The section cannot measure its checks: a seam is missing. Named, never zero, never a guess.</summary>
         NotCaptured = 3,
+
+        /// <summary>Evidence satisfies proposed checks that do not yet have owner approval.</summary>
+        Provisional = 4,
     }
 
     /// <summary>One of the six acceptance sections (Agent N §3.2–§3.7).</summary>
@@ -137,6 +140,9 @@ namespace LandLedgers.Diagnostics
 
         /// <summary>One or more sections cannot measure their checks; nothing is accepted on a guess.</summary>
         NotCaptured = 3,
+
+        /// <summary>Measured criteria pass, but an owner-controlled acceptance rule remains unapproved.</summary>
+        Provisional = 4,
     }
 
     /// <summary>The six-section run acceptance report (Agent N §3).</summary>
@@ -195,6 +201,9 @@ namespace LandLedgers.Diagnostics
                 case RunAcceptanceOverall.Failed:
                     lines.Add("Overall: FAILED — " + FirstFailure);
                     break;
+                case RunAcceptanceOverall.Provisional:
+                    lines.Add("Overall: PROVISIONAL — " + FirstFailure);
+                    break;
                 case RunAcceptanceOverall.NotRun:
                     lines.Add("Overall: NOT RUN — no live run was evaluated. Calendar completion alone accepts nothing.");
                     break;
@@ -203,7 +212,7 @@ namespace LandLedgers.Diagnostics
                     break;
             }
             lines.Add(string.Empty);
-            lines.Add("A run is ACCEPTED only when all six sections pass. A pass in the calendar section accepts nothing else.");
+            lines.Add("A run is ACCEPTED only when all six sections pass and owner-controlled criteria are approved. A pass in the calendar section accepts nothing else.");
             lines.Add(string.Empty);
             foreach (RunAcceptanceSection section in Sections)
             {
@@ -275,6 +284,7 @@ namespace LandLedgers.Diagnostics
                 case RunAcceptanceVerdict.Pass: return "PASS";
                 case RunAcceptanceVerdict.Fail: return "FAIL";
                 case RunAcceptanceVerdict.NotRun: return "NOT RUN";
+                case RunAcceptanceVerdict.Provisional: return "PROVISIONAL";
                 default: return "NOT CAPTURED";
             }
         }
@@ -287,6 +297,7 @@ namespace LandLedgers.Diagnostics
                 case RunAcceptanceOverall.Accepted: return "ACCEPTED";
                 case RunAcceptanceOverall.Failed: return "FAILED";
                 case RunAcceptanceOverall.NotRun: return "NOT RUN";
+                case RunAcceptanceOverall.Provisional: return "PROVISIONAL";
                 default: return "NOT CAPTURED";
             }
         }
@@ -354,6 +365,7 @@ namespace LandLedgers.Diagnostics
             string firstFailure = string.Empty;
             bool anyFail = false;
             bool anyNotCaptured = false;
+            bool anyProvisional = false;
             foreach (RunAcceptanceSection section in built)
             {
                 if (section.Verdict == RunAcceptanceVerdict.Fail && !anyFail)
@@ -376,6 +388,21 @@ namespace LandLedgers.Diagnostics
                 {
                     anyNotCaptured = true;
                 }
+                if (section.Verdict == RunAcceptanceVerdict.Provisional)
+                {
+                    anyProvisional = true;
+                    if (firstFailure.Length == 0)
+                    {
+                        foreach (RunAcceptanceCheck check in section.Checks)
+                        {
+                            if (check.Verdict == RunAcceptanceVerdict.Provisional)
+                            {
+                                firstFailure = check.Evidence;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
 
             RunAcceptanceOverall overall;
@@ -393,16 +420,23 @@ namespace LandLedgers.Diagnostics
             }
             else
             {
-                bool allPass = true;
+                bool allPassOrProvisional = true;
                 foreach (RunAcceptanceSection section in built)
                 {
-                    if (section.Verdict != RunAcceptanceVerdict.Pass)
+                    if (section.Verdict != RunAcceptanceVerdict.Pass
+                        && section.Verdict != RunAcceptanceVerdict.Provisional)
                     {
-                        allPass = false;
+                        allPassOrProvisional = false;
                     }
                 }
-                overall = allPass ? RunAcceptanceOverall.Accepted : RunAcceptanceOverall.NotRun;
-                if (!allPass && firstFailure.Length == 0)
+                overall = allPassOrProvisional
+                    ? (anyProvisional ? RunAcceptanceOverall.Provisional : RunAcceptanceOverall.Accepted)
+                    : RunAcceptanceOverall.NotRun;
+                if (overall == RunAcceptanceOverall.Provisional && firstFailure.Length == 0)
+                {
+                    firstFailure = "One or more owner-controlled criteria remain proposed; the measured result is provisional.";
+                }
+                if (!allPassOrProvisional && firstFailure.Length == 0)
                 {
                     firstFailure = "One or more sections did not run (e.g. no Continue midpoint); the run is not accepted.";
                 }
@@ -424,11 +458,12 @@ namespace LandLedgers.Diagnostics
             };
         }
 
-        /// <summary>Combines check verdicts into a section verdict: any Fail wins; else any NotCaptured wins; else any NotRun wins; else Pass.</summary>
+        /// <summary>Combines checks; provisional checks never become Pass.</summary>
         public static RunAcceptanceVerdict Combine(IReadOnlyList<RunAcceptanceCheck> checks)
         {
             bool anyNotCaptured = false;
             bool anyNotRun = false;
+            bool anyProvisional = false;
             foreach (RunAcceptanceCheck check in checks)
             {
                 if (check.Verdict == RunAcceptanceVerdict.Fail)
@@ -443,6 +478,10 @@ namespace LandLedgers.Diagnostics
                 {
                     anyNotRun = true;
                 }
+                if (check.Verdict == RunAcceptanceVerdict.Provisional)
+                {
+                    anyProvisional = true;
+                }
             }
             if (anyNotCaptured)
             {
@@ -452,7 +491,7 @@ namespace LandLedgers.Diagnostics
             {
                 return RunAcceptanceVerdict.NotRun;
             }
-            return RunAcceptanceVerdict.Pass;
+            return anyProvisional ? RunAcceptanceVerdict.Provisional : RunAcceptanceVerdict.Pass;
         }
 
         private static RunAcceptanceSection BuildCalendar(RunSummary summary)
@@ -584,6 +623,12 @@ namespace LandLedgers.Diagnostics
             {
                 checks.Add(new RunAcceptanceCheck("Survival acceptance test (§2: eight stages, eight bars)", RunAcceptanceVerdict.Fail, "Scenario Lab: " + survival.FirstFailure));
             }
+            else if (survival.Overall == SurvivalOverallVerdict.Provisional)
+            {
+                checks.Add(new RunAcceptanceCheck("Survival acceptance test (§2: eight stages, eight bars)",
+                    RunAcceptanceVerdict.Provisional,
+                    "Scenario Lab: " + survival.AcceptanceNote + " Run configuration: " + survival.ConfigurationSummary));
+            }
             else
             {
                 checks.Add(new RunAcceptanceCheck("Survival acceptance test (§2: eight stages, eight bars)", RunAcceptanceVerdict.NotRun, "Scenario Lab: " + survival.FirstFailure));
@@ -650,7 +695,7 @@ namespace LandLedgers.Diagnostics
                 ? new RunAcceptanceCheck("No duplicate settlement across the boundary", RunAcceptanceVerdict.Pass, "console-events.jsonl receipt matching: 0 double settlements")
                 : new RunAcceptanceCheck("No duplicate settlement across the boundary", RunAcceptanceVerdict.Fail, "console-events.jsonl receipt matching: " + summary.DoubleSettlements + " double settlement(s)"));
             checks.Add(new RunAcceptanceCheck("Known defects recorded, not skipped (F-S4/F-S5/F-S6)", RunAcceptanceVerdict.Fail,
-                "F-S4 in-progress furniture production vanishes, F-S5 fresh-scene drops Pass 9/Millbrook/procurement, F-S6 spurious cabinet want — each still open as EXPECTED-FAIL with defect ids until repaired."));
+                "F-S4 now has business DTO capture/restore and focused process/task fixtures, but fresh-scene Main Scene Continue and consumed-input conservation remain unverified. F-S5 fresh-scene drops Pass 9/Millbrook/procurement and F-S6 spurious cabinet want remain open. These known risks stay visible; no persistence claim is inferred from source presence."));
 
             return new RunAcceptanceSection(RunAcceptanceSectionKind.SaveContinue, Combine(checks), checks,
                 "Continue midpoint executed; pre/post comparison PARTIAL until Tool 07 lands.");

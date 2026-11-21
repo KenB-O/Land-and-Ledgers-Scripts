@@ -629,6 +629,49 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void HeatingSleepState_UsesActualStoveBurnWhenHouseholdReserveIsEmpty()
+        {
+            HouseholdStoveRegistry stoves = MakeStoveRegistry("B3 heating sleep outcome building");
+            HouseholdState household = CreateHouseholdWithFuelReserve(HouseholdId, 4);
+            var diag = new List<string>();
+            Assert.IsNull(stoves.TryFeedStove("stove-1", 4, household, diag));
+
+            HouseholdReserveEvaluator.ResolveDailyUse(
+                household, JanuaryDay, CalendarAnchor.Default, stoves, exteriorMeanCelsius: -10.7f);
+
+            Assert.AreEqual(3, household.lastHeatingFuelUseUnits);
+            Assert.AreEqual(0, household.GetReserve("fuel_wood").currentUnits);
+            Assert.AreEqual(1, stoves.FuelWoodUnitsOnHand("stove-1"));
+            Assert.IsFalse(DomesticNeedAuthorities.FuelHandlingNeeded(household, JanuaryDay, -10.7f),
+                "after the burn, no reserve fuel remains to handle; the handling forecast is not a heat outcome");
+            Assert.IsTrue(HouseholdHeatingEvaluator.DidBurnFuelOnDay(household, JanuaryDay),
+                "the actual stove debit supplied heat despite an empty household reserve");
+        }
+
+        [Test]
+        public void HeatingSleepState_UsesPartialActualBurnAndDoesNotCarryItIntoWarmDay()
+        {
+            HouseholdState household = CreateHouseholdWithFuelReserve(HouseholdId, 1);
+
+            HouseholdReserveEvaluator.ResolveDailyUse(
+                household, JanuaryDay, CalendarAnchor.Default, exteriorMeanCelsius: -10.7f);
+
+            Assert.AreEqual(1, household.lastHeatingFuelUseUnits);
+            Assert.Greater(household.lastHeatingFuelShortfallUnits, 0,
+                "the real shortage remains recorded independently of the did-burn flag");
+            Assert.IsTrue(HouseholdHeatingEvaluator.DidBurnFuelOnDay(household, JanuaryDay),
+                "partial fuel consumption still represents actual heat being supplied");
+
+            HouseholdReserveEvaluator.ResolveDailyUse(
+                household, JanuaryDay + 1, CalendarAnchor.Default, exteriorMeanCelsius: 21.8f);
+
+            Assert.AreEqual(0, household.lastHeatingFuelUseUnits);
+            Assert.IsFalse(HouseholdHeatingEvaluator.DidBurnFuelOnDay(household, JanuaryDay),
+                "a previous day's burn cannot satisfy the current day check");
+            Assert.IsFalse(HouseholdHeatingEvaluator.DidBurnFuelOnDay(household, JanuaryDay + 1));
+        }
+
+        [Test]
         public void SaveLoad_FuelTripMidTripRoundTripsWithHoldIntactAndCompletesAfterRestore()
         {
             var f = new DriverFixture();

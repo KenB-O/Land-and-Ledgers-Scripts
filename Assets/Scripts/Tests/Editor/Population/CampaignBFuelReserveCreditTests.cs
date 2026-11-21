@@ -177,6 +177,11 @@ namespace LandLedgers.EditorTests.Population
         private static PlannedShoppingTrip MakeTrip(Fixture f, HouseholdPurchasingNeed need,
             CarriedGoodsBatch batch, string tripId)
         {
+            if (batch != null && need != null)
+            {
+                batch.NeedSequence = need.NeedSequence;
+                batch.HasNeedIdentity = true;
+            }
             return new PlannedShoppingTrip
             {
                 TripId = tripId,
@@ -230,6 +235,34 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(PurchasingNeedStatus.Fulfilled, need.Status);
             Assert.IsTrue(DiagContains(f.Diagnostics, "credited 6 fuel_wood reserve unit(s)"),
                 "The credit comes from Series2HouseholdFuelReserveLink, not from the lot mirror (which logs no such line).");
+        }
+
+        [Test]
+        public void ReceiveCarriedBatch_OldPurchaseCannotFulfillLaterSameSkuNeed()
+        {
+            Fixture f = Fixture.Create();
+            HouseholdPurchasingNeed purchasedNeed = f.OpenNeed(HouseholdItemCatalog.BreadId, 4);
+            int purchasedNeedSequence = purchasedNeed.NeedSequence;
+            purchasedNeed.Status = PurchasingNeedStatus.Cancelled;
+            HouseholdPurchasingNeed laterNeed = f.OpenNeed(HouseholdItemCatalog.BreadId, 4);
+            Assert.AreNotEqual(purchasedNeedSequence, laterNeed.NeedSequence);
+
+            CarriedGoodsBatch batch = MakeBatch("b-old-bread", HouseholdItemCatalog.BreadId, 4,
+                GoodsCustodyState.InHand);
+            batch.NeedSequence = purchasedNeedSequence;
+            batch.HasNeedIdentity = true;
+            Assert.IsNotNull(f.Loop.AttachRestoredBatch(batch));
+
+            string refusal = f.Loop.ReceiveCarriedBatch(batch.BatchId, f.Day, f.Diagnostics);
+
+            Assert.IsNotNull(refusal, "a paid batch must not be assigned to a later same-SKU need");
+            Assert.AreEqual(PurchasingNeedStatus.Cancelled, purchasedNeed.Status);
+            Assert.AreEqual(PurchasingNeedStatus.Open, laterNeed.Status);
+            Assert.AreEqual(4, laterNeed.UnitsNeeded);
+            Assert.AreEqual(0, f.Inventories.GetOrCreate(f.HouseholdId)
+                .GetAvailableUnits(HouseholdItemCatalog.BreadId));
+            Assert.AreEqual(1, f.Loop.ActiveCustodyBatches.Count,
+                "unmatched purchased goods remain in custody for explicit recovery");
         }
 
         [Test]

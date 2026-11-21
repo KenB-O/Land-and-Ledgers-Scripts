@@ -526,11 +526,9 @@ namespace LandLedgers.FirstLedger
         /// Business exists (bootstrap registration, non-development builds,
         /// or a store whose NPC record could not be resolved). Single-SKU
         /// categories retain the exact legacy item identity. Multi-SKU
-        /// categories now project the same per-item offers Series 2 Pass 7
-        /// built for the NPC overload, drawing from the pooled category
-        /// stock (the Pass 7 shared-pool caveat applies: one pool per
-        /// category, so total units sold across its items can never exceed
-        /// the pool, even though each item alone reports the pool size).
+        /// categories project per-item offers, but those offers remain
+        /// unavailable unless matching identified retail lots exist; pooled
+        /// category stock is not substituted for a product.
         /// Previously this port offered nothing for a multi-SKU category,
         /// so a stocked staple_food shelf was invisible to the household
         /// shopping loop: every food need failed as "unavailable seller"

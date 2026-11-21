@@ -177,10 +177,13 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
         public int Sell(string categoryId, int requestedUnits, int dayIndex, List<string> diagnostics)
         {
             GeneralStoreCategoryOffer offer = FindOffer(categoryId);
-            if (offer == null || requestedUnits <= 0 || offer.UsesItemLevelInventory)
+            if (offer == null || requestedUnits <= 0 || offer.UsesItemLevelInventory
+                || !CanUseCategoryStockAsProductIdentity(categoryId))
             {
                 if (offer?.UsesItemLevelInventory == true)
                     diagnostics?.Add($"'{SupplierName}' requires an exact item ID for category '{categoryId}'; pooled-category sale refused.");
+                else if (offer != null && !CanUseCategoryStockAsProductIdentity(categoryId))
+                    diagnostics?.Add($"'{SupplierName}' cannot sell category '{categoryId}' as an identified product; exact item stock is required.");
                 return 0;
             }
 
@@ -251,6 +254,7 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 return Math.Max(0, exactPort.ItemStockUnits(itemId));
 
             GeneralStoreCategoryOffer offer = FindOffer(categoryId);
+            if (offer != null && !CanUseCategoryStockAsProductIdentity(categoryId)) return 0;
             return StockUnits(categoryId) / Math.Max(1, StoreUnitsPerItem(categoryId));
         }
 
@@ -330,6 +334,12 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                 return exactUnits;
             }
 
+            if (!CanUseCategoryStockAsProductIdentity(categoryId))
+            {
+                diagnostics?.Add($"'{SupplierName}' cannot sell '{itemId}' from pooled '{categoryId}' stock: an identified item lot is required.");
+                return 0;
+            }
+
             int storeUnitsNeeded = requestedUnits * Math.Max(1, StoreUnitsPerItem(categoryId));
             if (!port.TryConsumeStoreUnits(categoryId, storeUnitsNeeded, out int consumedStoreUnits) || consumedStoreUnits <= 0)
             {
@@ -401,6 +411,32 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Category totals can stand in for a product only when the category
+        /// has one declared identity. Staple food is explicitly multi-product
+        /// even when a legacy port happens to advertise just one of its SKUs;
+        /// a pooled balance cannot prove that it contains bread rather than
+        /// flour, potatoes, or another staple. Multi-SKU offers therefore
+        /// require the exact item-lot interface for both quotation and sale.
+        /// </summary>
+        private bool CanUseCategoryStockAsProductIdentity(string categoryId)
+        {
+            if (string.Equals(categoryId, "staple_food", StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (port.CategoryOffers == null) return false;
+
+            var itemIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < port.CategoryOffers.Count; i++)
+            {
+                GeneralStoreCategoryOffer offer = port.CategoryOffers[i];
+                if (offer?.OfferedItemIds == null
+                    || !string.Equals(offer.CategoryId, categoryId, StringComparison.OrdinalIgnoreCase)) continue;
+                for (int j = 0; j < offer.OfferedItemIds.Count; j++)
+                    if (!string.IsNullOrWhiteSpace(offer.OfferedItemIds[j])) itemIds.Add(offer.OfferedItemIds[j]);
+            }
+            return itemIds.Count == 1;
         }
 
         private int StoreUnitsPerItem(string categoryId)

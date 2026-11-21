@@ -194,6 +194,52 @@ namespace LandLedgers.EditorTests.Diagnostics
         }
 
         [Test]
+        public void RefusalReport_PreservesSimulationTimeAndKnownEntityCorrelation()
+        {
+            IncidentReport report = IncidentDiagnostics.RefusalReport(
+                "freight-pickup:shipment-17", 7, "shipment is waiting for physical arrival",
+                7 * 86400d + 3600d, shipmentId: "shipment-17");
+
+            Assert.AreEqual(7 * 86400d + 3600d, report.SimSeconds);
+            Assert.AreEqual("shipment-17", report.ShipmentId);
+            Assert.IsEmpty(report.TaskId);
+            Assert.IsEmpty(report.PersonId);
+        }
+
+        [Test]
+        public void EmitRefusal_StoresKnownCorrelationOnIncident()
+        {
+            var sink = new CapturingSink();
+            IncidentWarningAuthority authority = sink.CreateAuthority();
+            IncidentReport report = IncidentDiagnostics.RefusalReport(
+                "stale-queued:task-42", 3, "queued task has not progressed",
+                3 * 86400d + 120d, taskId: "task-42", personId: "person-8");
+
+            authority.Emit(report);
+            SimulationIncident incident = authority.RetainedIncidents[0];
+
+            Assert.AreEqual(3 * 86400d + 120d, incident.FirstSeenSimSeconds);
+            Assert.AreEqual("task-42", incident.FirstTaskId);
+            Assert.AreEqual("person-8", incident.FirstPersonId);
+        }
+
+        [Test]
+        public void DayKeyedRefusalLogGate_GroupsVolatileIdsAndDropsPriorDayKeys()
+        {
+            var gate = new DayKeyedRefusalLogGate();
+
+            Assert.IsTrue(gate.ShouldLog("stale-task:T1", 4));
+            Assert.IsFalse(gate.ShouldLog("stale-task:T2", 4));
+            Assert.IsTrue(gate.ShouldLog("dispatch:invalid-state", 4));
+            Assert.AreEqual(2, gate.RetainedKeyCount);
+
+            Assert.IsTrue(gate.ShouldLog("stale-task:T3", 5));
+            Assert.AreEqual(1, gate.RetainedKeyCount);
+            Assert.IsFalse(gate.ShouldLog("stale-task:T4", 5));
+            Assert.AreEqual(1, gate.RetainedKeyCount);
+        }
+
+        [Test]
         public void RefusalReport_KeyWithoutPrefix_FallsBackToSimulationDrivers()
         {
             IncidentReport report = IncidentDiagnostics.RefusalReport(

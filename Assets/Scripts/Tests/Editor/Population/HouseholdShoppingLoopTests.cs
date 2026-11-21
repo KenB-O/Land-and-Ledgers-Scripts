@@ -24,6 +24,101 @@ namespace LandLedgers.EditorTests.Population
     public sealed class HouseholdShoppingLoopTests
     {
         [Test]
+        public void ProductionDepartureCandidates_UseRequestedBaselinePreferredWindowsAndFullTripFit()
+        {
+            List<int> departures = HouseholdShoppingLoop.EnumerateCandidateDepartures(
+                requestedDeparture: 8 * 60, estimateMinutes: 95, usePreferredWindows: true);
+
+            Assert.AreEqual(9 * 60, departures[0]);
+            Assert.AreEqual(11 * 60, departures[8]);
+            Assert.AreEqual(14 * 60, departures[9]);
+            Assert.AreEqual(16 * 60 + 15, departures[departures.Count - 1],
+                "The full 95-minute estimate must finish before the 18:00 close/sleep boundary.");
+            Assert.IsFalse(departures.Contains(12 * 60), "The preferred production policy has no noon departure.");
+
+            List<int> lateRequest = HouseholdShoppingLoop.EnumerateCandidateDepartures(
+                requestedDeparture: 10 * 60, estimateMinutes: 95, usePreferredWindows: true);
+            Assert.AreEqual(10 * 60, lateRequest[0], "Earlier preferred slots cannot precede the requested baseline.");
+
+            Assert.IsEmpty(HouseholdShoppingLoop.EnumerateCandidateDepartures(
+                requestedDeparture: 17 * 60, estimateMinutes: 61, usePreferredWindows: true),
+                "A trip that cannot fit before close/sleep must have no candidate departure.");
+        }
+
+        [Test]
+        public void SellerAccessForecast_UsesRouteScheduleWorkBudgetAndClerkAuthorities()
+        {
+            static IItemResolvingSupplier Seller(Fixture fixture)
+            {
+                foreach (IGoodsSupplier registered in fixture.Directory.All)
+                    if (registered is IItemResolvingSupplier resolving) return resolving;
+                return null;
+            }
+
+            Fixture reachable = Fixture.Create();
+            IItemResolvingSupplier reachableSeller = Seller(reachable);
+            Assert.IsNotNull(reachableSeller);
+            Assert.IsTrue(reachable.Loop.HasAvailableMemberForSellerToday(
+                new[] { 1 }, reachableSeller, reachable.Day, _ => "home"),
+                "A real eligible member with an authored round-trip route and open seller is feasible.");
+
+            Fixture noRoute = Fixture.Create(withEdge: false);
+            Assert.IsFalse(noRoute.Loop.HasAvailableMemberForSellerToday(
+                new[] { 1 }, Seller(noRoute), noRoute.Day, _ => "home"),
+                "Forecast cover cannot count an unreachable seller.");
+
+            Fixture unstaffed = Fixture.Create();
+            unstaffed.Port.Capability.Staffed = false;
+            Assert.IsFalse(unstaffed.Loop.HasAvailableMemberForSellerToday(
+                new[] { 1 }, Seller(unstaffed), unstaffed.Day, _ => "home"),
+                "Seller hours alone do not make stock available when no clerk can serve.");
+
+            Fixture reserved = Fixture.Create();
+            Assert.IsNull(reserved.Tracker.TryReserve(1, PersonActivityKind.Work,
+                reserved.Day, 9 * 60, 9 * 60, "reserved through the shopping windows"));
+            Assert.IsFalse(reserved.Loop.HasAvailableMemberForSellerToday(
+                new[] { 1 }, Seller(reserved), reserved.Day, _ => "home"),
+                "An otherwise routeable shopper with conflicting reservations is not available.");
+
+            Fixture exhausted = Fixture.Create();
+            exhausted.Budgets.EnsureDay(exhausted.Day);
+            Assert.IsTrue(exhausted.Budgets.GetOrCreate(EntityId.For(EntityKind.Person, 1))
+                .TryCommit(WorkTimeBudget.DefaultDailyWorkMinutes, out _));
+            Assert.IsFalse(exhausted.Loop.HasAvailableMemberForSellerToday(
+                new[] { 1 }, Seller(exhausted), exhausted.Day, _ => "home"),
+                "A shopper with no remaining work-minute capacity cannot count stock as reachable cover.");
+
+            Fixture taskBlocked = Fixture.Create();
+            const string blockerDefinition = "test.food-shopping-access-task-blocker";
+            Assert.IsTrue(taskBlocked.Tasks.RegisterDefinition(
+                new TaskDefinition(blockerDefinition, "Blocking household shopper", 30), out string registerError),
+                registerError);
+            taskBlocked.Budgets.EnsureDay(taskBlocked.Day);
+            WorkTask activeTask = taskBlocked.Tasks.CreateTask(
+                blockerDefinition, EntityId.For(EntityKind.Business, 99), taskBlocked.Day);
+            Assert.IsTrue(taskBlocked.Tasks.AssignTask(activeTask.TaskId,
+                EntityId.For(EntityKind.Person, 1), taskBlocked.Budgets, out string assignmentError),
+                assignmentError);
+            Assert.IsTrue(taskBlocked.Tasks.StartTask(activeTask.TaskId, taskBlocked.Day, out string startError),
+                startError);
+            Assert.IsFalse(taskBlocked.Loop.HasAvailableMemberForSellerToday(
+                new[] { 1 }, Seller(taskBlocked), taskBlocked.Day, _ => "home"),
+                "A shopper committed to a real active task cannot count seller stock as cover.");
+
+            Fixture movementBlocked = Fixture.Create();
+            movementBlocked.Loop.ShopperMovementBlockReason = _ => "active freight route";
+            Assert.IsFalse(movementBlocked.Loop.HasAvailableMemberForSellerToday(
+                new[] { 1 }, Seller(movementBlocked), movementBlocked.Day, _ => "home"),
+                "A person blocked by the actual mover authority cannot count seller stock as cover.");
+
+            Fixture serving = Fixture.Create();
+            serving.Loop.IsPotentialServiceClerkForBusiness = (businessId, personId) => personId == 1;
+            Assert.IsFalse(serving.Loop.HasAvailableMemberForSellerToday(
+                new[] { 1 }, Seller(serving), serving.Day, _ => "home"),
+                "A household member who is the seller's required clerk cannot shop at that same counter.");
+        }
+
+        [Test]
         public void SettledPurchaseAndDeliveryDiagnosticsAreRoutineInfo_NotWarnings()
         {
             const int day = 12;

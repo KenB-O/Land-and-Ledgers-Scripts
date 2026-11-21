@@ -10943,6 +10943,16 @@ MonoBehaviour:
     requiresWalkableInterior: 0
     sourceObject: {fileID: 0}
     optionalRequirements: []
+  - id: firewood-handling
+    displayName: Firewood handling point
+    type: 10
+    floorIndex: 0
+    positionLocal: {x: 7.15, y: 0.833, z: -5.286968}
+    forwardLocal: {x: -1, y: 0, z: 0}
+    functionalSpaceId: 
+    requiresWalkableInterior: 0
+    sourceObject: {fileID: 0}
+    optionalRequirements: []
 --- !u!1 &8840767966045659119
 GameObject:
   m_ObjectHideFlags: 0

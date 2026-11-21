@@ -5,7 +5,9 @@ using LandLedgers.Economy.Businesses.Bakery;
 using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.Equipment.Workstations;
 using LandLedgers.Primitives;
+using LandLedgers.Population;
 using NUnit.Framework;
+using UnityEditor;
 
 namespace LandLedgers.Editor.Economy
 {
@@ -391,6 +393,7 @@ namespace LandLedgers.Editor.Economy
             BindGlenn(runtime, diag);
             Assert.IsNull(runtime.ResolveInitialChannelPolicy(
                 BakerySupplyProtectionPolicy.Unspecified, 0, diag));
+            Assert.IsNull(runtime.ResolveInitialSalesChannels(BakerySalesChannelPolicy.Retail, 290, diag));
             Assert.AreEqual(0, runtime.WholesaleAccounts.Count);
 
             Assert.IsNotNull(runtime.PlanWholesaleBatches(1, diag));
@@ -403,6 +406,92 @@ namespace LandLedgers.Editor.Economy
             foreach (BakeryChannelDecision decision in runtime.ChannelDecisions)
                 Assert.AreNotEqual(BakeryChannelDecision.AccountAddedKind, decision.Kind,
                     "no account was added");
+        }
+
+        [Test]
+        public void DevelopmentTownGlennBakery_IsRetailOnly_AndHasNoAutomaticGeneralStoreAgreement()
+        {
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(
+                "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+            Assert.IsNotNull(configuration);
+            Assert.AreEqual(BakerySalesChannelPolicy.Retail, configuration.OpeningBakerySalesChannels,
+                "Glenn's authored scenario decision enables direct consumer retail only");
+            Assert.AreEqual(BakerySupplyProtectionPolicy.ProtectRetailCounter, configuration.OpeningBakerySupplyProtection,
+                "the enabled retail counter receives the existing scarcity protection policy");
+            DevelopmentTownConfiguration.BusinessDefinition bakery = configuration.FindBusinessByOperation("bakery");
+            Assert.IsNotNull(bakery);
+            Assert.IsEmpty(bakery.opening.wholesaleAgreements,
+                "the development town must not create an automatic Glenn-to-General-Store obligation");
+        }
+
+        [Test]
+        public void SalesChannels_RetailAndWholesaleAreDistinctAndEnforcedForNewTransactions()
+        {
+            var diag = new List<string>();
+            BakeryShopRuntime runtime = StockedShop(diag);
+            Assert.IsNull(runtime.ResolveInitialSalesChannels(BakerySalesChannelPolicy.Retail, 290, diag));
+            Assert.IsTrue(runtime.RetailChannelEnabled);
+            Assert.IsFalse(runtime.WholesaleChannelEnabled);
+            Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.BreadLoafId, 1, 290, diag));
+            Assert.AreEqual(1, WorkDay(runtime, 290, diag));
+            Assert.AreEqual(1, runtime.SellBread(BakeryBreadCatalog.BreadLoafId, 1, 290, diag).Sum(sale => sale.Units),
+                "the retail-only decision permits the existing direct retail authority to sell its physical loaf");
+            StringAssert.Contains("new wholesale agreement refused", runtime.AddWholesaleAccount(
+                BoardingHouseAccount(), 290, "P12", diag));
+
+            Assert.IsNull(runtime.SetSalesChannels(BakerySalesChannelPolicy.RetailAndWholesale,
+                291, "P12", "Glenn elects to add a wholesale channel", diag));
+            Assert.IsTrue(runtime.RetailChannelEnabled);
+            Assert.IsTrue(runtime.WholesaleChannelEnabled);
+            Assert.IsNull(runtime.AddWholesaleAccount(BoardingHouseAccount(), 291, "P12", diag));
+            Assert.AreEqual(1, runtime.WholesaleAccounts.Count);
+        }
+
+        [Test]
+        public void WholesaleOnlyPolicy_RefusesRetailWithoutConsumingFinishedBread()
+        {
+            var diag = new List<string>();
+            BakeryShopRuntime runtime = StockedShop(diag);
+            Assert.IsNotNull(runtime.PlanBatch(BakeryBreadCatalog.BreadLoafId, 1, 290, diag));
+            Assert.AreEqual(1, WorkDay(runtime, 290, diag));
+            int shelfBefore = runtime.RetailUnitsAvailableForSale(BakeryBreadCatalog.BreadLoafId, 290, diag);
+            Assert.Greater(shelfBefore, 0);
+            Assert.IsNull(runtime.ResolveInitialSalesChannels(BakerySalesChannelPolicy.Wholesale, 290, diag));
+
+            Assert.AreEqual(0, runtime.RetailUnitsAvailableForSale(BakeryBreadCatalog.BreadLoafId, 290, diag));
+            Assert.AreEqual(0, runtime.SellBread(BakeryBreadCatalog.BreadLoafId, 1, 290, diag).Count);
+            Assert.AreEqual(shelfBefore, runtime.BreadShelf.Sum(lot => lot.UnitCount),
+                "a channel refusal leaves the finished goods physically in bakery ownership");
+            Assert.IsTrue(runtime.WholesaleChannelEnabled);
+            Assert.IsFalse(runtime.RetailChannelEnabled);
+        }
+
+        [Test]
+        public void SalesChannelChoice_RoundTrips_AndDoesNotCancelAcceptedWholesaleObligations()
+        {
+            var diag = new List<string>();
+            BakeryShopRuntime runtime = StockedShop(diag);
+            Assert.IsNull(runtime.ResolveInitialSalesChannels(BakerySalesChannelPolicy.RetailAndWholesale, 290, diag));
+            Assert.IsNull(runtime.AddWholesaleAccount(BoardingHouseAccount(dueDay: 294), 290, "P12", diag));
+            Assert.IsNull(runtime.SetSalesChannels(BakerySalesChannelPolicy.Retail, 292, "P12",
+                "Glenn leaves wholesale for direct household trade", diag));
+
+            BakeryShopRuntime.BakeryShopRuntimeSaveDto saved = runtime.CaptureSaveDto();
+            var restored = new BakeryShopRuntime(BakeryInstanceId);
+            restored.LoadFromSaveDto(saved);
+
+            Assert.AreEqual(BakerySalesChannelPolicy.Retail, restored.SalesChannels);
+            Assert.IsTrue(restored.RetailChannelEnabled);
+            Assert.IsFalse(restored.WholesaleChannelEnabled,
+                "no new wholesale contracts may be opened under retail-only policy");
+            Assert.AreEqual(1, restored.WholesaleAccounts.Count,
+                "an already-accepted account is preserved through Save/Continue");
+            Assert.IsTrue(restored.WholesaleAccounts[0].IsActive,
+                "a later channel preference does not silently cancel a contractual obligation");
+            Assert.IsTrue(restored.ChannelDecisions.Any(decision =>
+                decision != null && decision.Kind == BakeryChannelDecision.SalesChannelsChangeKind
+                && decision.OldValue == BakerySalesChannelPolicy.RetailAndWholesale.ToString()
+                && decision.NewValue == BakerySalesChannelPolicy.Retail.ToString()));
         }
 
         // ---- H-5: the evaluator, pure (no runtime) ----

@@ -236,6 +236,19 @@ namespace LandLedgers.Time
         }
 
         /// <summary>
+        /// Reads an existing budget without creating one. Forecasts and
+        /// diagnostics use this to inspect available work time without
+        /// mutating the authoritative budget collection.
+        /// </summary>
+        public bool TryGet(EntityId personId, out WorkTimeBudget budget)
+        {
+            budget = null;
+            if (personId.Kind != EntityKind.Person) return false;
+            RebuildLookupIfNeeded();
+            return lookup.TryGetValue(personId, out budget);
+        }
+
+        /// <summary>
         /// Convenience: commits task minutes for a Person, creating their budget on first use.
         /// </summary>
         public bool TryCommitTask(EntityId personId, int minutes, out string rejectionReason)

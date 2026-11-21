@@ -38,7 +38,7 @@ namespace LandLedgers.Editor.Diagnostics
                 + "(VERIFIED FIXED / REGRESSION VERIFIED / IMPLEMENTED UNVERIFIED / SUSPECTED FIX / UNRESOLVED / "
                 + "BLOCKED / NOT REPRODUCED / EXPLAINED LEGITIMATE / NEW REGRESSION) and cites exact evidence "
                 + "(file:line, test id, run id). Checks whose evidence is sufficient are recorded, not re-run. "
-                + "Run checks are BLOCKED until a live run exists — no run exists on this HEAD.",
+                + "Run checks are BLOCKED here until matching live or artifact evidence is supplied.",
                 EditorStyles.wordWrappedLabel);
 
             EditorGUILayout.Space();
@@ -99,6 +99,7 @@ namespace LandLedgers.Editor.Diagnostics
             var evidence = new AtoZSourceEvidence
             {
                 ConfigAssetText = ReadFile(repoRoot, "Assets/Core/Population/DevelopmentTownConfiguration.asset"),
+                SharedHomePrefabText = ReadFile(repoRoot, "Assets/Environment/Buildings/House Natural Wood.prefab"),
                 WholesaleAccountsText = ReadFile(repoRoot, "Assets/Scripts/Domains/Economy/Equipment/ScenarioOpeningWholesaleAccounts.cs"),
                 ByproductSettlementText = ReadFile(repoRoot, "Assets/Scripts/Domains/Economy/Core/FuelDealerByproductSettlement.cs"),
                 SawmillTransferText = ReadFile(repoRoot, "Assets/Scripts/Orchestration/Systems/SimulationDrivers.cs"),

@@ -356,6 +356,20 @@ namespace LandLedgers.Population
 
     public static class HouseholdHeatingEvaluator
     {
+        /// <summary>
+        /// True only when the reserve authority recorded a positive fuel
+        /// debit for this household on the requested day. This is the
+        /// authoritative sleep/heating outcome; a procurement or handling
+        /// forecast can differ from actual consumption when fuel is in a
+        /// stove, the reserve is exhausted, or supply is short.
+        /// </summary>
+        public static bool DidBurnFuelOnDay(HouseholdState household, int absoluteDayIndex)
+        {
+            return household != null
+                && household.lastReserveDepletionDayIndex == absoluteDayIndex
+                && household.lastHeatingFuelUseUnits > 0;
+        }
+
         public static bool IsFuelReserve(string categoryId)
         {
             return string.Equals(categoryId, HouseholdReserveCatalog.FuelWoodCategoryId, StringComparison.OrdinalIgnoreCase);

@@ -47,9 +47,9 @@ namespace LandLedgers.Editor.Diagnostics
         {
             EditorGUILayout.LabelField("Scenario Lab (Tool 10) — household survival acceptance test", EditorStyles.boldLabel);
             EditorGUILayout.LabelField(
-                "Fixed configuration: seed 1886, 15 days, 10x, New Game, 14 residents / 8 households / 7 businesses. "
-                + "The lab evaluates a run's own artifacts against the eight stages (S1–S8) and the pass bars (P-1–P-8, all PROPOSED). "
-                + "It cannot execute a live run here — with no run evidence every stage is BLOCKED, never passed.",
+                "Default observation run: seed 1886, 15 days, 10x, New Game, 14 residents / 8 households / 7 businesses. "
+                + "The lab also evaluates longer completed artifacts for this same scenario and seed, using their first 15 days for the survival window while preserving their actual speed and duration. "
+                + "Pass bars P-1–P-8 remain PROPOSED until owner approval. It cannot execute a live run here — with no run evidence every stage is BLOCKED, never passed.",
                 EditorStyles.wordWrappedLabel);
 
             EditorGUILayout.Space();
@@ -178,8 +178,12 @@ namespace LandLedgers.Editor.Diagnostics
             runCheckFindings = AtoZAuditRunner.EvaluateRunChecks(survivalResult);
             acceptanceReport = RunAcceptanceReportBuilder.Build(runSummary, survivalResult, continueMidpointRun);
 
-            status = "Evaluated run " + identity.RunId + ": survival " + survivalResult.Overall
-                + ", acceptance " + acceptanceReport.Overall + ".";
+            status = "Evaluated run " + identity.RunId + " (scenario '" + identity.Scenario
+                + "', startup '" + identity.StartupMode + "', seed " + identity.Seed
+                + ", " + identity.Speed + ", " + identity.CompletedDays + "/" + identity.TargetDays
+                + " days): survival " + survivalResult.Overall
+                + (survivalResult.AcceptanceNote.Length > 0 ? " — " + survivalResult.AcceptanceNote : string.Empty)
+                + ", report " + acceptanceReport.Overall + ".";
         }
 
         /// <summary>

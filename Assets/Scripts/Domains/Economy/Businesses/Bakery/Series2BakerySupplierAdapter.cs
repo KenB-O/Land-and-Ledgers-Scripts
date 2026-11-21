@@ -148,7 +148,8 @@ namespace LandLedgers.Economy.Businesses.Bakery
 
         public bool OffersItem(string itemId)
         {
-            return string.Equals(itemId, HouseholdItemCatalog.BreadId, StringComparison.OrdinalIgnoreCase);
+            return bakery != null && bakery.RetailChannelEnabled
+                && string.Equals(itemId, HouseholdItemCatalog.BreadId, StringComparison.OrdinalIgnoreCase);
         }
 
         public string CategoryForItem(string itemId)

@@ -2,8 +2,8 @@
 //
 // Known cases reproduced from the current tree's source-reviewed
 // evidence (no run exists on this HEAD — no Continue round-trip has
-// been observed): the Agent F §5 persistence table, the F R-2
-// ActiveProcesses loss, the duplicated-settled-lot defect, the Lane 9a
+// been observed): the Agent F §5 persistence table, an actual ActiveProcesses
+// loss outcome (which must still be caught), the duplicated-settled-lot defect, the Lane 9a
 // legitimate staple_food transformation, and the Lane 9f loud refusal.
 
 using System.Collections.Generic;
@@ -21,16 +21,16 @@ namespace LandLedgers.EditorTests.Diagnostics
         }
 
         [Test]
-        public void KnownPersistence_CoversPersistedSystems_AndFlagsActiveProcesses()
+        public void KnownPersistence_CoversBusinessActiveProcessesButKeepsRuntimeComparison()
         {
             IReadOnlyList<PersistenceExpectation> table = SaveContinueStateComparator.KnownPersistence();
             Assert.IsTrue(table.Any(e => e.System == "Furniture" && e.Field == "Purchase orders" && e.Persisted));
             Assert.IsTrue(table.Any(e => e.System == "Freight" && e.Field == "Shipments" && e.Persisted));
             Assert.IsTrue(table.Any(e => e.System == "Business" && e.Field.Contains("Customer queues") && e.Persisted));
             PersistenceExpectation active = table.First(e => e.Field.Contains("ActiveProcesses"));
-            Assert.IsFalse(active.Persisted);
-            Assert.IsTrue(active.Authority.Contains("F R-2"));
-            Assert.IsTrue(active.Note.Contains("Lane 9f"));
+            Assert.IsTrue(active.Persisted);
+            Assert.IsTrue(active.Authority.Contains("BusinessInstanceState.CaptureSaveDto"));
+            Assert.IsTrue(active.Note.Contains("Main Scene fresh-scene Continue"));
         }
 
         [Test]
@@ -46,7 +46,7 @@ namespace LandLedgers.EditorTests.Diagnostics
         [Test]
         public void CompareField_ActiveProcessesLost_IsLostDefect_NamingFR2()
         {
-            // F R-2: an in-flight furniture batch and its consumed inputs vanish on Continue.
+            // Even with a source DTO path, any observed loss remains a defect.
             StateFieldComparison comparison = SaveContinueStateComparator.CompareField(
                 Field("Production", "ActiveProcesses", "batch furniture-7 phase 2, inputs consumed", 1),
                 new PersistedField { System = "Production", Field = "ActiveProcesses", Present = false });

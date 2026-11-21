@@ -18,6 +18,23 @@ namespace LandLedgers.EditorTests.Core
         }
 
         [Test]
+        public void TryGet_ReadsExistingBudgetWithoutCreatingOne()
+        {
+            var store = new WorkTimeBudgetStore();
+            store.EnsureDay(7);
+
+            Assert.IsFalse(store.TryGet(TestPerson(19), out _),
+                "A forecast read for an uninitialized person must not create a budget record.");
+
+            WorkTimeBudget created = store.GetOrCreate(TestPerson(19));
+            Assert.IsTrue(created.TryCommit(240, out _));
+            Assert.IsTrue(store.TryGet(TestPerson(19), out WorkTimeBudget found));
+            Assert.AreSame(created, found);
+            Assert.AreEqual(360, found.MinutesRemaining,
+                "The read-only query returns the existing authoritative remaining-minute state.");
+        }
+
+        [Test]
         public void RestoreWithSameResidentCountReplacesLookupAndRolloverTargets()
         {
             var restored = new WorkTimeBudgetStore();

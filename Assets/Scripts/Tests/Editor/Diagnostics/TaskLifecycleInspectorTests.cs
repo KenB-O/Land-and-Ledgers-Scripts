@@ -294,16 +294,18 @@ namespace LandLedgers.EditorTests.Diagnostics
         }
 
         [Test]
-        public void FurnitureInstallWithNoResolverIsTerminalButUnrecovered()
+        public void CompletedFurnitureInstallWithUnresolvedOrderIsTerminalButUnrecovered()
         {
             LifecycleAssessment result = TaskLifecycleInspector.InspectKnownFurnitureInstallStrand();
             Assert.AreEqual(LifecycleDisposition.TerminalButUnrecovered, result.Disposition);
             Assert.AreEqual(IncidentSeverity.Warning, result.Severity);
             Assert.IsTrue(result.IsIncident);
-            StringAssert.Contains("FurnitureStorePurchase.cs", result.AuthoritySourcePath);
-            Assert.AreEqual(570, result.AuthoritySourceLine);
-            StringAssert.Contains("Lane 9f", result.RepairOwner);
+            StringAssert.Contains("FurnishingInstallTaskDriver.cs", result.AuthoritySourcePath);
+            Assert.Greater(result.AuthoritySourceLine, 0);
+            StringAssert.Contains("order-line advancement", result.RepairOwner);
             StringAssert.Contains("household custody", result.Explanation);
+            StringAssert.Contains("Synthetic failure-shaped snapshot", result.SourceNote);
+            StringAssert.Contains("current source includes", result.SourceNote);
         }
 
         [Test]

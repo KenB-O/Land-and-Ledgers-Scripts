@@ -84,6 +84,14 @@ namespace LandLedgers.Population
     {
         public string BatchId = string.Empty;
         public int HouseholdId = -1;
+        /// <summary>
+        /// Stable purchasing obligation that authorized this purchase.
+        /// HasNeedIdentity is additive for legacy saves; an unbound legacy
+        /// batch may only be bound from its restored trip DTO, never inferred
+        /// from whichever same-SKU need happens to be open later.
+        /// </summary>
+        public int NeedSequence = -1;
+        public bool HasNeedIdentity;
         public int HolderPersonId = -1;
         public string ItemId = string.Empty;
         public int Units;

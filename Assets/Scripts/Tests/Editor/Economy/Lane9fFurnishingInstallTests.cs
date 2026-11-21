@@ -12,6 +12,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using LandLedgers.Economy.Blacksmith;
 using LandLedgers.Economy.GenericBusiness;
@@ -127,6 +128,21 @@ namespace LandLedgers.Editor.Economy
                 (personId, buildingId) => arrived, DayIndex, diag);
         }
 
+        private FurnishingInstallTaskDriver.DriveDayResult DriveWithRoute(DomesticActivityMovementResult movement)
+        {
+            return FurnishingInstallTaskDriver.DriveDay(
+                tasks, budgets, owner, members, HouseholdId, BuildingInstanceId,
+                register, building, placements, PlacementIsBound, orders,
+                hasArrivedAtHome: null, dayIndex: DayIndex, diag: diag,
+                placementContext: null,
+                routeToInstallationTarget: (int personId, int buildingId, WorkTask task, out string reason) =>
+                {
+                    reason = movement == DomesticActivityMovementResult.Unsupported
+                        ? "test physical route unavailable" : string.Empty;
+                    return movement;
+                });
+        }
+
         private WorkTask LiveInstallTask(string assetId)
         {
             return FurnishingInstallTaskDriver.FindLiveInstallTask(tasks, owner, assetId);
@@ -147,7 +163,7 @@ namespace LandLedgers.Editor.Economy
             WorkTask task = LiveInstallTask("bed-1");
             Assert.IsNotNull(task, "the minted task is live under the household owner");
             Assert.AreEqual(FurnishingTaskDefinitions.InstallId, task.DefinitionId);
-            Assert.AreEqual("furnishing-install:" + PurchaseId + ":bed-1", task.CustomerRef);
+            Assert.AreEqual("furnishing-install:" + PurchaseId + ":bed-1:placement=plc-bed", task.CustomerRef);
             Assert.AreEqual(TaskStatus.Queued, task.Status, "minting never assigns work by itself — assignment waits for an arrived worker");
             Assert.IsNull(register.LiveBindingFor("bed-1"), "the asset stays in custody until its task completes");
             Assert.AreEqual(EquipmentPurchaseStage.Received, order.Lines[0].Stage, "the order stays Received until the install resolves");
@@ -170,6 +186,98 @@ namespace LandLedgers.Editor.Economy
         }
 
         [Test]
+        public void InstallTaskRef_RetainsLegacyAndColonBearingPurchaseIdentities()
+        {
+            string legacy = FurnishingInstallTaskDriver.BuildInstallTaskRef("purchase:legacy", "bed-1");
+            Assert.IsTrue(FurnishingInstallTaskDriver.TryParseInstallTaskRef(
+                legacy, out string oldPurchaseId, out string oldAssetId, out string oldPlacementId));
+            Assert.AreEqual("purchase:legacy", oldPurchaseId);
+            Assert.AreEqual("bed-1", oldAssetId);
+            Assert.IsEmpty(oldPlacementId);
+
+            string current = FurnishingInstallTaskDriver.BuildInstallTaskRef("purchase:current", "bed-2", "slot-2");
+            Assert.IsTrue(FurnishingInstallTaskDriver.TryParseInstallTaskRef(
+                current, out string purchaseId, out string assetId, out string placementId));
+            Assert.AreEqual("purchase:current", purchaseId);
+            Assert.AreEqual("bed-2", assetId);
+            Assert.AreEqual("slot-2", placementId);
+        }
+
+        [Test]
+        public void LegacyInstallTaskWithoutPlacement_IsReplacedBeforeAnyLabor()
+        {
+            EquipmentAsset asset = MakeAsset("bed-1", FurnitureItemSpecs.BedId);
+            FurniturePurchaseOrder order = MakeOrder(PurchaseId, "bed-1", EquipmentPurchaseStage.Received);
+            MakePlacement("plc-bed", FurnitureItemSpecs.BedId);
+            Assert.IsNull(FurnishingInstallTaskDriver.TryMintInstallTask(
+                tasks, owner, PurchaseId, asset, DayIndex, out WorkTask legacyTask));
+            Assert.IsNotNull(legacyTask);
+
+            FurnishingInstallTaskDriver.DriveDayResult migrated = Drive(arrived: false);
+            Assert.AreEqual(1, migrated.CompletedTasks);
+            Assert.AreEqual(TaskStatus.Failed, legacyTask.Status);
+            Assert.AreEqual(0, legacyTask.MinutesWorked);
+            Assert.IsNull(register.LiveBindingFor("bed-1"));
+            Assert.AreEqual(EquipmentPurchaseStage.Received, order.Lines[0].Stage);
+
+            FurnishingInstallTaskDriver.DriveDayResult resumed = Drive(arrived: false);
+            WorkTask currentTask = LiveInstallTask("bed-1");
+            Assert.AreEqual(1, resumed.MintedTasks);
+            Assert.IsNotNull(currentTask);
+            Assert.AreNotEqual(legacyTask.TaskId, currentTask.TaskId, "the compatibility migration closes the unbound legacy task and creates one slot-bound continuation");
+            Assert.IsTrue(FurnishingInstallTaskDriver.TryParseInstallTaskRef(
+                currentTask.CustomerRef, out _, out _, out string placementId));
+            Assert.AreEqual("plc-bed", placementId);
+        }
+
+        [Test]
+        public void MultipleCustodyAssets_DoNotReserveTheSameAuthoredPlacement()
+        {
+            MakeAsset("bed-1", FurnitureItemSpecs.BedId);
+            MakeAsset("bed-2", FurnitureItemSpecs.BedId);
+            MakeOrder(PurchaseId, "bed-1", EquipmentPurchaseStage.Received);
+            MakeOrder(PurchaseId + "-second", "bed-2", EquipmentPurchaseStage.Received);
+            MakePlacement("plc-bed", FurnitureItemSpecs.BedId);
+
+            FurnishingInstallTaskDriver.DriveDayResult result = Drive(arrived: false);
+
+            List<WorkTask> live = tasks.GetOpenTasks(owner)
+                .Where(task => FurnishingInstallTaskDriver.IsInstallTask(task)).ToList();
+            Assert.AreEqual(1, result.MintedTasks, "one authored slot can back only one live installation obligation");
+            Assert.AreEqual(1, live.Count);
+            Assert.IsTrue(FurnishingInstallTaskDriver.TryParseInstallTaskRef(
+                live[0].CustomerRef, out _, out _, out string reservedPlacement));
+            Assert.AreEqual("plc-bed", reservedPlacement, "the chosen authored slot is durable on the task identity");
+            Assert.IsNull(register.LiveBindingFor("bed-1"));
+            Assert.IsNull(register.LiveBindingFor("bed-2"));
+        }
+
+        [Test]
+        public void FailedOrCancelledInstallTask_ReleasesItsAuthoredPlacement()
+        {
+            MakeAsset("bed-1", FurnitureItemSpecs.BedId);
+            MakeAsset("bed-2", FurnitureItemSpecs.BedId);
+            FurniturePurchaseOrder firstOrder = MakeOrder(PurchaseId, "bed-1", EquipmentPurchaseStage.Received);
+            MakeOrder(PurchaseId + "-second", "bed-2", EquipmentPurchaseStage.Received);
+            MakePlacement("plc-bed", FurnitureItemSpecs.BedId);
+
+            Drive(arrived: false);
+            WorkTask firstTask = LiveInstallTask("bed-1");
+            Assert.IsNotNull(firstTask);
+            Assert.IsTrue(tasks.CompleteTask(firstTask.TaskId, TaskOutcome.RecoverableFailure, DayIndex, budgets));
+            firstOrder.CancellationRequested = true;
+
+            FurnishingInstallTaskDriver.DriveDayResult retry = Drive(arrived: false);
+
+            Assert.AreEqual(1, retry.MintedTasks, "terminal work releases the slot for the next eligible obligation");
+            Assert.IsNull(LiveInstallTask("bed-1"));
+            Assert.IsNotNull(LiveInstallTask("bed-2"));
+            Assert.IsTrue(FurnishingInstallTaskDriver.TryParseInstallTaskRef(
+                LiveInstallTask("bed-2").CustomerRef, out _, out _, out string placementId));
+            Assert.AreEqual("plc-bed", placementId);
+        }
+
+        [Test]
         public void InstallTask_NoFreePlacement_StaysInCustodyWithBlocker()
         {
             MakeAsset("bed-1", FurnitureItemSpecs.BedId);
@@ -184,6 +292,33 @@ namespace LandLedgers.Editor.Economy
             Assert.IsNull(register.LiveBindingFor("bed-1"), "the asset stays in custody");
             Assert.AreEqual(EquipmentPurchaseStage.Received, order.Lines[0].Stage);
             Assert.IsFalse(string.IsNullOrWhiteSpace(order.InstallationBlockedReason), "the placement refusal is recorded as the blocker");
+        }
+
+        [Test]
+        public void InstallTask_UnchangedPlacementBlockerIsReportedOnceAndRecoversWhenAuthoredSlotAppears()
+        {
+            MakeAsset("bed-1", FurnitureItemSpecs.BedId);
+            FurniturePurchaseOrder order = MakeOrder(PurchaseId, "bed-1", EquipmentPurchaseStage.Received);
+
+            FurnishingInstallTaskDriver.DriveDayResult first = Drive(arrived: true);
+            string blocker = order.InstallationBlockedReason;
+            int firstIncidentCount = diag.Count(line => line != null && line.Contains("has no free authored placement"));
+            FurnishingInstallTaskDriver.DriveDayResult repeated = Drive(arrived: true);
+
+            Assert.AreEqual(1, first.BlockedAssets);
+            Assert.AreEqual(1, repeated.BlockedAssets);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(blocker));
+            Assert.AreEqual(firstIncidentCount, diag.Count(line => line != null && line.Contains("has no free authored placement")),
+                "an unchanged durable order blocker must not generate another incident on each daily sweep");
+            Assert.IsNull(LiveInstallTask("bed-1"));
+            Assert.IsNull(register.LiveBindingFor("bed-1"), "the item remains in household custody while placement is unavailable");
+
+            MakePlacement("plc-bed", FurnitureItemSpecs.BedId);
+            FurnishingInstallTaskDriver.DriveDayResult recovered = Drive(arrived: false);
+
+            Assert.AreEqual(1, recovered.MintedTasks, "a genuinely changed authored layout permits a real install task");
+            Assert.IsTrue(string.IsNullOrWhiteSpace(order.InstallationBlockedReason), "the stale placement blocker clears when placement becomes available");
+            Assert.IsNull(register.LiveBindingFor("bed-1"), "minting still does not install the item");
         }
 
         // --- Working + resolving ---
@@ -231,6 +366,88 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(TaskStatus.Queued, LiveInstallTask("bed-1").Status, "the task waits Queued for an arrived worker");
             Assert.IsNull(register.LiveBindingFor("bed-1"), "the asset stays in custody");
             Assert.AreEqual(EquipmentPurchaseStage.Received, order.Lines[0].Stage);
+        }
+
+        [Test]
+        public void InstallTask_RouteTravelMustArriveAtReservedPlacementBeforeWork()
+        {
+            MakeAsset("bed-1", FurnitureItemSpecs.BedId);
+            FurniturePurchaseOrder order = MakeOrder(PurchaseId, "bed-1", EquipmentPurchaseStage.Received);
+            MakePlacement("plc-bed", FurnitureItemSpecs.BedId);
+
+            FurnishingInstallTaskDriver.DriveDayResult travelling = DriveWithRoute(DomesticActivityMovementResult.Traveling);
+            WorkTask task = LiveInstallTask("bed-1");
+            Assert.AreEqual(1, travelling.MintedTasks);
+            Assert.IsNotNull(task);
+            Assert.AreEqual(TaskStatus.Assigned, task.Status, "the worker remains assigned while physically en route");
+            Assert.AreEqual(0, task.MinutesWorked, "travel does not credit installation labor");
+            Assert.IsNull(register.LiveBindingFor("bed-1"));
+            Assert.AreEqual(EquipmentPurchaseStage.Received, order.Lines[0].Stage);
+
+            FurnishingInstallTaskDriver.DriveDayResult arrived = DriveWithRoute(DomesticActivityMovementResult.Arrived);
+
+            Assert.AreEqual(1, arrived.InstalledAssets);
+            Assert.IsNotNull(register.LiveBindingFor("bed-1"));
+            Assert.IsTrue(order.IsOperational);
+        }
+
+        [Test]
+        public void InstallTask_UnsupportedRouteReleasesWorkerAndSameTaskRecovers()
+        {
+            MakeAsset("bed-1", FurnitureItemSpecs.BedId);
+            MakeOrder(PurchaseId, "bed-1", EquipmentPurchaseStage.Received);
+            MakePlacement("plc-bed", FurnitureItemSpecs.BedId);
+
+            DriveWithRoute(DomesticActivityMovementResult.Unsupported);
+            WorkTask task = LiveInstallTask("bed-1");
+            Assert.IsNotNull(task);
+            Assert.AreEqual(TaskStatus.Queued, task.Status, "an unsupported physical route releases the worker reservation");
+            Assert.IsFalse(task.HasAssignee);
+            Assert.AreEqual(0, task.MinutesWorked);
+            Assert.IsNull(register.LiveBindingFor("bed-1"), "the item remains in custody while the route is unavailable");
+
+            FurnishingInstallTaskDriver.DriveDayResult resumed = DriveWithRoute(DomesticActivityMovementResult.Arrived);
+
+            Assert.AreSame(task, LiveInstallTask("bed-1"), "recovery retains the original install task identity");
+            Assert.AreEqual(1, resumed.InstalledAssets);
+            Assert.IsNotNull(register.LiveBindingFor("bed-1"));
+        }
+
+        [Test]
+        public void InstallTask_SaveContinueRetainsAssignedWorkerAndReservedPlacementBeforeArrival()
+        {
+            MakeAsset("bed-1", FurnitureItemSpecs.BedId);
+            FurniturePurchaseOrder order = MakeOrder(PurchaseId, "bed-1", EquipmentPurchaseStage.Received);
+            MakePlacement("plc-bed", FurnitureItemSpecs.BedId);
+            DriveWithRoute(DomesticActivityMovementResult.Traveling);
+            WorkTask beforeSave = LiveInstallTask("bed-1");
+            Assert.IsNotNull(beforeSave);
+            Assert.AreEqual(TaskStatus.Assigned, beforeSave.Status);
+            EntityId taskId = beforeSave.TaskId;
+            EntityId workerId = beforeSave.AssigneeId;
+
+            var restoredTasks = new TaskAuthority();
+            restoredTasks.LoadFromSaveDto(tasks.CaptureSaveDto());
+            var restoredBudgets = new WorkTimeBudgetStore();
+            restoredBudgets.LoadFromSaveDto(budgets.CaptureSaveDto(), DayIndex);
+            var restoredDiagnostics = new List<string>();
+            FurnishingInstallTaskDriver.DriveDayResult continued = FurnishingInstallTaskDriver.DriveDay(
+                restoredTasks, restoredBudgets, owner, members, HouseholdId, BuildingInstanceId,
+                register, building, placements, PlacementIsBound, orders,
+                hasArrivedAtHome: null, dayIndex: DayIndex, diag: restoredDiagnostics,
+                routeToInstallationTarget: (int personId, int buildingId, WorkTask task, out string reason) =>
+                {
+                    reason = string.Empty;
+                    Assert.AreEqual(taskId, task.TaskId);
+                    Assert.AreEqual(workerId, task.AssigneeId);
+                    return DomesticActivityMovementResult.Arrived;
+                });
+
+            WorkTask afterContinue = FurnishingInstallTaskDriver.FindLiveInstallTask(restoredTasks, owner, "bed-1");
+            Assert.IsNull(afterContinue, "the continued task completed after the physical arrival callback");
+            Assert.AreEqual(1, continued.InstalledAssets);
+            Assert.IsTrue(order.IsOperational);
+            Assert.IsNotNull(register.LiveBindingFor("bed-1"));
         }
 
         [Test]
@@ -344,7 +561,11 @@ namespace LandLedgers.Editor.Economy
             WorkTask restoredTask = FurnishingInstallTaskDriver.FindLiveInstallTask(
                 restoredTasks, owner, "bed-1");
             Assert.IsNotNull(restoredTask, "the install task survives the round-trip");
-            Assert.AreEqual("furnishing-install:" + PurchaseId + ":bed-1", restoredTask.CustomerRef, "the ref still names the order and asset");
+            Assert.AreEqual("furnishing-install:" + PurchaseId + ":bed-1:placement=plc-bed", restoredTask.CustomerRef,
+                "the ref still names the order, asset, and reserved authored placement");
+            Assert.IsTrue(FurnishingInstallTaskDriver.TryParseInstallTaskRef(
+                restoredTask.CustomerRef, out _, out _, out string restoredPlacement));
+            Assert.AreEqual("plc-bed", restoredPlacement, "the placement lock survives the TaskAuthority round-trip");
             Assert.AreEqual(TaskStatus.Queued, restoredTask.Status);
 
             FurnishingInstallTaskDriver.DriveDayResult result = FurnishingInstallTaskDriver.DriveDay(

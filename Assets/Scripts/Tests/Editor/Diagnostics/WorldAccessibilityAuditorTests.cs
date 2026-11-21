@@ -1,14 +1,18 @@
 // Land & Ledgers — World Accessibility and Interaction Auditor tests (Lane 7, Tool 06).
 //
-// Known cases reproduced from the current tree's source-reviewed
-// evidence (no run exists on this HEAD): the Firewood gap (B-03),
-// stove-less households (M-13), the three Agent M regimes, the two
+// Historical classification cases plus current source-authored asset
+// checks: the pre-fix Firewood gap (B-03), stove-less households (M-13),
+// the three Agent M regimes, the two
 // Regime B gate holes, and the "[StartupAccess] " gap wording.
 
 using System.Collections.Generic;
 using System.Linq;
+using LandLedgers.Population;
 using LandLedgers.Diagnostics;
+using LandLedgers.World;
 using NUnit.Framework;
+using UnityEditor;
+using UnityEngine;
 
 namespace LandLedgers.EditorTests.Diagnostics
 {
@@ -35,7 +39,8 @@ namespace LandLedgers.EditorTests.Diagnostics
         [Test]
         public void FirewoodGap_IsMissing_Class1()
         {
-            // B-03: zero Firewood-type locations anywhere; fuel trips can never run.
+            // Negative-control classification for historical B-03 evidence;
+            // the reusable development home now authors this destination.
             AccessPointCheck firewood = Check("Firewood", false, false, false, 3);
             Assert.AreEqual(AccessGapKind.Missing, WorldAccessibilityAuditor.ClassifyGap(firewood));
             Assert.AreEqual(RefusalCauseClass.DestinationMissing, WorldAccessibilityAuditor.RefusalClassFor(firewood));
@@ -107,10 +112,10 @@ namespace LandLedgers.EditorTests.Diagnostics
         // --- Config inventory (M-13 re-verified) ---------------------------------
 
         [Test]
-        public void KnownConfigInventory_FirewoodZero_CounterOne_ReceivingOne()
+        public void KnownConfigInventory_SharedHomeFirewoodAnchorOne_CounterOne_ReceivingOne()
         {
             IReadOnlyList<ConfigInventoryFact> inventory = WorldAccessibilityAuditor.KnownConfigInventory();
-            Assert.AreEqual(0, inventory.First(f => f.PointKind == "Firewood").AuthoredCount);
+            Assert.AreEqual(1, inventory.First(f => f.PointKind == "Firewood").AuthoredCount);
             Assert.AreEqual(0, inventory.First(f => f.PointKind == "Cleaning").AuthoredCount);
             Assert.AreEqual(1, inventory.First(f => f.PointKind == "Counter").AuthoredCount);
             Assert.AreEqual(1, inventory.First(f => f.PointKind == "Receiving").AuthoredCount);
@@ -119,6 +124,65 @@ namespace LandLedgers.EditorTests.Diagnostics
             Assert.AreEqual(19, inventory.First(f => f.PointKind == "Dining").AuthoredCount);
             Assert.IsTrue(inventory.First(f => f.PointKind == "Stove").Note.Contains("Shane Bryan"));
             Assert.IsTrue(inventory.First(f => f.PointKind == "Stove").Note.Contains("Millward"));
+        }
+
+        [Test]
+        public void SharedDevelopmentHome_HasDistinctExteriorFirewoodHandlingDestination()
+        {
+            const string homeDefinitionPath = "Assets/Core/World/Buildings/HouseNaturalWood.asset";
+            const string configPath = "Assets/Core/Population/DevelopmentTownConfiguration.asset";
+            BuildingDefinition homeDefinition = AssetDatabase.LoadAssetAtPath<BuildingDefinition>(homeDefinitionPath);
+            DevelopmentTownConfiguration configuration = AssetDatabase.LoadAssetAtPath<DevelopmentTownConfiguration>(configPath);
+            Assert.IsNotNull(homeDefinition);
+            Assert.IsNotNull(configuration);
+            Assert.AreEqual(8, configuration.Households.Count);
+            CollectionAssert.AreEquivalent(Enumerable.Range(0, 8),
+                configuration.Households.Select(household => household.homeBuildingOrdinal));
+            Assert.AreEqual(4, configuration.Households.Single(household => household.key == "shane-bryan").homeBuildingOrdinal);
+            Assert.AreEqual(7, configuration.Households.Single(household => household.key == "millward").homeBuildingOrdinal);
+            foreach (string stoveLessKey in new[] { "shane-bryan", "millward" })
+            {
+                DevelopmentTownConfiguration.HouseholdDefinition stoveLess = configuration.Households
+                    .Single(household => household.key == stoveLessKey);
+                Assert.IsFalse(stoveLess.openingFurnishingVariants
+                    .SelectMany(variant => variant.items)
+                    .Any(item => item != null && item.kind == "furniture.cooking-stove"),
+                    stoveLessKey + " must remain stove-less until an authorized acquisition/installation exists.");
+            }
+            CollectionAssert.AreEquivalent(new[]
+            {
+                "baldwin-ooms", "pierce", "boniecki", "ethan-tia",
+                "shane-bryan", "richard-sithole", "kwindt", "millward"
+            }, configuration.Households.Select(household => household.key));
+
+            GameObject homePrefab = homeDefinition.VisualPrefab;
+            Assert.IsNotNull(homePrefab, "The household building definition must retain its authored visual prefab.");
+            BuildingFootprintAuthority authority = homePrefab.GetComponent<BuildingFootprintAuthority>();
+            Assert.IsNotNull(authority);
+            BuildingActivityLocationAuthoring firewood = authority.ActivityLocations.SingleOrDefault(location =>
+                location != null && location.type == BuildingActivityLocationType.Firewood);
+            Assert.IsNotNull(firewood, "The shared home prefab needs one actual Firewood activity destination.");
+            Assert.AreEqual("firewood-handling", firewood.id);
+            Assert.IsFalse(firewood.requiresWalkableInterior,
+                "Firewood handling is authored outside the interior floor area.");
+            Assert.IsNull(firewood.sourceObject,
+                "The destination must not claim an un-authored firewood pile prop as its source object.");
+            Assert.AreNotEqual("porch-dropoff", firewood.id);
+            Assert.AreNotEqual("stove", firewood.id);
+            Assert.Greater(firewood.positionLocal.x, authority.BackRightCornerLocal.x + 2f,
+                "The target is offset beyond the east side of the authored footprint for exterior route clearance.");
+            Assert.LessOrEqual(firewood.positionLocal.z, authority.BackRightCornerLocal.z,
+                "The target sits at the rear edge rather than on the front porch or in the generic interior.");
+            Assert.AreEqual(2.25f, firewood.positionLocal.x - authority.BackRightCornerLocal.x, 0.01f,
+                "The exterior approach is placed from the measured rear-east footprint corner with documented side clearance.");
+            Assert.Less(Vector3.Distance(firewood.positionLocal, authority.FrontDoorLocalPoint), 15f,
+                "The household handling point remains within practical yard distance of the entrance.");
+
+            Assert.IsTrue(authority.TryGetActivityLocation(firewood.id, 6,
+                out ResolvedBuildingActivityLocation resolved, out string reason), reason);
+            Assert.AreEqual(firewood.id, resolved.Id);
+            Assert.AreEqual(BuildingActivityLocationType.Firewood, resolved.Type);
+            Assert.IsFalse(resolved.RequiresWalkableInterior);
         }
 
         [Test]

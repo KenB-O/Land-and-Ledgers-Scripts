@@ -151,9 +151,12 @@ namespace LandLedgers.Population
             public string openingHorseId = string.Empty;
             public string openingWagonId = string.Empty;
             public BakeryWholesaleAccountDefinition[] wholesaleAgreements = Array.Empty<BakeryWholesaleAccountDefinition>();
-            [Header("Sales-channel choice (Lane 10a, H-2)")]
-            [Tooltip("Glenn's initial sales-channel policy, scenario-authored. Unspecified (the default) means no policy is authored: the bootstrapper resolves ProtectRetailCounter and records that resolution as a decision. Canon §7.3E gives no default; the retail-first resolution is the §19 owner decision (Lane 9a).")]
+            [Header("Bakery supply allocation")]
+            [Tooltip("Scarce stock allocation when retail and wholesale are both enabled. Unspecified resolves to ProtectRetailCounter under the existing owner decision.")]
             public BakerySupplyProtectionPolicy supplyProtection = BakerySupplyProtectionPolicy.Unspecified;
+            [Header("Enabled sales channels")]
+            [Tooltip("Enabled bakery sales channels. Retail, Wholesale, or both. Unspecified preserves both channels for legacy/unconfigured openings; existing accepted wholesale agreements remain obligations if the owner later changes channels.")]
+            public BakerySalesChannelPolicy salesChannelPolicy = BakerySalesChannelPolicy.Unspecified;
         }
 
         /// <summary>
@@ -436,6 +439,8 @@ namespace LandLedgers.Population
         public int OpeningBakeryNotionsUnits => FindBusinessByOperation("bakery")?.opening?.bakeryNotionsUnits ?? 0;
         /// <summary>Lane 10a (H-2): Glenn's scenario-authored initial sales-channel policy; Unspecified when none is authored (the bootstrapper resolves ProtectRetailCounter and records it).</summary>
         public BakerySupplyProtectionPolicy OpeningBakerySupplyProtection => FindBusinessByOperation("bakery")?.opening?.supplyProtection ?? BakerySupplyProtectionPolicy.Unspecified;
+        /// <summary>Campaign 03: scenario-authored bakery channels; Unspecified preserves both for an unconfigured opening.</summary>
+        public BakerySalesChannelPolicy OpeningBakerySalesChannels => FindBusinessByOperation("bakery")?.opening?.salesChannelPolicy ?? BakerySalesChannelPolicy.Unspecified;
         public int OpeningCarpentryLumberUnits => FindBusinessByOperation("carpentry-workshop")?.opening?.carpentryLumberUnits ?? 0;
         public int FuelDealerIntakeUnitsPerBakeryUnit => FindBusinessByOperation("fuel-dealer")?.opening?.fuelDealerIntakeUnitsPerBakeryUnit ?? 0;
         public string OpeningHorseId => FindBusiness(FreightBusinessKey)?.opening?.openingHorseId ?? string.Empty;

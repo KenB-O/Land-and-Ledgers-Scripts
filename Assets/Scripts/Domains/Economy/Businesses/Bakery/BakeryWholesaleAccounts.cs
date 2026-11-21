@@ -44,6 +44,19 @@ namespace LandLedgers.Economy.Businesses.Bakery
     }
 
     /// <summary>
+    /// The bakery owner's enabled sales channels. This controls whether new
+    /// retail sales and new wholesale agreements may be initiated; it does
+    /// not cancel or erase a wholesale agreement already accepted.
+    /// </summary>
+    public enum BakerySalesChannelPolicy
+    {
+        Unspecified = 0,
+        Retail = 1,
+        Wholesale = 2,
+        RetailAndWholesale = 3,
+    }
+
+    /// <summary>
     /// Lane 10a (H-3): one recorded sales-channel decision (Canon §7.3E/§7.5).
     /// The choice machinery (policy + account set) already persisted; the
     /// decision record is what was missing — who chose, on what day, from
@@ -80,6 +93,12 @@ namespace LandLedgers.Economy.Businesses.Bakery
 
         /// <summary>Kind: a paused wholesale account resumed.</summary>
         public const string AccountResumedKind = "AccountResumed";
+
+        /// <summary>Kind: initial scenario-authored enabled sales channels.</summary>
+        public const string InitialSalesChannelsKind = "InitialSalesChannels";
+
+        /// <summary>Kind: an authorized owner/business decision changed enabled sales channels.</summary>
+        public const string SalesChannelsChangeKind = "SalesChannelsChange";
 
         public int DayIndex = -1;
         public string Decider = string.Empty;

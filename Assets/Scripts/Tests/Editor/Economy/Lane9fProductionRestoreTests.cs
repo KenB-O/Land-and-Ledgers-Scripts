@@ -17,8 +17,10 @@ using NUnit.Framework;
 using LandLedgers.Economy;
 using LandLedgers.Economy.GenericBusiness;
 using LandLedgers.Primitives;
+using LandLedgers.Persistence;
 using LandLedgers.Tasks;
 using LandLedgers.Time;
+using UnityEngine;
 
 namespace LandLedgers.Editor.Economy
 {
@@ -297,57 +299,55 @@ namespace LandLedgers.Editor.Economy
             config.AddInventory("nails_hardware_lot", 5f);
             config.AddInventory("basic_cloth", 10f);
             config.AddInventory("hay", 5f);
-            var business = new LandLedgers.Economy.BusinessInstanceState
+            var business = LandLedgers.Economy.BusinessInstanceState.FromSaveDto(new BusinessInstanceSaveDto
             {
-                GenericConfiguration = config,
-                BusinessType = LandLedgers.Economy.BusinessType.Generic,
-            };
+                instanceId = "carpentry-workshop-restore-test",
+                businessType = LandLedgers.Economy.BusinessType.Generic,
+                generic = config.CaptureSaveDto(),
+            });
             var registry = new GenericProductionRuntimeRegistry(tasks, budgets);
             GenericProductionRuntime runtime = registry.ForBusiness(business, businessId, 1);
             var outputDefinition = new GenericProductDefinition("furniture.bed", "Bed", ProductQuantityUnit.Each);
             Assert.IsTrue(GenericProductionPolicyExecutor.TryStart(business, runtime, method.MethodId,
                 carpenter, outputDefinition, 1, out ProductionProcessState process, out string startReason,
                 _ => true, _ => true), startReason);
-            Assert.AreEqual(8f, config.GetInventoryQuantity("lumber"), "lumber is consumed once at start");
+            Assert.AreEqual(8f, business.GenericConfiguration.GetInventoryQuantity("lumber"), "lumber is consumed once at start");
 
             Assert.IsTrue(runtime.Advance(process, carpenter, 10,
                 () => { outputsCreated++; return true; }, out _), "10 minutes into the cut phase");
 
-            // Continue: fresh authority from the save DTO; the business is
-            // rebuilt field-for-field from its configuration DTO (the same
-            // fields GenericBusinessConfigurationSaveDto.FromSaveDto
-            // restores — the stub business cannot round-trip itself).
+            // Continue through the same business DTO and JSON serialization
+            // boundary used by game saves. The previous fixture manually
+            // copied selected process fields, which could pass while the
+            // production save DTO silently omitted one of them.
+            string businessJson = JsonUtility.ToJson(business.CaptureSaveDto());
+            BusinessInstanceSaveDto restoredBusinessDto = JsonUtility.FromJson<BusinessInstanceSaveDto>(businessJson);
+            LandLedgers.Economy.BusinessInstanceState restoredBusiness =
+                LandLedgers.Economy.BusinessInstanceState.FromSaveDto(restoredBusinessDto);
+            Assert.NotNull(restoredBusiness);
+            ProductionProcessState rebuiltProcess = null;
+            foreach (ProductionProcessState candidate in restoredBusiness.GenericConfiguration.ActiveProcesses)
+                if (candidate != null && candidate.ProcessId == process.ProcessId) { rebuiltProcess = candidate; break; }
+            Assert.NotNull(rebuiltProcess, "the actual business save DTO retains the in-progress furniture batch");
+            Assert.AreEqual(process.ProcessId, rebuiltProcess.ProcessId);
+            Assert.AreEqual(process.CurrentPhaseIndex, rebuiltProcess.CurrentPhaseIndex);
+            Assert.AreEqual(process.RemainingPhaseMinutes, rebuiltProcess.RemainingPhaseMinutes);
+            CollectionAssert.AreEqual(process.ConsumedInputIds, rebuiltProcess.ConsumedInputIds,
+                "consumed-input identity is durable, preventing a second material debit");
+            CollectionAssert.AreEqual(process.ConsumedInputLotIds, rebuiltProcess.ConsumedInputLotIds,
+                "material provenance remains attached to the batch");
+            Assert.AreEqual(8f, restoredBusiness.GenericConfiguration.GetInventoryQuantity("lumber"));
+            Assert.AreEqual(4f, restoredBusiness.GenericConfiguration.GetInventoryQuantity("nails_hardware_lot"));
+            Assert.AreEqual(6f, restoredBusiness.GenericConfiguration.GetInventoryQuantity("basic_cloth"));
+
+            // Continue also restores TaskAuthority independently. The new
+            // runtime must rebind the persisted cut task instead of creating
+            // a duplicate or consuming the saved inputs again.
             var savedTasks = tasks.CaptureSaveDto();
             var restoredTasks = new TaskAuthority();
             restoredTasks.LoadFromSaveDto(savedTasks);
             var restoredBudgets = new WorkTimeBudgetStore();
             restoredBudgets.EnsureDay(2);
-            var rebuiltProcess = new ProductionProcessState
-            {
-                ProcessId = process.ProcessId,
-                MethodId = process.MethodId,
-                CurrentPhaseIndex = process.CurrentPhaseIndex,
-                RemainingPhaseMinutes = process.RemainingPhaseMinutes,
-                Completed = process.Completed,
-                OutputCreated = process.OutputCreated,
-                AssignedPersonId = process.AssignedPersonId,
-                ReservedEquipmentIds = new List<string>(process.ReservedEquipmentIds),
-                ReservedWorkspaceIds = new List<string>(process.ReservedWorkspaceIds),
-                ConsumedInputIds = new List<string>(process.ConsumedInputIds),
-                ConsumedInputLotIds = new List<string>(process.ConsumedInputLotIds),
-            };
-            var restoredConfig = new GenericBusinessConfiguration();
-            restoredConfig.AddProductionMethod(method);
-            restoredConfig.AddProcess(rebuiltProcess);
-            restoredConfig.AddInventory("lumber", 8f);
-            restoredConfig.AddInventory("nails_hardware_lot", 4f);
-            restoredConfig.AddInventory("basic_cloth", 6f);
-            restoredConfig.AddInventory("hay", 4f);
-            var restoredBusiness = new LandLedgers.Economy.BusinessInstanceState
-            {
-                GenericConfiguration = restoredConfig,
-                BusinessType = LandLedgers.Economy.BusinessType.Generic,
-            };
             var restoredRegistry = new GenericProductionRuntimeRegistry(restoredTasks, restoredBudgets);
 
             int restoredCount = restoredRegistry.RestoreProcessesForBusiness(
@@ -358,8 +358,9 @@ namespace LandLedgers.Editor.Economy
             for (int i = 0; i < 8 && !rebuiltProcess.Completed; i++)
                 restoredRegistry.AdvanceBusinessProcesses(restoredBusiness, businessId, 2, 24 * 60);
             Assert.IsTrue(rebuiltProcess.Completed, "the restored process finishes through the registry");
-            Assert.AreEqual(1f, restoredConfig.GetInventoryQuantity("furniture.bed"), "exactly one bed is created");
-            Assert.AreEqual(8f, restoredConfig.GetInventoryQuantity("lumber"), "lumber is not re-consumed after Continue");
+            Assert.AreEqual(1f, restoredBusiness.GenericConfiguration.GetInventoryQuantity("furniture.bed"), "exactly one bed is created");
+            Assert.AreEqual(8f, restoredBusiness.GenericConfiguration.GetInventoryQuantity("lumber"), "lumber is not re-consumed after Continue");
+            Assert.IsTrue(rebuiltProcess.OutputCreated, "the output guard itself survives in the real save DTO");
             Assert.AreEqual(1, CountTasksWithDefinition(restoredTasks, PhaseDefinitionId(rebuiltProcess, 0)),
                 "no duplicate cut task is minted for the restored process");
         }

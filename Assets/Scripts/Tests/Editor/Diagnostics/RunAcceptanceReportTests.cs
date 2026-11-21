@@ -101,6 +101,8 @@ namespace LandLedgers.EditorTests.Diagnostics
                 }));
             Assert.AreEqual(RunAcceptanceVerdict.NotRun, RunAcceptanceReportBuilder.Combine(
                 new List<RunAcceptanceCheck> { new RunAcceptanceCheck("a", RunAcceptanceVerdict.NotRun, "") }));
+            Assert.AreEqual(RunAcceptanceVerdict.Provisional, RunAcceptanceReportBuilder.Combine(
+                new List<RunAcceptanceCheck> { new RunAcceptanceCheck("a", RunAcceptanceVerdict.Provisional, "owner decision pending") }));
         }
 
         // --- Retained 60-day shape: calendar passes, run fails ------------------------
@@ -198,6 +200,29 @@ namespace LandLedgers.EditorTests.Diagnostics
             Assert.IsTrue(report.ToMarkdown().Contains("F-S4"));
         }
 
+        [Test]
+        public void Build_ProposedSurvivalBarsRemainExplicitlyProvisional()
+        {
+            RunSummary summary = Retained60DayShapeSummary();
+            var stages = new Dictionary<string, SurvivalStageVerdict>();
+            foreach (SurvivalStageSpec spec in SurvivalAcceptanceScenario.StageSpecs)
+                stages[spec.StageId] = new SurvivalStageVerdict(SurvivalVerdict.Pass, "Measured pass.");
+            var bars = new Dictionary<string, SurvivalStageVerdict>();
+            foreach (SurvivalPassBar bar in SurvivalAcceptanceScenario.PassBars)
+                bars[bar.BarId] = new SurvivalStageVerdict(SurvivalVerdict.Pass, "Measured pass; proposed bar.");
+            var survival = new SurvivalAcceptanceResult(SurvivalOverallVerdict.Provisional,
+                summary.RunId, stages, bars, string.Empty,
+                "scenario='millbrook-development-town', startup='NewGame', seed=1886, speed='Speed250x', completed=60/60 days",
+                "All measured stages and proposed bars pass, but P-1 through P-8 remain owner-unapproved.");
+
+            RunAcceptanceReport report = RunAcceptanceReportBuilder.Build(summary, survival, false);
+            RunAcceptanceSection household = report.Section(RunAcceptanceSectionKind.HouseholdSurvival);
+            Assert.IsTrue(household.Checks.Exists(check => check.Verdict == RunAcceptanceVerdict.Provisional));
+            Assert.IsFalse(report.Accepted);
+            StringAssert.Contains("owner-unapproved", report.ToMarkdown());
+            StringAssert.Contains("speed='Speed250x'", report.ToMarkdown());
+        }
+
         // --- Serialisation ----------------------------------------------------------------
 
         [Test]
@@ -221,8 +246,10 @@ namespace LandLedgers.EditorTests.Diagnostics
             Assert.AreEqual("FAIL", RunAcceptanceReport.VerdictLabel(RunAcceptanceVerdict.Fail));
             Assert.AreEqual("NOT RUN", RunAcceptanceReport.VerdictLabel(RunAcceptanceVerdict.NotRun));
             Assert.AreEqual("NOT CAPTURED", RunAcceptanceReport.VerdictLabel(RunAcceptanceVerdict.NotCaptured));
+            Assert.AreEqual("PROVISIONAL", RunAcceptanceReport.VerdictLabel(RunAcceptanceVerdict.Provisional));
             Assert.AreEqual("ACCEPTED", RunAcceptanceReport.OverallLabel(RunAcceptanceOverall.Accepted));
             Assert.AreEqual("NOT CAPTURED", RunAcceptanceReport.OverallLabel(RunAcceptanceOverall.NotCaptured));
+            Assert.AreEqual("PROVISIONAL", RunAcceptanceReport.OverallLabel(RunAcceptanceOverall.Provisional));
         }
     }
 }

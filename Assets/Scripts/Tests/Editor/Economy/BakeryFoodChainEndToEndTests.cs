@@ -584,6 +584,9 @@ namespace LandLedgers.Editor.Economy
         public void EmptyGeneralStore_HouseholdBuysFreshBreadFromBakery()
         {
             Slice s = NewSlice();
+            Assert.IsNull(s.Bakery.ResolveInitialSalesChannels(
+                BakerySalesChannelPolicy.Retail, 2, s.Diag),
+                "this end-to-end case models Glenn's retail-only business decision");
             InstallOven(s);
             SeedInputs(s, 24, 2, 2);
             Assert.IsNotNull(s.ProductionDriver.PlanBatches(
@@ -604,6 +607,8 @@ namespace LandLedgers.Editor.Economy
             {
                 DayIndex = 2,
             };
+            Assert.IsTrue(bakerySupplier.OffersItem(HouseholdItemCatalog.BreadId),
+                "Glenn's retail-only decision exposes actual bakery bread to the household seller directory");
             Series2BakerySupplierAdapter.RegisterIn(s.Directory, bakerySupplier);
             s.Journeys.RegisterLocation(new JourneyLocation(
                 "bakery", JourneyLocationKind.Store, "Glenn's Bakery", 3f, 0f));
@@ -631,6 +636,13 @@ namespace LandLedgers.Editor.Economy
             Assert.AreEqual(6, s.Inventories.GetOrCreate(HouseholdId)
                 .GetAvailableUnits(HouseholdItemCatalog.BreadId),
                 "the household receives goods through the shopping loop");
+            MealDayResult meals = ServeMeals(s, 3);
+            Assert.AreEqual(3, meals.MealsServed,
+                "the later meal service consumes purchased bread after the physical shopping loop returns it home");
+            Assert.AreEqual(0, meals.MealsMissed);
+            Assert.AreEqual(3, s.Inventories.GetOrCreate(HouseholdId)
+                .GetAvailableUnits(HouseholdItemCatalog.BreadId),
+                "three purchased loaves remain after the later day's three meals");
         }
 
         [Test]

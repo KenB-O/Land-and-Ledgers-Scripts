@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using LandLedgers.Economy.Equipment;
 using LandLedgers.Economy.GeneralStore;
 using LandLedgers.Economy.Retail;
 using LandLedgers.FirstLedger;
@@ -39,6 +40,48 @@ namespace LandLedgers.Editor.Population
         public void MovementRefusalClassifierOnlyTreatsOwnedMovementAsReplannable(string reason, bool expected)
         {
             Assert.AreEqual(expected, ShoppingTripDriver.IsPhysicalMovementOwnershipRefusal(reason));
+        }
+
+        [Test]
+        public void PlannedTripDiagnosticsExposeStableSellerAndOutboundTaskIdentities()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+
+            PlannedShoppingTrip trip = f.Loop.PlanTrip(need, Fixture.Day, f.LoopOptions);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Planned, trip.State, string.Join("\n", f.Diag));
+            Assert.AreEqual("store", trip.SellerLocationIdForDiagnostics);
+            Assert.IsNotEmpty(trip.OutboundTaskIdForDiagnostics,
+                "the run artifact can join the trip record to the authoritative outbound TaskAuthority record");
+        }
+
+        [Test]
+        public void CommittedAcquisitionUnitsForNeed_UsesTheTripsLiveExactStockHold()
+        {
+            var f = new Fixture();
+            f.Loop.ReservationAuthority = new EquipmentReservationService();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+
+            f.Driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+
+            PlannedShoppingTrip trip = f.Driver.ActiveTrips.Single();
+            Assert.IsNotEmpty(trip.StockReservationId, string.Join("\n", f.Diag));
+            float atDeparture = RetailStockReservation.GameSeconds(
+                Fixture.Day, trip.DepartureMinuteOfDay);
+            Assert.AreEqual(trip.Candidate.UnitsPlanned,
+                f.Driver.CommittedAcquisitionUnitsForNeed(
+                    Fixture.HouseholdId, need.NeedSequence, HouseholdItemCatalog.FlourId, atDeparture));
+            Assert.AreEqual(0, f.Driver.CommittedAcquisitionUnitsForNeed(
+                Fixture.HouseholdId + 1, need.NeedSequence, HouseholdItemCatalog.FlourId, atDeparture));
+            Assert.AreEqual(0, f.Driver.CommittedAcquisitionUnitsForNeed(
+                Fixture.HouseholdId, need.NeedSequence + 1, HouseholdItemCatalog.FlourId, atDeparture));
+            Assert.AreEqual(0, f.Driver.CommittedAcquisitionUnitsForNeed(
+                Fixture.HouseholdId, need.NeedSequence, HouseholdItemCatalog.BreadId, atDeparture));
+            Assert.AreEqual(100, f.Store.Stock[HouseholdItemCatalog.FlourId],
+                "A live planning hold is not a sale or inventory deduction.");
+            Assert.AreEqual(50000, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents(),
+                "A live planning hold does not settle household money.");
         }
 
         [Test]
@@ -183,6 +226,7 @@ namespace LandLedgers.Editor.Population
             public readonly TestStore Store = new TestStore();
             public readonly HouseholdShoppingLoop Loop;
             public readonly ShoppingTripDriver Driver;
+            public bool PhysicalArrivalAvailable = true;
             public readonly Dictionary<int, string> Locations = new Dictionary<int, string>();
             public readonly List<string> Diag = new List<string>();
 
@@ -227,7 +271,12 @@ namespace LandLedgers.Editor.Population
                     personEntityId: pid => EntityId.For(EntityKind.Person, pid),
                     spendingPolicyProvider: null);
                 LoopOptions = options;
-                Driver = new ShoppingTripDriver(Loop);
+                // The unit fixture models a route that reaches its destination
+                // when the corresponding travel leg is due. Tests that exercise
+                // missing/false physical evidence override this predicate.
+                Driver = new ShoppingTripDriver(Loop,
+                    (person, destination) => true,
+                    (person, destination) => PhysicalArrivalAvailable);
 
                 // Fund the household.
                 Ledgers.GetOrCreate(HouseholdId).RecordInflow(0, 50000,
@@ -871,6 +920,63 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(PlannedShoppingTrip.TripState.Outbound, trip.State);
             Assert.AreEqual(1, driver.ActiveTrips.Count);
             Assert.AreEqual(0, f.Store.CashReceived);
+        }
+
+        [Test]
+        public void MissingPhysicalArrivalAuthority_CannotSettleOutboundPurchase()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            var driver = new ShoppingTripDriver(f.Loop,
+                (person, destination) => true,
+                hasPhysicallyArrived: null,
+                hasActivePhysicalRoute: (person, destination) => true,
+                remainingPhysicalRouteSeconds: null,
+                cancelPhysicalRoute: null,
+                routeObservationIntervalSeconds: 60f);
+
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = driver.ActiveTrips.Single();
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+            DueEvent outbound = f.DueEvents.PopDue(departure + 86400f).Single();
+            driver.HandleDueEvent(outbound, Fixture.Day, outbound.DueGameSeconds, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Outbound, trip.State,
+                "elapsed route time cannot substitute for missing physical-arrival authority");
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(100, f.Store.ItemStockUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(50000, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.IsFalse(ServiceTaskIdOf(trip).IsValid,
+                "no customer-service task may be created before physically confirming the seller arrival");
+        }
+
+        [Test]
+        public void MissingOutboundDestination_AbortsBeforeSettlement()
+        {
+            var f = new Fixture();
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            var driver = new ShoppingTripDriver(f.Loop,
+                (person, destination) => true,
+                (person, destination) => true);
+            driver.PlanForHousehold(Fixture.HouseholdId, f.Needs, Fixture.Day, f.LoopOptions, f.Diag);
+            PlannedShoppingTrip trip = driver.ActiveTrips.Single();
+            float departure = Fixture.Day * 86400f + trip.DepartureMinuteOfDay * 60f;
+            driver.AdvanceTick(departure, Fixture.Day, f.DueEvents, f.Diag);
+
+            // The task was planned against a seller location, but the current
+            // seller authority no longer resolves a physical destination.
+            f.Store.LocationId = string.Empty;
+            DueEvent outbound = f.DueEvents.PopDue(departure + 86400f).Single();
+            driver.HandleDueEvent(outbound, Fixture.Day, outbound.DueGameSeconds, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Failed, trip.State);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(100, f.Store.ItemStockUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(50000, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
+            Assert.IsFalse(ServiceTaskIdOf(trip).IsValid);
         }
 
         [Test]
@@ -1795,6 +1901,34 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void RequiredPhysicalCounterService_LostCustomerArrivalEvidenceCannotSettle()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            f.Loop.RequirePhysicalCounterService = true;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            int cashBefore = f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents();
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            DueEvent serviceEv = PopServiceDueEvent(f, trip, arrival);
+            Assert.IsNotNull(serviceEv);
+
+            f.PhysicalArrivalAvailable = false;
+            f.Driver.HandleDueEvent(serviceEv, Fixture.Day, serviceEv.DueGameSeconds, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(0, queue.WaitingCount);
+            Assert.AreEqual(TaskStatus.Cancelled, f.Tasks.FindTask(ServiceTaskIdOf(trip)).Status);
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(cashBefore, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
+            Assert.AreEqual(100, f.Store.ItemStockUnits(HouseholdItemCatalog.FlourId));
+            Assert.IsNull(trip.Batch);
+            StringAssert.Contains("customer absent at service completion", string.Join("\n", f.Diag));
+        }
+
+        [Test]
         public void RequiredPhysicalCounterService_MissingQueueReturnsWithoutTransaction()
         {
             var f = new Fixture();
@@ -2000,6 +2134,49 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(1200, f.Store.CashReceived);
             Assert.AreEqual(PlannedShoppingTrip.TripState.InStore, trip.State);
             Assert.IsFalse(f.Diag.Any(line => line.Contains("did not complete")));
+        }
+
+        [Test]
+        public void CompletedServiceRecovery_RequiresShopperStillPhysicallyAtSeller()
+        {
+            var f = new Fixture();
+            var log = new LostSaleLog();
+            AddClerk(f);
+            CustomerQueue queue = WireService(f, log, 3);
+            f.Loop.RequirePhysicalCounterService = true;
+            HouseholdPurchasingNeed need = f.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            int cashBefore = f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents();
+            PlannedShoppingTrip trip = DriveToArrival(f, out float arrival);
+            DueEvent serviceEv = PopServiceDueEvent(f, trip, arrival);
+            Assert.IsNotNull(serviceEv);
+
+            WorkTask serviceTask = f.Tasks.FindTask(ServiceTaskIdOf(trip));
+            int remaining = System.Math.Max(1, serviceTask.MinutesRemaining);
+            Assert.IsTrue(f.Tasks.RecordWorkProgress(
+                serviceTask.TaskId, remaining, f.Budgets, Fixture.Day,
+                out bool reached, out string rejection), rejection);
+            Assert.IsTrue(reached);
+            Assert.IsTrue(f.Tasks.CompleteTask(
+                serviceTask.TaskId, TaskOutcome.Success, Fixture.Day, f.Budgets));
+
+            // The tick recovery path sees completed work before the queued due
+            // event is dispatched. Customer location remains an independent
+            // requirement for settling the retail transaction.
+            f.PhysicalArrivalAvailable = false;
+            f.Driver.AdvanceTick(serviceEv.DueGameSeconds, Fixture.Day, f.DueEvents, f.Diag);
+            foreach (DueEvent staleServiceEvent in f.DueEvents.PopDue(serviceEv.DueGameSeconds))
+                f.Driver.HandleDueEvent(staleServiceEvent, Fixture.Day,
+                    staleServiceEvent.DueGameSeconds, f.DueEvents, f.Diag);
+
+            Assert.AreEqual(PlannedShoppingTrip.TripState.Returning, trip.State);
+            Assert.AreEqual(PurchasingNeedStatus.Open, need.Status);
+            Assert.AreEqual(0, queue.WaitingCount);
+            Assert.IsNull(trip.Batch);
+            Assert.AreEqual(0, trip.UnitsSettled);
+            Assert.AreEqual(100, f.Store.ItemStockUnits(HouseholdItemCatalog.FlourId));
+            Assert.AreEqual(0, f.Store.CashReceived);
+            Assert.AreEqual(cashBefore, f.Ledgers.GetOrCreate(Fixture.HouseholdId).GetBalanceCents());
+            StringAssert.Contains("customer absent during completed-service recovery", string.Join("\n", f.Diag));
         }
 
         [Test]
@@ -3322,6 +3499,108 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(PurchasingNeedStatus.Fulfilled, gNeed.Status);
             Assert.AreEqual(90, g2.Store.Stock[HouseholdItemCatalog.FlourId]);
             Assert.AreEqual(1200, g2.Store.CashReceived);
+        }
+
+        [Test]
+        public void RehydrateAfterLoad_MissingRegistrySnapshotReattachesTripNeedBeforeReceipt()
+        {
+            var source = new Fixture();
+            HouseholdPurchasingNeed originalNeed = source.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            source.Driver.PlanForHousehold(Fixture.HouseholdId, source.Needs, Fixture.Day, source.LoopOptions, source.Diag);
+            float start = Fixture.Day * 86400f;
+            source.Driver.AdvanceTick(start + 610 * 60f, Fixture.Day, source.DueEvents, source.Diag);
+            Assert.AreEqual(1, source.Driver.ActiveTrips.Count);
+
+            var restored = new Fixture();
+            restored.Tasks.LoadFromSaveDto(source.Tasks.CaptureSaveDto());
+            restored.Budgets.LoadFromSaveDto(source.Budgets.CaptureSaveDto(), Fixture.Day);
+            restored.Tracker.LoadFromSaveDto(source.Tracker.CaptureSaveDto());
+            restored.DueEvents.LoadFromSaveDto(source.DueEvents.CaptureSaveDto());
+            restored.Driver.LoadFromSaveDto(source.Driver.CaptureSaveDto());
+            Assert.AreEqual(0, restored.Needs.GetOpenNeeds(Fixture.HouseholdId).Count,
+                "fixture simulates a partial/legacy save where the need registry row is absent");
+
+            restored.Driver.RehydrateAfterLoad(restored.Tasks, id => (IGoodsSupplier)restored.Store,
+                Fixture.Day, start + 610 * 60f, restored.DueEvents, restored.Diag);
+
+            PlannedShoppingTrip trip = restored.Driver.ActiveTrips[0];
+            HouseholdPurchasingNeed authoritativeNeed = restored.Needs.GetOpenNeed(
+                Fixture.HouseholdId, HouseholdItemCatalog.FlourId);
+            Assert.NotNull(authoritativeNeed);
+            Assert.AreSame(authoritativeNeed, trip.Need,
+                "trip receipt must mutate the authoritative registry object");
+            Assert.AreEqual(originalNeed.NeedSequence, authoritativeNeed.NeedSequence);
+
+            DrainRestoredTripToCompletion(restored, start);
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, authoritativeNeed.Status);
+            Assert.AreEqual(1, restored.Loop.TripHistory.Count,
+                "restoration must not create a second trip result");
+            Assert.AreEqual(1200, restored.Store.CashReceived,
+                "restoration must not repeat or omit the settled payment");
+        }
+
+        [Test]
+        public void RehydrateAfterLoad_TripAndNeedHouseholdMismatchAbortsBeforeSettlement()
+        {
+            var source = new Fixture();
+            source.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            source.Driver.PlanForHousehold(Fixture.HouseholdId, source.Needs, Fixture.Day, source.LoopOptions, source.Diag);
+            float start = Fixture.Day * 86400f;
+            source.Driver.AdvanceTick(start + 610 * 60f, Fixture.Day, source.DueEvents, source.Diag);
+            var tripDtos = source.Driver.CaptureSaveDto();
+            Assert.AreEqual(1, tripDtos.Count);
+
+            tripDtos[0].Need = new HouseholdPurchasingNeed
+            {
+                NeedSequence = tripDtos[0].Need.NeedSequence,
+                HouseholdId = Fixture.HouseholdId + 1,
+                ItemId = HouseholdItemCatalog.FlourId,
+                UnitsNeeded = 10,
+                Status = PurchasingNeedStatus.Open,
+            };
+            var restored = new Fixture();
+            restored.Tasks.LoadFromSaveDto(source.Tasks.CaptureSaveDto());
+            restored.DueEvents.LoadFromSaveDto(source.DueEvents.CaptureSaveDto());
+            restored.Driver.LoadFromSaveDto(tripDtos);
+
+            restored.Driver.RehydrateAfterLoad(restored.Tasks, id => (IGoodsSupplier)restored.Store,
+                Fixture.Day, start + 610 * 60f, restored.DueEvents, restored.Diag);
+
+            Assert.AreEqual(0, restored.Driver.ActiveTrips.Count,
+                "corrupt cross-household links must not reach settlement");
+            Assert.AreEqual(0, restored.Needs.GetOpenNeeds(Fixture.HouseholdId).Count);
+            Assert.AreEqual(0, restored.Needs.GetOpenNeeds(Fixture.HouseholdId + 1).Count);
+            Assert.AreEqual(0, restored.Store.CashReceived);
+            Assert.AreEqual(100, restored.Store.Stock[HouseholdItemCatalog.FlourId]);
+            StringAssert.Contains("could not attach to its authoritative need", string.Join("\n", restored.Diag));
+        }
+
+        [Test]
+        public void RehydrateAfterLoad_ClosedNeedDoesNotReviveTripOrSettleAgain()
+        {
+            var source = new Fixture();
+            source.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            source.Driver.PlanForHousehold(Fixture.HouseholdId, source.Needs, Fixture.Day, source.LoopOptions, source.Diag);
+            float start = Fixture.Day * 86400f;
+            source.Driver.AdvanceTick(start + 610 * 60f, Fixture.Day, source.DueEvents, source.Diag);
+            Assert.AreEqual(1, source.Driver.ActiveTrips.Count);
+
+            var restored = new Fixture();
+            HouseholdPurchasingNeed closedNeed = restored.OpenNeed(HouseholdItemCatalog.FlourId, 10);
+            closedNeed.Status = PurchasingNeedStatus.Fulfilled;
+            restored.Tasks.LoadFromSaveDto(source.Tasks.CaptureSaveDto());
+            restored.DueEvents.LoadFromSaveDto(source.DueEvents.CaptureSaveDto());
+            restored.Driver.LoadFromSaveDto(source.Driver.CaptureSaveDto());
+
+            restored.Driver.RehydrateAfterLoad(restored.Tasks, id => (IGoodsSupplier)restored.Store,
+                Fixture.Day, start + 610 * 60f, restored.DueEvents, restored.Diag);
+
+            Assert.AreEqual(0, restored.Driver.ActiveTrips.Count,
+                "an unsettled trip cannot revive a fulfilled or cancelled obligation");
+            Assert.AreEqual(PurchasingNeedStatus.Fulfilled, closedNeed.Status);
+            Assert.AreEqual(0, restored.Store.CashReceived);
+            Assert.AreEqual(100, restored.Store.Stock[HouseholdItemCatalog.FlourId]);
+            StringAssert.Contains("could not attach to its authoritative need", string.Join("\n", restored.Diag));
         }
 
         [Test]

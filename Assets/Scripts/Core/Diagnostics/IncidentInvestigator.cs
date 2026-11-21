@@ -744,9 +744,9 @@ namespace LandLedgers.Diagnostics
             {
                 sourcePath = "Assets/Scripts/Domains/Population/DomesticLaborDriver.cs";
                 sourceLine = 1191;
-                return "DomesticLaborDriver (domestic work authority) — ResolveDomesticActivityMovement requires a "
-                    + "BuildingActivityLocationType.Firewood point; the Natural Wood house prefab authors bed, stove, "
-                    + "cleaning, two storage and porch-dropoff points, but no Firewood point (checklist CI-5F80FDC40F).";
+                return "DomesticLaborDriver (domestic work authority) — the shared House Natural Wood prefab now "
+                    + "authors the distinct exterior 'firewood-handling' point (historical missing-point evidence: "
+                    + "checklist CI-5F80FDC40F); the physical route and fuel transfer remain live-unverified.";
             }
             if (!string.IsNullOrWhiteSpace(definitionId) && definitionId.StartsWith("domestic.", StringComparison.Ordinal))
             {

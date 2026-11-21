@@ -1360,8 +1360,9 @@ namespace LandLedgers.EditorTests.Population
             Assert.AreEqual(10000 - 30, ledger.GetBalanceCents(), "buyer outflow must equal 6 x 5c");
             Assert.AreEqual(30, livePort.CashBalance - 50000, "buyer outflow must equal store cash in");
 
-            // (b) Fallback port: UsesItemLevelInventory == false, pooled
-            // category stock of 18u at 5c.
+            // (b) Legacy pooled staple stock may not masquerade as bread.
+            // An exact bread item lot is required before the adapter can
+            // expose or settle a bread sale.
             var fallback = new FakeStorePort();
             fallback.OfferList.Add(new GeneralStoreCategoryOffer
             {
@@ -1374,14 +1375,16 @@ namespace LandLedgers.EditorTests.Population
             fallback.Prices["staple_food"] = 5;
             var fallbackAdapter = new GeneralStoreSupplierAdapter(fallback);
 
-            Assert.AreEqual(18, fallbackAdapter.ItemStockUnits("bread"),
-                "the fallback port must read pooled category stock as sellable bread");
-            Assert.IsTrue(fallbackAdapter.OffersItem("bread"), "pooled bread at 5c must be a viable offer");
+            Assert.AreEqual(0, fallbackAdapter.ItemStockUnits("bread"),
+                "pooled staple_food cannot prove that its units are bread");
+            Assert.IsFalse(fallbackAdapter.OffersItem("bread"), "unidentified staple stock is not a bread offer");
             int fallbackSold = fallbackAdapter.SellItem("bread", 6, 0, null, diag);
-            Assert.AreEqual(6, fallbackSold, "the fallback port must sell 6u from category stock: " + string.Join(" | ", diag));
-            Assert.AreEqual(12, fallbackAdapter.ItemStockUnits("bread"), "category stock must fall by exactly the units sold");
-            Assert.AreEqual(50030, fallback.CashBalance, "store cash must gain exactly 6 x 5c on the category path");
-            Assert.IsTrue(!string.IsNullOrWhiteSpace(fallbackAdapter.LastReceiptId), "a receipt id must be recorded");
+            Assert.AreEqual(0, fallbackSold, "the fallback must refuse a category-to-bread substitution");
+            Assert.AreEqual(0, fallbackAdapter.Sell("staple_food", 6, 0, diag),
+                "an ambiguous staple category cannot be sold as an unidentified food transaction");
+            Assert.AreEqual(18, fallbackAdapter.Stock["staple_food"], "refusal leaves unidentified category stock untouched");
+            Assert.AreEqual(50000, fallback.CashBalance, "a refused identity must not settle cash");
+            Assert.IsTrue(string.IsNullOrWhiteSpace(fallbackAdapter.LastReceiptId), "a refused sale has no receipt");
             Assert.AreEqual(0, fallback.CreditSettlements, "a cash sale must record no receivable");
         }
 

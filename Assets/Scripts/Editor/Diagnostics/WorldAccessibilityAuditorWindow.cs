@@ -101,7 +101,7 @@ namespace LandLedgers.Editor.Diagnostics
         private void DrawConfigInventory()
         {
             EditorGUILayout.BeginVertical("box");
-            EditorGUILayout.LabelField("Config inventory (Agent B / M-13, re-verified)", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Authored activity-point inventory (Agent B / M-13, re-verified)", EditorStyles.boldLabel);
             foreach (ConfigInventoryFact fact in WorldAccessibilityAuditor.KnownConfigInventory())
             {
                 EditorGUILayout.LabelField(fact.PointKind + ": " + fact.AuthoredCount + " authored — " + fact.Note,
@@ -146,12 +146,12 @@ namespace LandLedgers.Editor.Diagnostics
         {
             EditorGUILayout.BeginVertical("box");
             EditorGUILayout.LabelField("Known gaps this auditor surfaces (not decides)", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField("B-03 — zero Firewood-type locations anywhere; domestic.fuel-handling leg 0 can never run.", EditorStyles.wordWrappedLabel);
-            EditorGUILayout.LabelField("B-01/B-02 — meal prep routes to literal \"stove\", chores to literal \"cleaning\" / \"porch-dropoff\"; the type-based resolver (TryFindReachableActivityLocation) is wired by Lane 9c — this window re-runs it, it does not rewrite it.", EditorStyles.wordWrappedLabel);
+            EditorGUILayout.LabelField("Historical B-03 — the shared House Natural Wood prefab now authors a distinct exterior Firewood handling point used by the eight development-town homes. Physical arrival and fuel transfer remain unverified.", EditorStyles.wordWrappedLabel);
+            EditorGUILayout.LabelField("B-01/B-02 — current callers resolve the installed per-stove id and authored Cleaning/Porch point. Verify the routes in the current Main Scene; this window inspects access and does not rewrite it.", EditorStyles.wordWrappedLabel);
             EditorGUILayout.LabelField("M-04 — domestic.animal-care has no resolver branch (returns Unsupported) yet is scheduled daily when a household owns animals.", EditorStyles.wordWrappedLabel);
             EditorGUILayout.LabelField("M-07/M-08 — the bakery and fuel dealer have no counter point; the only Counter-type point is general-store-counter.", EditorStyles.wordWrappedLabel);
             EditorGUILayout.LabelField("M-15 — the \"receiving\" exact-id lookup fails on every building; the authored front-door fallback is the universal path.", EditorStyles.wordWrappedLabel);
-            EditorGUILayout.LabelField("No run exists on this HEAD — live behaviour is unverified until Codex runs the 5-10 day 10x run.", EditorStyles.wordWrappedLabel);
+            EditorGUILayout.LabelField("No Main Scene run against this integration source has been captured; live movement and fuel handling remain unverified.", EditorStyles.wordWrappedLabel);
             EditorGUILayout.EndVertical();
         }
 

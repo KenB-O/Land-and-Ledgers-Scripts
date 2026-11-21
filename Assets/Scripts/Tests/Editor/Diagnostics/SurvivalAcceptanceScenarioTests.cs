@@ -3,8 +3,8 @@
 //
 // The scenario definition's eight stages assert exactly what Agent N
 // specified, including the S7 caveat that State == Done alone does NOT
-// prove receipt. A passing fixture run is Accepted; the baseline collapse
-// shape fails loudly at the stage that breaks.
+// prove receipt. Passing proposed bars remain provisional, and missing
+// service or conservation evidence blocks the corresponding stage.
 
 using System.Collections.Generic;
 using System.Linq;
@@ -21,6 +21,8 @@ namespace LandLedgers.EditorTests.Diagnostics
             {
                 HasLiveRun = true,
                 RunId = "test-run-15d",
+                Scenario = SurvivalAcceptanceScenario.ScenarioId,
+                StartupMode = SurvivalAcceptanceScenario.StartupMode,
                 Seed = 1886,
                 Speed = "10x",
                 TargetDays = 15,
@@ -150,18 +152,22 @@ namespace LandLedgers.EditorTests.Diagnostics
             evidence.Seed = 1887;
             SurvivalAcceptanceResult result = SurvivalAcceptanceScenario.Evaluate(evidence);
             Assert.AreEqual(SurvivalOverallVerdict.NoLiveRun, result.Overall);
-            Assert.IsTrue(result.FirstFailure.Contains("not valid on any other configuration"));
+            Assert.IsTrue(result.FirstFailure.Contains("seed=1887"));
         }
 
         // --- Passing run ------------------------------------------------------------
 
         [Test]
-        public void Evaluate_PassingRun_Accepted()
+        public void Evaluate_PassingProposedBars_IsProvisionalUntilOwnerApproval()
         {
             SurvivalAcceptanceResult result = SurvivalAcceptanceScenario.Evaluate(PassingEvidence());
-            Assert.AreEqual(SurvivalOverallVerdict.Accepted, result.Overall);
-            Assert.IsTrue(result.Accepted);
+            Assert.AreEqual(SurvivalOverallVerdict.Provisional, result.Overall);
+            Assert.IsFalse(result.Accepted);
+            Assert.IsTrue(result.Provisional);
+            Assert.IsFalse(SurvivalAcceptanceScenario.PassBarsOwnerApproved);
             Assert.AreEqual(string.Empty, result.FirstFailure);
+            StringAssert.Contains("remain owner-unapproved", result.AcceptanceNote);
+            StringAssert.Contains("completed=15/15 days", result.ConfigurationSummary);
             foreach (SurvivalStageSpec spec in SurvivalAcceptanceScenario.StageSpecs)
             {
                 Assert.AreEqual(SurvivalVerdict.Pass, result.StageVerdict(spec.StageId).Verdict, spec.StageId);
@@ -170,6 +176,73 @@ namespace LandLedgers.EditorTests.Diagnostics
             {
                 Assert.AreEqual(SurvivalVerdict.Pass, result.BarVerdict(bar.BarId).Verdict, bar.BarId);
             }
+        }
+
+        [TestCase("service")]
+        [TestCase("settlement")]
+        [TestCase("receipt")]
+        public void Evaluate_MissingEndToEndEvidence_BlocksInsteadOfPassing(string missingEvidence)
+        {
+            SurvivalRunEvidence evidence = PassingEvidence();
+            if (missingEvidence == "service") evidence.ServedViaTendCustomer = null;
+            if (missingEvidence == "settlement") evidence.SettlementReceiptsMatch = null;
+            if (missingEvidence == "receipt") evidence.LotDepositedAndNeedDecremented = null;
+
+            SurvivalAcceptanceResult result = SurvivalAcceptanceScenario.Evaluate(evidence);
+            string stageId = missingEvidence == "service" ? "S5"
+                : missingEvidence == "settlement" ? "S6" : "S7";
+            Assert.AreEqual(SurvivalVerdict.Blocked, result.StageVerdict(stageId).Verdict, stageId);
+            Assert.AreEqual(SurvivalOverallVerdict.NoLiveRun, result.Overall);
+            Assert.IsFalse(result.Accepted);
+        }
+
+        [Test]
+        public void Evaluate_Completed60Day250xRun_UsesSurvivalWindowAndPreservesActualConfig()
+        {
+            SurvivalRunEvidence evidence = PassingEvidence();
+            evidence.RunId = "test-run-60d-250x";
+            evidence.Speed = "Speed250x";
+            evidence.TargetDays = 60;
+            evidence.DaysCompleted = 60;
+            for (int day = 16; day <= 60; day++)
+            {
+                evidence.MealsEatenPerDay.Add(40);
+                evidence.MealsMissedPerDay.Add(2);
+                evidence.HouseholdLotsPerDay.Add(100 + day);
+            }
+
+            SurvivalAcceptanceResult result = SurvivalAcceptanceScenario.Evaluate(evidence);
+            Assert.AreEqual(SurvivalOverallVerdict.Provisional, result.Overall);
+            Assert.IsTrue(result.Provisional);
+            Assert.IsFalse(result.Accepted);
+            Assert.AreEqual(SurvivalVerdict.Pass, result.BarVerdict("P-1").Verdict);
+            Assert.AreEqual(SurvivalVerdict.Pass, result.BarVerdict("P-2").Verdict);
+            StringAssert.Contains("speed='Speed250x'", result.ConfigurationSummary);
+            StringAssert.Contains("completed=60/60 days", result.ConfigurationSummary);
+        }
+
+        [Test]
+        public void Evaluate_ExtendedRunWithFewerThan15CompletedDays_IsBlocked()
+        {
+            SurvivalRunEvidence evidence = PassingEvidence();
+            evidence.TargetDays = 60;
+            evidence.DaysCompleted = 14;
+
+            SurvivalAcceptanceResult result = SurvivalAcceptanceScenario.Evaluate(evidence);
+            Assert.AreEqual(SurvivalOverallVerdict.NoLiveRun, result.Overall);
+            Assert.IsFalse(result.Accepted);
+            Assert.AreEqual(SurvivalVerdict.Blocked, result.BarVerdict("P-1").Verdict);
+            StringAssert.Contains("completedDays=14", result.FirstFailure);
+        }
+
+        [Test]
+        public void Evaluate_WrongScenarioOrStartupMode_IsBlocked()
+        {
+            SurvivalRunEvidence evidence = PassingEvidence();
+            evidence.StartupMode = "Continue";
+            SurvivalAcceptanceResult result = SurvivalAcceptanceScenario.Evaluate(evidence);
+            Assert.AreEqual(SurvivalOverallVerdict.NoLiveRun, result.Overall);
+            StringAssert.Contains("startup='Continue'", result.FirstFailure);
         }
 
         // --- Failing runs fail loudly at the breaking stage ---------------------------
@@ -257,7 +330,8 @@ namespace LandLedgers.EditorTests.Diagnostics
             SurvivalAcceptanceResult result = SurvivalAcceptanceScenario.Evaluate(evidence);
             Assert.AreEqual(SurvivalVerdict.Pass, result.StageVerdict("S8").Verdict);
             Assert.IsTrue(result.StageVerdict("S8").Reason.Contains("received food was eaten"));
-            Assert.IsTrue(result.Accepted);
+            Assert.IsTrue(result.Provisional);
+            Assert.IsFalse(result.Accepted);
         }
 
         [Test]

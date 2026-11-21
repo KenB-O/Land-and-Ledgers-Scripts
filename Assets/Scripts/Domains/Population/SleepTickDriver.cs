@@ -50,8 +50,11 @@ namespace LandLedgers.Population
         /// sleeper is at the place, Unsupported when no route exists.
         /// </summary>
         public delegate DomesticActivityMovementResult SleepMovement(
-            int personId, SleepingPlace place, BuildingFootprintAuthority authority,
+            int personId, string routeIdentity, SleepingPlace place, BuildingFootprintAuthority authority,
             out string failureReason);
+
+        /// <summary>Releases only the route owned by one expired sleep reservation.</summary>
+        public delegate void SleepRouteRelease(int personId, string routeIdentity, SleepingPlace place);
 
         /// <summary>
         /// Validate the arrival path to a reserved place. Returns null
@@ -99,7 +102,8 @@ namespace LandLedgers.Population
             Func<int, BuildingFootprintAuthority> authorityForPerson,
             SleepArrivalCheck arrivalCheck,
             SleepMovement moveToPlace,
-            List<string> diag)
+            List<string> diag,
+            SleepRouteRelease releaseRoute = null)
         {
             diag = diag ?? diagnostics;
             if (registries == null) return;
@@ -116,7 +120,7 @@ namespace LandLedgers.Population
                     if (reservation == null) continue;
                     if (reservation.DayIndex < dayIndex)
                     {
-                        WakeIfDue(registry, reservation, dayIndex, minuteOfDay, diag);
+                        WakeIfDue(registry, reservation, dayIndex, minuteOfDay, diag, releaseRoute);
                     }
                     else if (reservation.DayIndex == dayIndex
                         && minuteOfDay >= reservation.SleepStartMinute)
@@ -135,7 +139,8 @@ namespace LandLedgers.Population
             SleepingPlaceReservation reservation,
             int dayIndex,
             int minuteOfDay,
-            List<string> diag)
+            List<string> diag,
+            SleepRouteRelease releaseRoute)
         {
             bool stale = dayIndex > reservation.DayIndex + 1;
             if (!stale && minuteOfDay < reservation.SleepEndMinute) return;
@@ -147,6 +152,9 @@ namespace LandLedgers.Population
             bool released = reachedPlace
                 ? registry.ReleaseSleepingPlace(reservation.PersonId, reservation.DayIndex, out restQuality01)
                 : registry.CancelSleepingPlace(reservation.PersonId, reservation.DayIndex);
+            if (!reachedPlace && releaseRoute != null)
+                releaseRoute(reservation.PersonId, RouteIdentity(registry.HouseholdId, reservation.PersonId,
+                    reservation.DayIndex), ResolvePlace(registry, reservation));
             nights.Remove(key);
             if (!released) return;
 
@@ -226,7 +234,9 @@ namespace LandLedgers.Population
             }
 
             DomesticActivityMovementResult result = moveToPlace(
-                reservation.PersonId, place, authority, out string movementFailure);
+                reservation.PersonId,
+                RouteIdentity(registry.HouseholdId, reservation.PersonId, reservation.DayIndex),
+                place, authority, out string movementFailure);
             switch (result)
             {
                 case DomesticActivityMovementResult.Arrived:
@@ -298,6 +308,9 @@ namespace LandLedgers.Population
         {
             return "H" + householdId + ":P" + personId + ":D" + dayIndex;
         }
+
+        private static string RouteIdentity(int householdId, int personId, int dayIndex) =>
+            "sleep:" + NightKey(householdId, personId, dayIndex);
 
         private void LogOnce(List<string> diag, string logKey, string line)
         {

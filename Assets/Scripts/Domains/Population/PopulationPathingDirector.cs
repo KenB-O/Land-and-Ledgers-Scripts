@@ -1678,6 +1678,33 @@ namespace LandLedgers.FirstLedger
             }
         }
 
+        /// <summary>
+        /// Cancels a domestic-activity route only when the resident's active
+        /// route is still owned by the supplied obligation and destination.
+        /// Sleep reservations use this when a night expires before arrival;
+        /// a competing work or freight route is never cancelled.
+        /// </summary>
+        public bool CancelDomesticActivityRoute(int personId, string taskId, string activityLocationId)
+        {
+            if (personId < 0 || string.IsNullOrWhiteSpace(taskId)
+                || string.IsNullOrWhiteSpace(activityLocationId)) return false;
+            foreach (ManagedPersonAgent managed in agents)
+            {
+                if (managed?.person == null || managed.person.id != personId
+                    || !string.Equals(managed.domesticActivityTaskId, taskId, StringComparison.Ordinal)
+                    || !string.Equals(managed.domesticActivityLocationId, activityLocationId, StringComparison.Ordinal))
+                    continue;
+                if (managed.mover != null && managed.mover.IsRouteActive
+                    && managed.mover.RouteGeneration == managed.domesticActivityRouteGeneration)
+                    managed.mover.CancelActiveRoute();
+                ClearDomesticActivityRoute(managed);
+                if (managed.routeMode == AgentRouteMode.TaskDirected)
+                    managed.routeMode = AgentRouteMode.None;
+                return true;
+            }
+            return false;
+        }
+
         internal static string ResolveFreightDoorRouteReason(bool arrived, string routeReason)
         {
             if (arrived) return string.Empty;

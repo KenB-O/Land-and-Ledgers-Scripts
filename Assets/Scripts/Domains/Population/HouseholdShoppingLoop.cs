@@ -161,6 +161,122 @@ namespace LandLedgers.Population
         private readonly FinancialObligationAuthority obligations;
         private readonly EntityIdRegistry entityIds;
         private readonly Func<int, EntityId> personEntityId;
+
+        /// <summary>
+        /// The ordered candidate departure times used by both actual trip
+        /// planning and non-binding household supply forecasts. A candidate
+        /// must leave room for the complete estimate before close/sleep; the
+        /// preferred production windows and 15-minute cadence are shared so
+        /// forecasts cannot drift from the trip authority's calendar rules.
+        /// </summary>
+        public static List<int> EnumerateCandidateDepartures(
+            int requestedDeparture, int estimateMinutes, bool usePreferredWindows)
+        {
+            int earliestDeparture = Math.Max(0, requestedDeparture);
+            int tripMinutes = Math.Max(1, estimateMinutes);
+            int latestDeparture = LatestFeasibleDepartureMinute(tripMinutes);
+            var departures = new List<int>();
+            if (earliestDeparture > latestDeparture) return departures;
+
+            if (!usePreferredWindows)
+            {
+                for (int departure = earliestDeparture; departure <= latestDeparture; departure += 15)
+                    departures.Add(departure);
+                return departures;
+            }
+
+            int[][] windows = { new[] { 9 * 60, 11 * 60 }, new[] { 14 * 60, 16 * 60 } };
+            foreach (int[] window in windows)
+            {
+                int first = Math.Max(earliestDeparture, window[0]);
+                int last = Math.Min(latestDeparture, window[1]);
+                for (int departure = first; departure <= last; departure += 15)
+                    departures.Add(departure);
+            }
+            return departures;
+        }
+
+        public static int LatestFeasibleDepartureMinute(int estimateMinutes) =>
+            Math.Min(17 * 60, 18 * 60 - Math.Max(1, estimateMinutes));
+
+        /// <summary>
+        /// Non-mutating seller-access forecast using the shopping loop's own
+        /// schedule, task, movement, work-budget, clerk, route and trading
+        /// authorities. This only answers whether at least one member could
+        /// make a trip; it does not reserve time, stock, cash or service.
+        /// </summary>
+        public bool HasAvailableMemberForSellerToday(
+            IReadOnlyList<int> memberIds,
+            IItemResolvingSupplier supplier,
+            int dayIndex,
+            Func<int, string> personLocationId,
+            int requestedDepartureMinute = 8 * 60,
+            int inStoreMinutes = 15)
+        {
+            if (memberIds == null || memberIds.Count == 0 || supplier == null
+                || string.IsNullOrWhiteSpace(supplier.LocationId) || journeys == null
+                || personLocationId == null)
+                return false;
+
+            foreach (int personId in memberIds)
+            {
+                PersonState person = population?.GetPerson(personId);
+                if (person == null || person.deathDayIndex >= 0
+                    || person.ageBand < AgeBand.YoungWorker16To17
+                    || (offMapJourneys != null && offMapJourneys.IsOffMapPerson(personId)))
+                    continue;
+
+                EntityId personEntity = personEntityId != null
+                    ? personEntityId(personId) : EntityId.Invalid;
+                if (personEntity.IsValid)
+                {
+                    WorkTask activeTask = tasks?.FindBlockingTaskForAssignee(personEntity);
+                    if (activeTask != null) continue;
+                }
+                if (!string.IsNullOrWhiteSpace(ShopperMovementBlockReason?.Invoke(personId))) continue;
+
+                string origin = personLocationId(personId);
+                if (string.IsNullOrWhiteSpace(origin)) continue;
+                JourneyRoute outbound = journeys.FindRoute(origin, supplier.LocationId, TravelMode.Foot);
+                JourneyRoute returning = journeys.FindRoute(supplier.LocationId, origin, TravelMode.Foot);
+                if (!outbound.Found || !returning.Found) continue;
+
+                int outboundMinutes = Math.Max(1, outbound.TotalMinutes);
+                int tripMinutes = outboundMinutes + Math.Max(1, returning.TotalMinutes)
+                    + Math.Max(1, inStoreMinutes);
+                if (budgets != null && personEntity.IsValid)
+                {
+                    if (budgets.TryGet(personEntity, out WorkTimeBudget existingBudget))
+                    {
+                        if (existingBudget.MinutesRemaining < tripMinutes) continue;
+                    }
+                    else if (tripMinutes > WorkTimeBudget.DefaultDailyWorkMinutes)
+                    {
+                        continue;
+                    }
+                }
+
+                List<int> departures = EnumerateCandidateDepartures(
+                    requestedDepartureMinute, tripMinutes, usePreferredWindows: true);
+                foreach (int departureMinute in departures)
+                {
+                    if (scheduleTracker != null
+                        && !scheduleTracker.IsFree(personId, dayIndex, departureMinute, tripMinutes))
+                        continue;
+                    if (IsPotentialServiceClerkForBusiness?.Invoke(
+                            supplier.SupplierBusinessId, personId) == true)
+                        continue;
+
+                    int arrivalMinute = departureMinute + outboundMinutes;
+                    if (string.IsNullOrWhiteSpace(
+                            supplier.CheckTradingCapability(dayIndex, arrivalMinute)))
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
         private readonly Func<int, HouseholdSpendingPolicy> spendingPolicyProvider;
         private OffMapJourneyAuthority offMapJourneys;
 
@@ -306,7 +422,7 @@ namespace LandLedgers.Population
         /// receipt removes that one object from custody and deposits it
         /// exactly once.
         /// </summary>
-        public CarriedGoodsBatch AttachRestoredBatch(CarriedGoodsBatch batch)
+        public CarriedGoodsBatch AttachRestoredBatch(CarriedGoodsBatch batch, List<string> diag = null)
         {
             if (batch == null || string.IsNullOrEmpty(batch.BatchId)) return null;
             if (batch.Custody == GoodsCustodyState.ReceivedAtHousehold) return null;
@@ -314,6 +430,20 @@ namespace LandLedgers.Population
             {
                 if (existing != null && string.Equals(existing.BatchId, batch.BatchId, StringComparison.Ordinal))
                 {
+                    if (existing.HouseholdId != batch.HouseholdId
+                        || !string.Equals(existing.ItemId, batch.ItemId, StringComparison.Ordinal)
+                        || (existing.HasNeedIdentity && batch.HasNeedIdentity
+                            && existing.NeedSequence != batch.NeedSequence))
+                    {
+                        diag?.Add($"AttachRestoredBatch: batch identity conflict for {batch.BatchId}; existing custody remains authoritative.");
+                        return null;
+                    }
+
+                    if (!existing.HasNeedIdentity && batch.HasNeedIdentity)
+                    {
+                        existing.NeedSequence = batch.NeedSequence;
+                        existing.HasNeedIdentity = true;
+                    }
                     return existing;
                 }
             }
@@ -327,26 +457,14 @@ namespace LandLedgers.Population
         /// <summary>
         /// QA-19: registers one restored trip's need against the registry,
         /// idempotently — returns the registry-owned instance for the same
-        /// (HouseholdId, NeedSequence), or null when the registry holds no
-        /// such open need. The driver calls this when it restores a trip so
-        /// the trip's need and the registry's need are ONE object, never two
-        /// copies of the same demand: a delivery receipt decrements that one
-        /// object and the registry need shrinks (and fulfills at zero).
-        /// A null return leaves the trip's need untouched; the caller decides
-        /// whether that is loud (see ShoppingTripDriver).
+        /// (HouseholdId, NeedSequence). The driver calls this when it restores
+        /// a trip so receipt and the registry mutate one authoritative object.
+        /// A missing snapshot row is restored by stable persisted identity;
+        /// conflicting identities fail closed.
         /// </summary>
         public HouseholdPurchasingNeed AttachRestoredNeed(HouseholdPurchasingNeed dtoNeed)
         {
-            if (dtoNeed == null) return null;
-            foreach (HouseholdPurchasingNeed open in needs.GetOpenNeeds(dtoNeed.HouseholdId))
-            {
-                if (open != null && open.NeedSequence == dtoNeed.NeedSequence)
-                {
-                    return open;
-                }
-            }
-
-            return null;
+            return needs?.AttachRestoredNeed(dtoNeed);
         }
 
         /// <summary>
@@ -390,10 +508,13 @@ namespace LandLedgers.Population
                 return $"ReceiveCarriedBatch: batch {batchId} was already received — refusing a second receipt.";
             }
 
-            HouseholdPurchasingNeed need = needs.GetOpenNeed(batch.HouseholdId, batch.ItemId);
-            if (need == null)
+            HouseholdPurchasingNeed need = batch.HasNeedIdentity
+                ? needs.GetNeedBySequence(batch.HouseholdId, batch.NeedSequence)
+                : null;
+            if (need == null || need.Status != PurchasingNeedStatus.Open
+                || !string.Equals(need.ItemId, batch.ItemId, StringComparison.Ordinal))
             {
-                return $"ReceiveCarriedBatch: batch {batchId} has no open need for {batch.ItemId} in H{batch.HouseholdId} — refusing to receive without the need it was bought for.";
+                return $"ReceiveCarriedBatch: batch {batchId} has no matching open need identity ({batch.NeedSequence}) for {batch.ItemId} in H{batch.HouseholdId} — refusing to receive against another obligation.";
             }
 
             var result = new ShoppingTripResult
@@ -426,6 +547,8 @@ namespace LandLedgers.Population
             {
                 BatchId = batch.BatchId ?? string.Empty,
                 HouseholdId = batch.HouseholdId,
+                NeedSequence = batch.NeedSequence,
+                HasNeedIdentity = batch.HasNeedIdentity,
                 HolderPersonId = batch.HolderPersonId,
                 ItemId = batch.ItemId ?? string.Empty,
                 Units = batch.Units,
@@ -443,6 +566,12 @@ namespace LandLedgers.Population
                 HasPerishableCondition = batch.HasPerishableCondition,
             };
         }
+
+        private static bool BatchMatchesNeed(CarriedGoodsBatch batch, HouseholdPurchasingNeed need) =>
+            batch != null && need != null && batch.HasNeedIdentity
+            && batch.HouseholdId == need.HouseholdId
+            && batch.NeedSequence == need.NeedSequence
+            && string.Equals(batch.ItemId, need.ItemId, StringComparison.Ordinal);
 
         /// <summary>Priority spoilage integration: the batch's attached condition state, or null when the batch carries none.</summary>
         private static PerishableLotState ConditionOf(CarriedGoodsBatch batch) =>
@@ -1164,6 +1293,9 @@ namespace LandLedgers.Population
             List<string> diag,
             ShoppingLoopOptions options)
         {
+            if (!BatchMatchesNeed(batch, need))
+                return $"INCONSISTENCY: batch {batch?.BatchId ?? "<null>"} does not identify need {need?.NeedSequence.ToString() ?? "<null>"}; no household goods were received.";
+
             int unitsReceived = unitsSold * Math.Max(1, householdUnitsPerStoreUnit);
             HouseholdInventory inventory = inventories.GetOrCreate(need.HouseholdId);
             int lotIndexBefore = inventory.Lots.Count;
@@ -2262,6 +2394,8 @@ namespace LandLedgers.Population
         {
             BatchId = $"carry-{dayIndex}-{nextBatchSequence++}",
             HouseholdId = need.HouseholdId,
+            NeedSequence = need.NeedSequence,
+            HasNeedIdentity = true,
             HolderPersonId = shopperId,
             ItemId = need.ItemId,
             Units = sold,
@@ -2339,10 +2473,7 @@ namespace LandLedgers.Population
             chosen = null;
             shopperReason = null;
 
-            // Production households get two flexible shopping opportunities.
-            // Do not score a person's unrelated commitment across the entire
-            // day: query availability for each actual candidate window below.
-            int latestDeparture = Math.Min(17 * 60, 18 * 60 - Math.Max(1, estimateMinutes));
+            int latestDeparture = LatestFeasibleDepartureMinute(estimateMinutes);
             if (Math.Max(0, requestedDeparture) > latestDeparture)
             {
                 shopperReason = $"No shopping window: the {Math.Max(1, estimateMinutes)}-min trip cannot fit between " +
@@ -2351,66 +2482,60 @@ namespace LandLedgers.Population
                 return false;
             }
 
-            int earliestDeparture = Math.Max(0, requestedDeparture);
-            int[][] opportunities = UsePreferredShoppingWindows
-                ? new[] { new[] { 9 * 60, 11 * 60 }, new[] { 14 * 60, 16 * 60 } }
-                : new[] { new[] { earliestDeparture, latestDeparture } };
-            bool consideredAnyDeparture = false;
-            for (int windowIndex = 0; windowIndex < opportunities.Length; windowIndex++)
+            // Production households get two flexible shopping opportunities.
+            // Do not score a person's unrelated commitment across the entire
+            // day: query availability for each actual candidate window below.
+            List<int> candidateDepartures = EnumerateCandidateDepartures(
+                requestedDeparture, estimateMinutes, UsePreferredShoppingWindows);
+            bool consideredAnyDeparture = candidateDepartures.Count > 0;
+            foreach (int departure in candidateDepartures)
             {
-                int windowStart = Math.Max(earliestDeparture, opportunities[windowIndex][0]);
-                int windowEnd = Math.Min(latestDeparture, opportunities[windowIndex][1]);
-                if (windowStart > windowEnd) continue;
-                for (int departure = windowStart; departure <= windowEnd; departure += 15)
+                var rejectedClerksAtOwnCounter = new HashSet<int>();
+                for (int attempt = 0; attempt < memberIds.Count; attempt++)
                 {
-                    consideredAnyDeparture = true;
-                    var rejectedClerksAtOwnCounter = new HashSet<int>();
-                    for (int attempt = 0; attempt < memberIds.Count; attempt++)
+                    int candidateShopper = ShopperAssignmentPolicy.ChooseShopper(
+                        population, memberIds, dayIndex, departure, estimateMinutes,
+                        scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys,
+                        OneWayMinutesToNearestSupplier(knownOffering, options),
+                        personId =>
+                        {
+                            if (rejectedClerksAtOwnCounter.Contains(personId))
+                                return "is the configured clerk for the selected supplier and cannot serve while shopping there";
+                            string movementBlock = ShopperMovementBlockReason?.Invoke(personId);
+                            if (!string.IsNullOrWhiteSpace(movementBlock)) return movementBlock;
+                            EntityId person = personEntityId != null ? personEntityId(personId) : default(EntityId);
+                            WorkTask activeTask = person.IsValid ? tasks.FindBlockingTaskForAssignee(person) : null;
+                            return activeTask == null
+                                ? null
+                                : $"already occupied by task {activeTask.TaskId} ({activeTask.Status})";
+                        });
+                    if (candidateShopper < 0)
                     {
-                        int candidateShopper = ShopperAssignmentPolicy.ChooseShopper(
-                            population, memberIds, dayIndex, departure, estimateMinutes,
-                            scheduleTracker, budgets, personEntityId, out shopperReason, offMapJourneys,
-                            OneWayMinutesToNearestSupplier(knownOffering, options),
-                            personId =>
-                            {
-                                if (rejectedClerksAtOwnCounter.Contains(personId))
-                                    return "is the configured clerk for the selected supplier and cannot serve while shopping there";
-                                string movementBlock = ShopperMovementBlockReason?.Invoke(personId);
-                                if (!string.IsNullOrWhiteSpace(movementBlock)) return movementBlock;
-                                EntityId person = personEntityId != null ? personEntityId(personId) : default(EntityId);
-                                WorkTask activeTask = person.IsValid ? tasks.FindBlockingTaskForAssignee(person) : null;
-                                return activeTask == null
-                                    ? null
-                                    : $"already occupied by task {activeTask.TaskId} ({activeTask.Status})";
-                            });
-                        if (candidateShopper < 0)
-                        {
-                            break;
-                        }
-
-                        options.DepartureMinuteOfDay = departure;
-                        string candidateHome = ResolvePersonLocation(candidateShopper, options);
-                        ShoppingCandidate candidate = EvaluateCandidates(
-                            result, need, candidateShopper, candidateHome, knownOffering, dayIndex, options, diag);
-                        if (candidate == null)
-                        {
-                            break;
-                        }
-
-                        if (IsPotentialServiceClerkForBusiness?.Invoke(
-                                candidate.Supplier.SupplierBusinessId, candidateShopper) == true)
-                        {
-                            rejectedClerksAtOwnCounter.Add(candidateShopper);
-                            shopperReason = $"P{candidateShopper} is the configured clerk at '{candidate.Supplier.SupplierName}'; another available household member or shopping window is required";
-                            continue;
-                        }
-
-                        shopperId = candidateShopper;
-                        selectedDeparture = departure;
-                        chosen = candidate;
-                        options.DepartureMinuteOfDay = requestedDeparture;
-                        return true;
+                        break;
                     }
+
+                    options.DepartureMinuteOfDay = departure;
+                    string candidateHome = ResolvePersonLocation(candidateShopper, options);
+                    ShoppingCandidate candidate = EvaluateCandidates(
+                        result, need, candidateShopper, candidateHome, knownOffering, dayIndex, options, diag);
+                    if (candidate == null)
+                    {
+                        break;
+                    }
+
+                    if (IsPotentialServiceClerkForBusiness?.Invoke(
+                            candidate.Supplier.SupplierBusinessId, candidateShopper) == true)
+                    {
+                        rejectedClerksAtOwnCounter.Add(candidateShopper);
+                        shopperReason = $"P{candidateShopper} is the configured clerk at '{candidate.Supplier.SupplierName}'; another available household member or shopping window is required";
+                        continue;
+                    }
+
+                    shopperId = candidateShopper;
+                    selectedDeparture = departure;
+                    chosen = candidate;
+                    options.DepartureMinuteOfDay = requestedDeparture;
+                    return true;
                 }
             }
 
@@ -3357,6 +3482,8 @@ namespace LandLedgers.Population
             var need = trip.Need;
             var batch = trip.Batch;
             var result = trip.Result;
+            if (need == null || (batch != null && !BatchMatchesNeed(batch, need)))
+                return $"ReceiveAtHome: trip {trip.TripId} goods do not match its purchasing-need identity; receipt refused and custody is preserved.";
             PersonState shopper = population.GetPerson(trip.ShopperPersonId);
             SetPersonLocation(trip.ShopperPersonId, trip.HomeLocationId, trip.Options);
 
@@ -3467,6 +3594,8 @@ namespace LandLedgers.Population
             }
 
             var need = trip.Need;
+            if (need == null || !BatchMatchesNeed(batch, need))
+                return $"ReceiveDelivery: trip {trip.TripId} goods do not match its purchasing-need identity; receipt refused and custody is preserved.";
             // W5: custody holds STORE units (sacks for a package item);
             // the household is credited packages × package size.
             // Priority U-3: as in ReceiveAtHome, the batch's own package

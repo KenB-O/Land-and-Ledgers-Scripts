@@ -40,10 +40,11 @@
 //   with its authority (DomesticLaborDriver) and its earliest confirmed
 //   blocker (the firewood reason verbatim). The Firewood authoring repair
 //   is Lane 9c (Codex/scene-side; Muse fallback A4) — not this lane.
-// - The furniture install outcome: FurnitureStorePurchase.cs:570 states
-//   no production furnishing.install outcome is wired. The Inspector
-//   surfaces paid orders whose install task completed with no resolver;
-//   Lane 9f (M-R10) owns the fix.
+// - The furniture install mismatch: the current production driver mints
+//   and resolves furnishing.install tasks. The Inspector still surfaces a
+//   real task/order mismatch when captured evidence says the task completed
+//   but the saved order did not advance. Its canned case is synthetic and
+//   must not be presented as evidence that the resolver is absent.
 //
 // M-05: never use skill as the explanation for a failed task when the
 // real problem is a missing physical destination — no refusal path reads
@@ -628,11 +629,12 @@ namespace LandLedgers.Diagnostics
         }
 
         /// <summary>
-        /// Inspects one furniture order / install. The proving case is the
-        /// missing install outcome resolver (FurnitureStorePurchase.cs:570):
-        /// a paid order whose furnishing.install task completed, with no
-        /// resolver linking the task outcome to the order — the order sits
-        /// open in a state no code path can close (F-C3).
+        /// Inspects one furniture order / install. A completed task whose
+        /// saved order remains unresolved is still a serious lifecycle
+        /// mismatch. The current source has a resolver; this assessment
+        /// identifies the observed state and directs investigation to the
+        /// task-completion/order-persistence boundary rather than claiming
+        /// that the resolver is missing.
         /// </summary>
         public static LifecycleAssessment InspectFurnitureOrder(ObligationLifecycleSnapshot snapshot)
         {
@@ -653,18 +655,20 @@ namespace LandLedgers.Diagnostics
             {
                 result.Disposition = LifecycleDisposition.TerminalButUnrecovered;
                 result.Severity = IncidentSeverity.Warning;
-                result.ResponsibleAuthority = "FurnitureStorePurchase / FurnitureInstallBinding (furniture order authority)";
-                result.AuthoritySourcePath = "Assets/Scripts/Domains/Economy/GenericBusiness/FurnitureStorePurchase.cs";
-                result.AuthoritySourceLine = 570;
-                result.RepairOwner = "Lane 9f (M-R10 — build the furnishing.install outcome resolver)";
-                result.EarliestBlocker = "FurnitureStorePurchase.cs:570: 'No production furnishing.install task outcome is wired; "
-                    + "furniture remains in household custody pending installation integration.'";
+                result.ResponsibleAuthority = "FurnishingInstallTaskDriver / Pass 9 furniture-order persistence";
+                result.AuthoritySourcePath = "Assets/Scripts/Domains/Economy/GenericBusiness/FurnishingInstallTaskDriver.cs";
+                result.AuthoritySourceLine = 366;
+                result.RepairOwner = "Trace install-task completion, order-line advancement, and Save/Continue restoration";
+                result.EarliestBlocker = "Captured evidence has a completed furnishing.install task but an unresolved paid order; "
+                    + "check resolver execution and persisted order state.";
                 result.EarliestBlockerSeconds = snapshot.LastProgressSimSeconds;
                 result.Explanation = "Furniture order " + snapshot.ObligationId + " is paid and its furnishing.install task"
                     + (!string.IsNullOrWhiteSpace(snapshot.RelatedTaskId) ? " (" + snapshot.RelatedTaskId + ")" : "")
-                    + " completed, but no outcome resolver links the completed task to the order — the order sits open in a state "
-                    + "no code path can close. The goods remain in household custody; the order is neither installed nor failed.";
-                result.SourceNote = "C R-11 CONFIRMED missing at HEAD; M-17: definitions registered, zero production minters, no outcome resolver.";
+                    + " completed, but the saved order remains unresolved. This is a task/order lifecycle mismatch; the current "
+                    + "source has an outcome resolver, so trace whether it ran or whether restoration lost its update. The goods "
+                    + "remain in household custody; the order is neither installed nor failed.";
+                result.SourceNote = "Synthetic failure-shaped snapshot retained for regression coverage. Current source includes "
+                    + "FurnishingInstallTaskDriver task minting and completion resolution; no live mismatch has been captured on this HEAD.";
                 return result;
             }
 
@@ -952,8 +956,9 @@ namespace LandLedgers.Diagnostics
         }
 
         /// <summary>
-        /// Proving case 4 (C R-11 / M-17): a paid furniture order whose
-        /// furnishing.install task completed with no outcome resolver.
+        /// Synthetic proving case 4: a paid furniture order whose completed
+        /// furnishing.install task has not advanced the order. This tests
+        /// mismatch classification, not current-source resolver absence.
         /// </summary>
         public static ObligationLifecycleSnapshot KnownFurnitureInstallStrandSnapshot()
         {
@@ -977,9 +982,8 @@ namespace LandLedgers.Diagnostics
         public static LifecycleAssessment InspectKnownFurnitureInstallStrand()
         {
             LifecycleAssessment assessment = InspectFurnitureOrder(KnownFurnitureInstallStrandSnapshot());
-            assessment.SourceNote = "Proving case 4 (C R-11 CONFIRMED missing): FurnitureStorePurchase.cs:570 states no "
-                + "production furnishing.install task outcome is wired. No live run exists on this HEAD; this is the "
-                + "source-level defect shape.";
+            assessment.SourceNote = "Synthetic failure-shaped snapshot only: the current source contains the "
+                + "FurnishingInstallTaskDriver outcome resolver. No live task/order mismatch has been captured on this HEAD.";
             return assessment;
         }
 

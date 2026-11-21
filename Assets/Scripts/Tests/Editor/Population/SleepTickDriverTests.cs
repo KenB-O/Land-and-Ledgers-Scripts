@@ -198,6 +198,7 @@ namespace LandLedgers.Editor.Population
         private sealed class FakeMovement
         {
             public readonly List<string> Calls = new List<string>();
+            public readonly List<string> RouteIdentities = new List<string>();
             public readonly List<SleepingPlaceKind> Kinds = new List<SleepingPlaceKind>();
             private readonly Queue<DomesticActivityMovementResult> answers = new Queue<DomesticActivityMovementResult>();
 
@@ -206,10 +207,11 @@ namespace LandLedgers.Editor.Population
                 foreach (DomesticActivityMovementResult result in results) answers.Enqueue(result);
             }
 
-            public DomesticActivityMovementResult Move(int personId, SleepingPlace place,
+            public DomesticActivityMovementResult Move(int personId, string routeIdentity, SleepingPlace place,
                 BuildingFootprintAuthority authority, out string failureReason)
             {
                 Calls.Add("P" + personId + ":" + place.PlaceId);
+                RouteIdentities.Add(routeIdentity);
                 Kinds.Add(place.Kind);
                 failureReason = answers.Count > 0
                     && answers.Peek() == DomesticActivityMovementResult.Unsupported
@@ -491,6 +493,54 @@ namespace LandLedgers.Editor.Population
                 Assert.AreEqual(0, fixture.Registry.LiveReservations.Count);
                 Assert.AreEqual(1.0f, fixture.Registry.LastRestQuality01(1));
                 Assert.AreEqual(Day, fixture.Registry.LastBedNightDayIndex(1));
+            }
+            finally
+            {
+                DestroyFixture(fixture);
+            }
+        }
+
+        [Test]
+        public void Driver_UnreachedNightHasStableRouteIdentityAndReleasesOnlyThatRouteAtWake()
+        {
+            BedFixture fixture = null;
+            try
+            {
+                fixture = MakeBedFixture();
+                Reserve(fixture, 1, Day);
+                var driver = new SleepTickDriver();
+                var movement = new FakeMovement();
+                movement.Answer(DomesticActivityMovementResult.Traveling,
+                    DomesticActivityMovementResult.Traveling);
+                var arrival = new FakeArrivalCheck();
+                var released = new List<string>();
+                var diag = new List<string>();
+                var registries = new List<SleepingPlaceRegistry> { fixture.Registry };
+
+                driver.AdvanceTick(Day, 1320, registries, _ => fixture.Authority,
+                    arrival.Check, movement.Move, diag,
+                    (personId, routeIdentity, place) => released.Add(
+                        "P" + personId + ":" + routeIdentity + ":" + place.PlaceId));
+                driver.AdvanceTick(Day, 1400, registries, _ => fixture.Authority,
+                    arrival.Check, movement.Move, diag);
+
+                Assert.AreEqual(2, movement.Calls.Count);
+                Assert.AreEqual("sleep:H" + HouseholdId + ":P1:D" + Day,
+                    movement.RouteIdentities[0]);
+                Assert.AreEqual(movement.RouteIdentities[0], movement.RouteIdentities[1],
+                    "Repeated requests for one reserved night must retain route ownership.");
+
+                driver.AdvanceTick(Day + 1, 420, registries, _ => fixture.Authority,
+                    arrival.Check, movement.Move, diag,
+                    (personId, routeIdentity, place) => released.Add(
+                        "P" + personId + ":" + routeIdentity + ":" + place.PlaceId));
+
+                Assert.AreEqual(1, released.Count,
+                    "A missed arrival must release the movement owned by this expired sleep reservation.");
+                Assert.AreEqual("P1:" + movement.RouteIdentities[0] + ":bed:bed-1", released[0]);
+                Assert.AreEqual(0, fixture.Registry.LiveReservations.Count);
+                Assert.AreEqual(-1, fixture.Registry.LastBedNightDayIndex(1),
+                    "No rest credit is given when physical arrival never occurred.");
             }
             finally
             {

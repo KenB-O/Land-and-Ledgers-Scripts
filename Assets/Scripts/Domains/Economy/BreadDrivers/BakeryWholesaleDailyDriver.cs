@@ -51,6 +51,14 @@ namespace LandLedgers.Economy.BreadDrivers
         /// available to this daily production review.
         /// </summary>
         public int OpenHouseholdBreadNeedUnits;
+        /// <summary>
+        /// Whether this daily driver may plan conventional (non-task-backed)
+        /// household retail batches. The live scene disables this and leaves
+        /// household retail production to the persistent staged TaskAuthority
+        /// pipeline; wholesale obligations continue through this driver.
+        /// Defaults true for existing callers and legacy integrations.
+        /// </summary>
+        public bool AllowConventionalRetailProduction = true;
         public MillbrookFlourQuote MillbrookQuote;
         public OffMapAidBusinessRuntime MillbrookSupplier;
         public int ImportFlourPricePerLbCents;
@@ -413,8 +421,9 @@ namespace LandLedgers.Economy.BreadDrivers
             // observed. A wholesale account is not a prerequisite for the
             // bakery to operate its counter.
             List<string> planned = bakery.PlanWholesaleBatches(dayIndex, diag);
-            List<string> retailPlanned = bakery.PlanRetailBatches(
-                dayIndex, inputs.OpenHouseholdBreadNeedUnits, diag);
+            List<string> retailPlanned = inputs.AllowConventionalRetailProduction
+                ? bakery.PlanRetailBatches(dayIndex, inputs.OpenHouseholdBreadNeedUnits, diag)
+                : new List<string>();
             if (planned == null) planned = new List<string>();
             if (retailPlanned != null) planned.AddRange(retailPlanned);
             result.BatchesPlanned = planned != null ? planned.Count : 0;

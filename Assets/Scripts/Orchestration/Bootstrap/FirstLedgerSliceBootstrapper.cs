@@ -693,9 +693,11 @@ namespace LandLedgers.FirstLedger
                 if (startupIntent == WorldStartupIntent.NewGame)
                     SeedDevelopmentBusinessOpeningEquipment();
                 if (startupIntent == WorldStartupIntent.NewGame)
-                    SeedBakeryWholesaleAccounts();
-                if (startupIntent == WorldStartupIntent.NewGame)
                     ResolveBakeryInitialChannelPolicy();
+                if (startupIntent == WorldStartupIntent.NewGame)
+                    ResolveBakeryInitialSalesChannels();
+                if (startupIntent == WorldStartupIntent.NewGame)
+                    SeedBakeryWholesaleAccounts();
                 if (startupIntent == WorldStartupIntent.NewGame && simulationDrivers != null && developmentNpcStore?.RuntimeState != null)
                     ConfigurePlaytestHorseFeed(developmentNpcStore, simulationDrivers);
             }
@@ -2115,6 +2117,26 @@ namespace LandLedgers.FirstLedger
                 timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
                 diag);
             foreach (string line in diag) Debug.Log($"[WorldStartup] {line}", this);
+        }
+
+        /// <summary>Resolves the scenario-authored enabled retail/wholesale channels before opening agreements are booked.</summary>
+        private void ResolveBakeryInitialSalesChannels()
+        {
+            DevelopmentTownConfiguration configuration = ResolveDevelopmentTownConfiguration();
+            if (!enableDevelopmentTownConfiguration || configuration == null) return;
+            Series2Pass9SaveState pass9 = saveLoadManager?.Series2Pass9State;
+            if (pass9?.BakeryRuntime == null)
+            {
+                Debug.LogError("[WorldStartup] Initial bakery sales channels refused: no live bakery runtime is registered on the Pass 9 state.", this);
+                return;
+            }
+            var diag = new List<string>();
+            string refusal = pass9.BakeryRuntime.ResolveInitialSalesChannels(
+                configuration.OpeningBakerySalesChannels,
+                timeManager != null ? timeManager.CurrentAbsoluteDayIndex : 0,
+                diag);
+            if (!string.IsNullOrWhiteSpace(refusal)) Debug.LogError("[WorldStartup] " + refusal, this);
+            foreach (string line in diag) Debug.Log("[WorldStartup] " + line, this);
         }
 
         private void ConfigureOpeningBusinessRoster()

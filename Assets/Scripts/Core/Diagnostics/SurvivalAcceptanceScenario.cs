@@ -3,7 +3,7 @@
 //
 // Agent N's household survival end-to-end acceptance test as a runnable
 // scenario definition with exact assertions — not a stub. The definition
-// carries the fixed configuration (10x, 15 days, seed 1886), the eight
+// carries the default short-run configuration (10x, 15 days, seed 1886), the eight
 // stages with their assertions and evidence sources, and the pass bars
 // P-1–P-8 (all PROPOSED until the manager confirms them, N-14).
 //
@@ -122,7 +122,7 @@ namespace LandLedgers.Diagnostics
         /// <summary>Deterministic seed (1886 for every scenario in this lab).</summary>
         public int Seed { get; }
 
-        /// <summary>Speed preset ("10x" for acceptance scenarios; 250x only as a separate regression comparison).</summary>
+        /// <summary>Recommended short physical-observation speed preset.</summary>
         public string Speed { get; }
 
         /// <summary>Target days for the run.</summary>
@@ -159,11 +159,17 @@ namespace LandLedgers.Diagnostics
         /// <summary>Seed the run used (1886 for the acceptance test).</summary>
         public int Seed = -1;
 
-        /// <summary>Speed preset the run used ("10x" for the acceptance test).</summary>
+        /// <summary>Exact speed name recorded for the evaluated run; retained rather than replaced with a default.</summary>
         public string Speed = string.Empty;
 
         /// <summary>Target days (15 for the acceptance test).</summary>
         public int TargetDays = -1;
+
+        /// <summary>Scenario ID recorded in metadata.json.</summary>
+        public string Scenario = string.Empty;
+
+        /// <summary>Startup mode recorded in metadata.json.</summary>
+        public string StartupMode = string.Empty;
 
         /// <summary>Days actually completed (-1 = NOT_CAPTURED).</summary>
         public int DaysCompleted = -1;
@@ -269,7 +275,7 @@ namespace LandLedgers.Diagnostics
     /// <summary>Overall verdict of the survival acceptance test.</summary>
     public enum SurvivalOverallVerdict
     {
-        /// <summary>All eight stages and all eight bars pass. The only accepting verdict.</summary>
+        /// <summary>All stages and bars pass, and the proposed bars have owner approval.</summary>
         Accepted = 0,
 
         /// <summary>At least one stage or bar fails. The report names the first failing stage or bar.</summary>
@@ -277,6 +283,9 @@ namespace LandLedgers.Diagnostics
 
         /// <summary>Cannot be evaluated: no live run, or a named prior repair is missing.</summary>
         NoLiveRun = 2,
+
+        /// <summary>Evidence meets all proposed bars, but their acceptance criteria are not owner-approved.</summary>
+        Provisional = 3,
     }
 
     /// <summary>The evaluated survival acceptance test: per-stage and per-bar verdicts and the overall verdict.</summary>
@@ -286,13 +295,17 @@ namespace LandLedgers.Diagnostics
             SurvivalOverallVerdict overall, string runId,
             Dictionary<string, SurvivalStageVerdict> stageVerdicts,
             Dictionary<string, SurvivalStageVerdict> barVerdicts,
-            string firstFailure)
+            string firstFailure,
+            string configurationSummary = "",
+            string acceptanceNote = "")
         {
             Overall = overall;
             RunId = runId ?? string.Empty;
             StageVerdicts = stageVerdicts ?? new Dictionary<string, SurvivalStageVerdict>();
             BarVerdicts = barVerdicts ?? new Dictionary<string, SurvivalStageVerdict>();
             FirstFailure = firstFailure ?? string.Empty;
+            ConfigurationSummary = configurationSummary ?? string.Empty;
+            AcceptanceNote = acceptanceNote ?? string.Empty;
         }
 
         /// <summary>Overall verdict. Accepted only when every stage and every bar passes.</summary>
@@ -310,10 +323,22 @@ namespace LandLedgers.Diagnostics
         /// <summary>First failing stage or bar, in words; empty when Accepted.</summary>
         public string FirstFailure { get; }
 
+        /// <summary>Run configuration as recorded in its artifacts; never replaced with scenario defaults.</summary>
+        public string ConfigurationSummary { get; }
+
+        /// <summary>Qualification attached to a result that cannot be called accepted.</summary>
+        public string AcceptanceNote { get; }
+
         /// <summary>True only when the test is Accepted.</summary>
         public bool Accepted
         {
             get { return Overall == SurvivalOverallVerdict.Accepted; }
+        }
+
+        /// <summary>True when all scored checks pass but owner approval of proposed bars is pending.</summary>
+        public bool Provisional
+        {
+            get { return Overall == SurvivalOverallVerdict.Provisional; }
         }
 
         /// <summary>Verdict for one stage id; Blocked when the id is unknown.</summary>
@@ -341,7 +366,7 @@ namespace LandLedgers.Diagnostics
 
     /// <summary>
     /// Lane 8 (Tool 10, Agent N §2) — the Scenario Lab's survival acceptance
-    /// scenario: fixed configuration, eight stages with exact assertions,
+    /// scenario: default short-run configuration, eight stages with exact assertions,
     /// pass bars P-1–P-8, and the evaluator that asserts a run's evidence
     /// against them. The lab is a real, wired definition: the evaluator runs
     /// against RunArtifactReader output, and the Editor window drives it
@@ -350,7 +375,7 @@ namespace LandLedgers.Diagnostics
     /// </summary>
     public static class SurvivalAcceptanceScenario
     {
-        // ---- Fixed configuration (Agent N §2.2 — the test is not valid on any other configuration) ----
+        // ---- Default short-run configuration; longer completed runs may supply the same survival window. ----
 
         /// <summary>Deterministic TownGenerationSettings seed.</summary>
         public const int Seed = 1886;
@@ -358,7 +383,7 @@ namespace LandLedgers.Diagnostics
         /// <summary>Run length in days: covers exhaustion (days 8–10) plus 5 post-exhaustion days.</summary>
         public const int TargetDays = 15;
 
-        /// <summary>Speed preset: 10x. 250x tick-granularity (A F5) is an unmeasured confound — do not run acceptance assertions at 250x until the 10x test passes.</summary>
+        /// <summary>Recommended short physical-observation preset; longer runs retain and report their actual speed.</summary>
         public const string Speed = "10x";
 
         /// <summary>Startup mode: New Game, real bootstrap.</summary>
@@ -366,6 +391,13 @@ namespace LandLedgers.Diagnostics
 
         /// <summary>Scenario id.</summary>
         public const string ScenarioId = "millbrook-development-town";
+
+        /// <summary>
+        /// These survival bars are still labeled PROPOSED in the approved
+        /// handoff. Keep passing run evidence provisional until an owner
+        /// decision is recorded and this constant is deliberately updated.
+        /// </summary>
+        public const bool PassBarsOwnerApproved = false;
 
         /// <summary>Scene.</summary>
         public const string ScenePath = "Assets/Main Scene.unity";
@@ -539,12 +571,25 @@ namespace LandLedgers.Diagnostics
                     "No live run: the acceptance test cannot be evaluated.");
             }
 
-            // Wrong configuration: the test is not valid on any other configuration.
-            if (evidence.Seed != Seed || evidence.Speed != Speed || evidence.TargetDays != TargetDays)
+            // The default catalog entry describes the recommended short
+            // observation run. A longer campaign can also supply the
+            // acceptance window, provided its identity and New Game setup
+            // match and at least the required 15 days actually completed.
+            // Speed and full duration remain evidence; they are not replaced
+            // with the catalog defaults or grounds for discarding a 250x run.
+            if (evidence.Seed != Seed
+                || !string.Equals(evidence.Scenario, ScenarioId, StringComparison.Ordinal)
+                || !string.Equals(evidence.StartupMode, StartupMode, StringComparison.Ordinal)
+                || !IsSupportedSpeed(evidence.Speed)
+                || evidence.TargetDays < TargetDays
+                || evidence.DaysCompleted < TargetDays)
             {
-                string reason = "Run configuration does not match the acceptance configuration (seed 1886, 10x, 15 days): seed="
-                    + evidence.Seed + ", speed='" + evidence.Speed + "', targetDays=" + evidence.TargetDays
-                    + ". The test is not valid on any other configuration.";
+                string reason = "Run cannot supply the survival window (requires scenario '" + ScenarioId
+                    + "', startup '" + StartupMode + "', seed " + Seed + ", a supported recorded speed, and at least "
+                    + TargetDays + " completed days): scenario='" + (evidence.Scenario ?? string.Empty)
+                    + "', startup='" + (evidence.StartupMode ?? string.Empty) + "', seed=" + evidence.Seed
+                    + ", speed='" + (evidence.Speed ?? string.Empty) + "', targetDays=" + evidence.TargetDays
+                    + ", completedDays=" + evidence.DaysCompleted + ".";
                 foreach (SurvivalStageSpec spec in StageSpecs)
                 {
                     stages[spec.StageId] = new SurvivalStageVerdict(SurvivalVerdict.Blocked, reason);
@@ -553,7 +598,8 @@ namespace LandLedgers.Diagnostics
                 {
                     bars[bar.BarId] = new SurvivalStageVerdict(SurvivalVerdict.Blocked, reason);
                 }
-                return new SurvivalAcceptanceResult(SurvivalOverallVerdict.NoLiveRun, evidence.RunId, stages, bars, reason);
+                return new SurvivalAcceptanceResult(SurvivalOverallVerdict.NoLiveRun, evidence.RunId, stages, bars,
+                    reason, ConfigurationSummary(evidence));
             }
 
             stages["S1"] = EvaluateStage1(evidence);
@@ -624,10 +670,37 @@ namespace LandLedgers.Diagnostics
             }
             else
             {
-                overall = SurvivalOverallVerdict.Accepted;
+                overall = PassBarsOwnerApproved
+                    ? SurvivalOverallVerdict.Accepted
+                    : SurvivalOverallVerdict.Provisional;
             }
 
-            return new SurvivalAcceptanceResult(overall, evidence.RunId, stages, bars, firstFailure);
+            string acceptanceNote = overall == SurvivalOverallVerdict.Provisional
+                ? "All measured stages and proposed bars pass, but P-1 through P-8 remain owner-unapproved; this is provisional evidence, not an acceptance claim."
+                : string.Empty;
+            return new SurvivalAcceptanceResult(overall, evidence.RunId, stages, bars,
+                firstFailure, ConfigurationSummary(evidence), acceptanceNote);
+        }
+
+        private static bool IsSupportedSpeed(string speed)
+        {
+            if (string.IsNullOrWhiteSpace(speed)) return false;
+            string value = speed.Trim();
+            if (value.StartsWith("Speed", StringComparison.Ordinal)) value = value.Substring("Speed".Length);
+            return value == "1x" || value == "2x" || value == "4x" || value == "5x"
+                || value == "6x" || value == "10x" || value == "25x" || value == "50x"
+                || value == "100x" || value == "250x" || value == "500x"
+                || value == "RealTime" || value == "Observe";
+        }
+
+        private static string ConfigurationSummary(SurvivalRunEvidence evidence)
+        {
+            if (evidence == null) return string.Empty;
+            return "scenario='" + (evidence.Scenario ?? string.Empty)
+                + "', startup='" + (evidence.StartupMode ?? string.Empty)
+                + "', seed=" + evidence.Seed
+                + ", speed='" + (evidence.Speed ?? string.Empty)
+                + "', completed=" + evidence.DaysCompleted + "/" + evidence.TargetDays + " days";
         }
 
         private static SurvivalStageVerdict EvaluateStage1(SurvivalRunEvidence evidence)
@@ -695,7 +768,11 @@ namespace LandLedgers.Diagnostics
             {
                 return new SurvivalStageVerdict(SurvivalVerdict.Fail, evidence.CounterServiceExpiries + " 'counter service expired' warning(s) (baseline: 151).");
             }
-            if (evidence.ServedViaTendCustomer.HasValue && !evidence.ServedViaTendCustomer.Value)
+            if (!evidence.ServedViaTendCustomer.HasValue)
+            {
+                return new SurvivalStageVerdict(SurvivalVerdict.Blocked, "Counter-service completion evidence NOT_CAPTURED; absence of expiry warnings does not prove a TendCustomer task completed.");
+            }
+            if (!evidence.ServedViaTendCustomer.Value)
             {
                 return new SurvivalStageVerdict(SurvivalVerdict.Fail, "At least one trip was served via the compatibility direct-settlement path instead of a completed TendCustomer.");
             }
@@ -716,7 +793,11 @@ namespace LandLedgers.Diagnostics
             {
                 return new SurvivalStageVerdict(SurvivalVerdict.Fail, evidence.DoubleSettlements + " receipt id(s) settled twice.");
             }
-            if (evidence.SettlementReceiptsMatch.HasValue && !evidence.SettlementReceiptsMatch.Value)
+            if (!evidence.SettlementReceiptsMatch.HasValue)
+            {
+                return new SurvivalStageVerdict(SurvivalVerdict.Blocked, "Settlement amount and trip-to-receipt identity evidence NOT_CAPTURED.");
+            }
+            if (!evidence.SettlementReceiptsMatch.Value)
             {
                 return new SurvivalStageVerdict(SurvivalVerdict.Fail, "At least one settled purchase has UnitsSettled == 0 or a Batch.ReceiptId that does not match the settle line.");
             }
@@ -746,7 +827,11 @@ namespace LandLedgers.Diagnostics
             {
                 return new SurvivalStageVerdict(SurvivalVerdict.Fail, "Receive lines (" + evidence.ReceiveLineCount + ") do not match settle lines (" + evidence.SettleLineCount + "); every settled purchase needs exactly one receive line with the same receipt id.");
             }
-            if (evidence.LotDepositedAndNeedDecremented.HasValue && !evidence.LotDepositedAndNeedDecremented.Value)
+            if (!evidence.LotDepositedAndNeedDecremented.HasValue)
+            {
+                return new SurvivalStageVerdict(SurvivalVerdict.Blocked, "Household lot identity and need-decrement evidence NOT_CAPTURED.");
+            }
+            if (!evidence.LotDepositedAndNeedDecremented.Value)
             {
                 return new SurvivalStageVerdict(SurvivalVerdict.Fail, "At least one received lot was not deposited with the purchased item id, units and seller source label, or the need was not decremented by exactly UnitsAcquired.");
             }
@@ -906,7 +991,7 @@ namespace LandLedgers.Diagnostics
             var lines = new List<string>();
             lines.Add("# Scenario Lab — household survival acceptance test (Agent N §2)");
             lines.Add(string.Empty);
-            lines.Add("Configuration (fixed — the test is not valid on any other configuration): seed 1886, 15 days, 10x, New Game, "
+            lines.Add("Default short observation configuration: seed 1886, 15 days, 10x, New Game; longer artifacts for this scenario and seed can be evaluated using the first 15 completed days, with actual speed and duration preserved. "
                 + "scene '" + ScenePath + "', scenario '" + ScenarioId + "', 14 residents / 8 households / 7 businesses, "
                 + "day length " + DayLengthSeconds + " game seconds, Save/Continue midpoint at end of day " + SaveDayIndex + ".");
             lines.Add(string.Empty);

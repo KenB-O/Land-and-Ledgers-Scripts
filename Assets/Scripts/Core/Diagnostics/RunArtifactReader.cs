@@ -427,6 +427,8 @@ namespace LandLedgers.Diagnostics
                 evidence.Speed = identity.Speed;
                 evidence.TargetDays = identity.TargetDays;
                 evidence.DaysCompleted = identity.CompletedDays;
+                evidence.Scenario = identity.Scenario;
+                evidence.StartupMode = identity.StartupMode;
             }
 
             if (dailyRows != null)

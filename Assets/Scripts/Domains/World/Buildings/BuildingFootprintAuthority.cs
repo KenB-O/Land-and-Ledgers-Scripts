@@ -29,7 +29,9 @@ namespace LandLedgers.World
         Loading = 12,
         HitchCandidate = 13,
         /// <summary>B4 (Agent B, expanded campaign 2026-11-16): dining locations — the "dining" approach point and one "dining-chair-N" location per chair (plan §9.2 instruction 5). Append-only: existing values are untouched.</summary>
-        Dining = 14
+        Dining = 14,
+        /// <summary>Append-only: a temporary, geometry-derived target for task-backed furniture installation.</summary>
+        FurnishingInstall = 15
     }
 
     [System.Serializable]

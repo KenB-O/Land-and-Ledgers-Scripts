@@ -4,7 +4,7 @@
 // the Editor window passes the real files from disk. Known findings are
 // reproduced from the current tree's source-reviewed evidence values (no
 // run exists on this HEAD): the 24-loaf wholesale removal, the SF-7
-// byproduct settlement, the Firewood gap, the bakery fuel-death config.
+// byproduct settlement, shared-home Firewood authoring, bakery fuel-death config.
 
 using System.Collections.Generic;
 using System.Linq;
@@ -66,6 +66,7 @@ namespace LandLedgers.EditorTests.Diagnostics
                     "  - key: general-store\n"
                     + "    activityType: 3\n"
                     + BakeryConfig,
+                SharedHomePrefabText = "  activityLocations:\n  - id: stove\n    type: 1\n",
                 WholesaleAccountsText = WholesaleAccountsRemoved,
                 ByproductSettlementText = SettlePays,
                 SawmillTransferText = SawmillTransferFixed,
@@ -133,6 +134,19 @@ namespace LandLedgers.EditorTests.Diagnostics
             Assert.AreEqual(AtoZFindingStatus.Unresolved, finding.Status);
         }
 
+        [Test]
+        public void FurnitureProductionPersistence_RecordsCurrentSavePathButKeepsLiveCheckOpen()
+        {
+            AtoZCheckDefinition check = AtoZAuditRunner.BuildCatalog().First(item => item.Id == "F-S4-FURNITURE-CONTINUE");
+            AtoZFinding finding = AtoZAuditRunner.RecordedFinding(check);
+
+            Assert.AreEqual(AtoZFindingStatus.ImplementedUnverified, finding.Status);
+            Assert.IsTrue(finding.LiveRunStillOwed);
+            StringAssert.Contains("GenericConfiguration.ActiveProcesses", finding.Detail);
+            StringAssert.Contains("fresh-scene Main Scene Continue", finding.Detail);
+            StringAssert.Contains("BusinessInstanceState.CaptureSaveDto", finding.Evidence);
+        }
+
         // --- Byproduct settlement (W SF-7) ------------------------------------
 
         [Test]
@@ -163,17 +177,17 @@ namespace LandLedgers.EditorTests.Diagnostics
             AtoZFinding finding = Find(AtoZAuditRunner.Evaluate(FullEvidence()), "B-FIREWOOD");
             Assert.AreEqual(AtoZFindingStatus.Unresolved, finding.Status);
             Assert.AreEqual(RefusalCauseClass.DestinationMissing, finding.Definition.CauseClass);
-            Assert.IsTrue(finding.Evidence.Contains("0x 'activityType: 10'"));
+            Assert.IsTrue(finding.Evidence.Contains("no type: 10 entry under activityLocations"));
         }
 
         [Test]
         public void Firewood_ImplementedUnverifiedWhenAuthored()
         {
             var evidence = FullEvidence();
-            evidence.ConfigAssetText += "        activityType: 10\n";
+            evidence.SharedHomePrefabText += "  - id: firewood-handling\n    type: 10\n";
             AtoZFinding finding = Find(AtoZAuditRunner.Evaluate(evidence), "B-FIREWOOD");
             Assert.AreEqual(AtoZFindingStatus.ImplementedUnverified, finding.Status);
-            Assert.AreEqual(1, AtoZAuditRunner.CountActivityType(evidence.ConfigAssetText, 10));
+            Assert.AreEqual(1, AtoZAuditRunner.CountPrefabActivityLocationType(evidence.SharedHomePrefabText, 10));
         }
 
         // --- Bakery fuel (E-14) ------------------------------------------------
@@ -256,7 +270,7 @@ namespace LandLedgers.EditorTests.Diagnostics
                 if (finding.Definition.Kind == AtoZCheckKind.Run)
                 {
                     Assert.AreEqual(AtoZFindingStatus.Blocked, finding.Status, finding.Definition.Id);
-                    Assert.IsTrue(finding.Detail.Contains("No run exists on this HEAD"));
+                    Assert.IsTrue(finding.Detail.Contains("no run evidence was supplied"));
                 }
             }
             Assert.AreEqual(10, report.CountWithStatus(AtoZFindingStatus.Blocked));
@@ -298,7 +312,7 @@ namespace LandLedgers.EditorTests.Diagnostics
             Assert.IsTrue(markdown.Contains("A-06-WHOLESALE-CONFIG"));
             Assert.IsTrue(markdown.Contains("IMPLEMENTED UNVERIFIED"));
             Assert.IsTrue(markdown.Contains("UNRESOLVED"));
-            Assert.IsTrue(markdown.Contains("No run exists on this HEAD"));
+            Assert.IsTrue(markdown.Contains("Run-dependent checks remain BLOCKED"));
         }
 
         // --- Run-check evaluation ------------------------------------------------
@@ -313,6 +327,28 @@ namespace LandLedgers.EditorTests.Diagnostics
             {
                 Assert.AreEqual(AtoZFindingStatus.Blocked, finding.Status, finding.Definition.Id);
             }
+        }
+
+        [Test]
+        public void EvaluateRunChecks_WithRunId_ReportsMissingEvidenceInsteadOfClaimingNoRun()
+        {
+            SurvivalAcceptanceResult survival = SurvivalAcceptanceScenario.Evaluate(
+                new SurvivalRunEvidence { RunId = "run-20261121-01" });
+            List<AtoZFinding> findings = AtoZAuditRunner.EvaluateRunChecks(survival);
+            AtoZFinding reconciliation = findings.Find(f => f.Definition.Id == "N-ECONOMIC-RECONCILIATION");
+
+            Assert.IsNotNull(reconciliation);
+            Assert.AreEqual(AtoZFindingStatus.Blocked, reconciliation.Status);
+            Assert.IsTrue(reconciliation.Detail.Contains("run-20261121-01"));
+            Assert.IsTrue(reconciliation.Detail.Contains("transaction-event stream"));
+            Assert.IsFalse(reconciliation.Detail.Contains("No run exists on this HEAD"));
+            Assert.AreEqual("run-20261121-01", reconciliation.Evidence);
+
+            AtoZFinding saveContinue = findings.Find(f => f.Definition.Id == "N-SAVE-CONTINUE");
+            Assert.IsNotNull(saveContinue);
+            Assert.AreEqual(AtoZFindingStatus.Blocked, saveContinue.Status);
+            Assert.IsTrue(saveContinue.Detail.Contains("Continue midpoint"));
+            Assert.IsTrue(saveContinue.Detail.Contains("run-20261121-01"));
         }
     }
 }

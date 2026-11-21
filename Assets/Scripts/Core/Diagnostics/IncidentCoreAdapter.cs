@@ -10,6 +10,31 @@ using System.Collections.Generic;
 namespace LandLedgers.Diagnostics
 {
     /// <summary>
+    /// Per-day duplicate gate for refusal log lines. It retains only the keys
+    /// seen on the current simulated day, so dynamic task/shipment identities
+    /// cannot accumulate for the lifetime of a long-running session.
+    /// </summary>
+    public sealed class DayKeyedRefusalLogGate
+    {
+        private readonly HashSet<string> keysSeenToday = new HashSet<string>(StringComparer.Ordinal);
+        private int currentDay = -1;
+
+        public int RetainedKeyCount => keysSeenToday.Count;
+
+        public bool ShouldLog(string key, int dayIndex)
+        {
+            if (currentDay != dayIndex)
+            {
+                keysSeenToday.Clear();
+                currentDay = dayIndex;
+            }
+
+            string signature = IncidentSignature.Normalize(key) ?? key;
+            return !string.IsNullOrEmpty(signature) && keysSeenToday.Add(signature);
+        }
+    }
+
+    /// <summary>
     /// Translates a Lane 2 <see cref="IncidentFinding"/> into a Lane 1
     /// <see cref="IncidentReport"/> and emits it through an
     /// <see cref="IncidentWarningAuthority"/>. The core owns dedup,
@@ -181,7 +206,10 @@ namespace LandLedgers.Diagnostics
         /// classifier over the message verbatim. Pure and test-covered;
         /// the live funnel calls <see cref="EmitRefusal"/>.
         /// </summary>
-        public static IncidentReport RefusalReport(string key, int dayIndex, string message)
+        public static IncidentReport RefusalReport(string key, int dayIndex, string message,
+            double simSeconds = -1d, string taskId = null, string personId = null,
+            string householdId = null, string businessId = null, string buildingId = null,
+            string orderId = null, string shipmentId = null, string transactionId = null)
         {
             string safeKey = string.IsNullOrWhiteSpace(key) ? "refusal:unclassified" : key.Trim();
             string owningSystem = "SimulationDrivers";
@@ -197,11 +225,19 @@ namespace LandLedgers.Diagnostics
                 Severity = IncidentSeverity.Warning,
                 Summary = message ?? string.Empty,
                 DayIndex = dayIndex,
-                SimSeconds = -1,
+                SimSeconds = simSeconds,
                 OwningSystem = owningSystem,
                 RecoveryAuthority = owningSystem,
                 CauseClass = RefusalCauseClassifier.Classify(message ?? string.Empty),
                 CauseEvidence = message ?? string.Empty,
+                TaskId = taskId ?? string.Empty,
+                PersonId = personId ?? string.Empty,
+                HouseholdId = householdId ?? string.Empty,
+                BusinessId = businessId ?? string.Empty,
+                BuildingId = buildingId ?? string.Empty,
+                OrderId = orderId ?? string.Empty,
+                ShipmentId = shipmentId ?? string.Empty,
+                TransactionId = transactionId ?? string.Empty,
             };
         }
 
@@ -216,11 +252,16 @@ namespace LandLedgers.Diagnostics
         /// Debug.LogWarning — each other warning site still needs its own
         /// signature and severity decision before it feeds the authority.
         /// </summary>
-        public static void EmitRefusal(string key, int dayIndex, string message)
+        public static void EmitRefusal(string key, int dayIndex, string message,
+            double simSeconds = -1d, string taskId = null, string personId = null,
+            string householdId = null, string businessId = null, string buildingId = null,
+            string orderId = null, string shipmentId = null, string transactionId = null)
         {
             try
             {
-                SharedAuthority.Emit(RefusalReport(key, dayIndex, message));
+                SharedAuthority.Emit(RefusalReport(key, dayIndex, message, simSeconds,
+                    taskId, personId, householdId, businessId, buildingId, orderId,
+                    shipmentId, transactionId));
             }
             catch
             {

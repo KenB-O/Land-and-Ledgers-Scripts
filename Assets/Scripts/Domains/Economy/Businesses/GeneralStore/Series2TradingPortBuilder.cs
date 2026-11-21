@@ -17,19 +17,11 @@
 // stock authority stays BusinessRuntimeState category stock, reached
 // through the production GeneralStoreTradingPort.
 //
-// SHARED-POOL CAVEAT, stated loudly because it is the one place this
-// fix is weaker than item-level stock: BusinessRuntimeState holds ONE
-// aggregate count per category, not one count per item. Every per-item
-// offer in the same category therefore draws from the same pool.
-// ItemStockUnits for flour and for bread each report the pool size,
-// which overstates each item taken alone — but total units actually
-// sold across all items in the category can never exceed the pool,
-// because every sale consumes pool units through TryConsumeStoreUnits.
-// A future item-level stock migration (a save-shape change, Codex /
-// Kennedy decision, NOT claimed here) is what would make per-item
-// stock counts exact. Until then, no offer here may be read as
-// item-level stock, and no sale may be recorded against an item the
-// category pool did not actually supply.
+// This builder declares candidate item identities only. The production
+// port marks multi-SKU offers as item-level and reads/consumes the matching
+// BusinessRuntimeState retail lots. A category total is never evidence that
+// a particular item is on the shelf; legacy ports without the exact item-lot
+// interface must refuse staple-food sales rather than substitute a SKU.
 //
 // Items that are NOT household items are never offered, and never
 // offered under a representative id: beef/bacon/cheese are NOT offered

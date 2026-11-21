@@ -188,6 +188,11 @@ namespace LandLedgers.EditorTests.Diagnostics
             Assert.AreEqual(1, evidence.CounterServiceExpiries);
             Assert.AreEqual(2, evidence.MealsEatenPerDay.Count);
             Assert.AreEqual(42, evidence.MealsEatenPerDay[0]);
+            Assert.AreEqual("millbrook-development-town", evidence.Scenario);
+            Assert.AreEqual("NewGame", evidence.StartupMode);
+            Assert.AreEqual("Speed250x", evidence.Speed);
+            Assert.AreEqual(60, evidence.TargetDays);
+            Assert.AreEqual(60, evidence.DaysCompleted);
             Assert.AreEqual(null, evidence.NeedsOpenedWithin1Day);
             Assert.AreEqual(null, evidence.ShoppersChosenSameDay);
             Assert.IsFalse(evidence.LotTracingAvailable);

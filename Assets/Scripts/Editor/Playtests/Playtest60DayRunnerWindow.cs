@@ -1123,6 +1123,7 @@ namespace LandLedgers.Editor.Playtests
             PopulationManager population = UnityEngine.Object.FindFirstObjectByType<PopulationManager>();
             SimulationSystemsHub hub = UnityEngine.Object.FindFirstObjectByType<SimulationSystemsHub>();
             SharedBusinessRuntimeManager businesses = UnityEngine.Object.FindFirstObjectByType<SharedBusinessRuntimeManager>();
+            PopulationPathingDirector pathing = UnityEngine.Object.FindFirstObjectByType<PopulationPathingDirector>();
             DaySnapshot day = new()
             {
                 runId = current.runId,
@@ -1202,7 +1203,39 @@ namespace LandLedgers.Editor.Playtests
                 foreach (PlannedShoppingTrip trip in shopping.ActiveTrips)
                 {
                     if (trip == null || !trip.IsActive) continue;
-                    activeTrips.Add($"{trip.TripId}:H{trip.HouseholdId}/P{trip.ShopperPersonId}/{trip.State}/need={trip.Need?.ItemId ?? "unknown"}/failure={trip.FailureReason}");
+                    string movement = "NOT_CAPTURED";
+                    float remainingMeters = -1f;
+                    float etaGameSeconds = -1f;
+                    if (pathing != null && pathing.TryGetMovementReadout(trip.ShopperPersonId,
+                            out string status, out float distance, out float eta))
+                    {
+                        movement = status ?? string.Empty;
+                        remainingMeters = distance;
+                        etaGameSeconds = eta;
+                    }
+                    string route = "NOT_CAPTURED";
+                    if (pathing != null && pathing.TryGetMovementTraceReadout(trip.ShopperPersonId,
+                            out string identity, out int generation, out int waypoint, out int waypointCount,
+                            out Vector3 destination, out bool hasDestination, out string routeMode,
+                            out string schedule, out string activityLocation, out bool visible,
+                            out bool routeActive, out string moverState))
+                    {
+                        route = $"id={identity};gen={generation};waypoint={waypoint}/{waypointCount};" +
+                            $"destination={(hasDestination ? destination.ToString("F2") : "none")};mode={routeMode};" +
+                            $"schedule={schedule};activity={activityLocation};visible={visible};active={routeActive};mover={moverState}";
+                    }
+                    string tripNeed = trip.Need != null
+                        ? trip.Need.NeedSequence + ":" + trip.Need.ItemId
+                        : "unknown";
+                    string liveness =
+                        $"{trip.TripId}:H{trip.HouseholdId}/P{trip.ShopperPersonId}/{trip.State}/need={tripNeed}" +
+                        $"/seller={trip.SellerLocationIdForDiagnostics}/outboundTask={trip.OutboundTaskIdForDiagnostics}" +
+                        $"/routeWatch[leg={trip.ActiveRouteLegKind};started={trip.ActiveRouteStartedGameSeconds:0.##};" +
+                        $"deadline={trip.ActiveRouteDeadlineGameSeconds:0.##};lastProgress={trip.ActiveRouteLastProgressGameSeconds:0.##};" +
+                        $"remaining={trip.ActiveRouteLastRemainingSeconds:0.##};sampled={trip.ActiveRouteHasProgressSample}]" +
+                        $"/movement[{movement};remainingM={remainingMeters:0.##};etaGameS={etaGameSeconds:0.##};{route}]" +
+                        $"/failure={trip.FailureReason}";
+                    activeTrips.Add(liveness);
                 }
                 day.activeShoppingTripCount = activeTrips.Count;
                 day.activeShoppingTrips = activeTrips.Count == 0 ? "none" : string.Join(" | ", activeTrips);

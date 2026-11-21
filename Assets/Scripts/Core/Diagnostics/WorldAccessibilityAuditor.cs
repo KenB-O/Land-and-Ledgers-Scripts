@@ -19,7 +19,7 @@
 // (BuildingFootprintAuthority.TryFindReachableActivityLocation) and maps
 // the results into the snapshot records below; the core only classifies
 // gaps and regimes. No coordinates are fabricated; the porch point is
-// never aliased as Firewood (B-03).
+// never aliased as Firewood (historical B-03).
 //
 // Every gap is classified with the Lane 1 refusal taxonomy
 // (RefusalCauseClass): a missing point is DestinationMissing (class 1),
@@ -208,10 +208,12 @@ namespace LandLedgers.Diagnostics
         /// Config inventory (Agent B / M-13, re-verified): Bed 33, Dining
         /// 19, Stove 12, Workshop 10, Oven 1, Counter 1
         /// (general-store-counter), Receiving 1
-        /// (lumberyard-receiving-approach); Firewood 0, Cleaning 0,
+        /// (lumberyard-receiving-approach), Firewood 1
+        /// (shared House Natural Wood prefab, instantiated by the eight
+        /// development-town households); Cleaning 0,
         /// Porch 0, Storage 0, Delivery 0, Loading 0, Water 0,
-        /// HitchCandidate 0. Firewood 0 is the headline gap: fuel trips
-        /// can never run (B-03).
+        /// HitchCandidate 0. Firewood is one point on the shared home
+        /// prefab; physical fuel-task arrival remains unverified.
         /// </summary>
         public static IReadOnlyList<ConfigInventoryFact> KnownConfigInventory()
         {
@@ -224,7 +226,7 @@ namespace LandLedgers.Diagnostics
                 new ConfigInventoryFact("Oven", 1, "Bakery oven approach point exists in config with zero C# references (M-10)."),
                 new ConfigInventoryFact("Counter", 1, "Only general-store-counter; the bakery and fuel dealer have no counter point (M-07/M-08)."),
                 new ConfigInventoryFact("Receiving", 1, "Only lumberyard-receiving-approach; the \"receiving\" exact-id lookup fails on every building (M-15)."),
-                new ConfigInventoryFact("Firewood", 0, "HEADLINE GAP (B-03): zero Firewood-type locations anywhere; domestic.fuel-handling leg 0 can never run."),
+                new ConfigInventoryFact("Firewood", 1, "One distinct exterior firewood-handling point is authored on the shared House Natural Wood prefab used by all eight development-town homes; this is a route destination, not a stock grant."),
                 new ConfigInventoryFact("Cleaning", 0, "Chores route to literal \"cleaning\"; config authors zero Cleaning locations (B-02)."),
                 new ConfigInventoryFact("Porch", 0, "Chores route to literal \"porch-dropoff\" on alternate days; config authors zero Porch locations (B-02)."),
                 new ConfigInventoryFact("Storage", 0, "No Storage-type locations authored (B-20)."),
@@ -330,11 +332,8 @@ namespace LandLedgers.Diagnostics
                 || id.StartsWith("domestic.animal-care", StringComparison.Ordinal))
             {
                 return new TaskFamilyRegime(id, AccessRegime.PhysicalArrivalAtItem,
-                    "Must arrive at the authored activity point before work accrues. "
-                    + "meal-prep/chores/fuel-handling destinations are MISSING (class 1: literal ids "
-                    + "\"stove\" / \"cleaning\" / \"porch-dropoff\", zero Firewood points); animal-care "
-                    + "has no resolver branch at all (M-04) yet is scheduled daily when a household owns animals.",
-                    "Agent M §3.1 (M-01–M-04); DomesticLaborDriver RequiresPhysicalArrival; PopulationPathingDirector.TryReachDomesticActivity.");
+                    "Must arrive at the authored activity point before work accrues. Meal preparation resolves an installed per-stove id; chores resolve an authored Cleaning point (then Porch); fuel handling uses the exterior firewood-handling point when authored. Live routes still require Main Scene verification. Animal-care has no resolver branch (M-04).",
+                    "Current source: SimulationDrivers.ResolveDomesticActivityMovement; House Natural Wood prefab; DomesticLaborDriver RequiresPhysicalArrival; PopulationPathingDirector.TryReachDomesticActivity.");
             }
             if (id.StartsWith("sleep", StringComparison.Ordinal)
                 || id.IndexOf("sleep", StringComparison.OrdinalIgnoreCase) >= 0 && id.StartsWith("domestic", StringComparison.Ordinal))

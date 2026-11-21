@@ -91,6 +91,29 @@ namespace LandLedgers.EditorTests.Orchestration
         }
 
         [Test]
+        public void StagedBakeryBatch_DoesNotProduceForDisabledRetailChannel()
+        {
+            Assert.IsFalse(SimulationDrivers.ShouldBeginStagedBakeryBatch(
+                24, 0, false, false, retailChannelEnabled: false),
+                "a wholesale-only bakery must not create retail output it is not authorized to sell");
+            Assert.AreEqual("the bakery's retail channel is disabled",
+                SimulationDrivers.StagedBakeryBatchRefusalReason(
+                    24, 0, false, false, retailChannelEnabled: false));
+            Assert.IsTrue(SimulationDrivers.ShouldBeginStagedBakeryBatch(
+                24, 0, false, false, retailChannelEnabled: true));
+        }
+
+        [Test]
+        public void StagedBakeryBatch_DoesNotProduceForDisabledRetailChannel()
+        {
+            Assert.IsFalse(SimulationDrivers.ShouldBeginStagedBakeryBatch(
+                24, 0, false, false, retailChannelEnabled: false),
+                "a wholesale-only bakery must not create retail output it is not authorized to sell");
+            Assert.IsTrue(SimulationDrivers.ShouldBeginStagedBakeryBatch(
+                24, 0, false, false, retailChannelEnabled: true));
+        }
+
+        [Test]
         public void StagedBakeryPlanning_VoluntaryWholesaleNoLongerVetoesRetailProduction()
         {
             // Lane 9a (H-4): a voluntary wholesale account no longer

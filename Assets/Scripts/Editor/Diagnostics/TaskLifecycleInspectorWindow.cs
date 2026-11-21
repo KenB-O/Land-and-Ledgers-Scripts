@@ -121,7 +121,7 @@ namespace LandLedgers.Editor.Diagnostics
             if (GUILayout.Button("Fuel-handling strand (C R-18)")) { proving = TaskLifecycleInspector.InspectKnownFuelHandlingStrand(); status = "Proving case 1: interrupted domestic.fuel-handling tasks T9/T10/T170 (60-day) and T8/T9/T11 (5-day), retained-run record."; }
             if (GUILayout.Button("F6-2 request strand")) { proving = TaskLifecycleInspector.InspectKnownFreightRequestStrand(); status = "Proving case 2: terminal-Accepted freight request with no reopen path (F6-2, narrowed)."; }
             if (GUILayout.Button("Staging wait (C R-8)")) { proving = TaskLifecycleInspector.InspectKnownStagingWait(); status = "Proving case 3: shipment waiting in staging with no deadline and no liveness bound."; }
-            if (GUILayout.Button("Furniture install strand")) { proving = TaskLifecycleInspector.InspectKnownFurnitureInstallStrand(); status = "Proving case 4: paid furniture order whose furnishing.install task completed with no outcome resolver."; }
+            if (GUILayout.Button("Furniture install mismatch")) { proving = TaskLifecycleInspector.InspectKnownFurnitureInstallStrand(); status = "Synthetic case: a completed furnishing.install task whose paid order did not advance. The current source has a resolver; use this case to inspect mismatch classification, not as live failure evidence."; }
             EditorGUILayout.EndHorizontal();
             EditorGUILayout.EndVertical();
 

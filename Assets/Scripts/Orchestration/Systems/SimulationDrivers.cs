@@ -126,7 +126,7 @@ namespace LandLedgers.Orchestration.Systems
         // sat Assigned for 10 days with nothing in the log after day 6).
         // Hitch-path and off-map-guard refusals log once per day per key
         // instead, so a persistent stall stays visible.
-        private readonly Dictionary<string, int> refusalLoggedDay = new Dictionary<string, int>(StringComparer.Ordinal);
+        private readonly DayKeyedRefusalLogGate refusalLogGate = new DayKeyedRefusalLogGate();
         private int hitchStateLogDayIndex = -1;
         private readonly HashSet<string> freightAgreementBlockersLogged = new HashSet<string>(StringComparer.Ordinal);
         [SerializeField, Tooltip("When enabled, write up to 10 detailed, receipt-linked household purchase traces per in-game day. A 128-entry recent trace buffer is retained either way.")]
@@ -6679,8 +6679,10 @@ namespace LandLedgers.Orchestration.Systems
                 // location meal-prep uses. With no Firewood location
                 // authored on the home, leg 0 falls back to the stove
                 // as a single leg (fix #1, A4) with a day-keyed logged
-                // reason; authoring Firewood points in the owner-local
-                // prefabs remains the Codex morning item. Animal-care
+                // reason. The shared development home prefab now authors
+                // its exterior handling point; other home variants still
+                // need their own valid point or the supported fallback.
+                // Animal-care
                 // stays Unsupported (the animal location is a pen/pasture
                 // question, out of B scope per the plan).
                 if (flight.FuelHandlingLeg > 0)
@@ -6694,10 +6696,10 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     // Fix #1 (A4 fallback): the authored Firewood point
                     // when one exists, else the stove as a single leg
-                    // with a day-keyed logged reason. No Firewood point
-                    // is authored anywhere today; the old code refused
-                    // here with capability-wait, so every home's
-                    // domestic.fuel-handling task parked forever.
+                    // with a day-keyed logged reason. The development
+                    // House Natural Wood prefab now provides its distinct
+                    // exterior point; homes without that capability use
+                    // only the existing stove fallback.
                     activityLocationId = DomesticActivityLocationResolver.ResolveFuelLeg0LocationId(
                         () =>
                         {
@@ -6716,7 +6718,9 @@ namespace LandLedgers.Orchestration.Systems
                     {
                         int dayIndex = (int)Math.Floor(currentGameSeconds / 86400f);
                         LogRefusalDayKeyed("domestic:fuel-handling:no-firewood-point", dayIndex,
-                            $"[FuelHandling] Household {flight.HouseholdId} person {flight.PersonId}: {fallbackReason}");
+                            $"[FuelHandling] Household {flight.HouseholdId} person {flight.PersonId}: {fallbackReason}",
+                            personId: flight.PersonId >= 0 ? "P" + flight.PersonId : null,
+                            householdId: flight.HouseholdId >= 0 ? "H" + flight.HouseholdId : null);
                     }
                 }
             }
@@ -6771,17 +6775,15 @@ namespace LandLedgers.Orchestration.Systems
         /// W-G2: the production movement resolver for the sleep driver.
         /// A bed with an authored activity location routes through the
         /// director's domestic-activity movement (interior route to the
-        /// bed anchor — the flight is only a person carrier; the director
-        /// reads PersonId and writes the building and activity location
-        /// back). A floor or bedroll place has no authored anchor, so the
-        /// sleeper is routed to the home building and counts as arrived
-        /// once physically at the building (the arrival check already
-        /// proved the entrance indoor point is walkable). Returns
+        /// bed anchor). The flight carries the stable sleep-night route
+        /// identity used by the director's ownership and liveness checks.
+        /// A floor or bedroll place has no authored anchor, so the sleeper
+        /// routes to the validated indoor main-entrance point. Returns
         /// Travelling while the route is active, Arrived once the sleeper
         /// is at the place, Unsupported when no route exists.
         /// </summary>
         private DomesticActivityMovementResult ResolveSleepMovement(
-            int personId, SleepingPlace place, BuildingFootprintAuthority authority,
+            int personId, string routeIdentity, SleepingPlace place, BuildingFootprintAuthority authority,
             out string failureReason)
         {
             failureReason = string.Empty;
@@ -6803,23 +6805,37 @@ namespace LandLedgers.Orchestration.Systems
                 failureReason = "Population pathing director is unavailable.";
                 return DomesticActivityMovementResult.Unsupported;
             }
-            if (place.Kind == SleepingPlaceKind.Bed
-                && !string.IsNullOrWhiteSpace(place.ActivityLocationId))
+            // Beds use their authored sleeping anchor. Floor/bedroll sleep
+            // uses the validated indoor main-entrance point; reaching the
+            // building shell alone is not proof that the resident got inside.
+            string activityLocationId = place.Kind == SleepingPlaceKind.Bed
+                && !string.IsNullOrWhiteSpace(place.ActivityLocationId)
+                ? place.ActivityLocationId
+                : SleepingPlaceArrival.MainEntranceId;
+            var flight = new DomesticLaborDriver.InFlightDomesticTask
             {
-                var flight = new DomesticLaborDriver.InFlightDomesticTask { PersonId = personId };
-                DomesticActivityMovementResult result = director.TryReachDomesticActivity(
-                    flight, place.ActivityLocationId, out failureReason);
-                if (result == DomesticActivityMovementResult.Unsupported
-                    && string.IsNullOrWhiteSpace(failureReason))
-                    failureReason = $"No physical route reaches activity '{place.ActivityLocationId}'.";
-                return result;
-            }
-            if (director.IsPersonPhysicallyAtBuilding(personId, person.homeBuildingId))
-                return DomesticActivityMovementResult.Arrived;
-            if (director.TryStartExplicitRoute(personId, person.homeBuildingId, PopulationScheduleState.AtHome))
-                return DomesticActivityMovementResult.Traveling;
-            failureReason = "No physical route to the resident's home is available.";
-            return DomesticActivityMovementResult.Unsupported;
+                PersonId = personId,
+                TaskIdString = routeIdentity,
+            };
+            DomesticActivityMovementResult result = director.TryReachDomesticActivity(
+                flight, activityLocationId, out failureReason);
+            if (result == DomesticActivityMovementResult.Unsupported
+                && string.IsNullOrWhiteSpace(failureReason))
+                failureReason = $"No physical route reaches sleep activity '{activityLocationId}'.";
+            return result;
+        }
+
+        private void ReleaseSleepMovement(int personId, string routeIdentity, SleepingPlace place)
+        {
+            if (personId < 0 || place == null || string.IsNullOrWhiteSpace(routeIdentity)) return;
+            LandLedgers.FirstLedger.PopulationPathingDirector director =
+                FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+            if (director == null) return;
+            string activityLocationId = place.Kind == SleepingPlaceKind.Bed
+                && !string.IsNullOrWhiteSpace(place.ActivityLocationId)
+                ? place.ActivityLocationId
+                : SleepingPlaceArrival.MainEntranceId;
+            director.CancelDomesticActivityRoute(personId, routeIdentity, activityLocationId);
         }
 
         /// <summary>
@@ -7226,7 +7242,8 @@ namespace LandLedgers.Orchestration.Systems
                 if (record.RequiresPhysicalArrivalConfirmation && !record.PhysicalDestinationArrivalConfirmed)
                 {
                     LogRefusalDayKeyed("physical-pickup:" + shipment.ShipmentId, absoluteDayIndex,
-                        $"[FreightPickup] Shipment '{shipment.ShipmentId}' remains pending: no physical arrival at destination '{record.DestinationLocationId}' has been confirmed.");
+                        $"[FreightPickup] Shipment '{shipment.ShipmentId}' remains pending: no physical arrival at destination '{record.DestinationLocationId}' has been confirmed.",
+                        shipmentId: shipment.ShipmentId);
                     continue;
                 }
                 if (!record.RequiresPhysicalArrivalConfirmation
@@ -7692,17 +7709,20 @@ namespace LandLedgers.Orchestration.Systems
                 // sleeping-place registry per household, hub-owned and
                 // derived from the furnishing register (no Pass 9 list of
                 // its own). Night conditions come from the heating
-                // authority: IsColdSeasonMonth is the season gate, and
-                // DomesticNeedAuthorities.FuelHandlingNeeded is the
-                // heating authority's own forecast (burn above zero and
-                // fuel-wood on hand) — never recomputed here. The home
+                // authority: IsColdSeasonMonth is the season gate, and the
+                // actual current-day recorded fuel debit determines whether
+                // heat was supplied. FuelHandlingNeeded is a task/procurement
+                // forecast and can disagree with realized burn when stove
+                // stores pay, the household reserve is empty, or fuel runs
+                // short. The home
                 // building id locates floor places. The planner assigns
                 // tonight's sleep from this registry, and the sleep tick
                 // driver moves sleepers to the reserved places at 22:00.
                 SleepingPlaceRegistry sleepingPlaces = hub.SleepingPlaceRegistryFor(household.id);
                 sleepingPlaces.HomeBuildingInstanceId = household.homeBuildingId;
                 sleepingPlaces.IsColdSeason = IsColdSeasonMonth();
-                sleepingPlaces.HeatingFuelBurnedToday = DomesticNeedAuthorities.FuelHandlingNeeded(household, absoluteDayIndex);
+                sleepingPlaces.HeatingFuelBurnedToday = HouseholdHeatingEvaluator.DidBurnFuelOnDay(
+                    household, absoluteDayIndex);
                 // G-4 (Agent G, expanded campaign 2026-11-16): one
                 // dining-place registry per household, hub-owned and
                 // derived from the furnishing register (no Pass 9 list of
@@ -8385,14 +8405,17 @@ namespace LandLedgers.Orchestration.Systems
                 if (candidate.HomeBuildingId < 0)
                 {
                     LogRefusalDayKeyed("furniture-purchase:no-home:" + candidate.HouseholdId, absoluteDayIndex,
-                        "[SimulationDrivers] household " + candidate.HouseholdId + " furniture purchase skipped: no home building — no delivery or install location.");
+                        "[SimulationDrivers] household " + candidate.HouseholdId + " furniture purchase skipped: no home building — no delivery or install location.",
+                        householdId: candidate.HouseholdId >= 0 ? "H" + candidate.HouseholdId : null);
                     continue;
                 }
                 if (townWorld == null || !townWorld.TryGetBuildingById(candidate.HomeBuildingId, out PlacedBuilding home)
                     || home == null || home.runtimeFootprintAuthority == null)
                 {
                     LogRefusalDayKeyed("furniture-purchase:no-home-authority:" + candidate.HouseholdId, absoluteDayIndex,
-                        "[SimulationDrivers] household " + candidate.HouseholdId + " furniture purchase skipped: home building " + candidate.HomeBuildingId + " has no footprint authority.");
+                        "[SimulationDrivers] household " + candidate.HouseholdId + " furniture purchase skipped: home building " + candidate.HomeBuildingId + " has no footprint authority.",
+                        householdId: candidate.HouseholdId >= 0 ? "H" + candidate.HouseholdId : null,
+                        buildingId: candidate.HomeBuildingId >= 0 ? "B" + candidate.HomeBuildingId : null);
                     continue;
                 }
                 BuildingFootprintAuthority building = home.runtimeFootprintAuthority;
@@ -8419,11 +8442,10 @@ namespace LandLedgers.Orchestration.Systems
                 // and delivered item stays in household custody until a
                 // legitimate furnishing.install task physically installs it
                 // at a valid authored placement — the synchronous custody
-                // install that used to live here is gone. Work accrues only
-                // when an available household member has arrived at the
-                // home building (IsPersonVisuallyAtBuilding); a worker who
-                // has not arrived leaves the task Queued, never working
-                // from nowhere.
+                // install that used to live here is gone. The assigned
+                // household member is routed to a walkable approach beside
+                // the task's reserved placement; only an Arrived result
+                // permits labor to be recorded.
                 var installMembers = new List<EntityId>();
                 if (householdMemberships != null)
                 {
@@ -8440,6 +8462,7 @@ namespace LandLedgers.Orchestration.Systems
                 if (building.TryBuildFurniturePlacementContext(scenePlacements,
                         out FurniturePlacementContext builtContext, out _))
                     placementContext = builtContext;
+                CleanupOrphanedFurnitureInstallApproaches(building, hub.Tasks);
                 FurnishingInstallTaskDriver.DriveDayResult installResult = FurnishingInstallTaskDriver.DriveDay(
                     hub.Tasks, hub.WorkTimeBudgets,
                     EntityId.For(EntityKind.Household, candidate.HouseholdId),
@@ -8447,7 +8470,10 @@ namespace LandLedgers.Orchestration.Systems
                     candidate.Furnishings, building, scenePlacements, placementIsBound,
                     GetFurniturePurchaseOrders(),
                     (personId, buildingId) => IsPersonVisuallyAtBuilding(personId, buildingId),
-                    absoluteDayIndex, diag, placementContext);
+                    absoluteDayIndex, diag, placementContext,
+                    (int personId, int buildingId, WorkTask task, out string reason) => RouteFurnitureInstallTaskToPlacement(
+                        personId, buildingId, task, candidate.Furnishings, building, scenePlacements, out reason),
+                    task => building.UnregisterRuntimeActivityLocation(FurnitureInstallActivityLocationId(task)));
                 if (installResult.InstalledAssets > 0)
                 {
                     Debug.Log($"[SimulationDrivers] furniture purchase day {absoluteDayIndex}: household {candidate.HouseholdId} installed {installResult.InstalledAssets} custody piece(s) through furnishing.install tasks in building {candidate.HomeBuildingId}.", this);
@@ -8513,6 +8539,158 @@ namespace LandLedgers.Orchestration.Systems
             LandLedgers.Persistence.SaveLoadManager save = FindAnyObjectByType<LandLedgers.Persistence.SaveLoadManager>();
             List<FurniturePurchaseOrder> saved = save?.Series2Pass9State?.FurniturePurchaseOrders;
             return saved ?? furniturePurchaseOrders;
+        }
+
+        private static string FurnitureInstallActivityLocationId(WorkTask task) =>
+            "furnishing-install-approach:" + (task?.TaskId.ToString() ?? string.Empty);
+
+        private static void CleanupOrphanedFurnitureInstallApproaches(
+            BuildingFootprintAuthority building, TaskAuthority tasks)
+        {
+            if (building == null || tasks == null
+                || !building.TryListActivityLocations(out IReadOnlyList<BuildingActivityLocationAuthoring> locations, out _)) return;
+            const string prefix = "furnishing-install-approach:";
+            foreach (BuildingActivityLocationAuthoring location in locations)
+            {
+                if (location == null || string.IsNullOrWhiteSpace(location.id)
+                    || !location.id.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                string taskId = location.id.Substring(prefix.Length);
+                WorkTask task = tasks.FindTask(taskId);
+                if (task == null || !task.IsOpen)
+                    building.UnregisterRuntimeActivityLocation(location.id);
+            }
+        }
+
+        /// <summary>
+        /// Routes an assigned install worker to a walkable stand-off beside
+        /// the exact reserved authored placement. The stand-off candidates
+        /// derive from the item's catalog footprint, placement orientation,
+        /// authored floor, and BuildingFootprintAuthority geometry; no world
+        /// coordinate or generic home-arrival shortcut is used.
+        /// </summary>
+        private DomesticActivityMovementResult RouteFurnitureInstallTaskToPlacement(
+            int personId, int buildingId, WorkTask task,
+            HouseholdFurnishingRegister register, BuildingFootprintAuthority building,
+            IReadOnlyList<BuildingEquipmentPlacement> scenePlacements, out string reason)
+        {
+            reason = string.Empty;
+            if (task == null || register == null || building == null)
+            {
+                reason = "Install task, household custody, or home building authority is unavailable.";
+                return DomesticActivityMovementResult.Unsupported;
+            }
+            if (!FurnishingInstallTaskDriver.TryParseInstallTaskRef(
+                    task.CustomerRef, out _, out string assetId, out string placementId)
+                || string.IsNullOrWhiteSpace(placementId))
+            {
+                reason = "The install task has no durable authored-placement identity.";
+                return DomesticActivityMovementResult.Unsupported;
+            }
+            EquipmentAsset asset = register.FindAsset(assetId);
+            if (asset == null || !FurnitureItemSpecs.TryGetRow(asset.Kind, out FurnitureItemSpecs.Row spec)
+                || spec == null)
+            {
+                reason = $"Furniture asset '{assetId}' has no registered physical dimensions for an installation approach.";
+                return DomesticActivityMovementResult.Unsupported;
+            }
+            BuildingEquipmentPlacement placement = null;
+            foreach (BuildingEquipmentPlacement candidate in scenePlacements ?? Array.Empty<BuildingEquipmentPlacement>())
+                if (candidate != null && string.Equals(candidate.PlacementId, placementId, StringComparison.Ordinal))
+                { placement = candidate; break; }
+            if (placement == null || !ReferenceEquals(placement.BuildingAuthority, building)
+                || !placement.TryGetBuildingLocalPlacement(out Vector3 center, out Quaternion localRotation, out BuildingFootprintAuthority owner)
+                || owner != building)
+            {
+                reason = $"Reserved authored placement '{placementId}' is missing or no longer belongs to home building {buildingId}.";
+                return DomesticActivityMovementResult.Unsupported;
+            }
+            if (!building.TryGetEntrancePair("main-entrance", out BuildingEntrancePairAuthoring entrance, out reason))
+                return DomesticActivityMovementResult.Unsupported;
+            if (placement.FloorIndex != entrance.floorIndex)
+            {
+                reason = $"Reserved placement '{placementId}' is on floor {placement.FloorIndex}, but the authored main entrance route begins on floor {entrance.floorIndex}; no stair route is available to this install task.";
+                return DomesticActivityMovementResult.Unsupported;
+            }
+            InteriorFloorAuthoring floor = null;
+            foreach (InteriorFloorAuthoring candidateFloor in building.InteriorFloors ?? Array.Empty<InteriorFloorAuthoring>())
+                if (candidateFloor != null && candidateFloor.floorIndex == placement.FloorIndex)
+                { floor = candidateFloor; break; }
+            if (floor == null)
+            {
+                reason = $"Reserved placement '{placementId}' refers to floor {placement.FloorIndex}, which has no authored interior-floor height.";
+                return DomesticActivityMovementResult.Unsupported;
+            }
+            center.y = floor.floorHeightLocal;
+
+            string activityId = FurnitureInstallActivityLocationId(task);
+            building.UnregisterRuntimeActivityLocation(activityId);
+            float clearance = placement.NavigationClearanceMeters;
+            const float interiorRouteCellMeters = 0.4f; // Matches BuildingFootprintAuthority.TryBuildInteriorActivityRoute's authored-floor sampling step.
+            Vector3 localRight = localRotation * Vector3.right;
+            Vector3 localForward = localRotation * Vector3.forward;
+            float extentX = Mathf.Abs(localRight.x) * spec.WidthM * 0.5f
+                + Mathf.Abs(localForward.x) * spec.LengthM * 0.5f + clearance + interiorRouteCellMeters;
+            float extentZ = Mathf.Abs(localRight.z) * spec.WidthM * 0.5f
+                + Mathf.Abs(localForward.z) * spec.LengthM * 0.5f + clearance + interiorRouteCellMeters;
+            Vector3[] offsets =
+            {
+                new Vector3(extentX, 0f, 0f),
+                new Vector3(-extentX, 0f, 0f),
+                new Vector3(0f, 0f, extentZ),
+                new Vector3(0f, 0f, -extentZ),
+            };
+
+            string firstRefusal = string.Empty;
+            for (int i = 0; i < offsets.Length; i++)
+            {
+                Vector3 approach = center + offsets[i];
+                Vector3 facing = center - approach;
+                facing.y = 0f;
+                if (facing.sqrMagnitude < 0.0001f) continue;
+                string registrationRefusal = building.RegisterRuntimeActivityLocation(
+                    activityId, "Furniture installation approach: " + spec.DisplayName,
+                    BuildingActivityLocationType.FurnishingInstall, approach, facing.normalized,
+                    placement.FloorIndex, entrance.functionalSpaceId, placement);
+                if (registrationRefusal != null)
+                {
+                    if (string.IsNullOrEmpty(firstRefusal)) firstRefusal = registrationRefusal;
+                    continue;
+                }
+                if (!building.TryBuildInteriorActivityRoute("main-entrance", activityId,
+                        out _, out string routeRefusal))
+                {
+                    firstRefusal = string.IsNullOrEmpty(firstRefusal) ? routeRefusal : firstRefusal;
+                    building.UnregisterRuntimeActivityLocation(activityId);
+                    continue;
+                }
+
+                LandLedgers.FirstLedger.PopulationPathingDirector director =
+                    FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
+                if (director == null)
+                {
+                    reason = "Population pathing director is unavailable for the furniture installation route.";
+                    return DomesticActivityMovementResult.Unsupported;
+                }
+                var flight = new DomesticLaborDriver.InFlightDomesticTask
+                {
+                    TaskId = task.TaskId,
+                    TaskIdString = task.TaskId.ToString(),
+                    HouseholdId = register.HouseholdId,
+                    PersonId = personId,
+                    DefinitionId = FurnishingTaskDefinitions.InstallId,
+                    RequiresPhysicalArrival = true,
+                    ActivityLocationId = activityId,
+                    BuildingId = buildingId,
+                };
+                return director.TryReachDomesticActivity(
+                    flight, activityId, AbsoluteNowGameSeconds(), out reason);
+            }
+
+            reason = string.IsNullOrWhiteSpace(firstRefusal)
+                ? $"No walkable approach around authored placement '{placementId}' is reachable from the main entrance."
+                : $"No walkable approach around authored placement '{placementId}' is reachable: {firstRefusal}";
+            building.UnregisterRuntimeActivityLocation(activityId);
+            return DomesticActivityMovementResult.Unsupported;
         }
 
         /// <summary>
@@ -8837,7 +9015,8 @@ namespace LandLedgers.Orchestration.Systems
                 {
                     LogRefusalDayKeyed("stale-queued:" + task.TaskId, dayIndex,
                         "[StaleQueued] Task '" + task.TaskId + "' (" + task.DefinitionId + ", owner " + task.OwnerId
-                        + ") is stuck Queued — " + verdict.Reason);
+                        + ") is stuck Queued — " + verdict.Reason,
+                        taskId: task.TaskId);
                 }
             }
         }
@@ -9564,21 +9743,25 @@ namespace LandLedgers.Orchestration.Systems
         /// day), so a persistent stall can be read from the log instead of
         /// going silent after day 1.
         /// </summary>
-        private void LogRefusalDayKeyed(string key, int dayIndex, string message)
+        private void LogRefusalDayKeyed(string key, int dayIndex, string message,
+            string taskId = null, string personId = null, string householdId = null,
+            string businessId = null, string buildingId = null, string orderId = null,
+            string shipmentId = null, string transactionId = null)
         {
-            if (refusalLoggedDay.TryGetValue(key, out int loggedDay) && loggedDay == dayIndex) return;
-            refusalLoggedDay[key] = dayIndex;
-            Debug.LogWarning(message, this);
             // Wiring pass (W-4 / F3): the first live production feed into the
             // §17 warning authority. The day-keyed refusal funnel is the one
-            // bounded emitter — one call site, already deduped per key per day —
-            // not a blanket route of every Debug.LogWarning. Signatures are the
-            // existing stable "system:reason" keys; severity is Warning, the
-            // documented default for a stuck condition with a named cause and
-            // owning system; the cause class comes from the live classifier.
-            // Diagnostics must never break the simulation, so the emit is
-            // guarded the same way DriveDailyHealth is.
-            IncidentDiagnostics.EmitRefusal(key, dayIndex, message);
+            // bounded emitter, not a blanket route of every Debug.LogWarning.
+            // Feed every observed refusal to the authority so repeat counts
+            // are retained; the local gate limits the raw Unity warning to one
+            // per stable signature per day. Signatures use the existing keys,
+            // severity remains Warning, and the cause comes from the classifier.
+            // Diagnostics must never break simulation behavior.
+            IncidentDiagnostics.EmitRefusal(key, dayIndex, message,
+                timeManager != null ? timeManager.PreciseAbsoluteGameSeconds : -1d,
+                taskId, personId, householdId, businessId, buildingId, orderId,
+                shipmentId, transactionId);
+            if (!refusalLogGate.ShouldLog(key, dayIndex)) return;
+            Debug.LogWarning(message, this);
         }
 
         private EntityId ResolveFreightHandler(BusinessInstanceState carrier)
@@ -9938,8 +10121,8 @@ namespace LandLedgers.Orchestration.Systems
                 out var hotelMeals);
 
             // Kennedy's current development rule: open food errands at about
-            // one day of stock, before today's meal resolution can consume
-            // the last reserve. This is a scenario-side playtest setting;
+            // three days of remaining stock, before today's meal resolution
+            // can consume more reserves. This is a scenario-side setting;
             // the shortage authority's general default remains unchanged.
             var diag = new List<string>();
             DriveHouseholdShortageMonitor(absoluteDayIndex, diag);
@@ -14845,6 +15028,7 @@ namespace LandLedgers.Orchestration.Systems
                 BakeryRuntimeState = bakeryBusiness?.RuntimeState,
                 StoreFlourUnitPriceCents = storeFlourPriceCents,
                 OpenHouseholdBreadNeedUnits = CountOpenHouseholdBreadNeedUnits(hub?.PurchasingNeeds),
+                AllowConventionalRetailProduction = false,
                 MillbrookQuote = millbrookQuote,
                 MillbrookSupplier = millbrookAidRuntime,
                 ImportFlourPricePerLbCents = importFlourPricePerLbCents,
@@ -15015,11 +15199,13 @@ namespace LandLedgers.Orchestration.Systems
             if (!ShouldBeginStagedBakeryBatch(
                     openBreadNeedUnits, bakeryRetailUnits,
                     hasActiveConventionalBatch,
-                    hasActiveStagedBatch))
+                    hasActiveStagedBatch,
+                    bakery.RetailChannelEnabled))
             {
                 string refusal = StagedBakeryBatchRefusalReason(
                     openBreadNeedUnits, bakeryRetailUnits,
-                    hasActiveConventionalBatch, hasActiveStagedBatch);
+                    hasActiveConventionalBatch, hasActiveStagedBatch,
+                    bakery.RetailChannelEnabled);
                 string detail = diag.Count > 0 ? " | " + string.Join(" | ", diag) : string.Empty;
                 Debug.Log("[BakeryProduction] Day " + dayIndex + ": staged retail batch refused — " + refusal + detail, this);
                 return;
@@ -15050,9 +15236,11 @@ namespace LandLedgers.Orchestration.Systems
             int openBreadNeedUnits,
             int bakeryRetailUnits,
             bool hasActiveConventionalBatch,
-            bool hasActiveStagedBatch)
+            bool hasActiveStagedBatch,
+            bool retailChannelEnabled = true)
         {
-            return openBreadNeedUnits > Math.Max(0, bakeryRetailUnits)
+            return retailChannelEnabled
+                && openBreadNeedUnits > Math.Max(0, bakeryRetailUnits)
                 && !hasActiveConventionalBatch
                 && !hasActiveStagedBatch;
         }
@@ -15070,8 +15258,11 @@ namespace LandLedgers.Orchestration.Systems
             int openBreadNeedUnits,
             int bakeryRetailUnits,
             bool hasActiveConventionalBatch,
-            bool hasActiveStagedBatch)
+            bool hasActiveStagedBatch,
+            bool retailChannelEnabled = true)
         {
+            if (!retailChannelEnabled)
+                return "the bakery's retail channel is disabled";
             if (openBreadNeedUnits <= Math.Max(0, bakeryRetailUnits))
                 return $"open household bread need ({openBreadNeedUnits}u) does not exceed retail stock net of due-today wholesale ({Math.Max(0, bakeryRetailUnits)}u)";
             if (hasActiveConventionalBatch)
@@ -16481,6 +16672,7 @@ namespace LandLedgers.Orchestration.Systems
             };
             bool isColdSeason = IsColdSeasonMonth();
             var foodSupplyBudget = new HouseholdFoodSupplyBudget(supplierDirectory, sellerKnowledge);
+            float shoppingForecastGameSeconds = RetailStockReservation.GameSeconds(absoluteDayIndex, 8 * 60);
             foreach (HouseholdState household in populationManager.State.households)
             {
                 if (household == null)
@@ -16505,6 +16697,11 @@ namespace LandLedgers.Orchestration.Systems
                 }
 
                 int ledgerBalance = hub.HouseholdLedgers.Get(household.id)?.GetBalanceCents() ?? 0;
+                int committedFoodTripCashCents = shoppingTripDriver?.CommittedCashCentsForHousehold(
+                    household.id, shoppingForecastGameSeconds) ?? 0;
+                int spendableFoodPlanningCashCents = (int)Math.Max(
+                    0L, (long)ledgerBalance - committedFoodTripCashCents);
+                int remainingFoodPlanningCashCents = spendableFoodPlanningCashCents;
                 // Lane 9b (A7): real affordability, not zeros. Obligations
                 // are the household's payments coming due this week from
                 // the shared obligation authority; expected income is the
@@ -16530,7 +16727,7 @@ namespace LandLedgers.Orchestration.Systems
                     // reserves up to the monitor's target at the cheapest
                     // prices a known seller actually offers.
                     HasCash = HouseholdCanAffordFoodTopUp(
-                        household, inventory, expectedDailyUse, ledgerBalance, activeMemberIds),
+                        household, inventory, expectedDailyUse, spendableFoodPlanningCashCents, activeMemberIds),
                 };
 
                 monitor.Evaluate(
@@ -16555,7 +16752,21 @@ namespace LandLedgers.Orchestration.Systems
                     // as their own complete reserve.
                     mealPriorityOrder: policy.MealItemPriority,
                     allocateSupplyUnitsNow: (itemId, unitsNeeded) =>
-                        foodSupplyBudget.AllocateKnownStock(itemId, unitsNeeded, activeMemberIds));
+                        foodSupplyBudget.AllocateKnownStock(itemId, unitsNeeded, activeMemberIds,
+                            ref remainingFoodPlanningCashCents,
+                            allowTradeCredit: new ShoppingLoopOptions().AllowTradeCredit,
+                            creditAuthorityAvailable: hub.FinancialObligations != null && hub.Ids != null,
+                            canServeSupplier: supplier => householdShoppingLoop != null
+                                && householdShoppingLoop.HasAvailableMemberForSellerToday(
+                                    activeMemberIds, supplier, absoluteDayIndex,
+                                    ResolvePersonJourneyLocation, requestedDepartureMinute: 8 * 60),
+                            availableStoreUnits: (supplier, stockItemId, liveUnits) =>
+                                RetailStockReservation.AvailableUnits(
+                                    hub.ReservationAuthority, supplier.SupplierBusinessId,
+                                    stockItemId, liveUnits, shoppingForecastGameSeconds)),
+                    committedAcquisitionUnitsForNeed: (householdId, needSequence, itemId) =>
+                        shoppingTripDriver?.CommittedAcquisitionUnitsForNeed(
+                            householdId, needSequence, itemId, shoppingForecastGameSeconds) ?? 0);
             }
 
             foreach (string monitorDiagnostic in monitor.Diagnostics)
@@ -16995,7 +17206,8 @@ namespace LandLedgers.Orchestration.Systems
                     ResolveSleepAuthority,
                     SleepingPlaceArrival.TryValidateArrivalPath,
                     ResolveSleepMovement,
-                    sleepDiag);
+                    sleepDiag,
+                    ReleaseSleepMovement);
                 // The driver's lines are loud by construction (only
                 // failures and stale-night recoveries, once per night),
                 // so they all surface; routine nights stay silent.

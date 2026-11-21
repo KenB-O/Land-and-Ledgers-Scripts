@@ -56,6 +56,25 @@ namespace LandLedgers.Economy.Equipment.Tests
         }
 
         [Test]
+        public void ReservedUnitsForOwner_ReportsOnlyThatOwnersActiveSkuHold()
+        {
+            float at = RetailStockReservation.GameSeconds(100, 600);
+            string hold = RetailStockReservation.TryReserveUnits(
+                authority, "store-1", "bread", 4, 6, "trip-100-1", "shopping trip for H7",
+                at, at + 2 * 3600f, null);
+            Assert.IsNotNull(hold);
+
+            Assert.AreEqual(4, RetailStockReservation.ReservedUnitsForOwner(
+                authority, "store-1", "bread", "trip-100-1", at));
+            Assert.AreEqual(0, RetailStockReservation.ReservedUnitsForOwner(
+                authority, "store-1", "bread", "trip-100-2", at));
+            Assert.AreEqual(0, RetailStockReservation.ReservedUnitsForOwner(
+                authority, "store-1", "flour", "trip-100-1", at));
+            Assert.AreEqual(0, RetailStockReservation.ReservedUnitsForOwner(
+                authority, "store-1", "bread", "trip-100-1", at + 3 * 3600f));
+        }
+
+        [Test]
         public void SecondHoldOverCapacity_IsRefusedAndHoldsNothing()
         {
             float at = RetailStockReservation.GameSeconds(100, 600);

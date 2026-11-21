@@ -1825,6 +1825,8 @@ MonoBehaviour:
       openingHorseId: 
       openingWagonId: 
       wholesaleAgreements: []
+      supplyProtection: 2
+      salesChannelPolicy: 1
   - key: fuel-dealer
     displayName: Fuel Dealer
     operationId: fuel-dealer

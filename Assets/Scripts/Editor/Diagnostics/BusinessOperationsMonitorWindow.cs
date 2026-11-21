@@ -223,7 +223,8 @@ namespace LandLedgers.Editor.Diagnostics
                     + " lb, notions " + bakery.NotionsUnits + "u", EditorStyles.wordWrappedLabel);
                 EditorGUILayout.LabelField("Bakery: retail sold today " + bakery.RetailUnitsSoldToday + "u for "
                     + bakery.RetailRevenueTodayCents + "c; waste " + bakery.WasteUnitsToday + "u", EditorStyles.wordWrappedLabel);
-                EditorGUILayout.LabelField("Bakery: wholesale accounts " + bakery.WholesaleAccountCount
+                EditorGUILayout.LabelField("Bakery: enabled channels " + bakery.EnabledSalesChannels
+                    + "; wholesale accounts " + bakery.WholesaleAccountCount
                     + ", due today " + bakery.WholesaleUnitsDueToday + "u, retail available "
                     + bakery.RetailUnitsAvailableForSale + "u (net of due wholesale "
                     + bakery.RetailUnitsNetOfDueWholesale + "u), policy " + bakery.SupplyProtectionPolicy,
@@ -505,6 +506,7 @@ namespace LandLedgers.Editor.Diagnostics
             var detail = new BakeryOperationsDetail
             {
                 OwnerPersonId = bakery.OwnerPersonId,
+                EnabledSalesChannels = bakery.SalesChannels.ToString(),
                 SupplyProtectionPolicy = bakery.SupplyProtection.ToString(),
                 // Lane 10a (H-3): the channel history is inspectable from
                 // the monitor — the latest recorded decision, not a bare

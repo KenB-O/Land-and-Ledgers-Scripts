@@ -305,6 +305,11 @@ namespace LandLedgers.Economy.Businesses.Bakery
         /// </summary>
         private BakerySupplyProtectionPolicy supplyProtection = BakerySupplyProtectionPolicy.ProtectRetailCounter;
 
+        // Older saves predate explicit channel enablement; both channels
+        // preserve their existing behavior until a scenario or owner decision
+        // records a narrower choice.
+        private BakerySalesChannelPolicy salesChannelPolicy = BakerySalesChannelPolicy.RetailAndWholesale;
+
         private int batchSeq;
         private int saleSeq;
         private int proofSeq;
@@ -413,6 +418,12 @@ namespace LandLedgers.Economy.Businesses.Bakery
                 ? BakerySupplyProtectionPolicy.ProtectRetailCounter
                 : value;
         }
+
+        public BakerySalesChannelPolicy SalesChannels => salesChannelPolicy;
+        public bool RetailChannelEnabled => salesChannelPolicy == BakerySalesChannelPolicy.Retail
+            || salesChannelPolicy == BakerySalesChannelPolicy.RetailAndWholesale;
+        public bool WholesaleChannelEnabled => salesChannelPolicy == BakerySalesChannelPolicy.Wholesale
+            || salesChannelPolicy == BakerySalesChannelPolicy.RetailAndWholesale;
 
         /// <summary>
         /// D1D: sets proofing-rack capacity (canon "expanded racks" upgrade —
@@ -992,6 +1003,11 @@ namespace LandLedgers.Economy.Businesses.Bakery
         {
             diag = diag ?? diagnostics;
             var records = new List<BakerySaleRecord>();
+            if (!RetailChannelEnabled)
+            {
+                diag.Add($"BakeryShopRuntime '{businessInstanceId}': retail sale refused — the current sales-channel decision is {salesChannelPolicy}.");
+                return records;
+            }
             if (!BakeryBreadCatalog.IsKnownProduct(productId))
             {
                 diag.Add($"BakeryShopRuntime: sale refused — unknown product '{productId}'.");
@@ -1220,6 +1236,8 @@ namespace LandLedgers.Economy.Businesses.Bakery
         public string AddWholesaleAccount(BakeryWholesaleAccount account, int dayIndex, string decider, List<string> diag)
         {
             diag = diag ?? diagnostics;
+            if (!WholesaleChannelEnabled)
+                return $"BakeryShopRuntime '{businessInstanceId}': new wholesale agreement refused — the current sales-channel decision is {salesChannelPolicy}. Existing accepted agreements remain obligations.";
             if (account == null) return "BakeryShopRuntime: null wholesale account refused.";
             if (string.IsNullOrWhiteSpace(account.BuyerBusinessId))
                 return "BakeryShopRuntime: wholesale account refused — the buying business must be named.";
@@ -1416,6 +1434,11 @@ namespace LandLedgers.Economy.Businesses.Bakery
         public List<string> PlanRetailBatches(int dayIndex, int openHouseholdBreadNeedUnits, List<string> diag)
         {
             diag = diag ?? diagnostics;
+            if (!RetailChannelEnabled)
+            {
+                diag.Add($"BakeryShopRuntime '{businessInstanceId}': retail production planning skipped — sales channels are {salesChannelPolicy}.");
+                return new List<string>();
+            }
             const int historyDays = 3;
             int firstDay = Math.Max(0, dayIndex - historyDays);
             int elapsedDays = Math.Max(1, dayIndex - firstDay);
@@ -1874,6 +1897,7 @@ namespace LandLedgers.Economy.Businesses.Bakery
         /// </summary>
         public int RetailUnitsAvailableForSale(string productId, int dayIndex, List<string> diag = null)
         {
+            if (!RetailChannelEnabled) return 0;
             if (!BakeryBreadCatalog.IsKnownProduct(productId)) return 0;
             AgeShelf(dayIndex, diag);
             return RetailAllowanceFor(productId, dayIndex);
@@ -1918,6 +1942,62 @@ namespace LandLedgers.Economy.Businesses.Bakery
                 : "scenario-authored initial policy";
             RecordChannelDecision(dayIndex, BakeryChannelDecision.ScenarioDecider,
                 BakeryChannelDecision.InitialPolicyKind, previous.ToString(), resolved.ToString(), reason, diag);
+            return null;
+        }
+
+        /// <summary>
+        /// Resolves enabled sales channels once from scenario configuration.
+        /// Unspecified preserves legacy compatibility by enabling both
+        /// channels. This is distinct from SupplyProtection, which allocates
+        /// scarce output between channels already enabled.
+        /// </summary>
+        public string ResolveInitialSalesChannels(BakerySalesChannelPolicy authoredPolicy, int dayIndex, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            foreach (BakeryChannelDecision existing in channelDecisions)
+            {
+                if (existing != null && string.Equals(existing.Kind, BakeryChannelDecision.InitialSalesChannelsKind, StringComparison.Ordinal))
+                {
+                    diag.Add($"BakeryShopRuntime: initial sales channels already resolved on day {existing.DayIndex} ({existing.NewValue}); not re-resolved.");
+                    return null;
+                }
+            }
+
+            BakerySalesChannelPolicy resolved = authoredPolicy == BakerySalesChannelPolicy.Unspecified
+                ? BakerySalesChannelPolicy.RetailAndWholesale
+                : authoredPolicy;
+            if (!Enum.IsDefined(typeof(BakerySalesChannelPolicy), resolved) || resolved == BakerySalesChannelPolicy.Unspecified)
+                return $"BakeryShopRuntime '{businessInstanceId}': invalid initial sales-channel value '{authoredPolicy}'.";
+            BakerySalesChannelPolicy previous = salesChannelPolicy;
+            salesChannelPolicy = resolved;
+            string reason = authoredPolicy == BakerySalesChannelPolicy.Unspecified
+                ? "unconfigured opening preserves both existing channels"
+                : "scenario-authored enabled sales channels";
+            RecordChannelDecision(dayIndex, BakeryChannelDecision.ScenarioDecider,
+                BakeryChannelDecision.InitialSalesChannelsKind, previous.ToString(), resolved.ToString(), reason, diag);
+            return null;
+        }
+
+        /// <summary>
+        /// Applies an authorized owner/business sales-channel decision. A
+        /// narrower choice only affects new sales/agreements; any wholesale
+        /// contract already accepted remains in the fulfillment queue.
+        /// </summary>
+        public string SetSalesChannels(BakerySalesChannelPolicy policy, int dayIndex, string decider, string reason, List<string> diag)
+        {
+            diag = diag ?? diagnostics;
+            if (!Enum.IsDefined(typeof(BakerySalesChannelPolicy), policy) || policy == BakerySalesChannelPolicy.Unspecified)
+                return $"BakeryShopRuntime '{businessInstanceId}': Unspecified or invalid sales channels cannot be set; the current choice stands.";
+            BakerySalesChannelPolicy previous = salesChannelPolicy;
+            if (previous == policy)
+            {
+                diag.Add($"BakeryShopRuntime '{businessInstanceId}': sales channels already {policy}; no decision recorded.");
+                return null;
+            }
+
+            salesChannelPolicy = policy;
+            RecordChannelDecision(dayIndex, decider, BakeryChannelDecision.SalesChannelsChangeKind,
+                previous.ToString(), policy.ToString(), reason, diag);
             return null;
         }
 
@@ -2537,6 +2617,9 @@ namespace LandLedgers.Economy.Businesses.Bakery
             /// </summary>
             public BakerySupplyProtectionPolicy SupplyProtection = BakerySupplyProtectionPolicy.ProtectRetailCounter;
 
+            /// <summary>Enabled retail/wholesale channels; Both is the compatibility default for old saves.</summary>
+            public BakerySalesChannelPolicy SalesChannels = BakerySalesChannelPolicy.RetailAndWholesale;
+
             public int BatchSeq;
             public int SaleSeq;
 
@@ -2560,6 +2643,7 @@ namespace LandLedgers.Economy.Businesses.Bakery
                 FuelStock = fuelStock.CaptureSaveDto(),
                 ProofingRackSlots = proofingRackSlots,
                 SupplyProtection = supplyProtection,
+                SalesChannels = salesChannelPolicy,
                 BatchSeq = batchSeq,
                 SaleSeq = saleSeq,
                 ProofSeq = proofSeq,
@@ -2595,6 +2679,9 @@ namespace LandLedgers.Economy.Businesses.Bakery
             if (dto.ProofingRackSlots > 0) proofingRackSlots = dto.ProofingRackSlots;
             if (dto.SupplyProtection != BakerySupplyProtectionPolicy.Unspecified)
                 supplyProtection = dto.SupplyProtection;
+            if (Enum.IsDefined(typeof(BakerySalesChannelPolicy), dto.SalesChannels)
+                && dto.SalesChannels != BakerySalesChannelPolicy.Unspecified)
+                salesChannelPolicy = dto.SalesChannels;
             batchSeq = Math.Max(0, dto.BatchSeq);
             saleSeq = Math.Max(0, dto.SaleSeq);
             proofSeq = Math.Max(0, dto.ProofSeq);

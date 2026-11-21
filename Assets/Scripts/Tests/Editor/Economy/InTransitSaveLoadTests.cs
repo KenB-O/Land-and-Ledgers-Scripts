@@ -1159,6 +1159,10 @@ namespace LandLedgers.Editor.Economy
                 g.Needs.GetOpenNeed(g.HouseholdId, HouseholdItemCatalog.BreadId);
             Assert.IsNotNull(liveNeed,
                 "the restored registry must hold the open bread need before the Continue deposit");
+            Assert.AreEqual(liveNeed.NeedSequence, g.Loop.ActiveCustodyBatches[0].NeedSequence,
+                "the restored paid batch must retain the exact need identity it settled for");
+            Assert.IsTrue(g.Loop.ActiveCustodyBatches[0].HasNeedIdentity,
+                "Save/Continue must not infer a purchased batch's need from SKU alone");
             string error = g.Loop.ReceiveCarriedBatch(snap.MidTrip.BatchId, g.Day, g.Diagnostics);
             Assert.IsNull(error, "the Continue deposit must succeed: " + error);
             AssertDepositedOnce(g, snap.MidTrip.BatchId, snap.MidTrip.ReceiptId, personId, restored.CustodyLog, "continue deposit");

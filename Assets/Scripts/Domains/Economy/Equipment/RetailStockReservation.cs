@@ -128,6 +128,50 @@ namespace LandLedgers.Economy.Equipment
             return Math.Max(0, units - (int)Math.Floor(available));
         }
 
+        /// <summary>
+        /// Store units held by one shopping-trip owner for one SKU at the
+        /// given instant. This read-only view lets household need forecasts
+        /// credit the correct in-flight trip while keeping its stock hold
+        /// unavailable to every other household.
+        /// </summary>
+        public static int ReservedUnitsForOwner(
+            IUnifiedReservationAuthority authority,
+            string supplierBusinessId,
+            string itemId,
+            string ownerTaskId,
+            float atGameSeconds)
+        {
+            if (authority == null || string.IsNullOrWhiteSpace(supplierBusinessId)
+                || string.IsNullOrWhiteSpace(itemId) || string.IsNullOrWhiteSpace(ownerTaskId))
+            {
+                return 0;
+            }
+
+            string resourceKey = ReservationKeyConventions.RetailStock(supplierBusinessId, itemId);
+            List<ReservationHandle> handles = authority.ReservationsForTask(ownerTaskId);
+            if (handles == null) return 0;
+
+            int reserved = 0;
+            foreach (ReservationHandle handle in handles)
+            {
+                if (handle?.Items == null) continue;
+                foreach (ReservationItem reservation in handle.Items)
+                {
+                    if (reservation == null
+                        || !string.Equals(reservation.ResourceKey, resourceKey, StringComparison.Ordinal)
+                        || reservation.StartGameSeconds > atGameSeconds
+                        || atGameSeconds >= reservation.EndGameSeconds)
+                    {
+                        continue;
+                    }
+
+                    reserved += (int)Math.Floor(Math.Max(0f, reservation.Quantity));
+                }
+            }
+
+            return Math.Max(0, reserved);
+        }
+
         /// <summary>Releases one reservation by id. No-op when unknown or unwired (idempotent).</summary>
         public static void Release(IUnifiedReservationAuthority authority, string reservationId)
         {

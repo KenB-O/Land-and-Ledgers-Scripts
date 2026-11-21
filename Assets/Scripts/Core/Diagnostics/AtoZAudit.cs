@@ -16,12 +16,13 @@
 //     finding carries the recorded status and the exact evidence (run id,
 //     harness test id, file:line). It is re-opened only if current source or
 //     fresh results contradict it.
-//   - Run: needs a live run. With no run on this HEAD the finding is BLOCKED
-//     and names what is missing. With run evidence (SurvivalRunEvidence) the
+//   - Run: needs run evidence. With no run evidence supplied the finding is
+//     BLOCKED and names what is missing. With run evidence (SurvivalRunEvidence) the
 //     survival stages are evaluated by the Scenario Lab evaluator and mapped
 //     here.
 //
-// No run exists on this HEAD: every run check says so wherever it matters.
+// Run evidence is supplied separately by the Scenario Lab; source-only audit
+// output never makes claims about whether a run exists elsewhere on disk.
 
 using System;
 using System.Collections.Generic;
@@ -173,6 +174,9 @@ namespace LandLedgers.Diagnostics
         /// <summary>Assets/Core/Population/DevelopmentTownConfiguration.asset text.</summary>
         public string ConfigAssetText = string.Empty;
 
+        /// <summary>Assets/Environment/Buildings/House Natural Wood.prefab text; shared residential activity authoring.</summary>
+        public string SharedHomePrefabText = string.Empty;
+
         /// <summary>ScenarioOpeningWholesaleAccounts.cs text.</summary>
         public string WholesaleAccountsText = string.Empty;
 
@@ -253,7 +257,7 @@ namespace LandLedgers.Diagnostics
                 + " | BLOCKED: " + CountWithStatus(AtoZFindingStatus.Blocked)
                 + " | Live run still owed: " + LiveRunOwedCount);
             lines.Add(string.Empty);
-            lines.Add("No run exists on this HEAD: every BLOCKED finding names what a live run must supply.");
+            lines.Add("Run-dependent checks remain BLOCKED until their required live or artifact evidence is supplied.");
             lines.Add(string.Empty);
             foreach (AtoZFinding finding in Findings)
             {
@@ -354,10 +358,10 @@ namespace LandLedgers.Diagnostics
 
             catalog.Add(new AtoZCheckDefinition(
                 "F-S4-FURNITURE-CONTINUE", "F",
-                "In-progress furniture production survives Save/Continue (ActiveProcesses has no save path)",
+                "In-progress furniture production survives Save/Continue (business DTO round-trips ActiveProcesses; live restore remains unverified)",
                 AtoZCheckKind.Recorded, "Save/Continue", "Lane 9f (F-S4)",
                 RefusalCauseClass.Unclassified,
-                new List<string> { "Agent F §4-§5", "Q04FreshSceneContinueTests.cs" }));
+                new List<string> { "BusinessInstanceState.CaptureSaveDto / FromSaveDto", "GenericBusinessConfiguration.CaptureSaveDto / FromSaveDto", "Lane9fProductionRestoreTests.cs", "Agent F §4-§5" }));
 
             catalog.Add(new AtoZCheckDefinition(
                 "F-S7-RUNNER-CONTINUE", "F",
@@ -396,7 +400,7 @@ namespace LandLedgers.Diagnostics
             return catalog;
         }
 
-        /// <summary>Evaluates the source and recorded checks. Run checks are BLOCKED here (no run evidence in this call).</summary>
+        /// <summary>Evaluates source and recorded checks. Run checks are BLOCKED because this call has no run evidence.</summary>
         public static AtoZAuditReport Evaluate(AtoZSourceEvidence evidence)
         {
             if (evidence == null)
@@ -417,8 +421,8 @@ namespace LandLedgers.Diagnostics
                         break;
                     default:
                         findings.Add(new AtoZFinding(check, AtoZFindingStatus.Blocked,
-                            "Needs a live run. No run exists on this HEAD, so this check cannot be evaluated.",
-                            "No run exists on this HEAD."));
+                            "No run evidence was supplied to this source-only audit; this run check cannot be evaluated here.",
+                            "Source-only audit; no run evidence supplied."));
                         break;
                 }
             }
@@ -426,8 +430,8 @@ namespace LandLedgers.Diagnostics
         }
 
         /// <summary>
-        /// Maps a Scenario Lab result onto the run checks. With no live run
-        /// the stages stay BLOCKED; with a run, a passed stage is VERIFIED
+        /// Maps a Scenario Lab result onto the run checks. Without usable run
+        /// evidence the stages stay BLOCKED; with a run, a passed stage is VERIFIED
         /// FIXED, a failed stage is UNRESOLVED, and a stage blocked by a
         /// prior repair stays BLOCKED with the repair named.
         /// </summary>
@@ -446,9 +450,11 @@ namespace LandLedgers.Diagnostics
                     continue;
                 }
 
-                if (check.Id.StartsWith("N-S", StringComparison.Ordinal))
+                SurvivalStageSpec matchingStage = SurvivalAcceptanceScenario.StageSpecs
+                    .FirstOrDefault(spec => string.Equals("N-" + spec.StageId, check.Id, StringComparison.Ordinal));
+                if (matchingStage != null)
                 {
-                    SurvivalStageVerdict verdict = survival.StageVerdict(check.Id.Substring(2));
+                    SurvivalStageVerdict verdict = survival.StageVerdict(matchingStage.StageId);
                     AtoZFindingStatus status;
                     switch (verdict.Verdict)
                     {
@@ -457,13 +463,14 @@ namespace LandLedgers.Diagnostics
                         default: status = AtoZFindingStatus.Blocked; break;
                     }
                     findings.Add(new AtoZFinding(check, status, verdict.Reason,
-                        survival.RunId.Length > 0 ? survival.RunId : "No run exists on this HEAD."));
+                        survival.RunId.Length > 0 ? survival.RunId : "Run id not supplied."));
                 }
                 else
                 {
                     findings.Add(new AtoZFinding(check, AtoZFindingStatus.Blocked,
-                        "Needs a live run with the transaction-event stream / Continue midpoint seams. No run exists on this HEAD.",
-                        "No run exists on this HEAD."));
+                        "Run " + (string.IsNullOrWhiteSpace(survival.RunId) ? "(id not supplied)" : survival.RunId)
+                        + " was evaluated, but the transaction-event stream / Continue midpoint evidence required by this check is missing.",
+                        survival.RunId.Length > 0 ? survival.RunId : "Run id not supplied."));
                 }
             }
             return findings;
@@ -487,9 +494,9 @@ namespace LandLedgers.Diagnostics
                         "Day-1 business-cash gap of 2,448c (config 162,000c vs run day-1 159,552c), present in both the 30-day and 60-day retained runs. The acceptance report must show the gap on day 1 of every run until it is attributed; it must not be normalised away by starting the reconciliation at day 2.",
                         "Reports/Playtests/Runs/20261120T192311Z-343a8cd2/daily-summary.csv: businessCashCents day 1 = 159,552");
                 case "F-S4-FURNITURE-CONTINUE":
-                    return new AtoZFinding(check, AtoZFindingStatus.Unresolved,
-                        "In-progress furniture production vanishes on Continue (GenericConfiguration.ActiveProcesses has no save path; consumed inputs are destroyed with no refund or record). Recorded as EXPECTED-FAIL until repaired, not silently skipped.",
-                        "Agent F §4-§5; Q04FreshSceneContinueTests.cs");
+                    return new AtoZFinding(check, AtoZFindingStatus.ImplementedUnverified,
+                        "Current business DTO capture and restore include GenericConfiguration.ActiveProcesses, and Lane9fProductionRestoreTests exercises process/task continuation. The actual fresh-scene Main Scene Continue and consumed-input conservation remain unverified; preserve the comparison as a failure if a real batch is lost.",
+                        "BusinessInstanceState.CaptureSaveDto / FromSaveDto; GenericBusinessConfiguration.CaptureSaveDto / FromSaveDto; Assets/Scripts/Tests/Editor/Economy/Lane9fProductionRestoreTests.cs");
                 case "F-S7-RUNNER-CONTINUE":
                     return new AtoZFinding(check, AtoZFindingStatus.Unresolved,
                         "The runner has no Continue mode: it requires StartupIntent == NewGame and a grep for continue returns only continue; statements. The Save/Continue midpoint cannot be built until F-S5 holder setup and F-S7 land.",
@@ -512,7 +519,7 @@ namespace LandLedgers.Diagnostics
                 case "W-SF7-BYPRODUCT":
                     return CheckByproductSettlement(check, evidence.ByproductSettlementText, evidence.SawmillTransferText);
                 case "B-FIREWOOD":
-                    return CheckFirewood(check, evidence.ConfigAssetText);
+                    return CheckFirewood(check, evidence.SharedHomePrefabText);
                 case "E-14-BAKERY-FUEL":
                     return CheckBakeryFuel(check, evidence.ConfigAssetText);
                 case "A-08-STAPLE-FOOD":
@@ -678,24 +685,50 @@ namespace LandLedgers.Diagnostics
                 "FuelDealerByproductSettlement.cs / SimulationDrivers.cs TransferSawmillByproductsToFuelDealer");
         }
 
-        private static AtoZFinding CheckFirewood(AtoZCheckDefinition check, string configText)
+        private static AtoZFinding CheckFirewood(AtoZCheckDefinition check, string homePrefabText)
         {
-            if (string.IsNullOrEmpty(configText))
+            if (string.IsNullOrEmpty(homePrefabText))
             {
-                return MissingEvidence(check, "Assets/Core/Population/DevelopmentTownConfiguration.asset");
+                return MissingEvidence(check, "Assets/Environment/Buildings/House Natural Wood.prefab");
             }
 
-            int count = CountActivityType(configText, 10);
+            int count = CountPrefabActivityLocationType(homePrefabText, 10);
             if (count == 0)
             {
                 return new AtoZFinding(check, AtoZFindingStatus.Unresolved,
-                    "Zero Firewood activity points authored in the dev-town config (BuildingActivityLocationType.Firewood = 10; config inventory Bed 33, Dining 19, Stove 12, Workshop 10, Oven 1, Counter 1, Receiving 1, Firewood 0). domestic.fuel-handling tasks can never arrive.",
-                    "DevelopmentTownConfiguration.asset: 0x 'activityType: 10' (M-13 inventory)");
+                    "No Firewood activity point is authored on the shared residential home prefab (BuildingActivityLocationType.Firewood = 10). The development roster uses this home shell for eight households, so each would lack the physical handling destination.",
+                    "House Natural Wood.prefab: no type: 10 entry under activityLocations");
             }
 
             return new AtoZFinding(check, AtoZFindingStatus.ImplementedUnverified,
-                count + " Firewood activity point(s) authored in config. Live-run confirmation that fuel-handling tasks arrive is still owed.",
-                "DevelopmentTownConfiguration.asset: " + count + "x 'activityType: 10'");
+                count + " Firewood activity point(s) authored on the shared residential home prefab. Live-run confirmation that an eligible resident reaches the point and completes fuel delivery is still owed.",
+                "Assets/Environment/Buildings/House Natural Wood.prefab: " + count + " type: 10 entry under activityLocations");
+        }
+
+        /// <summary>Counts BuildingActivityLocationAuthoring type values only inside a prefab's activityLocations list.</summary>
+        public static int CountPrefabActivityLocationType(string prefabText, int activityType)
+        {
+            if (string.IsNullOrEmpty(prefabText)) return 0;
+            int count = 0;
+            bool inActivityLocations = false;
+            string expected = "type: " + activityType;
+            foreach (string line in prefabText.Split(new[] { '\n' }, StringSplitOptions.None))
+            {
+                string trimmed = line.Trim();
+                if (!inActivityLocations)
+                {
+                    if (trimmed == "activityLocations:") inActivityLocations = true;
+                    continue;
+                }
+
+                if (trimmed.Length == 0) continue;
+                int indentation = line.Length - line.TrimStart().Length;
+                if (trimmed.StartsWith("---", StringComparison.Ordinal)
+                    || (indentation <= 2 && !trimmed.StartsWith("- ", StringComparison.Ordinal)))
+                    break;
+                if (indentation > 2 && trimmed == expected) count++;
+            }
+            return count;
         }
 
         /// <summary>Counts authored activity points of one BuildingActivityLocationType value in a config asset text.</summary>

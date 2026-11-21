@@ -65,6 +65,25 @@ namespace LandLedgers.Population
 
         public int AllocateKnownStock(string itemId, int requestedUnits, IEnumerable<int> memberIds)
         {
+            int unlimitedBudget = int.MaxValue;
+            return AllocateKnownStock(itemId, requestedUnits, memberIds, ref unlimitedBudget);
+        }
+
+        /// <summary>
+        /// Allocates only stock this household could pay for from its current
+        /// cash budget. Cheapest known sellers are considered first, and the
+        /// caller passes one shared remaining budget across meal-priority
+        /// items. Planning still reserves neither the seller's stock nor the
+        /// household's money. <paramref name="availableStoreUnits"/> may
+        /// net out live retail holds so reserved stock cannot be promised to
+        /// another household's forecast.
+        /// </summary>
+        public int AllocateKnownStock(string itemId, int requestedUnits,
+            IEnumerable<int> memberIds, ref int availableCashCents,
+            bool allowTradeCredit = false, bool creditAuthorityAvailable = false,
+            Func<IItemResolvingSupplier, bool> canServeSupplier = null,
+            Func<IItemResolvingSupplier, string, int, int> availableStoreUnits = null)
+        {
             if (string.IsNullOrWhiteSpace(itemId) || requestedUnits <= 0
                 || suppliers == null || knowledge == null || memberIds == null)
             {
@@ -74,15 +93,10 @@ namespace LandLedgers.Population
             var members = new HashSet<int>(memberIds);
             if (members.Count == 0) return 0;
 
-            int allocated = 0;
+            var knownSuppliers = new List<IItemResolvingSupplier>();
             foreach (IGoodsSupplier supplier in suppliers.All)
             {
-                if (allocated >= requestedUnits || supplier == null
-                    || !(supplier is IItemResolvingSupplier resolving))
-                {
-                    continue;
-                }
-
+                if (supplier == null || !(supplier is IItemResolvingSupplier resolving)) continue;
                 bool recognized = supplier is IItemCatalogSupplier catalog
                     ? catalog.RecognizesItem(itemId)
                     : !string.IsNullOrWhiteSpace(resolving.CategoryForItem(itemId));
@@ -95,19 +109,61 @@ namespace LandLedgers.Population
                     known = true;
                     break;
                 }
-                if (!known) continue;
+                if (known && (canServeSupplier == null || canServeSupplier(resolving)))
+                    knownSuppliers.Add(resolving);
+            }
+            knownSuppliers.Sort((left, right) =>
+                left.ItemPricePerUnitCents(itemId).CompareTo(right.ItemPricePerUnitCents(itemId)));
 
-                string key = supplier.SupplierBusinessId + "\u001f" + itemId;
+            int allocated = 0;
+            foreach (IItemResolvingSupplier resolving in knownSuppliers)
+            {
+                if (allocated >= requestedUnits) break;
+
+                string key = resolving.SupplierBusinessId + "\u001f" + itemId;
                 if (!remainingBySellerItem.TryGetValue(key, out int remaining))
                 {
-                    remaining = Math.Max(0, resolving.ItemStockUnits(itemId));
+                    int liveStock = Math.Max(0, resolving.ItemStockUnits(itemId));
+                    int promiseableStock = availableStoreUnits != null
+                        ? availableStoreUnits(resolving, itemId, liveStock)
+                        : liveStock;
+                    remaining = Math.Min(liveStock, Math.Max(0, promiseableStock));
                 }
 
-                int take = Math.Min(requestedUnits - allocated, remaining);
-                if (take <= 0) continue;
+                int unitPrice = resolving.ItemPricePerUnitCents(itemId);
+                // A zero price is not a legitimate commercial offer in the
+                // shopping authority, so it cannot count as usable cover.
+                if (unitPrice <= 0) continue;
+                int householdUnitsPerStoreUnit = resolving is IPackageUnitSupplier packageSupplier
+                    ? Math.Max(1, packageSupplier.HouseholdUnitsPerStoreUnit(itemId))
+                    : 1;
+                int householdUnitsNeeded = requestedUnits - allocated;
+                int candidateStoreUnits = Math.Min(remaining,
+                    1 + (householdUnitsNeeded - 1) / householdUnitsPerStoreUnit);
+                int cashAffordableStoreUnits = Math.Min(candidateStoreUnits,
+                    Math.Max(0, availableCashCents) / unitPrice);
+                int creditAffordableStoreUnits = 0;
+                if (allowTradeCredit && creditAuthorityAvailable
+                    && resolving is IOffersTradeCredit credit
+                    && credit.OffersTradeCredit && credit.TradeCreditLimitCents > 0
+                    && candidateStoreUnits <= credit.TradeCreditLimitCents / unitPrice)
+                {
+                    // ShoppingLoopOptions settles a candidate entirely from
+                    // cash or entirely as a credit obligation. It does not
+                    // combine a partial cash balance with credit for one sale.
+                    creditAffordableStoreUnits = candidateStoreUnits;
+                }
+                bool useCash = cashAffordableStoreUnits >= creditAffordableStoreUnits;
+                int takeStoreUnits = useCash
+                    ? cashAffordableStoreUnits : creditAffordableStoreUnits;
+                if (takeStoreUnits <= 0) continue;
 
-                remainingBySellerItem[key] = remaining - take;
-                allocated += take;
+                remainingBySellerItem[key] = remaining - takeStoreUnits;
+                int coveredHouseholdUnits = (int)Math.Min(householdUnitsNeeded,
+                    (long)takeStoreUnits * householdUnitsPerStoreUnit);
+                allocated += coveredHouseholdUnits;
+                if (useCash)
+                    availableCashCents = Math.Max(0, availableCashCents - takeStoreUnits * unitPrice);
             }
 
             return allocated;
@@ -186,7 +242,8 @@ namespace LandLedgers.Population
             IReadOnlyList<string> mealPriorityOrder = null,
             Func<string, bool> isPurchasableNow = null,
             Func<string, int, bool> canSupplyNeedNow = null,
-            Func<string, int, int> allocateSupplyUnitsNow = null)
+            Func<string, int, int> allocateSupplyUnitsNow = null,
+            Func<int, int, string, int> committedAcquisitionUnitsForNeed = null)
         {
             if (household == null || inventory == null)
             {
@@ -244,7 +301,7 @@ namespace LandLedgers.Population
                         EvaluateAllocatedItem(household, inventory, itemId, Mathf.Max(0, dailyUse),
                             isColdSeason, supplyAccess, upcomingObligationCents, expectedIncomeCents, day,
                             isRecognizedByKnownSeller, isPurchasableNow, canSupplyNeedNow,
-                            allocateSupplyUnitsNow,
+                            allocateSupplyUnitsNow, committedAcquisitionUnitsForNeed,
                             totalHeldDays, ref plannedDays);
                     }
 
@@ -441,6 +498,7 @@ namespace LandLedgers.Population
             Func<string, bool> isPurchasableNow,
             Func<string, int, bool> canSupplyNeedNow,
             Func<string, int, int> allocateSupplyUnitsNow,
+            Func<int, int, string, int> committedAcquisitionUnitsForNeed,
             float totalHeldDays,
             ref float plannedDays)
         {
@@ -520,7 +578,12 @@ namespace LandLedgers.Population
                 : canSupplyNeedNow != null
                     ? (canSupplyNeedNow(itemId, openNeed.UnitsNeeded) ? openNeed.UnitsNeeded : 0)
                     : (isPurchasableNow == null || isPurchasableNow(itemId) ? openNeed.UnitsNeeded : 0);
-            plannedDays += (float)supplyUnits / Mathf.Max(1, dailyUseUnits);
+            int committedUnits = committedAcquisitionUnitsForNeed != null
+                ? Mathf.Clamp(committedAcquisitionUnitsForNeed(
+                    household.id, openNeed.NeedSequence, itemId), 0,
+                    Math.Max(0, openNeed.UnitsNeeded - supplyUnits))
+                : 0;
+            plannedDays += (float)(supplyUnits + committedUnits) / Mathf.Max(1, dailyUseUnits);
         }
 
         private void EvaluateItem(
@@ -717,6 +780,15 @@ namespace LandLedgers.Population
                 : null;
         }
 
+        public HouseholdPurchasingNeed GetNeedBySequence(int householdId, int needSequence)
+        {
+            if (householdId < 0 || needSequence < 0) return null;
+            foreach (HouseholdPurchasingNeed need in all)
+                if (need != null && need.HouseholdId == householdId && need.NeedSequence == needSequence)
+                    return need;
+            return null;
+        }
+
         public HouseholdPurchasingNeed CreateNeed(int householdId, string itemId, int dayIndex)
         {
             HouseholdPurchasingNeed existing = GetOpenNeed(householdId, itemId);
@@ -803,6 +875,54 @@ namespace LandLedgers.Population
 
                 all.Add(restored);
             }
+        }
+
+        /// <summary>
+        /// Reattaches a persisted trip to the authoritative need collection.
+        /// If the need snapshot was not present in this restore, its persisted
+        /// identity and state are restored here. This is recovery of an
+        /// existing obligation, not creation of new demand. Conflicting
+        /// identities fail closed instead of merging obligations.
+        /// </summary>
+        public HouseholdPurchasingNeed AttachRestoredNeed(HouseholdPurchasingNeed persistedNeed)
+        {
+            if (persistedNeed == null || persistedNeed.HouseholdId < 0
+                || persistedNeed.NeedSequence < 0 || string.IsNullOrWhiteSpace(persistedNeed.ItemId))
+            {
+                diagnostics.Add("AttachRestoredNeed: invalid persisted need identity; attachment refused.");
+                return null;
+            }
+
+            // The sequence was already issued by the saved authority even
+            // if a conflicting record below prevents recovery. Never reuse it.
+            nextSequence = Math.Max(nextSequence, persistedNeed.NeedSequence + 1);
+
+            foreach (HouseholdPurchasingNeed existing in all)
+            {
+                if (existing == null || existing.NeedSequence != persistedNeed.NeedSequence) continue;
+                if (existing.HouseholdId != persistedNeed.HouseholdId
+                    || !string.Equals(existing.ItemId, persistedNeed.ItemId, StringComparison.Ordinal))
+                {
+                    diagnostics.Add($"AttachRestoredNeed: need sequence {persistedNeed.NeedSequence} conflicts with existing household/item identity; attachment refused.");
+                    return null;
+                }
+
+                return existing;
+            }
+
+            HouseholdPurchasingNeed openForItem = GetOpenNeed(persistedNeed.HouseholdId, persistedNeed.ItemId);
+            if (persistedNeed.Status == PurchasingNeedStatus.Open && openForItem != null)
+            {
+                diagnostics.Add($"AttachRestoredNeed: household {persistedNeed.HouseholdId} already has open need {openForItem.NeedSequence} for '{persistedNeed.ItemId}'; persisted sequence {persistedNeed.NeedSequence} refused.");
+                return null;
+            }
+
+            HouseholdPurchasingNeed restored = CopyNeed(persistedNeed);
+            all.Add(restored);
+            nextSequence = Math.Max(nextSequence, restored.NeedSequence + 1);
+            if (restored.Status == PurchasingNeedStatus.Open)
+                openByKey[Key(restored.HouseholdId, restored.ItemId)] = restored;
+            return restored;
         }
 
         private static HouseholdPurchasingNeed CopyNeed(HouseholdPurchasingNeed need)

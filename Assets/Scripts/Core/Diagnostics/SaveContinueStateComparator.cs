@@ -21,14 +21,12 @@
 // (FinancialObligationSaveDto); shopping trips
 // (PlannedShoppingTripSaveDto); business runtime state incl. retail
 // lots, category stock, worker slots (BusinessRuntimeState).
-// KNOWN-LOST pre-9f — BusinessInstanceState.GenericConfiguration.
-// ActiveProcesses (in-flight production processes: method, phase,
-// task, consumed inputs) had no save path anywhere; on Continue an
-// in-flight furniture batch vanished and its already-consumed inputs
-// were destroyed with it, no refund, no record (F R-2). Lane 9f
-// repaired the restore path; the comparator must still CATCH a loss
-// if it happens, and must treat a loud refusal as a flagged outcome,
-// never as a silent pass.
+// Current source has a business DTO path for
+// BusinessInstanceState.GenericConfiguration.ActiveProcesses, and Lane
+// 9f exercises process/task restoration in focused fixtures. The
+// comparator must still CATCH an actual loss or loud refusal; neither
+// source presence nor a fixture substitutes for a fresh-scene Main
+// Scene Continue verification.
 //
 // Only meaningful changes are defects. Legitimate restoration
 // transformations are defined by the existing authorities — e.g. Lane
@@ -242,9 +240,9 @@ namespace LandLedgers.Diagnostics
                     "List<PlannedShoppingTripSaveDto>", "Persisted (DTO-verified)."),
                 new PersistenceExpectation("Business", "Runtime state (retail lots, category stock, worker slots)", true,
                     "BusinessRuntimeState", "Persisted (DTO-verified)."),
-                new PersistenceExpectation("Production", "ActiveProcesses (in-flight generic production)", false,
-                    "GenericProductionRuntimeRegistry — NO save path pre-9f (F R-2)",
-                    "KNOWN-LOST pre-9f: an in-flight furniture batch and its consumed inputs vanished on Continue. Lane 9f repaired the restore path (restore or refuse loudly); the comparator still catches any loss."),
+                new PersistenceExpectation("Production", "ActiveProcesses (in-flight generic production)", true,
+                    "BusinessInstanceState.CaptureSaveDto / FromSaveDto -> GenericBusinessConfiguration.CaptureSaveDto / FromSaveDto",
+                    "Source DTO capture/restore exists and Lane9fProductionRestoreTests covers process/task continuation. Main Scene fresh-scene Continue and consumed-input conservation remain unverified; the comparator still flags any actual loss or loud refusal."),
                 new PersistenceExpectation("Production", "Bakery batches (in-progress)", false,
                     "BakeryShopRuntime / GenericProductionRuntimeRegistry",
                     "Production and delivery Save/Continue integrity (F R-2, C-5): an unfinished batch must survive Continue without disappearing or duplicating."),

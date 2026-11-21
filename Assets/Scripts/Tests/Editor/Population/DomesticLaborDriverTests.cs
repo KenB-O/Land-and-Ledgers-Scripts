@@ -702,8 +702,8 @@ namespace LandLedgers.Editor.Population
             Assert.AreEqual(1, f.Driver.Pending.Count);
             Assert.AreEqual(DomesticTaskCatalog.FuelHandlingId, f.Driver.Pending[0].DefinitionId);
 
-            // Simulate the production movement refusal the OLD leg-0 code
-            // returned (no Firewood point): the flight fails and the task
+            // Simulate the historical movement refusal when a home has no
+            // Firewood point: the flight fails and the task
             // stays Queued. With the fallback input set, the next DriveDay
             // must re-adopt it instead of parking it.
             f.Driver.AdvanceTick(failedDay * 86400f + 990 * 60f, f.Tasks,

@@ -267,6 +267,13 @@ namespace LandLedgers.Orchestration.Systems
         [SerializeField, Tooltip("Optional: weekly profit posts hook into its reset. Found automatically if empty.")]
         private SharedBusinessRuntimeManager sharedBusinessRuntime;
 
+        // Lane 9b (Agent L F-L2): the town-pulse runtime for the daily
+        // demand resolution in DriveTownPulseDemand. Lazily resolved
+        // (FindAnyObjectByType) and cached; null means no pulse runtime
+        // exists, and the drive simply skips — never a store-runtime
+        // gate. Runtime-only, never serialized.
+        private TownPulseRuntimeManager townPulseRuntime;
+
         // Review 2 vertical slice Pass D2 (owner-decided horse feed):
         // in-memory registry of owner-added General Store feed items
         // (Review2StoreHorseFeed). Not serialized and NOT saved by
@@ -6023,6 +6030,12 @@ namespace LandLedgers.Orchestration.Systems
             // shared 600-min budget first; the search then refuses honestly
             // when the remainder cannot cover the trip. No budget change.
             DriveWorkAssignmentBeforeShopping(absoluteDayIndex);
+            // Lane 9b (Agent L F-L1/F-L2): the daily household reserve
+            // and heating drive — it must run BEFORE DriveDailyNeeds so
+            // the day's demand snapshot is fresh when shopping plans.
+            // It lives on this independent hub, never behind a
+            // player-owned business.
+            DriveHouseholdReserveDay(absoluteDayIndex);
             DriveDailyNeeds(absoluteDayIndex);
             // Pass VII Workstream B (P1-5): daily horse care had no production
             // caller — horses never tired and never needed care. Fed from the
@@ -9157,6 +9170,133 @@ namespace LandLedgers.Orchestration.Systems
                 Debug.Log("[SimulationDrivers] postal revenue day " + absoluteDayIndex + ": " +
                     string.Join(" | ", diag));
             }
+        }
+
+        /// <summary>
+        /// Lane 9b (Agent L F-L1/F-L2): the daily household reserve and
+        /// heating drive. HouseholdReserveEvaluator.ResolveDailyUse used
+        /// to run only inside GeneralStoreRuntimeManager.ResolveDailySales,
+        /// which early-returns every day in a town with no player General
+        /// Store — so heating fuel never burned after day 0 and demand
+        /// snapshots never refreshed. This drive runs on the independent
+        /// daily hub instead: no player-owned business is required, only
+        /// the hub and the population. It runs BEFORE DriveDailyNeeds so
+        /// the day's demand snapshot is fresh when shopping plans.
+        /// The legacy reserve-purchase step
+        /// (GeneralStoreRuntimeManager.ResolveHouseholdReserveNeeds) is
+        /// deliberately NOT called here: the embodied shopping loop in
+        /// DriveDailyNeeds is the live purchase path, and running the
+        /// legacy loop alongside it would double-charge households for
+        /// the same need (L-04 — owner/design decision still owed).
+        /// ResolveDailyUse is day-keyed (lastReserveDepletionDayIndex),
+        /// so a player-store ResolveDailySales later the same day is a
+        /// no-op for consumption, never a second burn.
+        /// Public so the bootstrapper can run the opening day through
+        /// this same single cadence (F-L8).
+        /// </summary>
+        public void DriveHouseholdReserveDay(int absoluteDayIndex)
+        {
+            if (hub == null || populationManager?.State?.households == null || timeManager == null)
+            {
+                return;
+            }
+
+            CalendarAnchor anchor = timeManager.Settings != null ? timeManager.TimelineAnchor : CalendarAnchor.Default;
+            // The physical household food authority flag: the same
+            // condition the shopping-loop wiring uses
+            // (householdShoppingLoop != null). Until the first
+            // DriveDailyNeeds builds the loop, food stays on the legacy
+            // reserve cadence — exactly the pre-Lane-9b opening-day
+            // behaviour.
+            bool foodInventoryIsAuthoritative = householdShoppingLoop != null;
+            foreach (HouseholdState household in populationManager.State.households)
+            {
+                if (household == null)
+                {
+                    continue;
+                }
+
+                HouseholdReserveEvaluator.ResolveDailyUse(
+                    household,
+                    absoluteDayIndex,
+                    anchor,
+                    ResolveHouseholdStoves(household),
+                    foodInventoryIsAuthoritative);
+                household.demandSnapshot = HouseholdReserveEvaluator.BuildDemandSnapshot(household);
+            }
+
+            DriveTownPulseDemand(absoluteDayIndex);
+        }
+
+        /// <summary>
+        /// Lane 9b (Agent L F-L2): town-pulse demand resolution, re-homed
+        /// from GeneralStoreRuntimeManager.ResolveTownPulseDemand. The only
+        /// guard is the town-pulse runtime existing — never a store
+        /// runtime. The aggregate pulse is a demand signal, not a buyer:
+        /// the store leg always fulfils zero (see
+        /// GeneralStoreRuntimeManager.ResolveTownPulseCategoryDemand), and
+        /// the support-industry leg reports through the shared runtime's
+        /// TrySellTownPulseDemand, which likewise never books a sale.
+        /// BeginDailyResolution is day-keyed, so a second resolution the
+        /// same day returns no lines and records nothing twice.
+        /// </summary>
+        private void DriveTownPulseDemand(int absoluteDayIndex)
+        {
+            townPulseRuntime ??= FindAnyObjectByType<TownPulseRuntimeManager>();
+            if (townPulseRuntime == null)
+            {
+                return;
+            }
+
+            IReadOnlyList<TownPulseDemandLine> demandLines = townPulseRuntime.BeginDailyResolution(absoluteDayIndex);
+            if (demandLines == null || demandLines.Count == 0)
+            {
+                return;
+            }
+
+            for (int i = 0; i < demandLines.Count; i++)
+            {
+                TownPulseDemandLine line = demandLines[i];
+                if (line == null)
+                {
+                    continue;
+                }
+
+                int requestedUnits = line.UnitsPerDay;
+                int supportFulfilledUnits = ResolveTownPulseSupportIndustryDemand(line.CategoryId, requestedUnits);
+                townPulseRuntime.RecordDailyFulfillment(
+                    line.CategoryId,
+                    requestedUnits,
+                    Mathf.Min(requestedUnits, supportFulfilledUnits));
+            }
+
+            townPulseRuntime.CompleteDailyResolution(absoluteDayIndex);
+        }
+
+        /// <summary>
+        /// Lane 9b (Agent L F-L2): the support-industry leg of town-pulse
+        /// demand, moved verbatim from
+        /// GeneralStoreRuntimeManager.ResolveTownPulseSupportIndustryDemand
+        /// — the shared runtime is the authority, not any store.
+        /// </summary>
+        private int ResolveTownPulseSupportIndustryDemand(string categoryId, int requestedUnits)
+        {
+            if (requestedUnits <= 0 || sharedBusinessRuntime == null)
+            {
+                return 0;
+            }
+
+            HouseholdReserveDefinition definition = HouseholdReserveCatalog.Get(categoryId);
+            if (definition == null)
+            {
+                return 0;
+            }
+
+            return sharedBusinessRuntime.TrySellTownPulseDemand(
+                definition.CategoryId,
+                definition.LocalSellerCategoryIds,
+                requestedUnits,
+                out _);
         }
 
         private void DriveDailyNeeds(int absoluteDayIndex)
@@ -15563,6 +15703,15 @@ namespace LandLedgers.Orchestration.Systems
                 }
 
                 int ledgerBalance = hub.HouseholdLedgers.Get(household.id)?.GetBalanceCents() ?? 0;
+                // Lane 9b (A7): real affordability, not zeros. Obligations
+                // are the household's payments coming due this week from
+                // the shared obligation authority; expected income is the
+                // agreed weekly wage of its employed members. Both are
+                // weekly-horizon figures, so the monitor's cash-strain
+                // comparison (obligations vs income) compares like with
+                // like. No authority, no income — never a guessed figure.
+                int upcomingObligationCents = HouseholdUpcomingObligationCents(household.id, absoluteDayIndex);
+                int expectedIncomeCents = HouseholdExpectedWeeklyIncomeCents(activeMemberIds);
                 var supplyAccess = new HouseholdSupplyAccess
                 {
                     HasGeneralStore = HasReachableStockedFoodSeller(household, policy, absoluteDayIndex),
@@ -15570,8 +15719,16 @@ namespace LandLedgers.Orchestration.Systems
                     // bound to this directory, so do not advertise access
                     // that the commerce path cannot execute.
                     HasOffMapAccess = false,
-                    CanProduce = false,
-                    HasCash = ledgerBalance > 0,
+                    // Lane 9b (A7): can cook only with an installed stove
+                    // and flour on hand — the stove registry is hub-owned,
+                    // the flour is the household's own lot stock.
+                    CanProduce = HouseholdCanCook(household, inventory),
+                    // Lane 9b (A7): cash only when the ledger balance
+                    // covers the cost of topping the household's food
+                    // reserves up to the monitor's target at the cheapest
+                    // prices a known seller actually offers.
+                    HasCash = HouseholdCanAffordFoodTopUp(
+                        household, inventory, expectedDailyUse, ledgerBalance, activeMemberIds),
                 };
 
                 monitor.Evaluate(
@@ -15580,8 +15737,8 @@ namespace LandLedgers.Orchestration.Systems
                     expectedDailyUse,
                     isColdSeason,
                     supplyAccess,
-                    upcomingObligationCents: 0,
-                    expectedIncomeCents: 0,
+                    upcomingObligationCents: upcomingObligationCents,
+                    expectedIncomeCents: expectedIncomeCents,
                     dayIndex: absoluteDayIndex,
                     // Plan 02 Slice 2: suppress needs no legitimately known
                     // seller recognizes (recognition only — never stock).
@@ -15603,6 +15760,228 @@ namespace LandLedgers.Orchestration.Systems
             {
                 diag.Add($"[SimulationDrivers] {monitorDiagnostic}");
             }
+        }
+
+        /// <summary>
+        /// Lane 9b (A7): obligations coming due for a household in the
+        /// coming week, from the shared FinancialObligationAuthority —
+        /// the debtor key is "household:&lt;id&gt;" (SliceBusinessCredit).
+        /// A maturity inside the week (including an overdue one) counts
+        /// in full; an instalment obligation counts its weekly share,
+        /// using the same instalment-to-week conversion
+        /// BusinessLenderService uses. Unscheduled obligations (no
+        /// maturity, no instalments) have no payment due this week and
+        /// count 0 here — they remain visible as total outstanding
+        /// elsewhere, never invented here.
+        /// </summary>
+        private int HouseholdUpcomingObligationCents(int householdId, int absoluteDayIndex)
+        {
+            if (hub?.FinancialObligations == null)
+            {
+                return 0;
+            }
+
+            string debtor = "household:" + householdId;
+            int upcoming = 0;
+            int weekEnd = Mathf.Max(0, absoluteDayIndex) + 7;
+            foreach (FinancialObligation obligation in hub.FinancialObligations.Obligations)
+            {
+                if (obligation == null || obligation.Settled
+                    || !string.Equals(obligation.Debtor, debtor, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (obligation.MaturityDayIndex >= 0 && obligation.MaturityDayIndex <= weekEnd)
+                {
+                    upcoming += obligation.TotalOutstandingCents;
+                }
+                else if (obligation.PaymentTerms != null
+                    && obligation.PaymentTerms.InstallmentPrincipalCents > 0
+                    && obligation.PaymentTerms.PaymentIntervalDays > 0)
+                {
+                    upcoming += obligation.PaymentTerms.InstallmentPrincipalCents * 7
+                        / Math.Max(1, obligation.PaymentTerms.PaymentIntervalDays);
+                }
+            }
+
+            return Math.Max(0, upcoming);
+        }
+
+        /// <summary>
+        /// Lane 9b (A7): expected weekly wage income for a household —
+        /// the agreed weekly wage of every active employment held by an
+        /// active household member, read from the shared business
+        /// runtimes' employment registries (the single source for agreed
+        /// compensation). No employment, no expected income — never a
+        /// guessed figure.
+        /// </summary>
+        private int HouseholdExpectedWeeklyIncomeCents(List<int> activeMemberIds)
+        {
+            if (sharedBusinessRuntime?.Businesses == null || activeMemberIds == null || activeMemberIds.Count == 0)
+            {
+                return 0;
+            }
+
+            var members = new HashSet<int>(activeMemberIds);
+            int expected = 0;
+            foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
+            {
+                if (business?.RuntimeState?.EmploymentRegistry == null)
+                {
+                    continue;
+                }
+
+                foreach (EmploymentRelationship relationship in business.RuntimeState.EmploymentRegistry
+                    .GetActiveByEmployer(business.InstanceId))
+                {
+                    if (relationship == null || !relationship.IsActive
+                        || !members.Contains(relationship.EmployeePersonId))
+                    {
+                        continue;
+                    }
+
+                    expected += Mathf.Max(0, relationship.Compensation.AgreedWeeklyWageCents);
+                }
+            }
+
+            return Math.Max(0, expected);
+        }
+
+        /// <summary>
+        /// Lane 9b (A7): a household can cook when it has an installed
+        /// stove (hub stove registry, empty when no stove is installed)
+        /// and flour on hand in its own inventory lots.
+        /// </summary>
+        private bool HouseholdCanCook(HouseholdState household, HouseholdInventory inventory)
+        {
+            if (household == null || inventory == null)
+            {
+                return false;
+            }
+
+            HouseholdStoveRegistry stoves = ResolveHouseholdStoves(household);
+            if (stoves == null || stoves.Stoves == null || stoves.Stoves.Count == 0)
+            {
+                return false;
+            }
+
+            return inventory.GetAvailableUnits(HouseholdItemCatalog.FlourId) > 0;
+        }
+
+        /// <summary>
+        /// Lane 9b (A7): the cheapest price any seller known to the
+        /// household actually offers for an item, in cents per unit, or
+        /// -1 when no known seller stocks it at a positive price.
+        /// "Known" is the household's own seller knowledge, not the
+        /// directory alone — an unknown seller cannot be shopped.
+        /// </summary>
+        private int CheapestKnownSellerPriceCents(string itemId, List<int> activeMemberIds)
+        {
+            if (string.IsNullOrWhiteSpace(itemId) || supplierDirectory?.All == null
+                || sellerKnowledge == null || activeMemberIds == null || activeMemberIds.Count == 0)
+            {
+                return -1;
+            }
+
+            int cheapest = -1;
+            foreach (IGoodsSupplier supplier in supplierDirectory.All)
+            {
+                if (!(supplier is IItemResolvingSupplier resolving)
+                    || string.IsNullOrWhiteSpace(resolving.CategoryForItem(itemId))
+                    || resolving.ItemStockUnits(itemId) <= 0)
+                {
+                    continue;
+                }
+
+                bool known = false;
+                foreach (int memberId in activeMemberIds)
+                {
+                    if (sellerKnowledge.Knows(memberId, supplier.SupplierBusinessId))
+                    {
+                        known = true;
+                        break;
+                    }
+                }
+
+                if (!known)
+                {
+                    continue;
+                }
+
+                int price = resolving.ItemPricePerUnitCents(itemId);
+                if (price <= 0)
+                {
+                    continue;
+                }
+
+                cheapest = cheapest < 0 ? price : Math.Min(cheapest, price);
+            }
+
+            return cheapest;
+        }
+
+        /// <summary>
+        /// Lane 9b (A7): "has cash" means the ledger balance covers the
+        /// cost of topping the household's food reserves up to the
+        /// shortage monitor's target at the cheapest prices known
+        /// sellers offer — the same top-up size the monitor itself
+        /// computes (target days minus days covered, per meal item).
+        /// The per-item shortfalls are summed independently, so shared
+        /// food cover (I1-M1) can only make the real need smaller, never
+        /// larger. No known price for a short item means the household
+        /// cannot establish that it can pay for that item: not
+        /// affordable. A household with no shortfall keeps the old
+        /// balance-greater-than-zero answer (no need, no purchase to
+        /// afford).
+        /// </summary>
+        private bool HouseholdCanAffordFoodTopUp(
+            HouseholdState household,
+            HouseholdInventory inventory,
+            Dictionary<string, int> expectedDailyUse,
+            int ledgerBalanceCents,
+            List<int> activeMemberIds)
+        {
+            if (household == null || inventory == null || expectedDailyUse == null)
+            {
+                return false;
+            }
+
+            float targetDays = Mathf.Max(
+                Mathf.Max(0f, householdFoodReorderDays),
+                Mathf.Max(householdFoodReorderDays, householdFoodTargetDays));
+            int topUpCostCents = 0;
+            bool anyShortfall = false;
+            foreach (KeyValuePair<string, int> use in expectedDailyUse)
+            {
+                if (use.Value <= 0)
+                {
+                    continue;
+                }
+
+                float daysCovered = inventory.EstimateDaysOfSupply(use.Key, use.Value);
+                if (daysCovered >= targetDays)
+                {
+                    continue;
+                }
+
+                anyShortfall = true;
+                int unitsNeeded = Mathf.CeilToInt((targetDays - daysCovered) * Mathf.Max(1, use.Value));
+                int cheapestPrice = CheapestKnownSellerPriceCents(use.Key, activeMemberIds);
+                if (cheapestPrice < 0)
+                {
+                    return false;
+                }
+
+                topUpCostCents += unitsNeeded * cheapestPrice;
+            }
+
+            if (!anyShortfall)
+            {
+                return ledgerBalanceCents > 0;
+            }
+
+            return ledgerBalanceCents >= topUpCostCents;
         }
 
         private bool HasReachableStockedFoodSeller(

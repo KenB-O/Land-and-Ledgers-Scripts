@@ -660,6 +660,16 @@ namespace LandLedgers.Economy
         private int lastUnregisteredHouseholdNeedsWeekKey = -1;
 
         /// <summary>
+        /// Lane 9b (Agent L F-L3): the week key household-upgrade
+        /// settlement effects last ran for. The evaluator is not
+        /// idempotent (income would credit twice, spoilage apply twice),
+        /// so the shared weekly pass — the single home for the effect
+        /// now — refuses a second run inside the same week. Runtime
+        /// state only; never serialized.
+        /// </summary>
+        private int lastHouseholdUpgradeSettlementWeekKey = -1;
+
+        /// <summary>
         /// M5 (Plan 04, D-S6): the week key each null-authority warning
         /// was last logged for, keyed by "authority|consequence", so the
         /// loud-wiring logs fire at most once per week per pair. Runtime
@@ -1206,6 +1216,19 @@ namespace LandLedgers.Economy
 
             ResolveNpcGeneralStoreWeeklyPayroll();
 
+            // Lane 9b (Agent L F-L3): weekly household-upgrade settlement
+            // effects — moved here from
+            // GeneralStoreRuntimeManager.ResolveWeeklyPayrollAndReorder,
+            // whose player-store gate meant upgrade income, upkeep and
+            // spoilage never ran in a town with no player store.
+            // OWNER-DECISION-PENDING: implemented per the audit's
+            // recommendation; awaiting owner confirmation that upgrade
+            // income/upkeep is a household system rather than a
+            // store-system artifact. The call was MOVED, not copied —
+            // running it in both passes would credit upgrade income and
+            // apply spoilage twice in one week.
+            operationCount += ApplyWeeklyHouseholdSettlementEffects(builder);
+
             // M2 (Plan 04, D-S1 sequencing): REAL TRADE BEFORE FORMULA.
             // Crop transfers, recurring orders, and transfer agreements
             // run before the converter, so the converter sees post-trade
@@ -1260,6 +1283,61 @@ namespace LandLedgers.Economy
 
             // M2: the weekly demand signal lives only for this pass.
             weeklyDemandIntents = null;
+        }
+
+        /// <summary>
+        /// Lane 9b (Agent L F-L3): weekly household-upgrade settlement
+        /// effects (garden/cellar/outbuilding reserve production, weekly
+        /// production income, weekly upkeep, weekly spoilage), moved here
+        /// from GeneralStoreRuntimeManager.ApplyWeeklyHouseholdSettlementEffects.
+        /// OWNER-DECISION-PENDING: implemented per the audit's
+        /// recommendation; awaiting owner confirmation that upgrade
+        /// income/upkeep is a household system rather than a store-system
+        /// artifact. Week-keyed: the evaluator is not idempotent, so a
+        /// second invocation inside the same week settles nothing.
+        /// Returns the number of households settled.
+        /// </summary>
+        private int ApplyWeeklyHouseholdSettlementEffects(StringBuilder builder)
+        {
+            int weekKey = GetCurrentWeekKey();
+            if (weekKey >= 0 && weekKey == lastHouseholdUpgradeSettlementWeekKey)
+            {
+                return 0;
+            }
+
+            PopulationState population = populationManager != null ? populationManager.State : null;
+            if (population?.households == null)
+            {
+                LogUnwiredAuthorityOncePerWeek("populationManager", "household upgrade settlement effects were skipped");
+                return 0;
+            }
+
+            int dayIndex = CurrentDayIndex;
+            int settled = 0;
+            for (int i = 0; i < population.households.Count; i++)
+            {
+                HouseholdState household = population.households[i];
+                if (household == null)
+                {
+                    continue;
+                }
+
+                HouseholdLedger ledger = HouseholdLedgers != null ? HouseholdLedgers.GetOrCreate(household.id) : null;
+                HouseholdUpgradeEconomyEvaluator.ApplyWeeklySettlementEffects(household, ledger, Mathf.Max(0, dayIndex));
+                settled++;
+            }
+
+            if (weekKey >= 0)
+            {
+                lastHouseholdUpgradeSettlementWeekKey = weekKey;
+            }
+
+            if (settled > 0)
+            {
+                AppendSummarySegment(builder, $"household upgrade settlement: {settled} households");
+            }
+
+            return settled;
         }
 
         private int ResolveAutomaticBusinessCashTransfers(BusinessCashAutoTransferMode mode, StringBuilder builder)

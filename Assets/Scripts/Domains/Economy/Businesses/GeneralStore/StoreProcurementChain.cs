@@ -140,6 +140,12 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
     /// </summary>
     public sealed class StoreRestockService
     {
+        // Lane 9b (Agent D D-6): minutes in one simulation day — the
+        // same 1440-minute day SimulationDrivers uses (TimeOfDay01 *
+        // 1440f). A delivery's TransitMinutes is the authored route
+        // transit in minutes, converted from the order's lead days.
+        private const int MinutesPerDay = 1440;
+
         private readonly List<StoreProcurementOrder> orders = new List<StoreProcurementOrder>();
         private readonly List<StoreDelivery> deliveries = new List<StoreDelivery>();
         private readonly List<string> diagnostics = new List<string>();
@@ -610,6 +616,20 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     continue;
                 }
 
+                // Lane 9b (Agent D D-6): the delivery records the
+                // authored route transit instead of teleporting on paper
+                // (TransitMinutes = 0). The order already waited that
+                // transit as Ordered — ExpectedArrivalDayIndex is the
+                // order day plus the supplier's LeadTimeDays (for the
+                // regional adapters, ceil(route miles / 96 wagon miles
+                // per day)) — so the delivery's transit is the lead the
+                // order itself waited, in minutes. Restock still arrives
+                // only on/after the arrival day (the due-order check
+                // above); this makes the interval the record claims.
+                // No second transit wait is added after shipping: that
+                // would charge the same route twice.
+                int transitDays = Math.Max(0, order.ExpectedArrivalDayIndex - order.OrderDayIndex);
+                int transitMinutes = transitDays * MinutesPerDay;
                 order.Stage = StoreProcurementStage.InTransit;
                 var delivery = new StoreDelivery
                 {
@@ -619,9 +639,9 @@ namespace LandLedgers.Economy.Businesses.GeneralStore
                     ItemId = order.ItemId ?? string.Empty,
                     Units = shipped,
                     ShippedDayIndex = Math.Max(0, dayIndex),
-                    TransitMinutes = 0,
+                    TransitMinutes = transitMinutes,
                     Arrived = true,
-                    Provenance = $"{order.Provenance} → delivery shipped day {dayIndex}",
+                    Provenance = $"{order.Provenance} → delivery shipped day {dayIndex} after {transitDays}d route transit ({transitMinutes} min)",
                 };
                 delivery.Provenance = $"delivery {delivery.DeliveryId}: " + delivery.Provenance;
                 deliveries.Add(delivery);

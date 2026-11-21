@@ -37,7 +37,8 @@ namespace LandLedgers.Pathing
             int floorIndex = 0,
             string functionalSpaceId = null,
             int startInteriorBuildingId = -1,
-            int targetInteriorBuildingId = -1)
+            int targetInteriorBuildingId = -1,
+            string attribution = null)
         {
             Start = start;
             Target = target;
@@ -48,6 +49,7 @@ namespace LandLedgers.Pathing
             FunctionalSpaceId = functionalSpaceId;
             StartInteriorBuildingId = startInteriorBuildingId;
             TargetInteriorBuildingId = targetInteriorBuildingId;
+            Attribution = attribution;
             suppressDiagnostics = !publishDiagnostics;
             SuppressFailureLog = suppressFailureLog;
         }
@@ -64,6 +66,39 @@ namespace LandLedgers.Pathing
         public bool PublishDiagnostics => !suppressDiagnostics;
         public bool SuppressFailureLog { get; }
 
+        /// <summary>
+        /// Lane 9c (M-R9): caller-held attribution for the failure warning —
+        /// task family, person and intended destination where the emitter
+        /// holds them (e.g. "task='domestic.meal-prep'
+        /// activity='stove-h1-a-stove'"). Free text, never parsed; the
+        /// label already carries the mover name ("Person 003 Glen Pierce
+        /// door-to-door"), so this field adds what the label cannot.
+        /// </summary>
+        public string Attribution { get; }
+
+        /// <summary>
+        /// Lane 9c (M-R9): the StartNotWalkable (and other pathing
+        /// failure) warning text, with attribution. The historical text
+        /// "Pathing request failed ({category}): {reason}" is preserved
+        /// as a strict prefix — the Lane 1/2 refusal classifiers match
+        /// on its substrings — and the attribution rides as a suffix
+        /// bracket: request label, caller attribution, and the
+        /// from/to cells (plus the target interior building when the
+        /// request carries one), so the next run's warnings are
+        /// attributable without the checklist.
+        /// </summary>
+        public static string FormatFailureWarning(PathingRequest request, PathingFailureCategory category, string reason)
+        {
+            string message = $"Pathing request failed ({category}): {reason}";
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(request.Label)) parts.Add(request.Label);
+            if (!string.IsNullOrWhiteSpace(request.Attribution)) parts.Add(request.Attribution);
+            parts.Add($"from {request.Start} to {request.Target}");
+            if (request.TargetInteriorBuildingId >= 0) parts.Add($"target building {request.TargetInteriorBuildingId}");
+            if (parts.Count == 0) return message;
+            return message + " [" + string.Join(" | ", parts) + "]";
+        }
+
         public static PathingRequest CreateProbe(
             GridCoord start,
             GridCoord target,
@@ -73,7 +108,8 @@ namespace LandLedgers.Pathing
             int floorIndex = 0,
             string functionalSpaceId = null,
             int startInteriorBuildingId = -1,
-            int targetInteriorBuildingId = -1)
+            int targetInteriorBuildingId = -1,
+            string attribution = null)
         {
             // Candidate probes return normal success/failure data without replacing the visible debug path or logging expected misses.
             return new PathingRequest(
@@ -87,7 +123,8 @@ namespace LandLedgers.Pathing
                 floorIndex: floorIndex,
                 functionalSpaceId: functionalSpaceId,
                 startInteriorBuildingId: startInteriorBuildingId,
-                targetInteriorBuildingId: targetInteriorBuildingId);
+                targetInteriorBuildingId: targetInteriorBuildingId,
+                attribution: attribution);
         }
     }
 

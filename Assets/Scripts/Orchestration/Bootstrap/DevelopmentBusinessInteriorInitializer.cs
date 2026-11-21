@@ -119,7 +119,6 @@ namespace LandLedgers.Orchestration
             foreach (DevelopmentTownConfiguration.BusinessDefinition definition in configuration.Businesses)
             {
                 DevelopmentTownConfiguration.BusinessInteriorFixture[] fixtures = definition?.opening?.interiorFixtures;
-                if (fixtures == null || fixtures.Length == 0) continue;
                 if (!TryResolveBusiness(definition, configuration, businessRuntime.Businesses, out BusinessInstanceState business, out string resolveError))
                 {
                     result.Diagnostics.Add(resolveError);
@@ -132,6 +131,19 @@ namespace LandLedgers.Orchestration
                     result.Diagnostics.Add($"Business '{business.RuntimeDisplayName}' ({business.InstanceId}) has no assigned building with a live BuildingFootprintAuthority; fixtures were not placed.");
                     continue;
                 }
+
+                // Lane 9c (B-7 + M-R13): startup access validation for the
+                // business building — a Counter (service point) and a
+                // Receiving point, each reachable from main-entrance.
+                // Runs for every resolved business, including fixture-less
+                // ones (freight company, sawmill, carpentry), which the
+                // old fixtures-first continue used to skip entirely.
+                // Gaps are warnings, not diagnostics-list entries, so they
+                // surface at startup instead of as silent task failures.
+                ValidateBusinessAccess(building.runtimeFootprintAuthority, building.id,
+                    business.RuntimeDisplayName, business.InstanceId);
+
+                if (fixtures == null || fixtures.Length == 0) continue;
 
                 BusinessEquipmentRegister register = systemsHub.EquipmentRegisterFor(business.InstanceId);
                 BusinessRuntimeState businessState = business.RuntimeState;
@@ -200,6 +212,80 @@ namespace LandLedgers.Orchestration
                     businessState.RecordAppliedScenarioEndowment(endowmentId);
             }
             return result;
+        }
+
+        /// <summary>
+        /// Lane 9c (B-7 + M-R13): per-business startup access validation.
+        /// A business needs a Counter (service point) and a Receiving
+        /// point, each authored and reachable from main-entrance via the
+        /// type-based resolver. Gaps are logged as warnings here so they
+        /// surface at startup (M-07/M-08/M-15: the bakery and fuel
+        /// dealer have no counter point, and no business but the lumber
+        /// yard has a receiving point). The gap text itself is decided
+        /// by StartupAccessValidator (harness-pinned); this method only
+        /// computes each check from the live authority.
+        /// </summary>
+        private static void ValidateBusinessAccess(
+            BuildingFootprintAuthority authority, int buildingId, string displayName, string instanceId)
+        {
+            if (authority == null) return;
+            var checks = new List<StartupAccessValidator.ActivityAccessCheck>
+            {
+                BuildAccessCheck(authority, buildingId, BuildingActivityLocationType.Counter, requiresInteriorRoute: true),
+                BuildAccessCheck(authority, buildingId, BuildingActivityLocationType.Receiving, requiresInteriorRoute: true),
+            };
+            var gaps = new List<string>();
+            StartupAccessValidator.AppendAccessGaps(
+                $"Business '{displayName}' ({instanceId}, building {buildingId})", checks, gaps);
+            foreach (string gap in gaps)
+                Debug.LogWarning("[StartupAccess] " + gap);
+        }
+
+        /// <summary>
+        /// Lane 9c: one required activity point, computed from the live
+        /// authority. Interior types go through the type-based resolver
+        /// (authored AND reachable from main-entrance); exterior types
+        /// (firewood pile) need presence only. When the resolver fails,
+        /// a scan of the authored locations distinguishes "no point
+        /// authored" from "point exists but no interior route". Shared
+        /// with DevelopmentTownFurnishingInitializer's home validation
+        /// (same assembly, internal); the pure gap decision lives in
+        /// StartupAccessValidator.
+        /// </summary>
+        internal static StartupAccessValidator.ActivityAccessCheck BuildAccessCheck(
+            BuildingFootprintAuthority authority, int buildingId,
+            BuildingActivityLocationType type, bool requiresInteriorRoute)
+        {
+            var check = new StartupAccessValidator.ActivityAccessCheck
+            {
+                TypeLabel = type.ToString(),
+                RequiresInteriorRoute = requiresInteriorRoute,
+            };
+            if (authority == null) return check;
+            if (requiresInteriorRoute)
+            {
+                if (authority.TryFindReachableActivityLocation(type, "main-entrance", buildingId,
+                        out ResolvedBuildingActivityLocation resolved, out _, out string reason))
+                {
+                    check.Found = true;
+                    check.LocationId = resolved.Id;
+                    check.ReachableFromMainEntrance = true;
+                    return check;
+                }
+                check.Reason = reason;
+            }
+            foreach (BuildingActivityLocationAuthoring candidate in authority.ActivityLocations ?? new List<BuildingActivityLocationAuthoring>())
+            {
+                if (candidate != null && candidate.type == type)
+                {
+                    check.Found = true;
+                    check.LocationId = candidate.id;
+                    break;
+                }
+            }
+            if (!check.Found && string.IsNullOrWhiteSpace(check.Reason))
+                check.Reason = $"No {type} activity is authored on this building.";
+            return check;
         }
 
         private static bool TryResolveBusiness(

@@ -300,6 +300,31 @@ namespace LandLedgers.FirstLedger
             return false;
         }
 
+        /// <summary>
+        /// Lane 9c (M-R8): the presentation facts AdvanceAutonomousWork
+        /// needs for a business task's assignee — whether the resident has
+        /// a managed on-map actor at all, and whether that actor's mover
+        /// is Hidden (or has no mover, which presents the same way: no
+        /// body that can move). False when the person has no managed
+        /// agent; off-map/dead come from PersonState, not the director.
+        /// </summary>
+        public bool TryGetPersonPresentationReadout(
+            int personId, out bool hasManagedActor, out bool isHidden)
+        {
+            hasManagedActor = false;
+            isHidden = false;
+            if (personId < 0) return false;
+            for (int i = 0; i < agents.Count; i++)
+            {
+                ManagedPersonAgent agent = agents[i];
+                if (agent?.person == null || agent.person.id != personId) continue;
+                hasManagedActor = true;
+                isHidden = agent.mover == null || agent.mover.IsHidden;
+                return true;
+            }
+            return false;
+        }
+
         /// <summary>Read-only physical route identity and progress for the development trace.</summary>
         public bool TryGetMovementTraceReadout(int personId, out string routeIdentity, out int routeGeneration,
             out int waypointIndex, out int waypointCount, out Vector3 routeDestination, out bool hasRouteDestination,
@@ -518,7 +543,8 @@ namespace LandLedgers.FirstLedger
             for (int i = 0; i < candidates.Count && sent < targetRoutes; i++)
             {
                 ManagedPersonAgent managed = candidates[i].Managed;
-                if (TrySendAgent(managed, storeBuildingId, PopulationScheduleState.GoingShopping, out ScheduledRouteFailureKind failureKind))
+                if (TrySendAgent(managed, storeBuildingId, PopulationScheduleState.GoingShopping, out ScheduledRouteFailureKind failureKind,
+                        $"destination=building:{storeBuildingId}"))
                 {
                     sent++;
                     continue;
@@ -1167,7 +1193,8 @@ namespace LandLedgers.FirstLedger
                     return true;
                 }
                 if (!TrySendAgent(managed, targetBuildingId, nextState,
-                        out ScheduledRouteFailureKind failureKind, out refusal))
+                        out ScheduledRouteFailureKind failureKind, out refusal,
+                        $"destination=building:{targetBuildingId}"))
                 {
                     if (string.IsNullOrWhiteSpace(refusal)) refusal = failureKind.ToString();
                     return false;
@@ -1858,7 +1885,8 @@ namespace LandLedgers.FirstLedger
                         RecordMovementTrace(managed, "refused", "InteriorOriginUnreachable", home.id, reason, activityLocationId);
                         return DomesticActivityMovementResult.Unsupported;
                     }
-                    if (!TrySendAgent(managed, home.id, PopulationScheduleState.ReturningHome, out _))
+                    if (!TrySendAgent(managed, home.id, PopulationScheduleState.ReturningHome, out _,
+                            $"task='{flight.DefinitionId}' activity='{activityLocationId}'"))
                     {
                         reason = "No physical route reaches the resident's home entrance.";
                         return DomesticActivityMovementResult.Unsupported;
@@ -1980,7 +2008,8 @@ namespace LandLedgers.FirstLedger
 
                     List<Vector3> finalApproach = new() { selectedOutdoor, activity.WorldPosition };
                     if (!managed.mover.BeginGridRouteWithFinalWaypoints(
-                        exteriorStart, selectedOutdoorCell, finalApproach))
+                        exteriorStart, selectedOutdoorCell, finalApproach,
+                        $"task='{flight.DefinitionId}' activity='{activityLocationId}'"))
                     {
                         reason = $"No valid exterior route from {exteriorStart} reaches doorway approach {selectedOutdoorCell} and porch point '{activityLocationId}'.";
                         RecordMovementTrace(managed, "refused", "PorchRouteFailed", home.id, reason, activityLocationId);
@@ -2584,14 +2613,14 @@ namespace LandLedgers.FirstLedger
             return false;
         }
 
-        private bool TrySendAgent(ManagedPersonAgent managed, int targetBuildingId, PopulationScheduleState nextState, out ScheduledRouteFailureKind failureKind)
+        private bool TrySendAgent(ManagedPersonAgent managed, int targetBuildingId, PopulationScheduleState nextState, out ScheduledRouteFailureKind failureKind, string attribution = null)
         {
-            return TrySendAgent(managed, targetBuildingId, nextState, out failureKind, out _);
+            return TrySendAgent(managed, targetBuildingId, nextState, out failureKind, out _, attribution);
         }
 
         private bool TrySendAgent(ManagedPersonAgent managed, int targetBuildingId,
             PopulationScheduleState nextState, out ScheduledRouteFailureKind failureKind,
-            out string refusal)
+            out string refusal, string attribution = null)
         {
             failureKind = ScheduledRouteFailureKind.CandidateNotReady;
             refusal = string.Empty;
@@ -2648,8 +2677,11 @@ namespace LandLedgers.FirstLedger
             }
             else
             {
+                // Lane 9c (M-R9): the caller-held attribution (task
+                // family / destination) rides the request so a failed
+                // exterior route names what it was for.
                 started = managed.mover.BeginDoorToDoor(startAnchor, targetAnchor, false,
-                    startBuilding?.doorAnimator, targetBuilding?.doorAnimator);
+                    startBuilding?.doorAnimator, targetBuilding?.doorAnimator, attribution);
                 if (!started)
                 {
                     GridCoord actual = grid != null ? grid.WorldToCoord(managed.mover.transform.position) : default;

@@ -6341,6 +6341,13 @@ namespace LandLedgers.Orchestration.Systems
                     CleaningNeeded = hub.DomesticLaborDriver.CleaningNeeded(household.id),
                     ColdSeason = coldSeason,
                     HasAnimals = HouseholdOwnsAnimals(household.id, members),
+                    // Lane 9c (M-R4): no pen/pasture animal-care destination
+                    // exists in the dev town (no such activity location
+                    // type), so animal-care is never scheduled; the driver
+                    // gates on this flag and the need stays visible as a
+                    // diagnostic. When the owner authors a destination,
+                    // supply a real probe here instead of false.
+                    AnimalCareDestinationAvailable = false,
                     // B8 (Agent B, expanded campaign 2026-11-16): the
                     // cooking/fuel context the driver settles against.
                     // The household state (fuel reserve + heating
@@ -6395,6 +6402,49 @@ namespace LandLedgers.Orchestration.Systems
             return false;
         }
 
+        /// <summary>
+        /// Lane 9c (M-R1): the household stove's registry activity id for
+        /// meal prep / fuel-handling leg 1 — the per-stove id the binding
+        /// already carries (B-19), not the literal "stove". Null when the
+        /// household has no stove in the registry; the resolver then falls
+        /// back to the legacy literal so stove-less households keep their
+        /// current behaviour.
+        /// </summary>
+        private string FirstStoveActivityLocationId(int personId)
+        {
+            if (hub == null || householdMemberships == null) return null;
+            int householdId = householdMemberships.GetActiveHouseholdId(personId);
+            if (householdId < 0) return null;
+            HouseholdStoveRegistry stoves = hub.HouseholdStoveRegistryFor(householdId);
+            if (stoves?.Stoves == null) return null;
+            foreach (HouseholdStove stove in stoves.Stoves)
+            {
+                if (stove != null && !string.IsNullOrWhiteSpace(stove.ActivityLocationId))
+                    return stove.ActivityLocationId;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Lane 9c (M-R1): the type-based resolver
+        /// TryFindReachableActivityLocation, wired for chores — it existed
+        /// with zero production callers. Returns the resolved activity
+        /// location id for the named type, or false when that type has no
+        /// reachable authored point on the home. The type name arrives as
+        /// a string so the pure resolver helper stays Unity-free.
+        /// </summary>
+        private bool TryResolveDomesticActivityLocationByType(
+            BuildingFootprintAuthority authority, string typeName, int buildingId, out string locationId)
+        {
+            locationId = null;
+            if (authority == null || string.IsNullOrWhiteSpace(typeName)) return false;
+            if (!Enum.TryParse<BuildingActivityLocationType>(typeName, out BuildingActivityLocationType type)) return false;
+            if (!authority.TryFindReachableActivityLocation(type, "main-entrance", buildingId,
+                    out ResolvedBuildingActivityLocation resolved, out _, out _)) return false;
+            locationId = resolved.Id;
+            return !string.IsNullOrWhiteSpace(locationId);
+        }
+
         private DomesticActivityMovementResult ResolveDomesticActivityMovement(
             DomesticLaborDriver.InFlightDomesticTask flight, float currentGameSeconds)
         {
@@ -6408,9 +6458,18 @@ namespace LandLedgers.Orchestration.Systems
 
             string activityLocationId;
             if (string.Equals(flight.DefinitionId, DomesticTaskCatalog.MealPrepId, StringComparison.Ordinal))
-                activityLocationId = "stove";
+                // Lane 9c (M-R1): the stove registry's per-stove id, not
+                // the literal "stove" no Git asset authors (B-01/B-19).
+                activityLocationId = DomesticActivityLocationResolver.ResolveStoveLocationId(
+                    FirstStoveActivityLocationId(flight.PersonId));
             else if (string.Equals(flight.DefinitionId, DomesticTaskCatalog.ChoresId, StringComparison.Ordinal))
-                activityLocationId = (flight.DayIndex & 1) == 0 ? "cleaning" : "porch-dropoff";
+                // Lane 9c (M-R1): chores resolve by activity type via the
+                // existing resolver (Cleaning, then Porch), falling back
+                // to the legacy literal ids by day parity (B-02/B-04).
+                activityLocationId = DomesticActivityLocationResolver.ResolveChoreLocationId(
+                    flight.DayIndex,
+                    typeName => TryResolveDomesticActivityLocationByType(
+                        home.runtimeFootprintAuthority, typeName, home.id, out string resolvedId) ? resolvedId : null);
             else if (string.Equals(flight.DefinitionId, DomesticTaskCatalog.FuelHandlingId, StringComparison.Ordinal))
             {
                 // B3 (Agent B, expanded campaign 2026-11-16): the
@@ -6427,7 +6486,10 @@ namespace LandLedgers.Orchestration.Systems
                 // scope per the plan).
                 if (flight.FuelHandlingLeg > 0)
                 {
-                    activityLocationId = "stove";
+                    // Lane 9c (M-R1): leg 1 is the stove, the same
+                    // registry id meal-prep uses — not the literal.
+                    activityLocationId = DomesticActivityLocationResolver.ResolveStoveLocationId(
+                        FirstStoveActivityLocationId(flight.PersonId));
                 }
                 else
                 {
@@ -14873,6 +14935,11 @@ namespace LandLedgers.Orchestration.Systems
         {
             if (hub == null || wholeMinutes <= 0 || sharedBusinessRuntime == null) return;
             int tickStartMinute = Math.Max(0, minuteOfDay - wholeMinutes);
+            // Lane 9c (M-R8): resolved once per tick for the presentation
+            // gate below; FindAnyObjectByType per call site is the
+            // established pattern in this file.
+            LandLedgers.FirstLedger.PopulationPathingDirector presentationDirector =
+                FindAnyObjectByType<LandLedgers.FirstLedger.PopulationPathingDirector>();
             foreach (BusinessInstanceState business in sharedBusinessRuntime.Businesses)
             {
                 if (business == null) continue;
@@ -14975,6 +15042,21 @@ namespace LandLedgers.Orchestration.Systems
                     if (scheduledMinutes <= 0) continue;
                     if (!HasArrivedAtBusinessForReservedWork(task, business, activeReservations,
                             dayIndex, tickStartMinute, minuteOfDay)) continue;
+                    // Lane 9c (M-R8): a business task whose worker has no
+                    // body cannot accrue minutes — the same presentation
+                    // check domestic tasks already get. Runs regardless of
+                    // CustomerRef: the arrival gate above may be skipped
+                    // for customer tasks, but this must not be. Skip, not
+                    // interrupt: the task stays InProgress and the stale
+                    // sweep still owns its window, so a worker who gains
+                    // an actor later can resume.
+                    if (ShouldSkipBusinessWorkAccrual(task, presentationDirector, out string presentationRefusal))
+                    {
+                        LogRefusalDayKeyed("business-presentation:" + task.TaskId, dayIndex,
+                            "[BusinessTask] Task '" + task.TaskId + "' ('" + task.DefinitionId + "') for P"
+                            + task.AssigneeId.Id + " skipped: " + presentationRefusal + ".");
+                        continue;
+                    }
                     int workMinutes = scheduledMinutes;
                     if (workMinutes <= 0) continue;
                     if (hub.Tasks.RecordWorkProgress(task.TaskId, workMinutes, hub.WorkTimeBudgets,
@@ -14997,6 +15079,37 @@ namespace LandLedgers.Orchestration.Systems
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Lane 9c (M-R8): gathers the presentation facts for one business
+        /// task's assignee and applies BusinessTaskPresentationGate. Dead
+        /// follows the codebase convention (deathDayIndex &gt;= 0); a
+        /// missing PersonState counts as no body. A missing presentation
+        /// director fails closed — the assignee's actor cannot be
+        /// confirmed, so no minutes accrue and the diagnostic says so.
+        /// </summary>
+        private bool ShouldSkipBusinessWorkAccrual(WorkTask task,
+            LandLedgers.FirstLedger.PopulationPathingDirector presentationDirector, out string reason)
+        {
+            reason = string.Empty;
+            if (task == null || !task.HasAssignee)
+            {
+                reason = "the task has no assignee";
+                return true;
+            }
+            PersonState worker = populationManager != null && populationManager.State != null
+                ? populationManager.State.GetPerson(task.AssigneeId.Id) : null;
+            bool isOffMap = worker == null || worker.isOffMap;
+            bool isDead = worker == null || worker.deathDayIndex >= 0;
+            if (presentationDirector == null)
+            {
+                reason = "the presentation director is unavailable, so the assignee's physical actor cannot be confirmed";
+                return true;
+            }
+            bool hasManagedActor = presentationDirector.TryGetPersonPresentationReadout(
+                task.AssigneeId.Id, out bool hasActor, out bool isHidden) && hasActor;
+            return BusinessTaskPresentationGate.ShouldSkipWorkAccrual(hasManagedActor, isOffMap, isDead, isHidden, out reason);
         }
 
         private bool HasArrivedAtBusinessForReservedWork(WorkTask task, BusinessInstanceState business,

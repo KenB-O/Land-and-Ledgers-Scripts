@@ -3158,13 +3158,13 @@ namespace LandLedgers.Orchestration.Systems
         // itself lives in NpcConstructionDriver and runs daily from
         // OnDayChanged; these bindings are the production path's inputs.
         // The labor leg is fully wired below from hub authorities. The
-        // catalog, price port, material source and parcel authority have
-        // no production implementation yet: no catalog asset is registered
-        // in source, no yard/sawmill lot adapter exists (only the
-        // household-inventory source adapter above, which fits self-supply
-        // but not the commissioner's supplier-payment leg), and no parcel
-        // authority adapter reads the real TitleAuthority. Until those
-        // adapters are bound, the driver advances already-staged packages
+        // catalog, price port, material source and parcel authority ARE
+        // bound in production: ConfigureNpcConstruction assigns them
+        // (below), ConfigureLumberYardConstructionBindings binds the
+        // price port, registers the yard supplier and binds the parcel
+        // authority from AcquisitionMarketManager titles plus the
+        // HousingAuthority, and BindProductionDesigns registers the
+        // three designs. The driver advances already-staged packages
         // and waits loudly on Ready packages and on completion, which
         // needs the catalog design. Nothing here invents a port.
         private BuildingDesignCatalog npcConstructionCatalog;
@@ -7784,6 +7784,14 @@ namespace LandLedgers.Orchestration.Systems
                     }
                 }
             }
+            // Lane 9f (F R-2): rebind the workshop's incomplete furniture
+            // processes after a Continue before advancing (same contract as
+            // the generic path — a process whose phase task cannot be
+            // rebound is diagnosed here, never silently lost).
+            hub.GenericProduction.RestoreProcessesForBusiness(workshop, businessId, absoluteDayIndex,
+                out List<string> restoreDiagnostics);
+            foreach (string restoreDiagnostic in restoreDiagnostics)
+                Debug.LogWarning($"[SimulationDrivers] {restoreDiagnostic}", this);
             if (workshop.GenericConfiguration.ActiveProcesses.Count > 0)
             {
                 if (!production.TryAdvanceFurnitureProcesses(runtime, 24 * 60, absoluteDayIndex, out string advanceReason))
@@ -7882,24 +7890,31 @@ namespace LandLedgers.Orchestration.Systems
         /// G-1: the B6 storage-want input — true when the household has
         /// at least one live storage binding (an installed, usable
         /// storage fixture with a live binding, per the storage
-        /// registry). After a Continue the bindings are empty until the
-        /// install path binds fixtures again (the B5 follow-up), so a
-        /// just-loaded household reads as having no storage — the
-        /// cabinet want then fires on its stored lots, which is the
-        /// evaluator's honest reading of the state at that moment.
+        /// registry). After a Continue the bindings are restored by the
+        /// bootstrapper (MarkRestoredFromSave calls RefreshInventory then
+        /// RestoreBindings before presentations rebuild — Lane 9f F R-4),
+        /// so a just-loaded household reads its restored storage; the
+        /// cabinet want fires only when no storage binding was restored,
+        /// which is the evaluator's honest reading of the state at that
+        /// moment.
         /// </summary>
         /// <summary>
         /// G-3 (W-G4 Workstream 3): the F4 purchase/install binding, driven
         /// once per day after the carpentry workshop (workshop first, so a
         /// G-1 sale made today is installed by the custody leg before any
         /// store purchase is considered for the same want). For each
-        /// household with a ranked B6 want: install its workshop-made
-        /// custody pieces, then — for its best affordable New-channel want
-        /// with no custody piece of that kind, a free placement in its home
-        /// (pre-flighted, never buy what cannot be installed), store stock,
-        /// and a balance covering the live price plus the quoted freight —
-        /// buy one unit from the General Store through the F4 service and
-        /// install it. One purchase per household per day. A household that
+        /// household with a ranked B6 want: drive its furnishing.install
+        /// tasks (Lane 9f M-R10 — a received purchase asset or a
+        /// workshop-made custody piece installs only through a completed
+        /// furnishing.install task worked by a household member who has
+        /// arrived at home; no synchronous installation shortcut), then
+        /// — for its best affordable New-channel want with no custody piece
+        /// of that kind, a free placement in its home (pre-flighted, never
+        /// buy what cannot be installed), store stock, and a balance
+        /// covering the live price plus the quoted freight — buy one unit
+        /// from the General Store through the F4 service; delivery and
+        /// installation follow through the task connection once the order
+        /// is received. One purchase per household per day. A household that
         /// cannot afford new stays on its Secondhand-channel want (the
         /// store sells new only); a want with no qualifying household
         /// simply stays a want for tomorrow. Every refusal is day-keyed,
@@ -8114,11 +8129,34 @@ namespace LandLedgers.Orchestration.Systems
                         && !string.Equals(previousInstallationBlock, pending.InstallationBlockedReason, StringComparison.Ordinal))
                         Debug.Log($"[SimulationDrivers] furniture order '{pending.PurchaseId}' retains delivered item(s) in household {candidate.HouseholdId} custody: {pending.InstallationBlockedReason}", this);
                 }
-                int installed = purchaseDriver.TryInstallCustodyPieces(candidate.Furnishings,
-                    candidate.HomeBuildingId, building, diag);
-                if (installed > 0)
+                // Lane 9f (M-R10): the furnishing.install connection. A paid
+                // and delivered item stays in household custody until a
+                // legitimate furnishing.install task physically installs it
+                // at a valid authored placement — the synchronous custody
+                // install that used to live here is gone. Work accrues only
+                // when an available household member has arrived at the
+                // home building (IsPersonVisuallyAtBuilding); a worker who
+                // has not arrived leaves the task Queued, never working
+                // from nowhere.
+                var installMembers = new List<EntityId>();
+                if (householdMemberships != null)
                 {
-                    Debug.Log($"[SimulationDrivers] furniture purchase day {absoluteDayIndex}: household {candidate.HouseholdId} installed {installed} workshop-made custody piece(s) in building {candidate.HomeBuildingId}.", this);
+                    foreach (int memberId in householdMemberships.GetActiveMembers(candidate.HouseholdId))
+                    {
+                        if (memberId >= 0) installMembers.Add(EntityId.For(EntityKind.Person, memberId));
+                    }
+                }
+                FurnishingInstallTaskDriver.DriveDayResult installResult = FurnishingInstallTaskDriver.DriveDay(
+                    hub.Tasks, hub.WorkTimeBudgets,
+                    EntityId.For(EntityKind.Household, candidate.HouseholdId),
+                    installMembers, candidate.HouseholdId, candidate.HomeBuildingId,
+                    candidate.Furnishings, building, scenePlacements, placementIsBound,
+                    GetFurniturePurchaseOrders(),
+                    (personId, buildingId) => IsPersonVisuallyAtBuilding(personId, buildingId),
+                    absoluteDayIndex, diag);
+                if (installResult.InstalledAssets > 0)
+                {
+                    Debug.Log($"[SimulationDrivers] furniture purchase day {absoluteDayIndex}: household {candidate.HouseholdId} installed {installResult.InstalledAssets} custody piece(s) through furnishing.install tasks in building {candidate.HomeBuildingId}.", this);
                 }
                 if (hasPendingFurnitureOrder) continue;
                 if (hub.Journeys == null)
@@ -8267,6 +8305,15 @@ namespace LandLedgers.Orchestration.Systems
                 }
 
                 if (business.GenericConfiguration.ActiveProcesses.Count == 0) continue;
+                // Lane 9f (F R-2): rebind every incomplete process after a
+                // Continue before advancing — the bridge's session-only
+                // phase-task map is gone on a fresh session, and a process
+                // whose phase task cannot be rebound is diagnosed here
+                // instead of failing silently at advance time.
+                hub.GenericProduction.RestoreProcessesForBusiness(business, businessId, absoluteDayIndex,
+                    out List<string> restoreDiagnostics);
+                foreach (string restoreDiagnostic in restoreDiagnostics)
+                    Debug.LogWarning($"[SimulationDrivers] {restoreDiagnostic}", this);
                 hub.GenericProduction.AdvanceBusinessProcesses(
                     business,
                     businessId,

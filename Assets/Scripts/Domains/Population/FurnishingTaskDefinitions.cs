@@ -14,7 +14,11 @@ namespace LandLedgers.Population
     /// execution. The presence contract itself does NOT mint tasks: a
     /// minted task whose completion does nothing would look like the
     /// install happened, and completion needs a furnishing-specific outcome
-    /// resolver that does not exist yet (G wiring). Registering the
+    /// resolver — Lane 9f (M-R10) built it:
+    /// FurnishingInstallTaskDriver (Domains/Economy/GenericBusiness)
+    /// mints furnishing.install tasks from the custody leg and resolves
+    /// completed ones into real installs at authored placements, or
+    /// named blockers with the asset left in custody. Registering the
     /// definitions authorizes the work; it does not start it.
     ///
     /// Base minutes are first-pass calibration, documented for the owner

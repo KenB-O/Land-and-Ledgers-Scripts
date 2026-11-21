@@ -194,7 +194,7 @@ namespace LandLedgers.EditorTests.Diagnostics
                     TargetDays = 60,
                     CompletedDays = 60,
                     Speed = "Speed250x",
-                    Branch = "muse/lane-8",
+                    Branch = "test/other-branch",
                     CommitSha = "0000000000000000000000000000000000000000",
                     DirtyTree = false,
                 },

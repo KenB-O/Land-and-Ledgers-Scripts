@@ -153,6 +153,11 @@ namespace LandLedgers.Population
         public bool UsePreferredShoppingWindows { get; set; }
         private readonly PersonScheduleTracker scheduleTracker;
         private readonly ShopperSellerKnowledge knowledge;
+
+        /// <summary>Fix (F2): read-only access to the per-person seller-knowledge
+        /// store, so diagnostics can report live seeding state instead of
+        /// hard-coding it. The store itself stays owned by this loop.</summary>
+        public ShopperSellerKnowledge SellerKnowledge => knowledge;
         private readonly FinancialObligationAuthority obligations;
         private readonly EntityIdRegistry entityIds;
         private readonly Func<int, EntityId> personEntityId;

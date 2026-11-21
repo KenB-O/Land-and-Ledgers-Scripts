@@ -335,7 +335,14 @@ namespace LandLedgers.Economy.GenericBusiness
             Func<string, bool> placementIsBound,
             FreightShipmentHooks hooksTemplate,
             int dayIndex,
-            bool stagedDelivery = false,
+            // Fix (#7): the safe default is staged delivery. A driver built
+            // without the flag used to install synchronously (ship, deliver,
+            // install in one call); production must go through physical
+            // freight over game time. Callers that genuinely need the legacy
+            // synchronous path (the G3 suite pins it) must pass false
+            // explicitly. A staged driver without the durable order register
+            // and carrier authority refuses below instead of falling back.
+            bool stagedDelivery = true,
             List<FurniturePurchaseOrder> pendingOrders = null,
             FreightProductionDriver freightOwner = null,
             string carrierBusinessId = "",
@@ -482,6 +489,9 @@ namespace LandLedgers.Economy.GenericBusiness
             }
             else if (refusal == null)
             {
+                // Explicit opt-in synchronous path only: stagedDelivery was
+                // passed false by the caller. No default-constructed driver
+                // reaches here (the default is staged, fix #7).
                 refusal = service.TryShip(order, freight, wagonAssetId, hooks)
                     ?? service.TryDeliver(order, freight, hooks, loader, driver, animals)
                     ?? service.TryInstall(order);

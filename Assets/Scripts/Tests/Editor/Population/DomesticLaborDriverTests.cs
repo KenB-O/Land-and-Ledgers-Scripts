@@ -683,6 +683,98 @@ namespace LandLedgers.Editor.Population
         }
 
         [Test]
+        public void MissingFirewoodAnchor_WithStoveFallback_DoesNotParkTask()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            const int failedDay = 200;
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3, 4);
+            inputs.MealsAtHomeCount = 0;
+            inputs.CleaningNeeded = false;
+            inputs.FuelHandlingNeeded = true;
+            inputs.FirewoodActivityLocationAvailable = false;
+            // Fix #1 (A4): the household has a stove to fall back to, so
+            // the missing Firewood point is not a capability block.
+            inputs.FuelHandlingStoveFallbackAvailable = true;
+
+            f.Driver.DriveDay(inputs, failedDay, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(1, f.Driver.Pending.Count);
+            Assert.AreEqual(DomesticTaskCatalog.FuelHandlingId, f.Driver.Pending[0].DefinitionId);
+
+            // Simulate the production movement refusal the OLD leg-0 code
+            // returned (no Firewood point): the flight fails and the task
+            // stays Queued. With the fallback input set, the next DriveDay
+            // must re-adopt it instead of parking it.
+            f.Driver.AdvanceTick(failedDay * 86400f + 990 * 60f, f.Tasks,
+                f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag, (flight, _) =>
+                {
+                    flight.ActivityLocationId = DomesticLaborDriver.MissingFirewoodStorageLocationId;
+                    return DomesticActivityMovementResult.Unsupported;
+                });
+
+            WorkTask task = f.Tasks.GetOpenTasks(EntityId.For(EntityKind.Household, 7))
+                .Find(candidate => candidate.DefinitionId == DomesticTaskCatalog.FuelHandlingId);
+            Assert.NotNull(task);
+            Assert.AreEqual(TaskStatus.Queued, task.Status);
+
+            f.Driver.DriveDay(inputs, failedDay + 1, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(1, f.Driver.Pending.Count,
+                "with the stove fallback available the retained fuel task is re-adopted, not capability-waited");
+            Assert.AreEqual(task.TaskId, f.Driver.Pending[0].ExistingTaskId,
+                "recovery reuses the original task identity");
+        }
+
+        [Test]
+        public void MissingFirewoodAnchor_ParkedTaskResumesWhenStoveFallbackAppears()
+        {
+            var f = new Fixture();
+            var diag = new List<string>();
+            const int failedDay = 200;
+            DomesticLaborDriver.DomesticDayInputs inputs = f.Inputs(7, 3, 4);
+            inputs.MealsAtHomeCount = 0;
+            inputs.CleaningNeeded = false;
+            inputs.FuelHandlingNeeded = true;
+            inputs.FirewoodActivityLocationAvailable = false;
+            // No fallback known yet (legacy): the task parks as before.
+            inputs.FuelHandlingStoveFallbackAvailable = null;
+
+            f.Driver.DriveDay(inputs, failedDay, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            f.Driver.AdvanceTick(failedDay * 86400f + 990 * 60f, f.Tasks,
+                f.Budgets, f.Schedules, f.Domestic, f.DueEvents, diag, (flight, _) =>
+                {
+                    flight.ActivityLocationId = DomesticLaborDriver.MissingFirewoodStorageLocationId;
+                    return DomesticActivityMovementResult.Unsupported;
+                });
+
+            WorkTask task = f.Tasks.GetOpenTasks(EntityId.For(EntityKind.Household, 7))
+                .Find(candidate => candidate.DefinitionId == DomesticTaskCatalog.FuelHandlingId);
+            Assert.NotNull(task);
+
+            var restored = new DomesticLaborDriver();
+            restored.LoadFromSaveDto(f.Driver.CaptureSaveDto());
+            Assert.IsTrue(restored.RouteRecoveries[0].WaitForCapabilityChange,
+                "the structural blocker survives Save/Continue");
+
+            restored.DriveDay(inputs, failedDay + 1, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(0, restored.Pending.Count, "still parked while no fallback is known");
+
+            // The stove fallback becomes available (household has a stove):
+            // the same retained task resumes without a duplicate need.
+            inputs.FuelHandlingStoveFallbackAvailable = true;
+            restored.DriveDay(inputs, failedDay + 2, f.Tasks, f.Budgets,
+                f.Schedules, f.Domestic, f.DueEvents, diag);
+            Assert.AreEqual(1, restored.Pending.Count,
+                "the stove fallback resumes the retained fuel task");
+            Assert.AreEqual(task.TaskId, restored.Pending[0].ExistingTaskId,
+                "recovery reuses the original task identity");
+            Assert.IsFalse(restored.RouteRecoveries[0].WaitForCapabilityChange);
+        }
+
+        [Test]
         public void RecoveredPhysicalRoute_ClearsFailureBackoffOnlyAfterArrival()
         {
             var f = new Fixture();

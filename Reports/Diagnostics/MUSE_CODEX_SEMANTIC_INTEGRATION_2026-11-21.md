@@ -54,7 +54,8 @@ The compiled fixtures below ran through Unity's bundled Mono as standalone manag
 | `DomesticLaborDriverTests.MissingFirewoodAnchor_*` | 3 | 0 |
 | `ShoppingTripDriverTests.RequiredPhysicalCounterService_AbsentClerkEventuallyReturnsWithoutPurchase` | 1 | 0 |
 | `IncidentCoreAdapterTests` | 15 | 0 |
-| Total | 62 | 7 |
+| `Lane10aBakeryChannelChoiceTests` selected tests for no implicit contract, channel permissions, existing contract DTO round-trip and policy evaluator | 13 | 0 |
+| Total | 75 | 7 |
 
 The seven freight cases reached an unavailable native `JsonUtility.ToJsonInternal_Injected` call during save capture in standalone Mono. The full freight fixture remains pending in the actual Unity Editor. The G3 default-driver test, Unity JSON persistence tests, and Main Scene tests were not executed.
 

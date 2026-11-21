@@ -67,12 +67,13 @@ namespace LandLedgers.Diagnostics
         public string recoveryState;
         public string detail;
         /// <summary>
-        /// Lane 2 (M-R14): the M-R14 causal class of this event's refusal /
-        /// interrupt, as a structured field, so classification never has to
-        /// reconstruct the call chain from free text. Empty when unclassified.
-        /// Values are DestinationBlockerKind names.
+        /// Lane 1 (M-R14) — the causal class of a refusal/interrupt carried as
+        /// a structured field (the <see cref="RefusalCauseClass"/> name, or
+        /// "Unclassified"). The recorder is the capture layer: it records the
+        /// tag the refusing authority supplied; classification lives in the
+        /// incident core above it.
         /// </summary>
-        public string blockerKind;
+        public string refusalCauseClass;
     }
 
     [Serializable]
@@ -276,7 +277,15 @@ namespace LandLedgers.Diagnostics
             }
         }
 
-        public void RecordRefusal(string taskId, string method, string reason, int day)
+        /// <summary>
+        /// Records an assign/start refusal for a task. The optional
+        /// <paramref name="causeClass"/> tags the refusal with its causal
+        /// class (M-R14) as a structured field; when the caller does not know
+        /// it, the tag stays Unclassified and the reason string is the only
+        /// evidence. A refusal is not progress: it never moves last-progress.
+        /// </summary>
+        public void RecordRefusal(string taskId, string method, string reason, int day,
+            RefusalCauseClass causeClass = RefusalCauseClass.Unclassified)
         {
             if (!Monitoring || Level < NpcTraceLevel.Detailed) return;
             knownTasks.TryGetValue(taskId ?? string.Empty, out WorkTask task);
@@ -284,9 +293,14 @@ namespace LandLedgers.Diagnostics
                 new NpcActivityTraceEvent { taskId = taskId ?? string.Empty, transition = method, simulatedSeconds = Now(), dayIndex = day };
             item.eventType = "task-refusal";
             item.reason = reason ?? string.Empty;
-            // Lane 2 (M-R14): tag the refusal with its causal class at capture
-            // time, from the reason the owning system already emits.
-            item.blockerKind = IncidentInvestigator.ClassifyRefusalReason(reason).ToString();
+            // Merge of Lane 1 + Lane 2 (M-R14): an explicit class supplied by
+            // the refusing authority wins; otherwise classify the reason
+            // string with the core classifier. (Lane 2's Investigator keeps
+            // its own DestinationBlockerKind classification internally; the
+            // two enums share the M-R14 classes 1-6 by design.)
+            item.refusalCauseClass = (causeClass != RefusalCauseClass.Unclassified
+                ? causeClass
+                : RefusalCauseClassifier.Classify(reason)).ToString();
             AppendObserved(item);
         }
 
@@ -734,8 +748,9 @@ namespace LandLedgers.Diagnostics
                 reason = anomaly.reason,
                 recoveryState = anomaly.recoveryState,
                 detail = anomaly.supportingState,
-                // Lane 2 (M-R14): tag the anomaly with its causal class.
-                blockerKind = IncidentInvestigator.ClassifyRefusalReason(
+                // Merge of Lane 1 + Lane 2 (M-R14): tag the anomaly with its
+                // causal class, classified from the reason + recovery strings.
+                refusalCauseClass = RefusalCauseClassifier.Classify(
                     (anomaly.reason ?? string.Empty) + " " + (anomaly.recoveryState ?? string.Empty)).ToString(),
                 selectionReason = "automatic anomaly selection: " + category
             };
@@ -949,8 +964,8 @@ namespace LandLedgers.Diagnostics
                 destinationBuildingId = source.destinationBuildingId,
                 reservationId = source.reservationId, workedMinutes = source.workedMinutes, plannedMinutes = source.plannedMinutes,
                 remainingMinutes = source.remainingMinutes, retryCount = source.retryCount, reason = source.reason,
-                selectionReason = source.selectionReason, recoveryState = source.recoveryState, detail = source.detail,
-                blockerKind = source.blockerKind
+                refusalCauseClass = source.refusalCauseClass,
+                selectionReason = source.selectionReason, recoveryState = source.recoveryState, detail = source.detail
             };
         }
 
